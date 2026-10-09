@@ -15,6 +15,7 @@ import { errorMessage, isApiError } from "@/lib/api";
 import { formatDuration, formatMinutes, formatNumber, formatRelativeOrDate, formatScore } from "@/lib/format";
 import { labelFor, RECOMMENDATION_SHORT_LABELS, ROUND_TYPE_LABELS } from "@/lib/labels";
 import type { Recommendation, SessionSummary } from "@/lib/types";
+import { INSUFFICIENT_EVIDENCE_HEADLINE, INSUFFICIENT_EVIDENCE_SHORT } from "@/components/domain/evidenceCopy";
 import { cn } from "@/lib/utils";
 
 import { isInProgress, isLive } from "../api/hooks";
@@ -28,8 +29,16 @@ export const RECOMMENDATION_TONES: Record<Recommendation, BadgeTone> = {
   insufficient_evidence: "outline",
 };
 
-export function ScoreCell({ score, compact = false }: { score: number | null | undefined; compact?: boolean }) {
-  if (typeof score !== "number") return <span className="text-fg-subtle">—</span>;
+export function ScoreCell({ score, compact = false, insufficient = false }: { score: number | null | undefined; compact?: boolean; insufficient?: boolean }) {
+  if (typeof score !== "number") {
+    return insufficient ? (
+      <span className="text-xs whitespace-nowrap text-warning-fg" title={INSUFFICIENT_EVIDENCE_HEADLINE} data-testid="score-insufficient">
+        {compact ? "No score" : INSUFFICIENT_EVIDENCE_SHORT}
+      </span>
+    ) : (
+      <span className="text-fg-subtle">—</span>
+    );
+  }
   const tone = scoreTone(score, 100);
   return (
     <span className="inline-flex items-center justify-end gap-2.5">
@@ -190,7 +199,7 @@ export function SessionsTable({ rows, loading, fetching, error, onRetry, empty, 
                     <StatusCell session={s} />
                   </TableCell>
                   <TableCell numeric>
-                    {isInProgress(s.status) ? <span className="text-xs whitespace-nowrap text-fg-subtle">In progress</span> : <ScoreCell score={s.overall_score} compact={!full} />}
+                    {isInProgress(s.status) ? <span className="text-xs whitespace-nowrap text-fg-subtle">In progress</span> : <ScoreCell score={s.overall_score} compact={!full} insufficient={s.recommendation === "insufficient_evidence"} />}
                   </TableCell>
                   <TableCell className="max-lg:hidden">
                     {s.recommendation ? (

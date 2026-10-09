@@ -269,13 +269,17 @@ def record_text(document: dict[str, Any], aliases: Aliases, *, audience: str) ->
     return "\n".join(lines)
 
 
+def _comp_score(c: dict[str, Any]) -> str:
+    return f"{c['score']:.1f}" if c.get("score") is not None else "not assessed (no evidence)"
+
+
 def _competency_lines(document: dict[str, Any], *, recruiter: bool) -> str:
     rows = []
     for c in document["scores"]["competencies"]:
         unanswered = ", ".join(c["unanswered_areas"][:6]) or "none"
         if recruiter:
             rows.append(
-                f"- {c['key']} ({c['name']}): {c['score']:.1f}, confidence {c['confidence']:.2f}, "
+                f"- {c['key']} ({c['name']}): {_comp_score(c)}, confidence {c['confidence']:.2f}, "
                 f"evidence {c['evidence_count']}, sufficient {c['sufficient_evidence']}, "
                 f"required {c['required']}; unanswered: {unanswered}"
             )
@@ -283,7 +287,7 @@ def _competency_lines(document: dict[str, Any], *, recruiter: bool) -> str:
             safe = (
                 ", ".join(humanize_topic(u) for u in c["unanswered_areas"][:6] if candidate_safe(u)) or "none"
             )
-            rows.append(f"- {_name(c)} [{c['key']}]: {c['score']:.1f}; not covered yet: {safe}")
+            rows.append(f"- {_name(c)} [{c['key']}]: {_comp_score(c)}; not covered yet: {safe}")
     return "\n".join(rows) or "- none"
 
 
@@ -298,7 +302,7 @@ def candidate_messages(document: dict[str, Any], aliases: Aliases) -> list[dict[
         {
             "role": "user",
             "content": CANDIDATE_USER.render(
-                overall_score=f"{document['scores']['overall']['score']:.0f}",
+                overall_score=_score_text(document["scores"]["overall"]["score"]),
                 competencies=_competency_lines(document, recruiter=False),
                 record=record_text(document, aliases, audience="candidate"),
             ),
@@ -353,7 +357,7 @@ def recruiter_messages(document: dict[str, Any], aliases: Aliases) -> list[dict[
         {
             "role": "user",
             "content": RECRUITER_USER.render(
-                overall_score=f"{overall['score']:.0f}",
+                overall_score=_score_text(overall["score"]),
                 overall_confidence=f"{overall['confidence']:.2f}",
                 coverage=f"{overall['required_coverage']:.0%}",
                 recommendation=rec["value"],
@@ -633,6 +637,11 @@ def _join(items: Sequence[str]) -> str:
     return ", ".join(items[:-1]) + " and " + items[-1]
 
 
+def _score_text(value: float | None) -> str:
+    """Overall score for prompts: "n/a (not enough evidence)" instead of a made-up number."""
+    return f"{value:.0f}" if value is not None else "n/a (not enough evidence)"
+
+
 def fallback_candidate_narrative(document: dict[str, Any]) -> dict[str, Any]:
     comps = [c for c in document["scores"]["competencies"] if c["evidence_count"] > 0]
     ranked = sorted(comps, key=lambda c: -c["score"])
@@ -870,7 +879,12 @@ def fallback_recruiter_narrative(document: dict[str, Any]) -> dict[str, Any]:
     required = [c for c in document["scores"]["competencies"] if c["required"]]
     covered = sum(1 for c in required if c["sufficient_evidence"])
     executive_summary = (
-        f"Overall {overall['score']:.0f} out of 100 (confidence {overall['confidence']:.2f}). "
+        (
+            f"Overall {overall['score']:.0f} out of 100 (confidence {overall['confidence']:.2f}). "
+            if overall["score"] is not None
+            else "No overall score: not enough evidence (the interview was too short or the candidate gave "
+            "no answers). "
+        )
         + (
             f"{covered} of {len(required)} required competencies have enough evidence to judge."
             if required

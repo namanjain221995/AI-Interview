@@ -224,7 +224,9 @@ class ScoreOut(APIModel):
     category: str
     key: str
     label: str | None
-    score: float
+    score: float | None = Field(
+        ..., description="NULL = not enough evidence to score (never a made-up midpoint)"
+    )
     confidence: float
     weight: float | None
     evidence_count: int
@@ -267,7 +269,10 @@ class CompetencyScoreOut(ScoreOut):
 
 class SessionScoresOut(BaseModel):
     session_id: uuid.UUID
-    source: str = Field(..., description="persisted | live (computed on the fly, not stored)")
+    source: str = Field(
+        ...,
+        description="persisted | live (computed on the fly, not stored) | intake_pending (intake evaluation not ready)",
+    )
     is_final: bool = False
     computed_at: datetime | None = None
     overall: ScoreOut | None = None
@@ -316,3 +321,60 @@ class TimelineOut(BaseModel):
     snapshots: list[TimelineSnapshotOut]
     series: dict[str, list[dict[str, Any]]]
     events: list[TimelineEventOut]
+
+
+class ReviewPointOut(BaseModel):
+    competency_key: str
+    competency: str
+    text: str
+    quote: str | None = None
+    evidence_id: str | None = None
+    question_id: str | None = None
+    answer_id: str | None = None
+    start_ms: int | None = None
+
+
+class ReviewFactsOut(BaseModel):
+    duration_seconds: float
+    planned_seconds: float
+    end_reason: str | None = None
+    ended_early: bool = False
+    questions_asked: int
+    questions_answered: int
+    questions_skipped: int
+    unprompted_answers: int = 0
+    candidate_words: int
+    candidate_speaking_seconds: float
+    minutes_answered: float
+    candidate_talk_share: float | None = None
+    silence_share: float | None = None
+    speaking_time_estimated: bool = False
+
+
+class AIAssessmentOut(BaseModel):
+    text: str
+    source: str | None = Field(None, description="recruiter_report | intake_evaluation")
+    generated_at: str | None = None
+
+
+class ReviewSummaryOut(BaseModel):
+    """Deterministic facts first, evidence-backed strengths/weaknesses, AI text only with enough evidence."""
+
+    session_id: uuid.UUID
+    kind: str = Field(..., description="interview | intake")
+    completed: bool
+    evidence_level: str = Field(..., description="none | thin | partial | sufficient")
+    headline: str
+    insufficient: bool
+    facts: ReviewFactsOut
+    statements: list[str]
+    evidence_statement: str | None = None
+    assessed_competencies: int
+    total_competencies: int
+    overall_score: float | None = None
+    recommendation: str | None = None
+    strengths: list[ReviewPointOut] = Field(default_factory=list)
+    weaknesses: list[ReviewPointOut] = Field(default_factory=list)
+    ai_assessment: AIAssessmentOut | None = None
+    ai_withheld_reason: str | None = None
+    note: str

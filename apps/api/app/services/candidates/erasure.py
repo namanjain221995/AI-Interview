@@ -3,8 +3,9 @@
 ``erase_candidate`` runs inside the request transaction:
 
 1. Preconditions (row lock held): the candidate is archived first (two-step
-   safety for an irreversible action) and nothing is still working on their
-   data - no running interview session, no resume being processed.
+   safety for an irreversible action; ``archive_first=True`` archives in the
+   same request) and nothing is still working on their data - no running
+   interview session, no resume being processed.
 2. Every stored file of the candidate (resumes, answer audio, frames,
    recordings, report artifacts) is removed through
    :func:`app.services.storage.media.delete_media`; the ``media_assets`` rows
@@ -16,9 +17,11 @@
    entries the candidate made keep the action but lose IP address and user
    agent.
 4. The candidate row is deleted; the database cascades to resumes, chunks,
-   profiles, interviews, consents, auth sessions, sessions and everything a
-   session produced (questions, answers, transcripts, evaluations, evidence,
-   scores, reports, reviews, coding data, integrity events).
+   profiles, interviews, consents, auth sessions, intake interviews (with their
+   stage/activity results, evaluations, evaluator runs, competency scores and
+   decisions), open-link registrations, sessions and everything a session
+   produced (questions, answers, transcripts, evaluations, evidence, scores,
+   reports, reviews, coding data, integrity events).
 
 After the commit, the candidate's cached auth state and the sessions' Redis
 keys (state, outbox, preparation caches) are removed.
@@ -29,25 +32,18 @@ so the request can simply be retried.
 
 from __future__ import annotations
 
-import functools
 import uuid
-from collections import Counter
-from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
-from redis.exceptions import RedisError
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import ColumnElement, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import Conflict, ServiceUnavailable
+from app.core.errors import Conflict
 from app.core.lifecycle import run_after_commit
 from app.core.logging import get_logger
-from app.core.queue import publish_session_event
 from app.db.models import (
-    Answer,
-    AnswerEvaluation,
     AuditLog,
     AuthSession,
     Candidate,
@@ -57,34 +53,46 @@ from app.db.models import (
     InterviewSession,
     LinkRegistration,
     MediaAsset,
-    ModelCall,
     Report,
 )
-from app.domain.enums import ActorType, ResumeStatus, SessionStatus
+from app.db.models.intake import IntakeInterview
+from app.domain.enums import ActorType, ResumeStatus
+from app.services.data_deletion.common import (
+    ACTIVE_WINDOW,
+    CONNECTED_WINDOW,
+    ERASED_PREFIX,
+    RUNNING_SESSION_STATUSES,
+    TERMINAL_SESSION_STATUSES,
+    WAITING_SESSION_STATUSES,
+    after_commit_session_cleanup,
+    ids_of,
+    purge_files,
+    scrub_model_calls,
+    session_blockers,
+    session_file_keys,
+    session_model_call_ids,
+)
 from app.services.identity.auth_cache import invalidate_auth_cache
-from app.services.storage import get_storage
-from app.services.storage.media import delete_media
 
 log = get_logger(__name__)
 
 ERASURE_REASON = "data_subject_deletion"
 
-# A session in one of these states is being worked on by the realtime runtime
-# or a background job, unless nothing touched it for ACTIVE_WINDOW.
-RUNNING_SESSION_STATUSES = frozenset(
-    {
-        SessionStatus.PREPARING.value,
-        SessionStatus.LIVE.value,
-        SessionStatus.PAUSED.value,
-        SessionStatus.COMPLETING.value,
-    }
-)
-# Waiting sessions only count as active while a client is connected
-# (the runtime writes ``last_heartbeat_at`` every 30 s).
-WAITING_SESSION_STATUSES = frozenset({SessionStatus.CREATED.value, SessionStatus.READY.value})
-TERMINAL_SESSION_STATUSES = frozenset(
-    {SessionStatus.COMPLETED.value, SessionStatus.ABORTED.value, SessionStatus.FAILED.value}
-)
+__all__ = [
+    "ACTIVE_WINDOW",
+    "CONNECTED_WINDOW",
+    "ERASURE_REASON",
+    "PROCESSING_RESUME_STATUSES",
+    "RUNNING_SESSION_STATUSES",
+    "TERMINAL_SESSION_STATUSES",
+    "WAITING_SESSION_STATUSES",
+    "ErasurePreview",
+    "ErasureSummary",
+    "erase_candidate",
+    "erasure_preview",
+    "find_blockers",
+]
+
 PROCESSING_RESUME_STATUSES = frozenset(
     {
         ResumeStatus.UPLOADED.value,
@@ -94,10 +102,6 @@ PROCESSING_RESUME_STATUSES = frozenset(
         ResumeStatus.ANALYZING.value,
     }
 )
-ACTIVE_WINDOW = timedelta(minutes=15)
-CONNECTED_WINDOW = timedelta(minutes=2)
-_REDIS_SCAN_COUNT = 500
-_ERASED_PREFIX = "erased/"
 
 
 @dataclass(slots=True)
@@ -121,14 +125,32 @@ class ErasureSummary:
     # attempts (no candidate row) with the same e-mail are deleted explicitly.
     link_registrations: int = 0
     link_blocked_registrations_deleted: int = 0
+    intake_interviews: int = 0
+    reports: int = 0
+    archived_in_request: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-def _latest(*values: datetime | None) -> datetime | None:
-    present = [v for v in values if v is not None]
-    return max(present) if present else None
+@dataclass(slots=True)
+class ErasurePreview:
+    """What a deletion would remove right now (counts only)."""
+
+    candidate_id: str
+    archived: bool
+    interviews: int = 0
+    sessions: int = 0
+    resumes: int = 0
+    reports: int = 0
+    intake_interviews: int = 0
+    link_registrations: int = 0
+    stored_files: int = 0
+    stored_bytes: int = 0
+    blockers: list[dict[str, Any]] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 async def find_blockers(
@@ -136,29 +158,7 @@ async def find_blockers(
 ) -> list[dict[str, Any]]:
     """Sessions or resumes of the candidate that something is still working on."""
     now = now or datetime.now(UTC)
-    blockers: list[dict[str, Any]] = []
-    sessions = (
-        await db.execute(
-            select(
-                InterviewSession.id,
-                InterviewSession.status,
-                InterviewSession.updated_at,
-                InterviewSession.last_heartbeat_at,
-            ).where(
-                InterviewSession.candidate_id == candidate_id,
-                InterviewSession.status.not_in(TERMINAL_SESSION_STATUSES),
-            )
-        )
-    ).all()
-    for sid, status, updated_at, heartbeat_at in sessions:
-        active = False
-        if status in RUNNING_SESSION_STATUSES:
-            last = _latest(updated_at, heartbeat_at)
-            active = last is not None and now - last < ACTIVE_WINDOW
-        elif status in WAITING_SESSION_STATUSES:
-            active = heartbeat_at is not None and now - heartbeat_at < CONNECTED_WINDOW
-        if active:
-            blockers.append({"type": "session", "id": str(sid), "status": status})
+    blockers = await session_blockers(db, InterviewSession.candidate_id == candidate_id, now=now)
     resumes = (
         await db.execute(
             select(CandidateResume.id, CandidateResume.status, CandidateResume.updated_at).where(
@@ -173,162 +173,54 @@ async def find_blockers(
     return blockers
 
 
-def _ids(values: Iterable[Any]) -> set[uuid.UUID]:
-    out: set[uuid.UUID] = set()
-    for value in values:
-        if value is None:
-            continue
-        try:
-            out.add(value if isinstance(value, uuid.UUID) else uuid.UUID(str(value)))
-        except ValueError:
-            continue
-    return out
+async def _count(db: AsyncSession, model: Any, *where: ColumnElement[bool]) -> int:
+    return int(await db.scalar(select(func.count()).select_from(model).where(*where)) or 0)
 
 
-async def _model_call_ids(
-    db: AsyncSession, candidate_id: uuid.UUID, session_ids: list[uuid.UUID]
-) -> set[uuid.UUID]:
-    ids: set[uuid.UUID] = set()
-    for (call_ids,) in (
-        await db.execute(
-            select(CandidateProfile.model_call_ids).where(CandidateProfile.candidate_id == candidate_id)
-        )
-    ).all():
-        ids |= _ids(call_ids or [])
-    if session_ids:
-        for (call_ids,) in (
-            await db.execute(select(Report.model_call_ids).where(Report.session_id.in_(session_ids)))
-        ).all():
-            ids |= _ids(call_ids or [])
-        ids |= _ids(
-            (
-                await db.scalars(
-                    select(AnswerEvaluation.model_call_id).where(
-                        AnswerEvaluation.session_id.in_(session_ids),
-                        AnswerEvaluation.model_call_id.is_not(None),
-                    )
-                )
-            ).all()
-        )
-    return ids
-
-
-async def _delete_files(
-    db: AsyncSession, candidate_id: uuid.UUID, session_ids: list[uuid.UUID], summary: ErasureSummary
-) -> None:
-    conditions = [MediaAsset.candidate_id == candidate_id]
+def _media_conditions(candidate_id: uuid.UUID, session_ids: list[uuid.UUID]) -> list[ColumnElement[bool]]:
+    conditions: list[ColumnElement[bool]] = [MediaAsset.candidate_id == candidate_id]
     if session_ids:
         conditions.append(MediaAsset.session_id.in_(session_ids))
-    assets = list(
-        (await db.scalars(select(MediaAsset).where(or_(*conditions)).order_by(MediaAsset.created_at))).all()
+    return conditions
+
+
+async def erasure_preview(db: AsyncSession, candidate: Candidate) -> ErasurePreview:
+    """Counts of what :func:`erase_candidate` would remove (no side effects)."""
+    cid = candidate.id
+    session_ids = list(
+        (await db.scalars(select(InterviewSession.id).where(InterviewSession.candidate_id == cid))).all()
     )
-    registered = {a.storage_key for a in assets}
-    storage = get_storage()
-    kinds: Counter[str] = Counter()
-    failures = 0
-    for asset in assets:
-        if asset.storage_key.startswith(_ERASED_PREFIX):
-            continue  # anonymized by an earlier erasure
-        if asset.deleted_at is None:
-            size = int(asset.size_bytes or 0)
-            try:
-                deleted = await delete_media(db, asset, reason=ERASURE_REASON)
-            except OSError as exc:
-                failures += 1
-                log.error("candidate.erase_file_failed", media_id=str(asset.id), error=type(exc).__name__)
-                continue
-            except ValueError:  # InvalidStorageKey: no file can exist there
-                asset.deleted_at = datetime.now(UTC)
-                deleted = True
-            if deleted:
-                summary.media_files_deleted += 1
-                summary.media_bytes_deleted += size
-                kinds[asset.kind] += 1
-        else:
-            # Soft-deleted earlier (e.g. retention): make sure no bytes survived.
-            try:
-                await storage.delete(asset.storage_key)
-            except ValueError:
-                pass
-            except OSError as exc:
-                failures += 1
-                log.error("candidate.erase_file_failed", media_id=str(asset.id), error=type(exc).__name__)
-                continue
-        # Keep the row as an anonymous deletion record (no file name, hash or details).
-        asset.storage_key = f"{_ERASED_PREFIX}{asset.id}"
-        asset.sha256 = None
-        asset.details = {"deleted_reason": ERASURE_REASON, "erased": True}
-        summary.media_records_anonymized += 1
-    # Files referenced by a row but never registered as media (defensive).
-    keys: set[str] = set(
-        (
-            await db.scalars(
-                select(CandidateResume.storage_key).where(CandidateResume.candidate_id == candidate_id)
-            )
-        ).all()
-    )
+    preview = ErasurePreview(candidate_id=str(cid), archived=candidate.archived_at is not None)
+    preview.interviews = await _count(db, Interview, Interview.candidate_id == cid)
+    preview.sessions = len(session_ids)
+    preview.resumes = await _count(db, CandidateResume, CandidateResume.candidate_id == cid)
+    preview.intake_interviews = await _count(db, IntakeInterview, IntakeInterview.candidate_id == cid)
+    preview.link_registrations = await _count(db, LinkRegistration, LinkRegistration.candidate_id == cid)
     if session_ids:
-        keys |= {
-            k
-            for k in (
-                await db.scalars(
-                    select(Answer.audio_storage_key).where(
-                        Answer.session_id.in_(session_ids), Answer.audio_storage_key.is_not(None)
-                    )
-                )
-            ).all()
-            if k
-        }
-        keys |= {
-            k
-            for k in (
-                await db.scalars(
-                    select(Report.artifact_storage_key).where(
-                        Report.session_id.in_(session_ids), Report.artifact_storage_key.is_not(None)
-                    )
-                )
-            ).all()
-            if k
-        }
-    for key in sorted(keys - registered):
-        try:
-            if await storage.delete(key):
-                summary.unregistered_files_deleted += 1
-        except (OSError, ValueError) as exc:  # ValueError: InvalidStorageKey
-            if isinstance(exc, OSError):
-                failures += 1
-            log.error("candidate.erase_unregistered_file_failed", error=type(exc).__name__)
-    if failures:
-        raise ServiceUnavailable(
-            "Some stored files could not be deleted. Nothing was deleted from the database; please retry.",
-            code="erasure_incomplete",
-            details={"failed_files": failures},
+        preview.reports = await _count(db, Report, Report.session_id.in_(session_ids))
+    files, size = (
+        await db.execute(
+            select(func.count(), func.coalesce(func.sum(MediaAsset.size_bytes), 0)).where(
+                or_(*_media_conditions(cid, session_ids)),
+                MediaAsset.deleted_at.is_(None),
+                ~MediaAsset.storage_key.startswith(ERASED_PREFIX),
+            )
         )
-    await db.flush()
-    summary.media_by_kind = dict(sorted(kinds.items()))
+    ).one()
+    preview.stored_files, preview.stored_bytes = int(files or 0), int(size or 0)
+    preview.blockers = await find_blockers(db, cid)
+    return preview
 
 
-async def _clear_redis(session_ids: list[uuid.UUID]) -> None:
-    from app.core.redis import get_redis
-
-    redis = get_redis()
-    removed = 0
-    try:
-        for sid in session_ids:
-            keys = [key async for key in redis.scan_iter(match=f"session:{sid}:*", count=_REDIS_SCAN_COUNT)]
-            for start in range(0, len(keys), 500):
-                removed += int(await redis.delete(*keys[start : start + 500]))
-    except (RedisError, OSError) as exc:  # keys expire on their own (<= 24 h)
-        log.warning("candidate.erase_redis_failed", error=type(exc).__name__, sessions=len(session_ids))
-        return
-    if removed:
-        log.info("candidate.erase_redis_cleared", keys=removed, sessions=len(session_ids))
-
-
-async def erase_candidate(db: AsyncSession, candidate: Candidate) -> ErasureSummary:
+async def erase_candidate(
+    db: AsyncSession, candidate: Candidate, *, archive_first: bool = False
+) -> ErasureSummary:
     """Delete the candidate and all their data; ``candidate`` must be row-locked
-    (``get_candidate(..., for_update=True)``). Returns counts for the audit trail."""
-    if candidate.archived_at is None:
+    (``get_candidate(..., for_update=True)``). Returns counts for the audit trail.
+
+    ``archive_first``: archive a not-yet-archived candidate in the same request
+    (one confirmed step in the UI); otherwise 409 ``candidate_not_archived``."""
+    if candidate.archived_at is None and not archive_first:
         raise Conflict(
             "Archive the candidate before deleting their data permanently.",
             code="candidate_not_archived",
@@ -344,6 +236,9 @@ async def erase_candidate(db: AsyncSession, candidate: Candidate) -> ErasureSumm
         )
     cid = candidate.id
     summary = ErasureSummary(candidate_id=str(cid))
+    if candidate.archived_at is None:
+        candidate.archived_at = now  # everything below goes anyway; recorded for the audit trail
+        summary.archived_in_request = True
     interview_ids = list((await db.scalars(select(Interview.id).where(Interview.candidate_id == cid))).all())
     sessions = (
         await db.execute(
@@ -354,33 +249,24 @@ async def erase_candidate(db: AsyncSession, candidate: Candidate) -> ErasureSumm
     open_session_ids = [s.id for s in sessions if s.status not in TERMINAL_SESSION_STATUSES]
     summary.interviews = len(interview_ids)
     summary.sessions = len(session_ids)
-    summary.resumes = len(
-        (await db.scalars(select(CandidateResume.id).where(CandidateResume.candidate_id == cid))).all()
-    )
-    summary.profiles = len(
-        (await db.scalars(select(CandidateProfile.id).where(CandidateProfile.candidate_id == cid))).all()
-    )
-    auth_conditions = [AuthSession.candidate_id == cid]
+    summary.resumes = await _count(db, CandidateResume, CandidateResume.candidate_id == cid)
+    summary.profiles = await _count(db, CandidateProfile, CandidateProfile.candidate_id == cid)
+    summary.intake_interviews = await _count(db, IntakeInterview, IntakeInterview.candidate_id == cid)
+    if session_ids:
+        summary.reports = await _count(db, Report, Report.session_id.in_(session_ids))
+    auth_conditions: list[ColumnElement[bool]] = [AuthSession.candidate_id == cid]
     if interview_ids:
         auth_conditions.append(AuthSession.interview_id.in_(interview_ids))
     auth_ids = list((await db.scalars(select(AuthSession.id).where(or_(*auth_conditions)))).all())
     summary.auth_sessions_revoked = len(auth_ids)
 
     # Ledger: keep metrics, drop content.
-    call_ids = await _model_call_ids(db, cid, session_ids)
-    ledger_conditions = []
-    if call_ids:
-        ledger_conditions.append(ModelCall.id.in_(call_ids))
-    if session_ids:
-        ledger_conditions.append(ModelCall.session_id.in_(session_ids))
-    if ledger_conditions:
-        result = await db.execute(
-            update(ModelCall)
-            .where(or_(*ledger_conditions))
-            .values(request_payload=None, response_payload=None, error=None)
-            .execution_options(synchronize_session=False)
-        )
-        summary.model_calls_scrubbed = int(result.rowcount or 0)  # type: ignore[attr-defined]
+    call_ids = await session_model_call_ids(db, session_ids)
+    for (profile_calls,) in (
+        await db.execute(select(CandidateProfile.model_call_ids).where(CandidateProfile.candidate_id == cid))
+    ).all():
+        call_ids |= ids_of(profile_calls or [])
+    summary.model_calls_scrubbed = await scrub_model_calls(db, call_ids, session_ids)
     # Audit entries the candidate made: keep the action, drop network identifiers.
     result = await db.execute(
         update(AuditLog)
@@ -392,9 +278,7 @@ async def erase_candidate(db: AsyncSession, candidate: Candidate) -> ErasureSumm
 
     # Open-link registrations: the candidate's rows cascade with the candidate;
     # blocked attempts carry no candidate id, so they go by org + e-mail.
-    summary.link_registrations = len(
-        (await db.scalars(select(LinkRegistration.id).where(LinkRegistration.candidate_id == cid))).all()
-    )
+    summary.link_registrations = await _count(db, LinkRegistration, LinkRegistration.candidate_id == cid)
     result = await db.execute(
         delete(LinkRegistration)
         .where(
@@ -408,7 +292,23 @@ async def erase_candidate(db: AsyncSession, candidate: Candidate) -> ErasureSumm
     summary.link_blocked_registrations_deleted = int(result.rowcount or 0)  # type: ignore[attr-defined]
 
     # Files last among the reversible steps: a failure here rolls back the rest.
-    await _delete_files(db, cid, session_ids, summary)
+    extra_keys = set(
+        (
+            await db.scalars(select(CandidateResume.storage_key).where(CandidateResume.candidate_id == cid))
+        ).all()
+    ) | await session_file_keys(db, session_ids)
+    files = await purge_files(
+        db,
+        media_conditions=_media_conditions(cid, session_ids),
+        extra_keys=extra_keys,
+        reason=ERASURE_REASON,
+        error_code="erasure_incomplete",
+    )
+    summary.media_files_deleted = files.files_deleted
+    summary.media_bytes_deleted = files.bytes_deleted
+    summary.media_by_kind = files.by_kind
+    summary.media_records_anonymized = files.records_anonymized
+    summary.unregistered_files_deleted = files.unregistered_deleted
 
     await db.execute(
         delete(Candidate).where(Candidate.id == cid).execution_options(synchronize_session=False)
@@ -416,16 +316,11 @@ async def erase_candidate(db: AsyncSession, candidate: Candidate) -> ErasureSumm
     db.expunge(candidate)
     await db.flush()
 
-    async def _after_commit() -> None:
+    async def _revoke() -> None:
         await invalidate_auth_cache(auth_ids)
-        await _clear_redis(session_ids)
 
-    async def _notify(sid: uuid.UUID) -> None:  # a runtime still attached to a stale session ends it
-        await publish_session_event(sid, {"type": "session.cancelled", "reason": "candidate_deleted"})
-
-    run_after_commit(db, _after_commit)
-    for sid in open_session_ids:
-        run_after_commit(db, functools.partial(_notify, sid))
+    run_after_commit(db, _revoke)
+    after_commit_session_cleanup(db, session_ids, open_session_ids, reason="candidate_deleted")
     log.info(
         "candidate.erased",
         candidate_id=str(cid),

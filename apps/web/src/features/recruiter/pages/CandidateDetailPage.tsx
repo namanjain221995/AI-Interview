@@ -25,7 +25,7 @@ import {
   useSessionDetail,
   useSessions,
 } from "@/features/recruiter/admin/api/candidates";
-import { ArchivedCandidateBanner, CandidateLifecycleMenu } from "@/features/recruiter/admin/candidates/CandidateLifecycle";
+import { ArchivedCandidateBanner, CandidateDangerZone, CandidateLifecycleMenu } from "@/features/recruiter/admin/candidates/CandidateLifecycle";
 import { InterviewsPanel } from "@/features/recruiter/admin/candidates/InterviewsPanel";
 import { ProfileView } from "@/features/recruiter/admin/candidates/ProfileView";
 import { ResumeList } from "@/features/recruiter/admin/candidates/ResumePanel";
@@ -256,6 +256,7 @@ export default function CandidateDetailPage() {
               </CardContent>
             </Card>
           ) : null}
+          {canErase ? <CandidateDangerZone candidate={c} onErased={() => navigate("/app/candidates", { replace: true })} /> : null}
         </aside>
       </div>
 

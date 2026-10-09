@@ -422,7 +422,14 @@ def test_aggregate_rubric_empty_category_and_coverage() -> None:
         ),
     }
     rubric = aggregate_rubric(config, states, {})
-    assert rubric.categories[2].score == 50.0 and rubric.categories[2].confidence == 0.0
+    # Nothing assessed in the category: no score (never a made-up neutral 50).
+    assert rubric.categories[2].score is None and rubric.categories[2].confidence == 0.0
+    # Technical counts only kubernetes (aws is unassessed); communication has nothing either.
+    assert rubric.categories[0].score == pytest.approx(80.0)
+    assert rubric.categories[0].contributing_competencies == ["kubernetes"]
+    assert rubric.categories[1].score is None
+    assert rubric.overall_score == pytest.approx(80.0)  # re-normalised over the scored category
+    assert rubric.assessed_weight_share == pytest.approx(0.60)
     assert rubric.required_coverage == 0.5
     weights = 1.5 + 1.0 + 0.25
     # mean over assessed competencies (only kubernetes) x effective-weight coverage

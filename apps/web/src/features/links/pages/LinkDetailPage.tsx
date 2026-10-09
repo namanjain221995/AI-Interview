@@ -1,4 +1,4 @@
-import { Pencil } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 
@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatCard, StatGroup } from "@/components/ui/StatCard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/Tabs";
-import { usePermission } from "@/lib/auth";
+import { useHasRole, usePermission } from "@/lib/auth";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { useDocumentTitle } from "@/lib/hooks";
 import { CANDIDATE_REPORT_MODE_LABELS, labelFor, ROUND_TYPE_LABELS } from "@/lib/labels";
@@ -20,6 +20,7 @@ import { DetailSkeleton, Fact, LoadError } from "@/features/recruiter/admin/comp
 
 import { useLink } from "../api";
 import { FIELD_TYPE_LABELS } from "../formSchema";
+import { DeleteLinkDialog } from "../components/DeleteLinkDialog";
 import { RegistrationsTable } from "../components/RegistrationsTable";
 import { AccessCodeDialog, ShareLinkCard } from "../components/ShareLinkCard";
 import { LINK_STATE_LABELS, LINK_STATE_TONES, PROGRESSION_LABELS } from "../status";
@@ -129,6 +130,9 @@ export default function LinkDetailPage() {
   const requested = params.get("tab");
   const tab: Tab = (TABS as readonly string[]).includes(requested ?? "") ? (requested as Tab) : "registrations";
   const [accessCode, setAccessCode] = useState<string | null>(null);
+  // Permanent deletion is for administrators only (the API enforces it too).
+  const canDelete = useHasRole("ADMIN", "SUPER_ADMIN");
+  const [deleteOpen, setDeleteOpen] = useState(false);
   useDocumentTitle(link.data?.name ?? "Interview link");
 
   // A code issued on create arrives once through navigation state; drop it from history right away.
@@ -177,13 +181,23 @@ export default function LinkDetailPage() {
           </>
         }
         actions={
-          canManage && data.status !== "closed" ? (
-            <Button asChild variant="outline" leftIcon={<Pencil />}>
-              <Link to={`/app/links/${data.id}/edit`}>Edit</Link>
-            </Button>
+          (canManage && data.status !== "closed") || canDelete ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {canManage && data.status !== "closed" ? (
+                <Button asChild variant="outline" leftIcon={<Pencil />}>
+                  <Link to={`/app/links/${data.id}/edit`}>Edit</Link>
+                </Button>
+              ) : null}
+              {canDelete ? (
+                <Button variant="outline" leftIcon={<Trash2 />} className="text-danger-fg hover:bg-danger-soft" onClick={() => setDeleteOpen(true)} data-testid="link-delete-permanently">
+                  Delete link…
+                </Button>
+              ) : null}
+            </div>
           ) : null
         }
       />
+      {canDelete ? <DeleteLinkDialog link={data} open={deleteOpen} onOpenChange={setDeleteOpen} /> : null}
 
       {data.warnings.includes("job_not_open") ? (
         <Callout tone="warning" className="mb-5" title="The job isn't open">

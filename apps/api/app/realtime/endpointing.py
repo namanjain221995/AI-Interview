@@ -8,6 +8,12 @@ Two stages, so a pause in the middle of a thought never ends the answer:
    * ``endpoint_silence_short_ms`` (600 ms) when the text ends a complete
      sentence, has >= 6 words AND is settled (no segment still being
      transcribed - otherwise the words just spoken are unknown);
+   * ``endpoint_fragment_hold_ms`` (4 s) for a short fragment that stops
+     mid-sentence: at most 5 words ending with a continuation word ("so for
+     that", "and the", "I think it was because", "okay so"); live intake
+     2026-10-10: "so for that" + a thinking pause got a new question after
+     1.7 s. The engine then answers a fragment with a soft nudge, never a new
+     question (``app.services.interview.understanding``);
    * ``endpoint_silence_long_ms`` (1.7 s) when it ends with a conjunction or a
      filler ("and", "so", "but", "because", "um", "uh", "like" ...), even if
      Whisper put a period after it, or has fewer than 3 words;
@@ -39,7 +45,14 @@ from dataclasses import dataclass
 from typing import Literal
 
 EndpointReason = Literal[
-    "short_complete", "base", "long_trailing", "long_short_text", "think_pause", "max_utterance", "manual"
+    "short_complete",
+    "base",
+    "long_trailing",
+    "long_short_text",
+    "fragment",
+    "think_pause",
+    "max_utterance",
+    "manual",
 ]
 
 CONJUNCTIONS_AND_FILLERS: frozenset[str] = frozenset(
@@ -84,6 +97,18 @@ CONJUNCTIONS_AND_FILLERS: frozenset[str] = frozenset(
     }
 )
 
+#: Continuation words that leave a SHORT turn unfinished. Not fillers ("um" alone is hesitation) and not words that
+#: often end a short complete answer ("I did that.", "It was.", "Thanks for that.").
+FRAGMENT_TAILS: frozenset[str] = frozenset(
+    "and so but because like or also plus then which if when while although though since unless the a an my our "
+    "to of with".split()
+)
+FRAGMENT_MAX_WORDS = 5
+#: "so for that", "and about this": a discourse marker + a pointer, no verb yet.
+_FRAGMENT_POINTER = re.compile(
+    r"^(?:(?:and|but|so|okay|ok|yeah|yes|um|uh|like)\s+){1,2}(?:for|about|regarding|on|in|with)\s+(?:that|this|it)$"
+)
+
 _THINK = re.compile(
     r"\b(?:let me (?:think|see|check|recall|remember)|give me (?:a|one) (?:moment|second|sec|minute|bit)|"
     r"(?:one|just a) (?:moment|second|sec|minute)|hold on|bear with me|let me just think|"
@@ -111,6 +136,14 @@ def asks_for_time(text: str) -> bool:
     return bool(_THINK.search(tail))
 
 
+def is_short_fragment(tokens: list[str]) -> bool:
+    """A few words that stop mid-sentence ("so for that", "and the", "okay so"): the candidate is still
+    formulating, so the turn waits longer (``fragment_ms``)."""
+    if not 0 < len(tokens) <= FRAGMENT_MAX_WORDS:
+        return False
+    return tokens[-1] in FRAGMENT_TAILS or bool(_FRAGMENT_POINTER.match(" ".join(tokens)))
+
+
 @dataclass(slots=True, frozen=True)
 class EndpointParams:
     base_ms: int = 850
@@ -118,6 +151,7 @@ class EndpointParams:
     long_ms: int = 1700
     think_max_ms: int = 25_000
     max_utterance_ms: int = 240_000
+    fragment_ms: int = 4000
 
     @classmethod
     def from_settings(cls, settings: object) -> EndpointParams:
@@ -125,6 +159,7 @@ class EndpointParams:
             base_ms=int(getattr(settings, "endpoint_silence_ms", 850)),
             short_ms=int(getattr(settings, "endpoint_silence_short_ms", 600)),
             long_ms=int(getattr(settings, "endpoint_silence_long_ms", 1700)),
+            fragment_ms=int(getattr(settings, "endpoint_fragment_hold_ms", 4000)),
             think_max_ms=int(getattr(settings, "think_pause_max_seconds", 25)) * 1000,
             max_utterance_ms=int(getattr(settings, "max_utterance_seconds", 240)) * 1000,
         )
@@ -142,6 +177,8 @@ def required_silence_ms(
     tokens = words(stripped)
     if not tokens:
         return params.base_ms, "base"
+    if is_short_fragment(tokens):
+        return max(params.fragment_ms, params.long_ms), "fragment"
     if tokens[-1] in CONJUNCTIONS_AND_FILLERS:
         # "... and." is still unfinished: Whisper ends every segment with a period.
         return params.long_ms, "long_trailing"
@@ -164,6 +201,8 @@ def commit_required_ms(text: str, params: EndpointParams) -> int:
     tokens = words(stripped)
     if not tokens:
         return 0
+    if is_short_fragment(tokens):
+        return max(params.fragment_ms, params.long_ms)
     if tokens[-1] in CONJUNCTIONS_AND_FILLERS or len(tokens) < 3 or not ends_complete_sentence(stripped):
         return params.long_ms
     return params.short_ms

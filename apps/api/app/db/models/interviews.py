@@ -318,7 +318,8 @@ class Score(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     category: Mapped[str] = mapped_column(String(32), nullable=False)  # ScoreCategory
     key: Mapped[str] = mapped_column(String(80), nullable=False)  # competency key / rubric category / "overall"
     label: Mapped[str | None] = mapped_column(String(200))
-    score: Mapped[float] = mapped_column(Float, nullable=False)  # competency 0-10; rubric/overall 0-100
+    # competency 0-10; rubric/overall 0-100; NULL = not enough evidence to score (never a made-up midpoint)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     weight: Mapped[float | None] = mapped_column(Float)
     evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

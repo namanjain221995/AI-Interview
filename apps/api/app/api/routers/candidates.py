@@ -19,13 +19,14 @@ from app.domain.enums import InterviewStatus, ResumeStatus, Role
 from app.schemas.api.candidates import (
     CandidateCreate,
     CandidateDeletionOut,
+    CandidateDeletionPreviewOut,
     CandidateOut,
     CandidateProfileOut,
     CandidateUpdate,
 )
 from app.schemas.api.common import ERROR_RESPONSES, Page
 from app.schemas.api.interviews import InterviewOut
-from app.services.candidates.erasure import erase_candidate
+from app.services.candidates.erasure import erase_candidate, erasure_preview
 from app.services.candidates.service import (
     ArchivedFilter,
     archive_candidate,
@@ -203,14 +204,28 @@ async def restore_candidate_endpoint(
     return await _out(db, candidate)
 
 
+@router.get(
+    "/candidates/{candidate_id}/deletion-preview",
+    response_model=CandidateDeletionPreviewOut,
+    summary="What a permanent deletion would remove (ADMIN; counts only)",
+)
+async def candidate_deletion_preview(
+    candidate_id: uuid.UUID, principal: Eraser, org_id: OrgScope, db: DbSession
+) -> CandidateDeletionPreviewOut:
+    candidate = await get_candidate(db, candidate_id, org_id)
+    return CandidateDeletionPreviewOut.model_validate((await erasure_preview(db, candidate)).as_dict())
+
+
 @router.delete(
     "/candidates/{candidate_id}",
     response_model=CandidateDeletionOut,
     summary="Permanently delete an archived candidate and all their data (ADMIN, irreversible)",
     description=(
         "Data-subject deletion: removes the candidate, every interview, session, transcript, evaluation, "
-        "report and stored file (resumes, audio, frames, recordings, report artifacts). The candidate must "
-        "be archived first. Returns counts only; the action is audited without personal data."
+        "report, intake interview, open-link registration and stored file (resumes, audio, frames, "
+        "recordings, report artifacts). The candidate must be archived first, or pass "
+        "`archive_first=true` to archive and delete in one confirmed step. Returns counts only; the "
+        "action is audited without personal data."
     ),
 )
 async def delete_candidate_endpoint(
@@ -227,9 +242,12 @@ async def delete_candidate_endpoint(
             description="Your data-subject request id (recorded in the audit log; no personal data)",
         ),
     ] = None,
+    archive_first: Annotated[
+        bool, Query(description="Archive a not-yet-archived candidate in the same request")
+    ] = False,
 ) -> CandidateDeletionOut:
     candidate = await get_candidate(db, candidate_id, org_id, for_update=True)
-    summary = await erase_candidate(db, candidate)
+    summary = await erase_candidate(db, candidate, archive_first=archive_first)
     counts = summary.as_dict()
     counts.pop("candidate_id")
     await audit(

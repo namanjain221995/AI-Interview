@@ -434,9 +434,12 @@ async def create_completed_session(
     end_reason: str = "sufficient_evidence",
     started_ago_minutes: float = 40.0,
     with_audio: bool = True,
+    question_specs: list[dict[str, Any]] | None = None,
+    elapsed_seconds: float | None = None,
 ) -> SessionFixture:
     config = devops_round_config()
-    specs = QUESTION_SPECS[: question_count if question_count is not None else len(QUESTION_SPECS)]
+    pool = question_specs if question_specs is not None else QUESTION_SPECS
+    specs = pool[: question_count if question_count is not None else len(pool)]
     now = datetime.now(UTC)
     started_at = now - timedelta(minutes=started_ago_minutes)
     async with session_scope() as db:
@@ -508,7 +511,7 @@ async def create_completed_session(
             if status in ("completed", "aborted", "failed", "completing")
             else None,
             end_reason=end_reason if status in ("completed", "aborted", "failed", "completing") else None,
-            elapsed_seconds=1720.0,
+            elapsed_seconds=elapsed_seconds if elapsed_seconds is not None else 1720.0,
             reconnect_count=1,
             state={
                 "version": 42,

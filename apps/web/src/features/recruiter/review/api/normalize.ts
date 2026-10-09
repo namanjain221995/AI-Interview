@@ -102,7 +102,7 @@ export function normalizeEvidence(raw: unknown): EvidenceRecord[] {
 // --------------------------------------------------------------------- scores
 
 function isScoreRecord(value: unknown): value is ScoreRecord {
-  return isRecord(value) && typeof value.key === "string" && typeof value.score === "number";
+  return isRecord(value) && typeof value.key === "string" && (typeof value.score === "number" || value.score === null);
 }
 
 /** Accepts the SessionScores object (with per-competency `why`) or a flat ScoreRecord list. */

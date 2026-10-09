@@ -67,7 +67,7 @@ describe("intake review page", () => {
     expect(screen.getByTestId("intake-band")).toHaveAttribute("data-band", "insufficient_evidence");
     const composure = screen.getByTestId("intake-competency-composure");
     expect(composure).toHaveAttribute("data-status", "insufficient");
-    expect(composure).toHaveTextContent("Insufficient evidence");
+    expect(composure).toHaveTextContent("Not enough evidence");
     expect(composure).toHaveTextContent("No follow-up or challenge was answered");
   });
 

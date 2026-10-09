@@ -1,5 +1,5 @@
-import { BriefcaseBusiness, CalendarClock, ClipboardCheck, Copy, Ellipsis, FileText, Layers, MessagesSquare, RefreshCcw, Timer, UserRound } from "lucide-react";
-import type { ReactNode } from "react";
+import { BriefcaseBusiness, CalendarClock, ClipboardCheck, Copy, Ellipsis, FileText, Layers, MessagesSquare, RefreshCcw, Timer, Trash2, UserRound } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 
 import { StatusBadge } from "@/components/domain/StatusBadge";
@@ -8,12 +8,13 @@ import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { Button } from "@/components/ui/Button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/DropdownMenu";
 import { toast } from "@/components/ui/Toaster";
-import { usePermission } from "@/lib/auth";
+import { useHasRole, usePermission } from "@/lib/auth";
 import { formatDateTime, formatMinutes, pluralize } from "@/lib/format";
 import { labelFor, ROUND_TYPE_LABELS, SESSION_END_REASON_LABELS } from "@/lib/labels";
 
 import { useRecomputeScores } from "../api/hooks";
 import { useSessionContext } from "./context";
+import { DeleteSessionDialog } from "./DeleteSessionDialog";
 
 function MetaItem({ icon, children, label }: { icon: ReactNode; children: ReactNode; label: string }) {
   return (
@@ -33,6 +34,9 @@ export function SessionHeader() {
   const canRecompute = usePermission("reviews:write");
   const canSeeCandidates = usePermission("candidates:read");
   const recompute = useRecomputeScores(sessionId);
+  // Permanent deletion is for administrators only (the API enforces it too).
+  const canDelete = useHasRole("ADMIN", "SUPER_ADMIN");
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const name = session.candidate?.full_name ?? "Candidate";
   const round = session.round;
   const questionCount = session.question_count ?? session.state_digest?.question_count ?? questions.length;
@@ -133,10 +137,28 @@ export function SessionHeader() {
                   </DropdownMenuItem>
                 </>
               ) : null}
+              {canDelete ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    destructive
+                    disabled={live}
+                    title={live ? "End the interview before deleting it" : undefined}
+                    onSelect={() => setDeleteOpen(true)}
+                    data-testid="session-delete-permanently"
+                  >
+                    <Trash2 />
+                    Delete session permanently…
+                  </DropdownMenuItem>
+                </>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </div>
+      {canDelete ? (
+        <DeleteSessionDialog sessionId={sessionId} candidateName={session.candidate?.full_name} intake={intake} open={deleteOpen} onOpenChange={setDeleteOpen} />
+      ) : null}
     </header>
   );
 }

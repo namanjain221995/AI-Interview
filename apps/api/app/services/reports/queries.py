@@ -404,13 +404,15 @@ def state_digest(
     for key, comp in (state.get("competencies") or {}).items():
         if not isinstance(comp, dict):
             continue
+        assessed = int(comp.get("evidence_count", 0) or 0) > 0 or _num(comp.get("confidence")) > 0
         competencies.append(
             {
                 "key": key,
                 "name": comp.get("name"),
                 "weight": comp.get("weight", 1.0),
                 "required": comp.get("required", True),
-                "score_estimate": round(_num(comp.get("score_estimate"), 5.0), 2),
+                # Nothing observed yet: no estimate (the engine's neutral start is not a score).
+                "score_estimate": round(_num(comp.get("score_estimate"), 5.0), 2) if assessed else None,
                 "confidence": round(_num(comp.get("confidence")), 3),
                 "evidence_count": int(comp.get("evidence_count", 0) or 0),
                 "sufficient_evidence": bool(comp.get("sufficient_evidence", False)),

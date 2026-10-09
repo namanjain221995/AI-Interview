@@ -54,7 +54,9 @@ another instance is refused with `session_active_elsewhere` unless the lock is s
 
 Base silence `endpoint_silence_ms` (850 ms). Shorter (`endpoint_silence_short_ms`, 600 ms) when the text so far ends in a
 complete sentence and has >= 6 words. Longer (`endpoint_silence_long_ms`, 1.7 s) when it ends with a conjunction or filler
-("and", "so", "but", "because", "um", "uh", "like") or is under 3 words. "Let me think" / "give me a moment" extends the
+("and", "so", "but", "because", "um", "uh", "like") or is under 3 words. A short fragment that stops mid-sentence (at most
+5 words ending with a continuation word, or "so for that") waits `endpoint_fragment_hold_ms` (4 s) in both stages, and
+the engine answers it with a soft nudge, never a new question. "Let me think" / "give me a moment" extends the
 wait up to `think_pause_max_seconds`. `control.end_turn` (button) ends immediately; `max_utterance_seconds` forces it.
 While silence is accumulating, the runtime calls `engine.on_partial_transcript(text, silence_started=True)` so the
 engine can prepare (quick assessment, retrieval) without committing anything.

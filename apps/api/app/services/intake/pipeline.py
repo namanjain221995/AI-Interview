@@ -746,18 +746,33 @@ def evidence_sufficiency(result: ValidationResult) -> str:
     return "insufficient" if scored == 0 else "partial"
 
 
-def _score_rows(
+INSUFFICIENT_OVERALL_LABEL = "Intake weighted total — not enough evidence"
+
+
+def intake_generic_score_rows(
     session_id: uuid.UUID,
     evaluation: IntakeEvaluation,
-    result: ValidationResult,
+    competencies: Mapping[str, Any],
     created_at: datetime,
 ) -> list[Score]:
-    """Generic ``scores`` rows (contract 8.10) so the sessions list and analytics show intake sessions."""
+    """Generic ``scores`` rows (contract 8.10) so the sessions list, session detail and analytics show intake
+    sessions.
+
+    ``competencies`` maps each intake competency key to an object with ``status``, ``score`` (Decimal 1-5 or
+    None), ``evidence`` and ``missing_evidence`` (a validated competency or a stored
+    ``IntakeCompetencyScore``); totals come from the evaluation row. Every competency gets a row: an
+    unscored one (``insufficient`` / ``not_assessed``) is stored with ``score = NULL`` and
+    ``sufficient_evidence = false`` — never a made-up number. The overall row is always written: the
+    converted total when the session is banded, else ``score = NULL`` with ``insufficient_evidence``.
+    """
     rows: list[Score] = []
-    for key, comp in result.competencies.items():
-        if comp.status != "scored" or comp.score is None:
-            continue
-        refs = comp.evidence
+    for key in INTAKE_WEIGHTS:
+        comp = competencies.get(key)
+        status = str(getattr(comp, "status", None) or "insufficient")
+        raw = getattr(comp, "score", None)
+        scored = status == "scored" and raw is not None
+        refs = list(getattr(comp, "evidence", None) or [])
+        missing = list(getattr(comp, "missing_evidence", None) or [])
         rows.append(
             Score(
                 id=uuid.uuid4(),
@@ -765,14 +780,14 @@ def _score_rows(
                 category=ScoreCategory.COMPETENCY.value,
                 key=key,
                 label=INTAKE_LABELS[key],
-                score=float(comp.score * 2),
-                confidence=1.0,
+                score=float(Decimal(str(raw)) * 2) if scored else None,
+                confidence=1.0 if scored else 0.0,
                 weight=float(INTAKE_WEIGHTS[key] * 10),
                 evidence_count=len(refs),
                 positive_count=sum(1 for r in refs if r.get("supports") == "positive"),
                 negative_count=sum(1 for r in refs if r.get("supports") == "negative"),
-                sufficient_evidence=True,
-                unanswered_areas=list(comp.missing_evidence)[:10],
+                sufficient_evidence=scored,
+                unanswered_areas=missing[:10],
                 supporting_question_ids=sorted({str(r["question_id"]) for r in refs if r.get("question_id")}),
                 transcript_refs=[
                     {
@@ -786,40 +801,74 @@ def _score_rows(
                 details={
                     "source": "intake",
                     "evaluation_id": str(evaluation.id),
-                    "intake_score": format(comp.score, "f"),
+                    "status": status,
+                    "assessed": scored,
+                    "intake_score": format(Decimal(str(raw)), "f") if scored else None,
                     "intake_weight": format(INTAKE_WEIGHTS[key], "f"),
                 },
                 is_final=True,
                 created_at=created_at,
             )
         )
-    summary = result.summary
-    if summary.total is not None and summary.normalized_100 is not None:
-        recommendation = recommendation_for(summary.band.value)
-        rows.append(
-            Score(
-                id=uuid.uuid4(),
-                session_id=session_id,
-                category=ScoreCategory.OVERALL.value,
-                key="overall",
-                label="Intake weighted total (out of 100, conversion)",
-                score=float(summary.normalized_100),
-                confidence=1.0,
-                weight=None,
-                evidence_count=sum(len(c.evidence) for c in result.competencies.values()),
-                sufficient_evidence=True,
-                details={
-                    "source": "intake",
-                    "evaluation_id": str(evaluation.id),
-                    "recommendation": recommendation.value if recommendation else None,
-                    "band": summary.band.value,
-                    "weighted_total": format(summary.total, "f"),
-                },
-                is_final=True,
-                created_at=created_at,
-            )
+    banded = evaluation.weighted_total is not None and evaluation.normalized_100 is not None
+    band = evaluation.band or DecisionBand.INSUFFICIENT_EVIDENCE.value
+    recommendation = recommendation_for(band) if banded else Recommendation.INSUFFICIENT_EVIDENCE
+    scored_count = sum(1 for r in rows if r.score is not None)
+    if banded:
+        rationale = None
+    elif scored_count == 0:
+        rationale = (
+            "Insufficient evidence: no intake competency could be scored (the interview was too short or the "
+            "candidate gave no answers), so no score is given."
         )
+    else:
+        rationale = (
+            f"Insufficient evidence: {scored_count} of {len(rows)} intake competencies could be scored, so the "
+            "weighted total is not banded."
+        )
+    rows.append(
+        Score(
+            id=uuid.uuid4(),
+            session_id=session_id,
+            category=ScoreCategory.OVERALL.value,
+            key="overall",
+            label="Intake weighted total (out of 100, conversion)" if banded else INSUFFICIENT_OVERALL_LABEL,
+            score=float(evaluation.normalized_100)
+            if banded and evaluation.normalized_100 is not None
+            else None,
+            confidence=1.0 if banded else 0.0,
+            weight=None,
+            evidence_count=sum(r.evidence_count for r in rows),
+            sufficient_evidence=banded,
+            details={
+                "source": "intake",
+                "evaluation_id": str(evaluation.id),
+                "recommendation": recommendation.value if recommendation else None,
+                "rationale": rationale,
+                "band": band,
+                "weighted_total": format(evaluation.weighted_total, "f") if banded else None,
+                "partial_total": format(evaluation.partial_total, "f")
+                if evaluation.partial_total is not None
+                else None,
+                "scored_competencies": scored_count,
+                "insufficient_reason": None
+                if banded
+                else ("no_evidence" if scored_count == 0 else "partial"),
+            },
+            is_final=True,
+            created_at=created_at,
+        )
+    )
     return rows
+
+
+def _score_rows(
+    session_id: uuid.UUID,
+    evaluation: IntakeEvaluation,
+    result: ValidationResult,
+    created_at: datetime,
+) -> list[Score]:
+    return intake_generic_score_rows(session_id, evaluation, result.competencies, created_at)
 
 
 async def _eligibility(

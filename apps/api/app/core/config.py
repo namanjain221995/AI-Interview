@@ -180,6 +180,8 @@ class Settings(BaseSettings):
     endpoint_silence_ms: int = 850
     endpoint_silence_short_ms: int = 600
     endpoint_silence_long_ms: int = 1700
+    # A short fragment ending mid-sentence ("so for that", "and the") waits this long before the turn ends.
+    endpoint_fragment_hold_ms: int = 4000
     think_pause_max_seconds: int = 25
     max_utterance_seconds: int = 240
     acknowledgment_enabled: bool = True

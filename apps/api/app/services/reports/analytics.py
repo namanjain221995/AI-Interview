@@ -221,8 +221,10 @@ async def overview(db: AsyncSession, period: Period) -> dict[str, Any]:
         or 0
     )
     rows = await _latest_overall_rows(db, period)
-    scores = [float(r[3]) for r in rows]
-    confidences = [float(r[4]) for r in rows]
+    # Sessions without enough evidence have no overall score: they count in the recommendation
+    # distribution (insufficient_evidence) but never in score/confidence averages.
+    scores = [float(r[3]) for r in rows if r[3] is not None]
+    confidences = [float(r[4]) for r in rows if r[3] is not None]
     durations = [float(r[6] or 0.0) for r in rows]
     if not durations:
         durations = [
@@ -372,13 +374,15 @@ async def score_distributions(db: AsyncSession, period: Period) -> dict[str, Any
     by_job: dict[uuid.UUID, list[float]] = defaultdict(list)
     by_round: dict[uuid.UUID, list[float]] = defaultdict(list)
     for _, job_id, round_id, score, *_rest in rows:
+        if score is None:  # not enough evidence: no score to distribute
+            continue
         by_job[job_id].append(float(score))
         by_round[round_id].append(float(score))
     jobs, rounds = await _labels(db, by_job, by_round)
     return {
         "period": period.as_dict(),
         "bucket_labels": BUCKET_LABELS,
-        "overall": _group("all", "All sessions", [float(r[3]) for r in rows]),
+        "overall": _group("all", "All sessions", [float(r[3]) for r in rows if r[3] is not None]),
         "by_job": sorted(
             (_group(str(k), jobs.get(k, "Unknown job"), v) for k, v in by_job.items()),
             key=lambda g: -g["count"],
@@ -401,7 +405,7 @@ async def competency_averages(db: AsyncSession, period: Period) -> dict[str, Any
     measurement); ``sessions`` counts every session scored.
     """
     latest = latest_scores_lateral()
-    evidenced = Score.evidence_count > 0
+    evidenced = (Score.evidence_count > 0) & Score.score.isnot(None)
     stmt = (
         select(
             Score.key,

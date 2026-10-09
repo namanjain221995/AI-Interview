@@ -152,6 +152,7 @@ from app.services.interview.contracts import (
     UtteranceBegin,
     UtteranceMeta,
 )
+from app.services.interview.understanding import understand as understand_turn
 
 log = get_logger(__name__)
 
@@ -2337,7 +2338,11 @@ class SessionRuntime:
             return False
         if capture.voiced_ms < ACK_MIN_SPEECH_MS:
             return False
-        return not is_repeat_or_clarification(text_so_far)
+        if is_repeat_or_clarification(text_so_far):
+            return False
+        # "Can you hear me?", "Should I start?", "okay", "so for that": the engine's flow reply is the
+        # acknowledgement ("Thanks, that helps." before "Yes, I can hear you clearly." would sound absurd).
+        return not understand_turn(text_so_far).flow
 
     def _play_ack(self, capture: TurnCapture, *, soft: bool = False) -> bool:
         pick = self.ack_cache.pick(get_ai().tts, self.voice, last=self._last_ack, soft_only=soft)

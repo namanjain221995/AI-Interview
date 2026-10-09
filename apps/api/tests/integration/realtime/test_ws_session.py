@@ -786,6 +786,22 @@ async def test_misrecognized_technical_terms_are_corrected(realtime_env, ws_conn
     assert get_registry().get(env.session_id).latency[-1]["glossary"] == 2
 
 
+async def test_known_misrecognitions_reach_the_engine_corrected(realtime_env, ws_connect, mock_ai) -> None:
+    """Live intake 2026-10-10: "we use the CACD pipeline" was echoed back by the interviewer. The glossary's exact
+    aliases fix CI/CD, LLM and TechSara before the engine (and the transcript) see the answer."""
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("At Tech Sara we deploy the L L M service,", "and we use the CACD pipeline for it.")
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((silence(300), load_clip("cost_vague"), silence(2200))))
+    final = await ws.wait_type("transcript.final", after=mark, timeout=15)
+    await ws.wait_type("ai.utterance.start", kind="question", after=mark, timeout=15)
+    expected = "At TechSara we deploy the LLM service, and we use the CI/CD pipeline for it."
+    assert final["text"] == expected and env.engine.turns[0].text == expected
+    assert get_registry().get(env.session_id).latency[-1]["glossary"] == 3
+
+
 async def test_unclear_answer_is_asked_again_not_answered(realtime_env, ws_connect, mock_ai) -> None:
     """Hesitation sounds only (or nothing usable after real speech) never reach the
     engine: the interviewer asks the candidate to repeat; a clear answer then goes on."""

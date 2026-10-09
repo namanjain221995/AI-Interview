@@ -2348,8 +2348,11 @@ keeps the contract's intent. Engine/realtime details: `INTERVIEW_ENGINE.md` ("In
    spoken MQ2 answer names a PM role, and the language clarifier `mandatory.mq3.language`) are created in
    `intake_stage_results.items` when they happen, not planned. `verification_retry` uses the `mandatory` follow-up
    budget. `learning.scenario` uses one of the learning follow-up slots.
-4. **Candidate questions before stage 7** always get the template deferral ("Let's make sure we get to that at the
-   end." + the current question); no model answer (the contract allowed either).
+4. **Candidate questions before stage 7**: job / company / program questions get the template deferral ("Let's make
+   sure we get to that at the end." + the current question); no model answer (the contract allowed either). Since
+   2026-10-10 questions about the interview itself ("can you hear me", "should I start", "am I able to do it", "how
+   long should I speak", "what are the next steps") are answered at once with a template and the item stays pending
+   (point 19).
 5. **Hiring-team fallback wording** is "The hiring team is best placed to answer that; they'll follow up with you on
    it." instead of "That's a good question for the hiring team; ..." — the platform's own praise detector
    (`speech.PRAISE`, used by `acceptable_closing`) flags "That's a good question" as judging the candidate. When the
@@ -2395,6 +2398,16 @@ keeps the contract's intent. Engine/realtime details: `INTERVIEW_ENGINE.md` ("In
 18. **Smaller behaviours**: a stage change also yields `StateChanged("intake_stage")` (7.10 snapshot push); the MQ3
     verification retry is graded like the first answer (`retry=True` prompt); a capture committed while the session
     was paused emits its `ActivityEnded` on resume, before the next item.
+19. **Turn understanding (2026-10-10, owner's live session f1dc3a1b).** Before `next_move()` consumes an item, the
+    conductor runs `app.services.interview.understanding.understand()`: audio / connection checks, questions about
+    the interview, readiness ("okay" on an open item; twice per item), "let me think", mid-sentence fragments ("so
+    for that"; twice per item) and interruptions get a template reply (`P.REINVITE` short forms for the greeting
+    items, else the question sentence), recorded as an interviewer utterance with `decision.flow`, no `questions`
+    row, no `answers` row (candidate transcript only) and no model call; the item stays `asked`. Very short or
+    unclear answers (`brief`, `garbled`, `backchannel`, `empty`) are clarified with a template (`P.UNCLEAR_*_LEAD` +
+    the rephrased template or the question again) instead of a model `clarify` (live: "Exactly." became "what you
+    meant by exactly regarding the retries or deduplication"); explicit clarification requests still go to the
+    model for M items. A flow turn transcribed while paused is not kept as the pending answer.
 
 Known limitation (T1): a read_relay passage the runtime showed before the engine recorded the phase start
 (`phase_started` still queued) is accounted only by the runtime's own `shown_ms`; if the runtime instance is

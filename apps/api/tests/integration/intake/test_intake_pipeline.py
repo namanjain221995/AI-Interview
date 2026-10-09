@@ -230,13 +230,18 @@ async def test_last_attempt_falls_back(org_factory, redis, storage, mock_ai) -> 
                 IntakeCompetencyScore.competency_key == "composure",
             )
         )
-        overall = await db.scalar(
-            select(func.count())
-            .select_from(Score)
-            .where(Score.session_id == demo.session_id, Score.category == "overall")
-        )
+        generic = list((await db.scalars(select(Score).where(Score.session_id == demo.session_id))).all())
     assert composure is not None and composure.status == "insufficient" and composure.score is None
-    assert overall == 0  # no overall row without a band
+    # Without a band the overall row has no score (never a made-up number) and says why; the unscored
+    # competency is stored as NULL, the scored ones keep their numbers.
+    overall = [r for r in generic if r.category == "overall"]
+    assert len(overall) == 1 and overall[0].score is None and overall[0].sufficient_evidence is False
+    assert overall[0].details["recommendation"] == "insufficient_evidence"
+    assert overall[0].details["insufficient_reason"] == "partial"
+    comps = {r.key: r for r in generic if r.category == "competency"}
+    assert len(comps) == 7
+    assert comps["composure"].score is None and comps["composure"].sufficient_evidence is False
+    assert all(r.score is not None for k, r in comps.items() if k != "composure")
 
 
 async def test_invalid_output_before_last_attempt_retries(org_factory, redis, storage, mock_ai) -> None:

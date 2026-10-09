@@ -61,6 +61,7 @@ from app.services.intake.turn_schema import (
     synthesize_turn,
 )
 from app.services.interview import behavior as beh
+from app.services.interview import understanding as U
 from app.services.interview.attribution import guard_for_turn
 from app.services.interview.contracts import (
     ActivityEnded,
@@ -76,6 +77,7 @@ from app.services.interview.contracts import (
     UtteranceMeta,
 )
 from app.services.interview.policy import speech_issues
+from app.services.interview.prompts import fence
 from app.services.interview.records import (
     add_answer,
     add_question,
@@ -83,7 +85,7 @@ from app.services.interview.records import (
     log_event,
     store_answer_audio,
 )
-from app.services.interview.special import classify, hedge_kind
+from app.services.interview.special import SpecialResult, classify, hedge_kind
 from app.services.interview.state import InterviewState, QuestionRecord, UtteranceRecord
 from app.services.interview.transitions import add_utterance, record_answer, record_interviewer_text
 from app.services.interview.turns import TurnOutcome, question_core, stream_speech_object
@@ -250,10 +252,18 @@ class IntakeConductor:
                 yield event
 
     # ======================================================= candidate turns
-    def signal(self, state: InterviewState, text: str, turn: CandidateTurn | None = None) -> S.AnswerSignal:
+    def signal(
+        self,
+        state: InterviewState,
+        text: str,
+        turn: CandidateTurn | None = None,
+        *,
+        special: SpecialResult | None = None,
+    ) -> S.AnswerSignal:
         ik = self._ik(state)
         stage = ik.stage.key if ik.stage else ""
-        special = classify(text, awaiting_answer=True, questions_invited=stage == "close")
+        if special is None:
+            special = classify(text, awaiting_answer=True, questions_invited=stage == "close")
         language = selection.language_in_text(self.kit, text)
         return S.AnswerSignal(
             kind=special.kind.value,
@@ -265,6 +275,92 @@ class IntakeConductor:
             language=language.key if language else None,
             question_like=_question_like(text),
         )
+
+    def understand(
+        self, state: InterviewState, text: str, turn: CandidateTurn | None = None
+    ) -> U.Understanding:
+        """What the turn IS (``understanding.py``) before the pending item may be consumed."""
+        ik = self._ik(state)
+        stage = ik.stage.key if ik.stage else ""
+        current = state.current_question()
+        spec = self._spec(ik.current_item)
+        return U.understand(
+            text,
+            question_text=current.text if current is not None else None,
+            awaiting_answer=True,
+            questions_invited=stage == "close",
+            accepts_brief=bool(spec is not None and spec.accepts_brief),
+            stt_confidence=turn.stt_confidence if turn is not None and not turn.typed else None,
+        )
+
+    @staticmethod
+    def _spec(key: str | None) -> S.ItemSpec | None:
+        if not key:
+            return None
+        try:
+            return S.item_spec(key)
+        except KeyError:
+            return None
+
+    def _flow_turn(self, state: InterviewState, heard: U.Understanding) -> bool:
+        """Answer the turn with a flow reply and keep the pending item (audio checks, questions about the
+        interview, "okay", "let me think", fragments, interruptions). Job/company questions keep the deferral to
+        the last part; "what are the next steps?" gets the approved closing wording before stage 7."""
+        ik = self._ik(state)
+        item = ik.current()
+        if item is None or item.status != "asked" or ik.stage is None:
+            return False
+        if not ik.time_up and self._now(state) >= ik.time_limit_s:
+            return False  # the time-up close comes first (next_move)
+        if heard.intent is U.TurnIntent.CANDIDATE_QUESTION:
+            return heard.topic == "next_steps" and ik.stage.key != "close"
+        return U.flow_allowed(state, heard)
+
+    async def _flow_reply(
+        self, state: InterviewState, heard: U.Understanding
+    ) -> AsyncGenerator[TurnEvent, None]:
+        """A deterministic, human reply that leaves the pending item pending (no answer row, no new question)."""
+        ik = self._ik(state)
+        key = ik.current_item
+        spec = self._spec(key)
+        current = state.current_question()
+        streak = U.note_flow(state, heard.intent)
+        text = U.flow_reply(
+            heard,
+            question_text=current.text if current is not None else None,
+            reinvite=P.REINVITE.get(key or ""),
+            streak=streak,
+            seed=f"{state.session_id}:{state.turn_index}:{len(state.utterances)}",
+            remaining_s=max(0.0, ik.time_limit_s - self._now(state)),
+            soft_limit_s=spec.soft_limit_s if spec is not None else None,
+        )
+        if heard.intent is U.TurnIntent.THINKING:
+            text = P.WAIT
+        state.silence_prompts = 0
+        log.info(
+            "intake.flow_turn", session_id=state.session_id, intent=heard.intent.value, topic=heard.topic,
+            item_key=key, streak=streak,
+        )  # fmt: skip
+        async for event in self._say(
+            state, text, item_key=key, item_kind="prompt", kind="acknowledgment", action=U.flow_action(heard),
+            creates_question=False, flow=heard.intent.value,
+        ):  # fmt: skip
+            yield event
+
+    def _unclear_text(self, state: InterviewState, key: str, reason: str) -> str:
+        """The deterministic clarification after a very short or unclear answer: a lead and the question again
+        (a rephrased template for template items), never the model's guess at what the candidate meant."""
+        lead = P.UNCLEAR_GARBLED_LEAD if reason in ("garbled", "empty") else P.UNCLEAR_BRIEF_LEAD
+        body: str | None = None
+        rephrase = P.CLARIFY.get(key)
+        if rephrase and "{core}" not in rephrase:
+            body = P.strip_ack(rephrase)
+        if body is None:
+            body = P.REINVITE.get(key)
+        if body is None:
+            current = state.current_question()
+            body = U.short_reinvite(current.text if current is not None else None)
+        return P.join_speech(lead, body)
 
     async def candidate_turn(
         self, state: InterviewState, turn: CandidateTurn, text: str, *, replay: bool
@@ -278,22 +374,41 @@ class IntakeConductor:
         activity = ik.activity
         if activity is not None and activity.status in ("armed", "running"):
             # The candidate spoke while an activity instruction was playing (or typed during a non-capture
-            # phase): record it, then explain again and re-arm (7.3 step 5).
+            # phase): record it, then explain again and re-arm (7.3 step 5). "Can you hear me?" is answered first;
+            # flow turns stay in the transcript only (never an answer of the activity item).
+            heard = self.understand(state, text, turn) if text else None
             if not replay and text:
-                await self._persist_answer(state, turn, text, item_key=ik.current_item)
+                if heard is not None and heard.flow:
+                    await self.engine._record_candidate_utterance(state, turn, text)
+                    state.last_turn_key = self._turn_key(turn, text)
+                else:
+                    await self._persist_answer(state, turn, text, item_key=ik.current_item)
             if activity.status == "running":
                 await self._recover_running(state)  # the runtime lost the running phase (a failed job)
-            async with aclosing(self._rearm(state, lead=P.REEXPLAIN_LEAD)) as relay:
+            lead = P.REEXPLAIN_LEAD
+            if heard is not None and heard.intent is U.TurnIntent.AUDIO_CHECK:
+                lead = P.AUDIO_REEXPLAIN_LEAD
+            async with aclosing(self._rearm(state, lead=lead)) as relay:
                 async for event in relay:
                     yield event
             return
         if ik.closed:
             return
-        signal = self.signal(state, text, turn)
+        heard = self.understand(state, text, turn)
+        signal = self.signal(state, text, turn, special=heard.special)
         if signal.kind == "repeat":
             if not replay:
                 await self.engine._record_candidate_utterance(state, turn, text)
             async with aclosing(self.engine._repeat_events(state)) as relay:
+                async for event in relay:
+                    yield event
+            return
+        if self._flow_turn(state, heard):
+            # Not an answer: the candidate's words stay in the transcript, the item stays pending.
+            if not replay and text:
+                await self.engine._record_candidate_utterance(state, turn, text)
+                state.last_turn_key = self._turn_key(turn, text)
+            async with aclosing(self._flow_reply(state, heard)) as relay:
                 async for event in relay:
                     yield event
             return
@@ -302,7 +417,9 @@ class IntakeConductor:
             await self._persist_answer(state, turn, text, item_key=current)
         self._answer_facts(state, current, text, signal)
         move = S.next_move(ik, signal, self._now(state))
-        async with aclosing(self._execute(state, move, last_answer=text)) as relay:
+        # An answer that opened with an audio check: "Yes, I can hear you clearly." before the next item.
+        ack_lead = heard.ack if move.action == "ask" else None
+        async with aclosing(self._execute(state, move, last_answer=text, lead=ack_lead)) as relay:
             async for event in relay:
                 yield event
 
@@ -320,9 +437,16 @@ class IntakeConductor:
             return
         if not text:
             return
+        heard = self.understand(state, text, turn)
+        if heard.flow or heard.intent is U.TurnIntent.REPEAT:
+            # "Can you hear me?" transcribed after a disconnect: the resume re-asks the item anyway.
+            await self.engine._record_candidate_utterance(state, turn, text)
+            state.last_turn_key = self._turn_key(turn, text)
+            await self.engine._save(state, durable=True)
+            return
         current = ik.current_item
         await self._persist_answer(state, turn, text, item_key=current)
-        signal = self.signal(state, text, turn)
+        signal = self.signal(state, text, turn, special=heard.special)
         self._answer_facts(state, current, text, signal)
         ik.pending_candidate_turn = True
         ik.pending_signal = {
@@ -494,6 +618,13 @@ class IntakeConductor:
         if action == "clarify":
             key = move.item_key or ""
             S.apply_clarification(ik, key)
+            if move.reason in ("brief", "garbled", "backchannel", "empty"):
+                async for event in self._say(
+                    state, self._unclear_text(state, key, move.reason), item_key=key, item_kind="clarify",
+                    kind="followup", action=TurnAction.CLARIFY_QUESTION,
+                ):  # fmt: skip
+                    yield event
+                return
             spec = S.item_spec(key) if key else None
             if spec is not None and spec.kind == "M":
                 async with aclosing(
@@ -902,6 +1033,12 @@ class IntakeConductor:
             card = {"title": topic_card.title, "bullets": list(topic_card.bullets)}
         approved = P.approved_info_text(ik.approved_info) if stage_key == "close" else None
         elapsed = self._now(state)
+        if state.ungrounded_reference:
+            notes = [
+                *notes,
+                "Your previous question credited the candidate with something they never said (quoted below); do "
+                "not refer to it again. " + fence(state.ungrounded_reference, "derived_ungrounded_reference"),
+            ]
         return P.render_turn(
             interviewer_name=state.interviewer_name,
             program_name=ik.program_name,
@@ -1040,6 +1177,7 @@ class IntakeConductor:
         activity_id: str | None = None,
         ended_stage: str | None = None,
         all_stages: bool = False,
+        flow: str | None = None,
     ) -> AsyncGenerator[TurnEvent, None]:
         """A template utterance: commit first, then UtteranceBegin (with the text) + UtteranceMeta."""
         utterance_id = str(uuid.uuid4())
@@ -1058,6 +1196,7 @@ class IntakeConductor:
             followup_index=followup_index,
             activity_id=activity_id,
             all_stages=all_stages,
+            flow=flow,
         )
         yield UtteranceBegin(
             utterance_id=utterance_id,
@@ -1165,6 +1304,7 @@ class IntakeConductor:
         activity_id: str | None = None,
         latency: dict[str, Any] | None = None,
         all_stages: bool = False,
+        flow: str | None = None,
     ) -> UtteranceMeta:
         """Persist one interviewer utterance (questions + transcripts rows, stage rows, durable state)."""
         ik = self._ik(state)
@@ -1178,6 +1318,8 @@ class IntakeConductor:
         question_id = str(uuid.uuid4()) if creates_question else None
         behavior = beh.provisional(action)
         decision = {"action": action.value, "intake": meta, "template": template, "latency": latency or {}}
+        if flow:
+            decision["flow"] = flow  # a flow reply (understanding.py): the item stays pending
         key = meta["item_key"]
         parent = (
             state.current_question_id
@@ -1271,6 +1413,7 @@ class IntakeConductor:
                     "item_kind": item_kind,
                     "template": template,
                     "move": move,
+                    "flow": flow,
                     "deviations": deviations[:8],
                 },
                 elapsed_s=elapsed,

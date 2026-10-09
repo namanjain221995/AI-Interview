@@ -54,7 +54,7 @@ class RubricCategoryResult:
     key: str
     label: str
     weight: float  # percent
-    score: float  # 0-100
+    score: float | None  # 0-100; None = no assessed competency or scored dimension (never a made-up 50)
     confidence: float
     contributing_competencies: list[str] = field(default_factory=list)
 
@@ -62,16 +62,17 @@ class RubricCategoryResult:
 @dataclass(slots=True)
 class RubricResult:
     categories: list[RubricCategoryResult]
-    overall_score: float  # 0-100
+    overall_score: float | None  # 0-100; None = nothing was assessed (insufficient evidence)
     overall_confidence: float  # 0-1
     required_coverage: float  # share of required competencies with sufficient evidence
+    assessed_weight_share: float = 1.0  # share of the weight behind ``overall_score`` (1 = everything scored)
 
 
 @dataclass(slots=True)
 class RecommendationResult:
     recommendation: Recommendation
     rationale: str
-    factors: dict[str, float | int | str] = field(default_factory=dict)
+    factors: dict[str, float | int | str | None] = field(default_factory=dict)
     human_decision_note: str = "This recommendation is assistive. A human reviewer owns the hiring decision."
 
 

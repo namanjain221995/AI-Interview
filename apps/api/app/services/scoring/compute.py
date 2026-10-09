@@ -19,7 +19,13 @@ Observation (one evaluated answer, one competency)
     assistance_factor = 1 - 0.07 x hints (at most 3 hints count: >= 0.79).
 
 Competency score
-    bayes   = (5.0 x 1.0 + sum(r_i x s_i)) / (1.0 + sum(r_i))
+    mean    = sum(r_i x s_i) / sum(r_i)                      (weighted observation mean)
+    bayes   = (5.0 x 1.0 + sum(r_i x s_i)) / (1.0 + sum(r_i))  when mean > 5.0, else mean
+              The neutral prior only tempers HIGH scores from thin evidence;
+              it never lifts weak or empty answers towards the midpoint
+              (owner rule: low/empty answers = low scores). Without any
+              observation the prior 5.0 is the starting point of the evidence
+              balance below.
     balance = 0.8 x (P - N) / (P + N + 1.0)
               where P / N = sum(strength x confidence) of positive / negative
               evidence. This is the strength-and-confidence-weighted mean of
@@ -56,6 +62,16 @@ Round scope (short-round calibration, :func:`round_scope`)
     The cap makes sufficient evidence on every required competency (the
     engine's stop condition) always meet the overall target. Confidence
     values themselves are never changed, and scores never move.
+
+No evidence = no score
+    A competency with neither an observation nor non-neutral evidence is
+    *unassessed*: its internal estimate stays the neutral starting point the
+    engine needs, but it is never shown or stored as a score (persistence
+    writes ``score = NULL``), never enters a rubric category or the overall
+    score, and a session where nothing was assessed has no overall score at
+    all and the recommendation ``insufficient_evidence``. Rubric categories
+    and the overall score are re-normalised over what was assessed
+    (``RubricResult.assessed_weight_share`` says how much that is).
 
 Hint-usage evidence (``source=hint_usage``) is recorded for transparency but
 treated as neutral here: assistance is already priced in through the coding
@@ -172,6 +188,10 @@ POSITIVE_RECOMMENDATIONS = frozenset({Recommendation.STRONG_PROCEED, Recommendat
 TIME_END_REASONS = frozenset({SessionEndReason.TIME_LIMIT.value})
 
 HUMAN_DECISION_NOTE = "This recommendation is assistive. A human reviewer owns the hiring decision."
+NO_EVIDENCE_REASON = (
+    "No answer produced scorable evidence (the interview was too short or the candidate gave no answers), "
+    "so no score is given."
+)
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -417,7 +437,11 @@ def calculate(
         denominator += r
         total_weight += r
         scores.append(s)
-    bayes = numerator / denominator
+    if total_weight > 0 and (numerator - PRIOR_SCORE * PRIOR_WEIGHT) / total_weight <= PRIOR_SCORE:
+        # Weak answers keep their own (low) mean: the prior never pulls them up to the midpoint.
+        bayes = (numerator - PRIOR_SCORE * PRIOR_WEIGHT) / total_weight
+    else:
+        bayes = numerator / denominator
     balance, pos, neg = evidence_balance(evidence)
     score = clamp(bayes + balance, 0.0, 10.0)
 
@@ -890,6 +914,12 @@ def _touched(state: CompetencyState) -> bool:
     return state.evidence_count > 0 or state.confidence > 0
 
 
+def is_assessed(state: CompetencyState) -> bool:
+    """True when the competency has any observation or non-neutral evidence. An unassessed competency
+    has no score: its ``score_estimate`` is only the engine's neutral starting point."""
+    return _touched(state)
+
+
 def evidence_coverage(round_config: RoundConfig, states: Mapping[str, CompetencyState]) -> float:
     """Effective-weight share of the round's competencies that have any
     evidence (an untouched nice-to-have costs half of an untouched requirement)."""
@@ -914,14 +944,16 @@ def aggregate_rubric(
 ) -> RubricResult:
     """Rubric categories (0-100), overall score and confidence.
 
-    Category score = weighted average of its competencies' scores x 10
-    (weight = competency weight) and its dimension averages x 10 (weight 1
-    each, only dimensions that were actually scored). A category with
-    nothing to measure scores the neutral 50 with confidence 0. Overall =
-    sum(category weight % x category score); without a rubric, the
-    weight-averaged competency score x 10. Overall confidence =
-    weight-averaged confidence of the assessed competencies x evidence
-    coverage (optional competencies weigh half in both).
+    Category score = weighted average of its *assessed* competencies' scores
+    x 10 (weight = competency weight) and its dimension averages x 10
+    (weight 1 each, only dimensions that were actually scored). A category
+    with nothing assessed has no score (``None``, confidence 0): an untouched
+    competency is never counted as a neutral 50. Overall = category-weighted
+    mean of the categories that have a score (re-normalised; without a
+    rubric, the weight-averaged score of the assessed competencies x 10);
+    ``None`` when nothing was assessed. Overall confidence = weight-averaged
+    confidence of the assessed competencies x evidence coverage (optional
+    competencies weigh half in both).
     """
     mean_confidence = _weighted_confidence(round_config, states)
     categories: list[RubricCategoryResult] = []
@@ -931,7 +963,7 @@ def aggregate_rubric(
         contributing: list[str] = []
         for key in category.competency_keys:
             state = states.get(key)
-            if state is None:
+            if state is None or not is_assessed(state):
                 continue
             weight = max(float(state.weight), 0.0) or 1.0
             items.append((state.score_estimate * 10.0, weight))
@@ -940,11 +972,10 @@ def aggregate_rubric(
         dims_used = [d for d in category.dimensions if dimension_averages.get(d) is not None]
         for dim in dims_used:
             items.append((clamp(float(dimension_averages[dim]), 0.0, 10.0) * 10.0, 1.0))
+        score: float | None = None
         if items:
             total = sum(w for _, w in items)
-            score = sum(v * w for v, w in items) / total
-        else:
-            score = PRIOR_SCORE * 10.0
+            score = round(clamp(sum(v * w for v, w in items) / total, 0.0, 100.0), 2)
         if conf_items:
             ctotal = sum(w for _, w in conf_items)
             confidence = sum(c * w for c, w in conf_items) / ctotal
@@ -957,34 +988,47 @@ def aggregate_rubric(
                 key=category.key,
                 label=category.label,
                 weight=float(category.weight),
-                score=round(clamp(score, 0.0, 100.0), 2),
+                score=score,
                 confidence=round(clamp(confidence, 0.0, 1.0), 3),
                 contributing_competencies=contributing,
             )
         )
 
+    overall: float | None = None
+    share = 0.0
     if categories:
-        total_weight = sum(c.weight for c in categories)
-        overall = (
-            sum(c.weight * c.score for c in categories) / total_weight
-            if total_weight > 0
-            else PRIOR_SCORE * 10
-        )
+        total_weight = sum(max(c.weight, 0.0) for c in categories)
+        scored = [c for c in categories if c.score is not None]
+        scored_weight = sum(max(c.weight, 0.0) for c in scored)
+        if scored and scored_weight > 0:
+            overall = sum(max(c.weight, 0.0) * (c.score or 0.0) for c in scored) / scored_weight
+            share = scored_weight / total_weight if total_weight > 0 else 1.0
+        elif scored:
+            overall = sum(c.score or 0.0 for c in scored) / len(scored)
+            share = len(scored) / len(categories)
     else:
         keys = _coverage_keys(round_config, states)
         total = sum(max(float(states[k].weight), 0.0) for k in keys)
-        overall = (
-            sum(max(float(states[k].weight), 0.0) * states[k].score_estimate for k in keys) / total * 10.0
-            if total > 0
-            else PRIOR_SCORE * 10.0
-        )
+        assessed = [k for k in keys if is_assessed(states[k])]
+        assessed_weight = sum(max(float(states[k].weight), 0.0) for k in assessed)
+        if assessed and assessed_weight > 0:
+            overall = (
+                sum(max(float(states[k].weight), 0.0) * states[k].score_estimate for k in assessed)
+                / assessed_weight
+                * 10.0
+            )
+            share = assessed_weight / total if total > 0 else 1.0
+        elif assessed:
+            overall = sum(states[k].score_estimate for k in assessed) / len(assessed) * 10.0
+            share = len(assessed) / len(keys)
     coverage = required_coverage(round_config, states)
     overall_confidence = mean_confidence * evidence_coverage(round_config, states)
     return RubricResult(
         categories=categories,
-        overall_score=round(clamp(overall, 0.0, 100.0), 2),
+        overall_score=round(clamp(overall, 0.0, 100.0), 2) if overall is not None else None,
         overall_confidence=round(clamp(overall_confidence, 0.0, 1.0), 3),
         required_coverage=round(coverage, 3),
+        assessed_weight_share=round(clamp(share, 0.0, 1.0), 3),
     )
 
 
@@ -1038,8 +1082,10 @@ def recommend(
     required = [k for k in keys if states[k].required] or keys
     insufficient = [k for k in required if not states[k].sufficient_evidence]
     time_ran_out = (end_reason or "") in TIME_END_REASONS
-    factors: dict[str, float | int | str] = {
-        "overall_score": round(score, 2),
+    nothing_assessed = score is None or not any(is_assessed(states[k]) for k in keys)
+    factors: dict[str, float | int | str | None] = {
+        "overall_score": round(score, 2) if score is not None else None,
+        "assessed_weight_share": rubric.assessed_weight_share,
         "overall_confidence": round(confidence, 3),
         "required_coverage": round(coverage, 3),
         "min_confidence": guidance.min_confidence,
@@ -1066,7 +1112,10 @@ def recommend(
 
     low_confidence = confidence < min_confidence
     low_coverage = coverage < guidance.min_required_coverage
-    if low_confidence or low_coverage:
+    if nothing_assessed or score is None:
+        rec = Recommendation.INSUFFICIENT_EVIDENCE
+        reason = NO_EVIDENCE_REASON
+    elif low_confidence or low_coverage:
         partial = coverage > 0 or confidence >= min_confidence / 2
         if time_ran_out and partial:
             rec = Recommendation.BORDERLINE_EVIDENCE
@@ -1112,7 +1161,7 @@ def recommend(
             f"Overall score {score:.0f}/100 is below {guidance.borderline_min_score:.0f}. "
             "The platform never rejects automatically; a reviewer should look at the evidence."
         )
-    if scope.calibrated:
+    if scope.calibrated and not nothing_assessed:
         notes.append(scope.describe())
     rationale = " ".join([f"{_LABELS[rec].capitalize()}.", reason, *notes])
     return RecommendationResult(

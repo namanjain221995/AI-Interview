@@ -130,6 +130,10 @@ Written for: frontend engineers and the end-to-end test suite (`tests/e2e`). Eve
 | Intake analytics `/app/intake/analytics` | page root / period / KPI row | `intake-analytics-page` / `intake-analytics-period` / `intake-analytics-kpis` |
 | Intake settings `/app/intake/settings` | page root / approved information row / save | `intake-settings-page` / `intake-approved-info-row` / `intake-settings-save` |
 | Round editor (intake round) | stage plan strip / Intake tab panel | `intake-round-blueprint` / `intake-round-panel` |
+| Admin-only permanent deletes (ADMIN, SUPER_ADMIN) | candidate: header menu item / sidebar "Danger zone" button / confirm dialog (type the full name; `erase-candidate-counts` shows live counts) | `candidate-delete-permanently` / `candidate-danger-delete` / `erase-candidate-dialog` |
+| | session detail header menu item / confirm dialog (type the candidate's name, or DELETE) | `session-delete-permanently` / `delete-session-dialog` |
+| | intake review header menu item / confirm dialog | `intake-delete-permanently` / `delete-intake-dialog` |
+| | link detail header button / confirm dialog (type the link name) | `link-delete-permanently` / `delete-link-dialog` |
 
 ## App-wide
 

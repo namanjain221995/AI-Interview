@@ -28,7 +28,7 @@ from app.db.models import (
     Score,
     ScoreSnapshot,
 )
-from app.domain.enums import IntegrityReviewStatus, Recommendation, ReportType, ScoreCategory
+from app.domain.enums import IntegrityReviewStatus, Recommendation, ReportType, RoundType, ScoreCategory
 from app.services.reports.queries import (
     LIVE_STATUSES,
     TERMINAL_STATUSES,
@@ -51,6 +51,10 @@ from app.services.scoring.persistence import (
 from app.services.scoring.timeline import TimelinePoint, bucket_timeline, competency_series
 
 MAX_TIMELINE_EVENTS = 2000
+
+
+def is_intake_round_config(round_config: dict[str, Any] | None) -> bool:
+    return str((round_config or {}).get("round_type") or "") == RoundType.INTAKE.value
 
 
 def _recommendation(value: str | None) -> str | None:
@@ -203,8 +207,8 @@ async def session_summaries(db: AsyncSession, sessions: Sequence[InterviewSessio
                 else None,
                 "job": {"id": job.id, "title": job.title} if job else None,
                 "round": {"id": rnd.id, "name": rnd.name, "round_type": rnd.round_type} if rnd else None,
-                "overall_score": round(score.score, 2) if score else None,
-                "confidence": round(score.confidence, 3) if score else None,
+                "overall_score": round(score.score, 2) if score and score.score is not None else None,
+                "confidence": round(score.confidence, 3) if score and score.score is not None else None,
                 "recommendation": (report.recommendation if report and report.recommendation else None)
                 or _recommendation(score.recommendation if score else None),
                 "report_status": report.status if report else None,
@@ -301,8 +305,8 @@ async def session_detail(db: AsyncSession, session: InterviewSession) -> dict[st
         }
     )
     if overall is not None:
-        summary["overall_score"] = round(overall.score, 2)
-        summary["confidence"] = round(overall.confidence, 3)
+        summary["overall_score"] = round(overall.score, 2) if overall.score is not None else None
+        summary["confidence"] = round(overall.confidence, 3) if overall.score is not None else None
     return summary
 
 
@@ -527,7 +531,10 @@ async def scores_view(db: AsyncSession, session: InterviewSession) -> dict[str, 
     persisted yet (live session), computed on the fly without writing."""
     rows = await latest_score_rows(db, session.id)
     source = "persisted"
-    if not rows:
+    if not rows and is_intake_round_config(session.round_config):
+        # Intake scores come only from the intake evaluation: never the generic scorer's estimates.
+        source = "intake_pending"
+    elif not rows:
         computation = await compute_session_scores(db, session.id)
         rows = build_score_rows(computation, final=False, created_at=datetime.now(UTC), trigger="live_view")
         source = "live"

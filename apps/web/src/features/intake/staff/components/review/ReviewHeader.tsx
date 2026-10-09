@@ -1,4 +1,4 @@
-import { BriefcaseBusiness, CalendarClock, Copy, Ellipsis, FileText, Link2, MonitorPlay, RefreshCcw, Target, Timer, UserRound, XCircle } from "lucide-react";
+import { BriefcaseBusiness, CalendarClock, Copy, Ellipsis, FileText, Link2, MonitorPlay, RefreshCcw, Target, Timer, Trash2, UserRound, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 
@@ -11,7 +11,7 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, Dia
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/DropdownMenu";
 import { toast } from "@/components/ui/Toaster";
 import { isApiError } from "@/lib/api";
-import { usePermission } from "@/lib/auth";
+import { useHasRole, usePermission } from "@/lib/auth";
 import { formatDateTime, formatMinutes } from "@/lib/format";
 
 import { copyText } from "@/features/recruiter/admin/lib/utils";
@@ -21,6 +21,7 @@ import { TARGET_ROLE_LABELS } from "../../labels";
 import { formatTotal } from "../../lib/decimals";
 import type { IntakeCreateResponse, IntakeDetail, IntakeEvaluation } from "../../types";
 import { CopyValue } from "../create/CopyValue";
+import { DeleteIntakeDialog } from "./DeleteIntakeDialog";
 import { BandBadge, BucketBadge } from "../IntakeBadges";
 
 function Meta({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
@@ -76,6 +77,9 @@ export function ReviewHeader({ detail, evaluation }: { detail: IntakeDetail; eva
   const regenerate = useRegenerateIntakeLink(detail.id);
   const cancel = useCancelIntake(detail.id);
   const [newLink, setNewLink] = useState<IntakeCreateResponse | null>(null);
+  // Permanent deletion is for administrators only (the API enforces it too).
+  const canDelete = useHasRole("ADMIN", "SUPER_ADMIN");
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const session = detail.session;
   const ended = Boolean(session && ENDED.has(session.status));
@@ -224,12 +228,27 @@ export function ReviewHeader({ detail, evaluation }: { detail: IntakeDetail; eva
                     Cancel intake
                   </DropdownMenuItem>
                 ) : null}
+                {canDelete ? (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      destructive
+                      disabled={Boolean(session && ["live", "paused"].includes(session.status))}
+                      onSelect={() => setDeleteOpen(true)}
+                      data-testid="intake-delete-permanently"
+                    >
+                      <Trash2 />
+                      Delete intake permanently…
+                    </DropdownMenuItem>
+                  </>
+                ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
         </div>
       </div>
       <NewLinkDialog result={newLink} onClose={() => setNewLink(null)} />
+      {canDelete ? <DeleteIntakeDialog intakeId={detail.id} candidateName={detail.candidate.full_name} open={deleteOpen} onOpenChange={setDeleteOpen} /> : null}
     </header>
   );
 }

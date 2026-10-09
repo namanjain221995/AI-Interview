@@ -155,7 +155,7 @@ function normalizeCompetency(raw: unknown): CompetencyDigest | null {
     name: stringOrNull(raw.name) ?? stringOrNull(raw.label),
     weight: numberOrNull(raw.weight) ?? undefined,
     required: typeof raw.required === "boolean" ? raw.required : undefined,
-    score_estimate: numberOrNull(raw.score_estimate) ?? numberOrNull(raw.score) ?? 0,
+    score_estimate: numberOrNull(raw.score_estimate) ?? numberOrNull(raw.score),
     confidence: numberOrNull(raw.confidence) ?? 0,
     evidence_count: numberOrNull(raw.evidence_count) ?? 0,
     sufficient_evidence: raw.sufficient_evidence === true || raw.sufficient === true,
@@ -229,7 +229,7 @@ export function liveReducer(state: LiveState, event: LiveEvent): LiveState {
       if (competencies) {
         for (const c of competencies) {
           const before = state.competencies.find((x) => x.key === c.key);
-          if (before && Math.abs(before.score_estimate - c.score_estimate) >= 0.05) previousScores[c.key] = before.score_estimate;
+          if (before && before.score_estimate !== null && c.score_estimate !== null && Math.abs(before.score_estimate - c.score_estimate) >= 0.05) previousScores[c.key] = before.score_estimate;
         }
       }
       // `session_status` is the stored session status; `status` mirrors the live interview state.
@@ -373,7 +373,7 @@ export function liveReducer(state: LiveState, event: LiveEvent): LiveState {
         const byKey = new Map(state.competencies.map((c) => [c.key, c]));
         for (const update of updates) {
           const before = byKey.get(update.key);
-          if (before && Math.abs(before.score_estimate - update.score_estimate) >= 0.05) previousScores[update.key] = before.score_estimate;
+          if (before && before.score_estimate !== null && update.score_estimate !== null && Math.abs(before.score_estimate - update.score_estimate) >= 0.05) previousScores[update.key] = before.score_estimate;
           byKey.set(update.key, { ...before, ...update, name: update.name ?? before?.name ?? null, weight: before?.weight ?? update.weight, required: before?.required ?? update.required });
         }
         competencies = [...byKey.values()];

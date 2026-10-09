@@ -94,7 +94,14 @@ async def test_upgrade_downgrade_and_metadata_parity() -> None:
                 assert await _tables(conn) == INTAKE_TABLES
                 assert await conn.run_sync(_compare) == []
                 version = (await conn.exec_driver_sql("SELECT version_num FROM alembic_version")).scalar_one()
-                assert version == "0005"
+                assert version == "0006"  # 0006: nullable scores.score (no evidence = NULL, never a midpoint)
+                nullable = (
+                    await conn.exec_driver_sql(
+                        "SELECT is_nullable FROM information_schema.columns "
+                        "WHERE table_name = 'scores' AND column_name = 'score'"
+                    )
+                ).scalar_one()
+                assert nullable == "YES"
                 index = (
                     await conn.exec_driver_sql(
                         "SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_intake_interviews_interview'"

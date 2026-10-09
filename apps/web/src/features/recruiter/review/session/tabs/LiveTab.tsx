@@ -306,7 +306,7 @@ export function LiveTab() {
               ) : (
                 sortedCompetencies.map((c) => {
                   const before = state.previousScores[c.key];
-                  const delta = typeof before === "number" ? c.score_estimate - before : null;
+                  const delta = typeof before === "number" && c.score_estimate !== null ? c.score_estimate - before : null;
                   return (
                     <div key={c.key} className="grid grid-cols-1 gap-1">
                       <ScoreBar

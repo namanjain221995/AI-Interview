@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import functools
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
@@ -19,14 +19,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import audit
-from app.core.deps import DbSession, OrgScope, PaginationParams, require_permission
+from app.core.deps import DbSession, OrgScope, PaginationParams, require_permission, require_role
 from app.core.errors import ServiceUnavailable
 from app.core.lifecycle import run_after_commit
 from app.core.metrics import INTAKE_INVITATIONS
 from app.core.ratelimit import enforce_rate_limit
 from app.core.rbac import Permission, Principal
 from app.db.models import Job, Round
+from app.domain.enums import Role
 from app.schemas.api.common import ERROR_RESPONSES, Page
+from app.schemas.api.deletion import IntakeDeletionOut, SessionDeletionCounts
 from app.schemas.api.intake_admin import (
     IntakeBatchCreate,
     IntakeBatchResponse,
@@ -56,6 +58,7 @@ from app.schemas.intake import (
     IntakeBucket,
     TargetRole,
 )
+from app.services.data_deletion.intake import delete_intake
 from app.services.intake import invitations as service
 from app.services.intake.access import IntakeRoute, get_intake, require_intake_enabled
 from app.services.intake.kit import IntakeKitError, load_intake_kit
@@ -78,6 +81,10 @@ Creator = Annotated[
 ]
 Inviter = Annotated[Principal, Depends(require_permission(Permission.INTERVIEWS_INVITE))]
 Reader = Annotated[Principal, Depends(require_permission(Permission.SESSIONS_READ))]
+Deleter = Annotated[
+    Principal,
+    Depends(require_role(Role.ADMIN, Role.SUPER_ADMIN, perms=(Permission.SESSIONS_READ,))),
+]
 
 BATCH_RATE_LIMIT = 10  # per minute per user
 SortKey = Literal["-created_at", "created_at", "-completed_at", "-score", "score", "candidate"]
@@ -496,3 +503,45 @@ async def regenerate_intake_link(
     )
     _no_store(response)
     return _create_response(await get_summary(db, org_id, intake.id), issued)
+
+
+@router.delete(
+    "/interviews/{intake_id}",
+    response_model=IntakeDeletionOut,
+    summary="Permanently delete an intake interview and its sessions, results and files (ADMIN)",
+    description=(
+        "Deletes the intake interview (drafts too), its invitation, every session with its stage and "
+        "activity results, captures, evaluations, scores, decisions, reports (and artifacts), recordings, "
+        "integrity events and stored files. The candidate and their résumés stay. 409 `intake_busy` while "
+        "a session is live or still being evaluated. Audited with counts only."
+    ),
+)
+async def delete_intake_interview(
+    intake_id: uuid.UUID, request: Request, principal: Deleter, org_id: OrgScope, db: DbSession
+) -> IntakeDeletionOut:
+    intake = await get_intake(db, intake_id, org_id, lock=True)
+    candidate_id = intake.candidate_id
+    summary = await delete_intake(db, intake)
+    counts = summary.as_dict()
+    counts.pop("intake_id")
+    await audit(
+        db,
+        principal,
+        "intake.delete",
+        resource_type="intake",
+        resource_id=intake_id,
+        request=request,
+        organization_id=org_id,
+        details={**counts, "candidate_id": str(candidate_id)},
+    )
+    return IntakeDeletionOut(
+        intake_id=intake_id,
+        candidate_id=candidate_id,
+        deleted_at=datetime.now(UTC),
+        was_draft=summary.was_draft,
+        interviews=summary.interviews,
+        evaluations=summary.evaluations,
+        decisions=summary.decisions,
+        auth_sessions_revoked=summary.auth_sessions_revoked,
+        sessions=SessionDeletionCounts.model_validate(summary.sessions),
+    )

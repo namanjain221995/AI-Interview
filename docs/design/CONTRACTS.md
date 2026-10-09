@@ -136,6 +136,10 @@ Single HTTP ranges are answered with 206 (video seeking); `?download=1` serves m
 `POST /candidates/{id}/resumes` (multipart), `GET /candidates/{id}/resumes`,
 `GET /resumes/{id}` (status, progress, extraction summary), `POST /resumes/{id}/reprocess`,
 `GET /candidates/{id}/profile` (latest CandidateProfile), `GET /candidates/{id}/interviews`.
+Admin-only permanent deletes (ADMIN/SUPER_ADMIN; counts-only responses; see SECURITY.md "Data protection"):
+`DELETE /candidates/{id}?request_reference=&archive_first=` (+ `GET /candidates/{id}/deletion-preview`),
+`DELETE /sessions/{id}` (409 `session_busy`), `DELETE /intake/interviews/{id}` (409 `intake_busy`),
+`DELETE /open-links/{id}` (409 `link_has_registrations`).
 
 **Interviews** (interview module): `POST /interviews {candidate_id, job_id, round_id?, allow_round_selection, expires_in_hours, require_access_code}`
 -> `{interview, invite_url, access_code?}` (link and code shown once); `GET /interviews`, `GET /interviews/{id}`,

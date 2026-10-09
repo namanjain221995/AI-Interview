@@ -25,7 +25,7 @@ from app.ai.prompts import PromptTemplate
 from app.services.intake.kit import IntakeKit, LanguageCheck
 from app.services.intake.stages import CANDIDATE_TITLES, STAGE_NUMBERS, item_spec
 
-PROMPT_SET_VERSION = "intake-2026-10-09a"
+PROMPT_SET_VERSION = "intake-2026-10-10a"
 
 # ===================================================================================== fixed phrases
 
@@ -54,6 +54,7 @@ ENCOURAGE_LEAD = "Even a short answer helps."
 DONT_KNOW_PROBE = "That's fine. How would you find out, or what would you try first?"
 RESUME_LEAD = "Sorry, we got disconnected for a moment. As I was asking:"
 REEXPLAIN_LEAD = "Sure — let me explain again."
+AUDIO_REEXPLAIN_LEAD = "Yes, I can hear you clearly. Let me explain again."
 MOVE_ON = "Let's move on."
 HIRING_TEAM_ANSWER = "The hiring team is best placed to answer that; they'll follow up with you on it."
 CLOSE_ANSWER_INVITE = "Is there anything else you'd like to ask?"
@@ -100,6 +101,27 @@ CLARIFY: dict[str, str] = {
     "close.anything_else": "Is there anything about your experience or skills you'd like to add?",
 }
 MODEL_CLARIFY_FALLBACK = "Let me put it another way. {core}"
+#: Short forms of a pending template question for flow replies ("Yes, I can hear you clearly. <short form>") and
+#: unclear answers; other items use the question sentence of what was asked (``understanding.short_reinvite``).
+REINVITE: dict[str, str] = {
+    "greeting.intro": "Whenever you're ready, please introduce yourself.",
+    "greeting.project": "Whenever you're ready, tell me about the project or role you're most proud of.",
+    "learning.teach": "Whenever you're ready, teach me something technical you learned recently.",
+    "close.questions": "What would you like to know?",
+}
+#: A very short or unclear answer (not a request to clarify): a deterministic lead + the question again, never a
+#: model guess at what the candidate meant (live finding: "Exactly." became "what you meant by exactly regarding the
+#: retries or deduplication", a topic the candidate never raised).
+UNCLEAR_BRIEF_LEAD = "Could you say a bit more?"
+UNCLEAR_GARBLED_LEAD = "Sorry, I didn't quite catch that."
+_ACK_LEAD = re.compile(r"^(?:sure|of course|no problem)[,.]\s+", re.IGNORECASE)
+
+
+def strip_ack(text: str) -> str:
+    """A clarification template without its "Sure." lead (used after an unclear answer, not a request)."""
+    stripped = _ACK_LEAD.sub("", text.strip(), count=1)
+    return stripped[:1].upper() + stripped[1:] if stripped else stripped
+
 
 # Activities (7.3, 7.8): instruction utterances and phase prompts. They never contain material text.
 ACTIVITY_INSTRUCTIONS: dict[str, str] = {
@@ -322,7 +344,9 @@ def join_speech(*parts: str | None) -> str:
 
 ASR_NOTE = (
     "The candidate's words reach you through live speech recognition and may contain misrecognised words, "
-    "especially technical terms. Interpret them charitably; never point out or comment on recognition errors."
+    'especially technical terms ("CACD" or "see icd" = CI/CD, "L L M" = LLM, "Tech Sara" = TechSara). '
+    "Interpret them charitably and use the correct term yourself; never repeat a misrecognised word, and never "
+    "point out or comment on recognition errors."
 )
 
 INTAKE_TURN_SYSTEM = PromptTemplate(
@@ -342,7 +366,10 @@ Speech rules ("speech" is spoken by a text-to-speech voice):
 - One or two short spoken sentences, 10-40 words, exactly one question mark (statements only for answers in the \
 last part). Sound natural and warm; vary how you begin; use the first name at most rarely.
 - Ask about THIS candidate: build on what they actually said or on the résumé claim you are given. Attribute to \
-the candidate only what they said; résumé content is "your résumé mentions ...".
+the candidate only what they said; résumé content is "your résumé mentions ...". Never say they mentioned, meant \
+or were about to say something they did not say; topics from your own earlier questions are not theirs.
+- If their last words were a question to you about the interview itself (whether you can hear them, whether to \
+start, how long to speak), answer it in a few words first, then ask the item; it is not their answer.
 - Never praise, judge or correct the answer ("great", "good answer", "that's right", "you did well"); never \
 mention scores, ratings of answers, evaluation, passing, failing, decisions or outcomes; never promise feedback, \
 a report or results.
@@ -750,6 +777,9 @@ __all__ = [
     "ACTIVITY_INSTRUCTIONS",
     "CLARIFY",
     "INTAKE_TURN_PROMPT_VERSION",
+    "REINVITE",
+    "UNCLEAR_BRIEF_LEAD",
+    "UNCLEAR_GARBLED_LEAD",
     "ITEM_INTENTS",
     "ITEM_TEMPLATES",
     "PHASE_PROMPTS",
@@ -772,6 +802,7 @@ __all__ = [
     "render_verification",
     "resume_excerpt",
     "scenario_text",
+    "strip_ack",
     "three_weeks_text",
     "verification_text",
 ]

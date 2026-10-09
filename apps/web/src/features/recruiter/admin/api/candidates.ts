@@ -110,12 +110,46 @@ export function useRestoreCandidate(id: string) {
 /** Reference of the data-subject request, as the API accepts it (recorded in the audit log). */
 export const REQUEST_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:#/-]{0,63}$/;
 
-/** Permanent data-subject erasure (ADMIN, archived candidates only). Irreversible. */
+/** What `DELETE /candidates/{id}` would remove right now (ADMIN; counts only). */
+export interface CandidateDeletionPreview {
+  candidate_id: string;
+  archived: boolean;
+  interviews: number;
+  sessions: number;
+  resumes: number;
+  reports: number;
+  intake_interviews: number;
+  link_registrations: number;
+  stored_files: number;
+  stored_bytes: number;
+  blockers: Array<{ type: string; id: string; status: string }>;
+}
+
+export function useCandidateDeletionPreview(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...queryKeys.candidates.detail(id), "deletion-preview"],
+    queryFn: () => api.get<CandidateDeletionPreview>(`/candidates/${id}/deletion-preview`),
+    enabled,
+    staleTime: 0,
+    retry: false,
+    meta: { errorToast: false },
+  });
+}
+
+/** Query params of the erase call: an active candidate is archived and deleted in one step. */
+export function eraseParams(requestReference: string | null, archiveFirst: boolean): Record<string, string | boolean> | undefined {
+  const params: Record<string, string | boolean> = {};
+  if (archiveFirst) params.archive_first = true;
+  if (requestReference) params.request_reference = requestReference;
+  return Object.keys(params).length ? params : undefined;
+}
+
+/** Permanent data-subject erasure (ADMIN). Irreversible. `archiveFirst` archives an active candidate in the same request. */
 export function useEraseCandidate(id: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (requestReference: string | null) =>
-      api.delete<CandidateDeletionResult>(`/candidates/${id}`, { params: requestReference ? { request_reference: requestReference } : undefined }),
+    mutationFn: ({ requestReference, archiveFirst = false }: { requestReference: string | null; archiveFirst?: boolean }) =>
+      api.delete<CandidateDeletionResult>(`/candidates/${id}`, { params: eraseParams(requestReference, archiveFirst) }),
     meta: { silentError: true },
     onSuccess: () => {
       client.removeQueries({ queryKey: queryKeys.candidates.detail(id) });

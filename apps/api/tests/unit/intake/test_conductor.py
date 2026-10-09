@@ -58,6 +58,7 @@ DECISION_WORDS = re.compile(
 
 def all_template_texts() -> list[str]:
     texts: list[str] = [*P.ITEM_TEMPLATES.values(), *P.CLARIFY.values(), *P.ACTIVITY_INSTRUCTIONS.values()]
+    texts += [*P.REINVITE.values(), P.UNCLEAR_BRIEF_LEAD, P.UNCLEAR_GARBLED_LEAD, P.AUDIO_REEXPLAIN_LEAD]
     for table in (
         P.PHASE_PROMPTS,
         P.PHASE_PROMPTS_EARLY,

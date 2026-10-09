@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight, CircleDashed, Scale, TriangleAlert, UserRound } from "lucide-react";
 import { useState } from "react";
 
+import { INSUFFICIENT_EVIDENCE_HEADLINE, NOT_ENOUGH_EVIDENCE } from "@/components/domain/evidenceCopy";
 import { Callout } from "@/components/ui/Callout";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -120,7 +121,7 @@ function CompetencyRow({ competency, intakeId }: { competency: CompetencyScore; 
           ) : (
             <span className="inline-flex items-center gap-1 text-[13px] font-medium text-fg-muted">
               <CircleDashed className="size-3.5" aria-hidden="true" />
-              Insufficient evidence
+              {NOT_ENOUGH_EVIDENCE}
             </span>
           )}
         </p>
@@ -244,6 +245,8 @@ export function ScorecardTab({ detail, evaluation }: { detail: IntakeDetail; eva
   }
 
   const insufficient = evaluation.band === "insufficient_evidence" || !evaluation.weighted_total;
+  // Nothing scored at all: there is no number to show, not even a partial one (never a made-up score).
+  const noEvidence = insufficient && !evaluation.competencies.some((c) => c.status === "scored");
   const ordered = [...evaluation.competencies].sort((a, b) => (decimalToNumber(b.weight) ?? 0) - (decimalToNumber(a.weight) ?? 0));
 
   return (
@@ -253,14 +256,22 @@ export function ScorecardTab({ detail, evaluation }: { detail: IntakeDetail; eva
         <CardContent className="grid grid-cols-1 gap-5 py-5">
           <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-4">
             <div className="grid grid-cols-1 gap-1" data-testid="intake-weighted-total" data-total={evaluation.weighted_total ?? ""}>
-              <span className="text-xs text-fg-muted">{insufficient ? (evaluation.partial_label ?? "Partial total") : "Weighted total"}</span>
-              <span className="flex items-baseline gap-1.5">
-                <span className="text-[2.5rem] leading-none font-semibold tracking-[-0.03em] text-fg">
-                  {insufficient ? formatTotal(evaluation.partial_total) : formatTotal(evaluation.weighted_total)}
+              <span className="text-xs text-fg-muted">{noEvidence ? "Weighted total" : insufficient ? (evaluation.partial_label ?? "Partial total") : "Weighted total"}</span>
+              {noEvidence ? (
+                <span className="text-lg font-semibold text-warning-fg" data-testid="intake-no-evidence">
+                  {INSUFFICIENT_EVIDENCE_HEADLINE}
                 </span>
-                <span className="text-base font-medium text-fg-subtle">/ 5</span>
-              </span>
-              {insufficient ? (
+              ) : (
+                <span className="flex items-baseline gap-1.5">
+                  <span className="text-[2.5rem] leading-none font-semibold tracking-[-0.03em] text-fg">
+                    {insufficient ? formatTotal(evaluation.partial_total) : formatTotal(evaluation.weighted_total)}
+                  </span>
+                  <span className="text-base font-medium text-fg-subtle">/ 5</span>
+                </span>
+              )}
+              {noEvidence ? (
+                <span className="text-xs text-fg-muted">No competency could be scored, so there is no total and no band. Every competency below reads &ldquo;{NOT_ENOUGH_EVIDENCE}&rdquo;.</span>
+              ) : insufficient ? (
                 <span className="text-xs text-fg-muted">Re-normalised over the scored competencies only. No band is recommended without full evidence.</span>
               ) : evaluation.normalized_100 ? (
                 <span className="text-xs text-fg-muted" data-testid="intake-normalized-100">

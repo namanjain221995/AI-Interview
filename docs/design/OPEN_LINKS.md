@@ -699,6 +699,9 @@ check (the candidate-access precedent); otherwise no change.
   cascades `link_registrations` and `link_registration_rounds` through the `candidate_id` FK; one additive statement
   also deletes `blocked` rows of the same org with that e-mail (`email = candidate.email`). The erasure summary counts
   them. Note: after erasure the person could register again (the right to erasure wins over duplicate detection).
+* Deleting a link (`DELETE /open-links/{id}`, ADMIN/SUPER_ADMIN, audit `link.delete` with counts) is allowed only while
+  no registration of it has a candidate (else 409 `link_has_registrations`; close the link instead). Its candidate-less
+  registrations (blocked/abandoned attempts) cascade with it; candidates, interviews and sessions are never touched.
 * Archiving a candidate cancels open interviews (existing); `sync_registration` then marks the registration
   `cancelled`.
 * CSV export: staff only, `Cache-Control: no-store`, every cell starting with `= + - @ \t \r` prefixed with `'`

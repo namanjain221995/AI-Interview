@@ -468,3 +468,24 @@ def test_short_rounds_cap_followups_per_topic(minutes: int, expected: int) -> No
     ask(s, "kubernetes")
     # Competency still uncertain: the round's depth (3) applies unless the round is short.
     assert followup_limit(s, s.competencies["kubernetes"]) == expected
+
+
+
+# ------------------------------------------------- "what you meant by X" / "what you were about to say regarding X"
+
+
+def test_meant_and_about_to_say_frames_are_attributions_checked_against_the_candidate() -> None:
+    """Live intake 2026-10-10: after "Exactly." the model asked "what you meant by exactly regarding the retries or
+    deduplication" - a topic from the interviewer's own question, never said by the candidate."""
+    from app.services.interview.grounding import GroundingContext, find_references
+
+    meant = "Could you clarify what you meant by exactly regarding the retries or deduplication in that platform?"
+    about = "Could you clarify what you were about to say regarding the retries or deduplication?"
+    assert [r.phrase for r in find_references(meant)] == [
+        "exactly regarding the retries or deduplication in that platform"
+    ]
+    assert [r.phrase for r in find_references(about)] == ["the retries or deduplication"]
+    ctx = GroundingContext(candidate=["so for that", "Exactly.", "Yeah, that's it."], resume=[])
+    assert ctx.unsupported(meant) is not None and ctx.unsupported(about) is not None
+    said = GroundingContext(candidate=["We handled retries with an idempotency key for deduplication."], resume=[])
+    assert said.unsupported(about) is None  # grounded when they did say it

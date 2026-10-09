@@ -19,7 +19,7 @@ P = EndpointParams(base_ms=850, short_ms=600, long_ms=1700, think_max_ms=25_000,
         ("We ran three node groups across three availability zones.", 600, "short_complete"),
         ("We ran three node groups across three zones and", 1700, "long_trailing"),
         ("The main reason was cost, so", 1700, "long_trailing"),
-        ("I think it was because", 1700, "long_trailing"),
+        ("I think it was because", 4000, "fragment"),  # a short fragment stopping mid-sentence
         ("Um", 1700, "long_trailing"),
         ("Yes.", 1700, "long_short_text"),
         ("Not sure", 1700, "long_short_text"),
@@ -99,8 +99,48 @@ def test_commit_policy_on_the_final_transcript() -> None:
 
     params = EndpointParams()
     assert commit_required_ms("We used Karpenter for node autoscaling.", params) == params.short_ms
-    assert commit_required_ms("Our first step was to", params) == params.long_ms  # unfinished
-    assert commit_required_ms("spot instances and then", params) == params.long_ms
+    assert commit_required_ms("Our first step was to", params) == params.fragment_ms  # unfinished, short
+    assert commit_required_ms("spot instances and then", params) == params.fragment_ms
+    assert commit_required_ms("We moved the batch jobs to spot instances and", params) == params.long_ms
     assert commit_required_ms("Yes.", params) == params.long_ms  # very short: wait for more
     assert commit_required_ms("Let me think about that for a second.", params) == params.think_max_ms
     assert commit_required_ms("", params) == 0
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["so for that", "So for that.", "and the", "Okay, so", "But because", "We used the", "and about this"],
+)
+def test_short_fragments_wait_the_fragment_hold(text: str) -> None:
+    """Live intake 2026-10-10: "so for that" + a thinking pause got a new question after 1.7 s. A short fragment
+    that stops mid-sentence now waits ``fragment_ms`` in both stages."""
+    from app.realtime.endpointing import EndpointParams, commit_required_ms, required_silence_ms
+
+    params = EndpointParams()
+    assert required_silence_ms(text, params) == (params.fragment_ms, "fragment")
+    assert commit_required_ms(text, params) == params.fragment_ms
+    ep = Endpointer(params)
+    assert not ep.decide(text, silence_ms=params.long_ms + 500, turn_ms=3000, speaking=False).end
+    assert ep.decide(text, silence_ms=params.fragment_ms, turn_ms=3000, speaking=False).end
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("I did that.", "long_trailing"),  # short but complete: "that" is not a continuation tail
+        ("Thanks for that.", "long_trailing"),
+        ("It was.", "long_trailing"),
+        ("Um", "long_trailing"),  # hesitation, not a fragment
+        ("The main reason was cost, so", "long_trailing"),  # Indian English trailing "so" after content
+        ("Yes.", "long_short_text"),
+    ],
+)
+def test_complete_short_answers_and_hesitations_keep_their_waits(text: str, expected: str) -> None:
+    from app.realtime.endpointing import EndpointParams, required_silence_ms
+
+    assert required_silence_ms(text, EndpointParams())[1] == expected
+
+
+def test_fragment_hold_comes_from_settings(settings) -> None:
+    params = EndpointParams.from_settings(settings)
+    assert params.fragment_ms == settings.endpoint_fragment_hold_ms == 4000

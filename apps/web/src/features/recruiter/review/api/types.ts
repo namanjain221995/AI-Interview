@@ -58,7 +58,7 @@ export interface SessionDetailView extends SessionDetail {
   human_decision_note?: string;
   scores_final?: boolean;
   scores_computed_at?: string | null;
-  rubric?: Array<{ key: string; label: string | null; weight: number | null; score: number; confidence: number }>;
+  rubric?: Array<{ key: string; label: string | null; weight: number | null; score: number | null; confidence: number }>;
   reports?: Partial<Record<"recruiter" | "candidate", { id: string; version: number; status: ReportStatus; generated_at: string | null; released_to_candidate: boolean }>>;
   candidate_report_mode?: CandidateReportMode | null;
   claims?: Array<{ id: string; claim: string; status: ClaimStatus }>;

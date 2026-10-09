@@ -185,6 +185,38 @@ Silence: after an utterance is delivered, the silence timer speaks a gentle prom
 turn as "I don't know" and moves on. There is no prompt-injection classifier; candidate text is fenced in prompts
 (see [Prompts](#prompts)).
 
+### Turn understanding (`understanding.py`)
+
+Before any question or intake item is consumed, `understanding.understand()` (deterministic, ~0.03 ms, wraps
+`special.classify`) decides what the turn IS. Flow turns get a template reply, never consume the pending question,
+never create an `answers` row (the candidate transcript keeps them), never call the model and are not evaluated
+(owner's live intake 2026-10-10: "Okay, so can you hear?", "Can you hear me?" and "am I able to do it or not?" were
+consumed as the introduction, the project answer and the first résumé answer):
+
+| Intent | Examples | Reply (then the pending question in a short form where marked *) |
+|---|---|---|
+| `audio_check` | "can you hear me", "am I (properly) audible", "is my voice coming", "hello?", "are you there", "I can't hear you", "my internet was slow" | "Yes, I can hear you clearly." * (third check on one question adds a speaker-volume hint) |
+| `process_question` | "should I start", "am I able to do it or not", "how long should I speak", "how long is this interview", "can I use my notes", "are you an AI", "is my answer correct" | brief honest answer * ("Yes, please go ahead.", "About a minute and a half is plenty ...", "We have about N minutes left.", "Please answer in your own words ...", "I'm an AI interviewer ...", "I don't comment on answers during the interview ...") |
+| `readiness` | "okay", "sure", "okay so", "I'm ready" on an open question (a yes/no question or an item that accepts brief answers takes it as the answer) | "Sure, go ahead." (twice per question, then the ordinary clarification path) |
+| `thinking` | "let me think", "one second" | "Of course, take your time." |
+| `incomplete` | "so for that", "and the", "I think it was because" (<= 8 words, continuation tail, <= 2 content words) | a soft nudge ("Take your time, go on."), never a new question (twice per question) |
+| `off_topic` | "sorry, someone is at the door", "sorry about the background noise" | "No problem, take your time." |
+
+An answer that opens with an audio check and goes on ("Can you hear me? So, I'm Heet, I work at ...") is the
+answer; the reply starts with "Yes, I can hear you clearly." (directive instruction; intake: template lead). Repeat,
+clarification, brief, garbled, "I don't know" and role questions keep the table above. Flow turns are skipped while
+coding, while the session is closing (`must_close`) and for speculative turns; a flow turn transcribed after a
+disconnect is not kept as the answer. Per-question counts live in `state.flow_question_id` / `state.flow_counts`.
+The turn prompts add "if their last words were a question to you about the interview itself, answer it first; it is
+not their answer" and "never say they meant or were about to say something they did not say"; grounding now also
+checks "what you meant by X" / "what you were about to say regarding X". Deterministic patterns only: the turn path
+has no budget for a classification model call before the reply streams; ambiguous turns stay answers and the turn
+model (with the rule above) is the fallback. The realtime runtime skips its provisional acknowledgement ("Thanks,
+that helps.") on flow turns and holds short mid-sentence fragments 4 s (`endpoint_fragment_hold_ms`) before the turn
+ends. Tests: `tests/unit/interview/test_understanding.py` (classifier, 200+ cases incl. real-answer negatives),
+`tests/integration/interview/test_turn_understanding.py`, `tests/integration/intake/test_intake_understanding.py`
+(replays of the live transcript).
+
 ## Policy directive
 
 `compute_directive` (`policy.py`) is a pure function of the state, the round configuration, the quick assessment

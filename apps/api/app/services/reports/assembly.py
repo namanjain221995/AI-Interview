@@ -43,7 +43,7 @@ from app.services.integrity.queries import NOTICE as INTEGRITY_NOTICE
 from app.services.integrity.queries import integrity_summary
 from app.services.integrity.rules import label_for
 from app.services.reports.wording import candidate_voice, neutral_recruiter_document
-from app.services.scoring.compute import assistance_factor
+from app.services.scoring.compute import assistance_factor, is_assessed
 from app.services.scoring.persistence import (
     FLAG_ACTIONS,
     ScoringComputation,
@@ -232,7 +232,9 @@ def _competencies(computation: ScoringComputation, supporting: dict[str, list[st
                 "name": state.name or computation.inputs.competency_names.get(key) or humanize_key(key),
                 "weight": state.weight,
                 "required": state.required,
-                "score": round(state.score_estimate, 2),
+                # Unassessed (no observation, no evidence): no score, never the neutral starting estimate.
+                "score": round(state.score_estimate, 2) if is_assessed(state) else None,
+                "assessed": is_assessed(state),
                 "confidence": round(state.confidence, 3),
                 "evidence_count": state.evidence_count,
                 "positive_count": state.positive_evidence,
@@ -573,6 +575,7 @@ async def assemble_report_data(db: AsyncSession, computation: ScoringComputation
                 "confidence": computation.rubric.overall_confidence,
                 "required_coverage": computation.rubric.required_coverage,
                 "evidence_coverage": round(computation.evidence_coverage, 3),
+                "assessed_weight_share": computation.rubric.assessed_weight_share,
             },
             "rubric": [
                 {

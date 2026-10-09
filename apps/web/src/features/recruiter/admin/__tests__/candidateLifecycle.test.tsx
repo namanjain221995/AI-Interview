@@ -8,8 +8,8 @@ import { ConfirmDialogHost } from "@/components/ui/AlertDialog";
 import { TooltipProvider } from "@/components/ui/Tooltip";
 import { ApiError, api } from "@/lib/api";
 
-import { candidateActionError, candidateListParams } from "../api/candidates";
-import { ArchivedCandidateBanner, CandidateLifecycleMenu, deletionSummary, EraseCandidateDialog } from "../candidates/CandidateLifecycle";
+import { candidateActionError, candidateListParams, eraseParams } from "../api/candidates";
+import { ArchivedCandidateBanner, CandidateDangerZone, CandidateLifecycleMenu, deletionSummary, EraseCandidateDialog } from "../candidates/CandidateLifecycle";
 import type { AdminCandidate } from "../types";
 
 function wrap(ui: ReactNode) {
@@ -42,6 +42,19 @@ const CANDIDATE: AdminCandidate = {
   archived_at: null,
 };
 const ARCHIVED: AdminCandidate = { ...CANDIDATE, archived_at: "2026-10-07T12:00:00Z" };
+const PREVIEW = {
+  candidate_id: "c1",
+  archived: true,
+  interviews: 2,
+  sessions: 3,
+  resumes: 1,
+  reports: 3,
+  intake_interviews: 1,
+  link_registrations: 1,
+  stored_files: 9,
+  stored_bytes: 4_800_000,
+  blockers: [],
+};
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -91,15 +104,19 @@ describe("candidate lifecycle UI", () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith("/candidates/c1/restore"));
   });
 
-  it("erases only after the email is typed, with a valid optional reference", async () => {
+  it("erases only after the full name is typed, with a valid optional reference", async () => {
     const result = { candidate_id: "c1", deleted_at: "2026-10-07T12:30:00Z", interviews: 2, sessions: 1, resumes: 1, profiles: 1, media_files_deleted: 7, media_bytes_deleted: 2_400_000 };
+    vi.spyOn(api, "get").mockResolvedValue(PREVIEW as never);
     const del = vi.spyOn(api, "delete").mockResolvedValue(result as never);
     const onErased = vi.fn();
     wrap(<EraseCandidateDialog candidate={ARCHIVED} open onOpenChange={vi.fn()} onErased={onErased} />);
     const confirmButton = screen.getByRole("button", { name: "Delete permanently" });
     expect(confirmButton).toBeDisabled();
     expect(screen.getByText(/answer audio, camera and screen images, recordings/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText(/Type .* to confirm/), { target: { value: "PRIYA@example.com " } });
+    expect(await screen.findByTestId("erase-candidate-counts")).toHaveTextContent(/2 interviews, 3 sessions, 3 reports, 1 résumé, 1 intake interview, 1 link registration, 9 stored files/);
+    fireEvent.change(screen.getByLabelText(/Type .* to confirm/), { target: { value: "priya@example.com" } });
+    expect(confirmButton).toBeDisabled(); // the email is not the name
+    fireEvent.change(screen.getByLabelText(/Type .* to confirm/), { target: { value: "  priya   RAMAN " } });
     fireEvent.change(screen.getByLabelText(/Request reference/), { target: { value: "jane doe" } });
     expect(confirmButton).toBeDisabled();
     expect(screen.getByText(/no spaces/)).toBeInTheDocument();
@@ -112,12 +129,52 @@ describe("candidate lifecycle UI", () => {
   });
 
   it("keeps the dialog open and explains a busy candidate", async () => {
+    vi.spyOn(api, "get").mockResolvedValue(PREVIEW as never);
     vi.spyOn(api, "delete").mockRejectedValue(new ApiError({ status: 409, code: "candidate_busy", message: "busy", details: { retry_after_seconds: 300 } }));
     const onErased = vi.fn();
     wrap(<EraseCandidateDialog candidate={ARCHIVED} open onOpenChange={vi.fn()} onErased={onErased} />);
-    fireEvent.change(screen.getByLabelText(/Type .* to confirm/), { target: { value: "priya@example.com" } });
+    fireEvent.change(screen.getByLabelText(/Type .* to confirm/), { target: { value: "Priya Raman" } });
     fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/still being processed. Try again in about 5 minutes/);
     expect(onErased).not.toHaveBeenCalled();
+  });
+
+  it("offers an active candidate's permanent delete in the menu and archives + deletes in one step", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({ ...PREVIEW, archived: false } as never);
+    const result = { candidate_id: "c1", deleted_at: "2026-10-07T12:30:00Z", interviews: 1, sessions: 1, resumes: 0, profiles: 0, media_files_deleted: 2, media_bytes_deleted: 2048, archived_in_request: true };
+    const del = vi.spyOn(api, "delete").mockResolvedValue(result as never);
+    const onErased = vi.fn();
+    wrap(<CandidateLifecycleMenu candidate={CANDIDATE} canWrite canErase onErased={onErased} />);
+    fireEvent.keyDown(screen.getByRole("button", { name: "More actions" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Delete candidate permanently/ }));
+    expect(await screen.findByText(/archived first .* and then deleted, in one step/)).toBeInTheDocument();
+    const confirmButton = screen.getByRole("button", { name: "Archive and delete permanently" });
+    expect(confirmButton).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Type the candidate's full name/), { target: { value: "Priya Raman" } });
+    expect(confirmButton).toBeEnabled();
+    fireEvent.click(confirmButton);
+    await waitFor(() => expect(del).toHaveBeenCalledWith("/candidates/c1", { params: { archive_first: true } }));
+    await waitFor(() => expect(onErased).toHaveBeenCalledWith(result));
+  });
+
+  it("keeps the delete menu item for administrators only", async () => {
+    wrap(<CandidateLifecycleMenu candidate={CANDIDATE} canWrite canErase={false} onErased={vi.fn()} />);
+    fireEvent.keyDown(screen.getByRole("button", { name: "More actions" }), { key: "Enter" });
+    await screen.findByRole("menuitem", { name: /Archive candidate/ });
+    expect(screen.queryByRole("menuitem", { name: /Delete candidate permanently/ })).not.toBeInTheDocument();
+  });
+
+  it("shows a danger zone card that opens the same confirmation", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({ ...PREVIEW, archived: false } as never);
+    wrap(<CandidateDangerZone candidate={CANDIDATE} onErased={vi.fn()} />);
+    expect(screen.getByText(/archived first, in the same step/)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("candidate-danger-delete"));
+    expect(await screen.findByTestId("erase-candidate-dialog")).toBeInTheDocument();
+  });
+
+  it("builds the erase params", () => {
+    expect(eraseParams(null, false)).toBeUndefined();
+    expect(eraseParams("DSR-1", false)).toEqual({ request_reference: "DSR-1" });
+    expect(eraseParams(null, true)).toEqual({ archive_first: true });
   });
 });

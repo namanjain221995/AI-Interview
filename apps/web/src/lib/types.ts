@@ -1547,6 +1547,11 @@ export interface CandidateDeletionResult {
   model_calls_scrubbed?: number;
   audit_entries_scrubbed?: number;
   auth_sessions_revoked?: number;
+  intake_interviews?: number;
+  reports?: number;
+  link_registrations?: number;
+  /** True when the candidate was archived and deleted in one request (`archive_first`). */
+  archived_in_request?: boolean;
 }
 
 export interface CandidateInput {
@@ -1722,7 +1727,8 @@ export interface CompetencyDigest {
   name?: string | null;
   weight?: number;
   required?: boolean;
-  score_estimate: number;
+  /** `null` = nothing observed yet (the engine's neutral starting point is not a score). */
+  score_estimate: number | null;
   confidence: number;
   evidence_count: number;
   sufficient_evidence: boolean;
@@ -1850,8 +1856,8 @@ export interface ScoreRecord {
   category: ScoreCategory;
   key: string;
   label: string | null;
-  /** Competency 0-10; rubric category / overall 0-100. */
-  score: number;
+  /** Competency 0-10; rubric category / overall 0-100. `null` = not enough evidence to score (never a made-up midpoint). */
+  score: number | null;
   confidence: number;
   weight: number | null;
   evidence_count: number;

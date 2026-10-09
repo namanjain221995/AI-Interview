@@ -18,7 +18,14 @@ technologies) and a built-in list of common technical terms:
 * a word right after another capitalised word that is neither a term nor a
   common sentence opener is left alone: "John Carpenter" is a person;
 * every correction is counted and logged with the terms only, never the
-  transcript.
+  transcript;
+* a few known misrecognitions that fuzzy matching cannot reach (too short,
+  spelled out, lower case or split) are fixed by exact aliases first
+  (:data:`ALIASES`): "CACD" / "C I C D" / "see icd" -> CI/CD, "L L M" -> LLM,
+  "Tech Sara" -> TechSara (live intake 2026-10-10: "we use the CACD pipeline"
+  was echoed back by the interviewer). "local error" becomes "local LLM" only
+  in an LLM context ("a local error which can answer ..."); elsewhere it is a
+  real phrase and stays.
 """
 
 from __future__ import annotations
@@ -71,7 +78,36 @@ BUILTIN_TERMS: tuple[str, ...] = (
     # practices
     "GitOps", "DevOps", "SRE", "SLO", "SLI", "CI/CD", "Backstage", "cert-manager", "Cert Manager",
     "Nginx", "HAProxy", "Traefik", "Linux", "Bash", "systemd",
+    # company
+    "TechSara",
 )  # fmt: skip
+
+_LLM_CONTEXT = (
+    r"(?=(?:\s+[\w']+){0,4}?\s+(?:answer|answers|answered|answering|respond|responds|generate|generates|chat|chats|"
+    r"chatbot|model|models|prompt|prompts|fine[\s-]?tun\w*|rag|retrieval|trained|inference|tokens?|embeddings?)\b)"
+)
+#: (pattern, canonical) exact corrections applied before the fuzzy pass (case-insensitive, whole words).
+ALIASES: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pattern, re.IGNORECASE), term)
+    for pattern, term in (
+        # CI/CD: "CACD", "CICD", "CI CD", "CI-CD", "C I C D", "C.I.C.D.", "see icd", "see I see D"
+        (r"\bc\s?a\s?c\s?d\b", "CI/CD"),
+        (r"\bci\s?[-/]?\s?cd\b", "CI/CD"),
+        (r"\bc\.?\s?i\.?\s?c\.?\s?d\b\.?", "CI/CD"),
+        (r"\bsee\s+i\.?\s?c\.?\s?d\b", "CI/CD"),
+        (r"\bsee\s+i\s+see\s+d\b", "CI/CD"),
+        # LLM spelled out: "L L M", "L.L.M.", "el el em" (+ plural)
+        (r"\bl\.?\s+l\.?\s+m\b\.?(?!\w)", "LLM"),
+        (r"\bl\.l\.m\b\.?", "LLM"),
+        (r"\bel\s+el\s+em\b", "LLM"),
+        (r"\bl\s+l\s+ms\b", "LLMs"),
+        # "a local error which can answer ...": only in an LLM context
+        (r"\blocal\s+errors\b" + _LLM_CONTEXT, "local LLMs"),
+        (r"\blocal\s+error\b" + _LLM_CONTEXT, "local LLM"),
+        # the company name: "Tech Sara", "Techsara", "Tech-Sarah", "Teksara"
+        (r"\bte(?:ch|k)[\s-]?sar(?:a|ah)\b", "TechSara"),
+    )
+)
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9+#]*")
 # Capitalised words that start sentences without being names.
@@ -128,11 +164,11 @@ class Glossary:
 
     def correct(self, text: str) -> tuple[str, list[Correction]]:
         """``text`` with misrecognized terms replaced, and the corrections made."""
+        text, corrections = apply_aliases(text)
         tokens = list(_WORD.finditer(text))
         if not tokens or not self._fuzzy:
-            return text, []
+            return text, corrections
         pieces: list[str] = []
-        corrections: list[Correction] = []
         cursor = 0
         i = 0
         while i < len(tokens):
@@ -201,6 +237,21 @@ class Glossary:
             ):
                 best = (term, score)
         return best
+
+
+def apply_aliases(text: str) -> tuple[str, list[Correction]]:
+    """The exact alias corrections (:data:`ALIASES`) of ``text``."""
+    corrections: list[Correction] = []
+    for pattern, term in ALIASES:
+
+        def repl(match: re.Match[str], term: str = term) -> str:
+            if match.group(0) == term:
+                return term
+            corrections.append(Correction(match.group(0), term, 100.0))
+            return term
+
+        text = pattern.sub(repl, text)
+    return text, corrections
 
 
 def correct_transcript(text: str, session_terms: Sequence[str] = ()) -> str:

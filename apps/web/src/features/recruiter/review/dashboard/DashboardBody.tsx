@@ -140,7 +140,7 @@ function AwaitingDecision({ sessions, loading, failed }: { sessions: SessionSumm
                     <span className="truncate text-xs text-fg-muted">{s.job?.title}</span>
                   </span>
                   {s.recommendation ? <span className="hidden text-xs text-fg-muted sm:inline">{RECOMMENDATION_SHORT_LABELS[s.recommendation]}</span> : null}
-                  <ScoreCell score={s.overall_score} />
+                  <ScoreCell score={s.overall_score} compact insufficient={s.recommendation === "insufficient_evidence"} />
                   <span className="w-20 shrink-0 text-right text-xs whitespace-nowrap text-fg-subtle sm:w-28">{formatRelativeOrDate(s.ended_at ?? s.started_at)}</span>
                 </Link>
               </li>

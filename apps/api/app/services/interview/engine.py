@@ -54,6 +54,7 @@ from app.domain.enums import (
 )
 from app.schemas.ai import InterviewPlan, TurnDecision
 from app.services.interview import behavior as beh
+from app.services.interview import understanding as U
 from app.services.interview.adapters import CodingPort, ScoringPort, get_scoring
 from app.services.interview.attribution import guard_for_turn
 from app.services.interview.closing import (
@@ -926,13 +927,21 @@ class InterviewEngine:
                 # Transcription finished just after a disconnect: keep the answer
                 # (and its evaluation) and reply when the session resumes.
                 if not replay:
-                    special = classify(
+                    paused_q = state.current_question()
+                    heard = U.understand(
                         text,
+                        question_text=paused_q.text if paused_q is not None else None,
                         awaiting_answer=True,
                         coding_active=state.coding.active,
                         questions_invited=state.candidate_questions_invited,
                     )
-                    pending = await self._accept_answer(state, turn, text, special, None, persist=False)
+                    if (heard.flow or heard.intent is U.TurnIntent.REPEAT) and not state.coding.active:
+                        # "Can you hear me?" is not an answer: the resume re-asks the question anyway.
+                        await self._record_candidate_utterance(state, turn, text)
+                        state.last_turn_key = turn_key(turn, text)
+                        await self._save(state, durable=True)
+                        return
+                    pending = await self._accept_answer(state, turn, text, heard.special, None, persist=False)
                     await self._persist_pending_answer(state, pending)
                     log.info("engine.answer_while_paused", session_id=session_id)
                 return
@@ -950,15 +959,35 @@ class InterviewEngine:
                         yield event
                 return
             awaiting = state.awaiting_answer or state.current_question_id is not None
-            special = classify(
-                text, awaiting_answer=awaiting, questions_invited=state.candidate_questions_invited
+            pending_question = state.current_question()
+            # Turn understanding first (understanding.py): an audio check, a question about the interview, "okay",
+            # "let me think" or a fragment is answered as such and never consumes the pending question.
+            heard = U.understand(
+                text,
+                question_text=pending_question.text if pending_question is not None else None,
+                awaiting_answer=awaiting,
+                questions_invited=state.candidate_questions_invited,
+                stt_confidence=turn.stt_confidence if not turn.typed else None,
             )
+            special = heard.special
             if special.kind is SpecialKind.REPEAT and not replay:
                 await self._record_candidate_utterance(state, turn, text)
                 async with aclosing(self._repeat_events(state)) as _relay:
                     async for event in _relay:
                         yield event
                 return
+            if U.flow_allowed(state, heard) and pending_question is not None and not turn.speculative:
+                flow_directive = compute_directive(
+                    state, special=special, now=self.now(), closing_reserve_s=self.config.closing_reserve_s
+                )
+                if not flow_directive.must_close:
+                    if not replay:
+                        await self._record_candidate_utterance(state, turn, text)
+                        state.last_turn_key = turn_key(turn, text)
+                    async with aclosing(self._flow_events(state, heard)) as _relay:
+                        async for event in _relay:
+                            yield event
+                    return
             prep = await self._take_prep_async(session_id, text, state.current_question_id)
             self._cancel_speculation(session_id)  # free the model for the turn's own stream
             quick = prep.quick if prep is not None else None
@@ -972,6 +1001,11 @@ class InterviewEngine:
                 now=self.now(),
                 closing_reserve_s=self.config.closing_reserve_s,
             )
+            if heard.ack and not directive.must_close:
+                # "Can you hear me? So, I'm ..." - a real answer that opened with an audio check.
+                directive.instructions.append(
+                    f'The candidate first asked whether you can hear them: begin your reply with "{heard.ack}"'
+                )
             if directive.must_close or directive.start_coding:
                 if pending is not None:
                     await self._persist_pending_answer(state, pending)
@@ -1901,6 +1935,69 @@ class InterviewEngine:
             question_id=question_id,
             behavior=spec,
             decision={"action": "repeat_question"},
+            full_text=text,
+        )
+
+    async def _flow_events(
+        self, state: InterviewState, heard: U.Understanding
+    ) -> AsyncGenerator[TurnEvent, None]:
+        """A deterministic reply to a flow turn (understanding.py): "Yes, I can hear you clearly." + the question in
+        a short form, "Sure, go ahead.", "Take your time." ... No model call, no answer row, no new question: the
+        pending question stays pending (like a repeat)."""
+        question = state.current_question()
+        question_id = question.id if question is not None else None
+        streak = U.note_flow(state, heard.intent)
+        text = U.flow_reply(
+            heard,
+            question_text=question.text if question is not None else None,
+            streak=streak,
+            seed=f"{state.session_id}:{state.turn_index}:{len(state.utterances)}",
+            remaining_s=state.remaining_seconds(self.now()),
+        )
+        action = U.flow_action(heard)
+        state.silence_prompts = 0
+        utterance_id = str(uuid.uuid4())
+        spec = beh.provisional(action)
+        elapsed = self._elapsed(state)
+        async with session_scope() as db:
+            row = await add_transcript(
+                db,
+                state.session_id,
+                speaker="interviewer",
+                text_value=text,
+                start_ms=int(elapsed * 1000),
+                end_ms=int(elapsed * 1000),
+                question_id=question_id,
+            )
+            add_utterance(
+                state,
+                UtteranceRecord(
+                    id=utterance_id,
+                    kind="acknowledgment",
+                    action=action,
+                    question_id=question_id,
+                    text=text,
+                    at_s=elapsed,
+                    transcript_id=str(row.id),
+                ),
+            )
+            record_interviewer_text(state, text=text, at_s=elapsed, question_id=question_id)
+            await log_event(
+                db,
+                state.session_id,
+                "turn.flow",
+                {"intent": heard.intent.value, "topic": heard.topic, "question_id": question_id, "streak": streak},
+                elapsed_s=elapsed,
+            )
+            await self._save(state, db=db)
+        yield UtteranceBegin(
+            utterance_id=utterance_id, kind="acknowledgment", behavior=spec, question_id=question_id, text=text
+        )
+        yield UtteranceMeta(
+            utterance_id=utterance_id,
+            question_id=question_id,
+            behavior=spec,
+            decision={"action": action.value, "flow": heard.intent.value, "topic": heard.topic},
             full_text=text,
         )
 

@@ -369,6 +369,21 @@ block them; disable them outside development.
   scrubbed deletion records), model-call payloads and audit IP/user-agent data for the candidate are scrubbed, and
   the candidate row is deleted with all interviews, sessions, transcripts, evaluations, reports, coding and
   integrity data (database cascades); audited as `candidate.delete` with counts only (`app/services/candidates/erasure.py`).
+  The cascade also covers intake interviews (all intake tables), open-link registrations, review decisions, recordings
+  and frames; `?archive_first=true` archives an active candidate and deletes it in the same request (the web confirm
+  dialog asks for the candidate's full name), and `GET /api/v1/candidates/{id}/deletion-preview` returns the counts.
+* Other permanent deletes (ADMIN or SUPER_ADMIN only, 403 for other roles, 404 across organisations, counts-only audit,
+  stored files removed and `media_assets` rows scrubbed as above, model-call payloads nulled; shared helpers in
+  `app/services/data_deletion/`):
+  `DELETE /api/v1/sessions/{id}` removes one session and everything it produced (transcripts, answers, evidence, scores,
+  reports + artifacts, recordings, frames, coding, integrity events, intake results/evaluations/decisions; the
+  candidate, résumés and the interview invitation stay; 409 `session_busy` while live or being scored; audit
+  `session.delete`). `DELETE /api/v1/intake/interviews/{id}` removes the intake interview (drafts too), its invitation,
+  portal sign-ins and sessions (409 `intake_busy`; audit `intake.delete`; the candidate stays).
+  `DELETE /api/v1/open-links/{id}` removes a link and its candidate-less (blocked/abandoned) registrations; a link that
+  already produced a candidate is refused with 409 `link_has_registrations` (close it instead) and candidates,
+  interviews and sessions are never deleted with a link (audit `link.delete`). The busy rule is the erasure rule: a
+  running session counts while touched within 15 minutes, a waiting one while a client heartbeat is under 2 minutes old.
 * Personal data never leaves the host except through operator backups; all models run locally.
 * IP addresses and user agents are stored in `auth_sessions`, `audit_logs` and `consents` and appear in edge logs
   (rotated, 5 x 20 MB).

@@ -309,7 +309,13 @@ _REFERENCE = re.compile(
     rf"(?P<d>[^.?!;]{{3,240}})"
     # "the Karpenter setup you mentioned"
     rf"|\b(?:the|that|those|these|this)\s+(?P<e>(?:[\w'/-]+\s+){{0,5}}?[\w'/-]+)\s+(?:that\s+)?you(?:'ve)?\s+"
-    rf"(?:mentioned|described|talked about|brought up|said|noted)\b",
+    rf"(?:mentioned|described|talked about|brought up|said|noted)\b"
+    # "what you meant by exactly regarding the retries", "what you were about to say regarding the retries" (live
+    # finding 2026-10-10: a clarification credited the candidate with the topic of the interviewer's own question)
+    r"|\bwhat\s+you\s+(?:meant|mean|were\s+(?:about\s+to\s+say|going\s+to\s+say|saying|getting\s+at)|"
+    r"wanted\s+to\s+say)\s+(?:by|about|regarding|on|with|when\s+you\s+said)?\s*(?P<f>[^.?!;]{3,240})"
+    r"|\byou\s+were\s+(?:about|going)\s+to\s+(?:say|explain|describe|mention)\s+(?:something\s+)?"
+    r"(?:about|regarding|on)\s+(?P<g>[^.?!;]{3,240})",
     re.IGNORECASE,
 )
 _RESUME_REFERENCE = re.compile(
@@ -357,7 +363,7 @@ def find_references(text: str) -> list[Reference]:
             refs.append(Reference(phrase, True, match.start(), match.end()))
             seen.append((match.start(), match.end()))
     for match in _REFERENCE.finditer(text or ""):
-        group = next(g for g in ("a", "b", "c", "d", "e") if match.group(g) is not None)
+        group = next(g for g in ("a", "b", "c", "d", "e", "f", "g") if match.group(g) is not None)
         raw = match.group(group)
         phrase = raw.strip() if group == "e" else _trim_phrase(raw)
         if not phrase:

@@ -13,6 +13,7 @@ import { ConfidenceMeter } from "@/components/domain/ConfidenceMeter";
 import { DifficultyBadge } from "@/components/domain/DifficultyBadge";
 import { HUMAN_DECISION_NOTE, RecommendationBadge } from "@/components/domain/RecommendationBadge";
 import { scoreTone, TONE_BG } from "@/components/domain/scoreBands";
+import { INSUFFICIENT_EVIDENCE_HEADLINE, NOT_ENOUGH_EVIDENCE } from "@/components/domain/evidenceCopy";
 import { ScoreRing } from "@/components/domain/ScoreRing";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { confidenceLabel, formatClock, formatDate, formatDateTime, formatMinutes, formatOffsetMs, formatPercent, formatScore, humanize, pluralize, truncate } from "@/lib/format";
@@ -140,7 +141,14 @@ export function ReportDocument({ view, index, version, generatedAt, draft = fals
               {view.round ? <span className="text-fg-muted">, {view.round.name}</span> : null}
             </p>
           </div>
-          <ScoreRing value={view.overallScore} max={100} size="lg" label="Overall score" ariaLabel="Overall score" />
+          <div className="grid justify-items-center gap-1.5">
+            <ScoreRing value={view.overallScore} max={100} size="lg" label="Overall score" ariaLabel="Overall score" />
+            {view.overallScore === null && !draft ? (
+              <p className="max-w-44 text-center text-xs font-medium text-warning-fg" data-testid="report-insufficient-evidence">
+                {INSUFFICIENT_EVIDENCE_HEADLINE}
+              </p>
+            ) : null}
+          </div>
         </div>
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-lg bg-surface-subtle px-5 py-4 text-[13px] ring-1 ring-line-subtle ring-inset sm:grid-cols-4">
           <div className="grid gap-0.5">
@@ -238,10 +246,16 @@ export function ReportDocument({ view, index, version, generatedAt, draft = fals
                       </span>
                     </td>
                     <td className="py-2 pr-3 text-right whitespace-nowrap tabular-nums">
-                      <span className="mr-2">
-                        <MiniBar value={c.score} max={10} />
-                      </span>
-                      <span className="font-semibold text-fg">{formatScore(c.score, 10)}</span>
+                      {c.score === null ? (
+                        <span className="text-xs text-fg-subtle">{NOT_ENOUGH_EVIDENCE}</span>
+                      ) : (
+                        <>
+                          <span className="mr-2">
+                            <MiniBar value={c.score} max={10} />
+                          </span>
+                          <span className="font-semibold text-fg">{formatScore(c.score, 10)}</span>
+                        </>
+                      )}
                     </td>
                     <td className="py-2 pr-3 text-fg-muted">{c.confidence === null ? "—" : confidenceLabel(c.confidence)}</td>
                     <td className="py-2 pr-3 text-right text-fg-muted tabular-nums">{c.evidenceCount ?? c.evidence.length}</td>
@@ -263,8 +277,14 @@ export function ReportDocument({ view, index, version, generatedAt, draft = fals
                   <span className="text-xs text-fg-subtle">{typeof r.weight === "number" ? `${Math.round(r.weight)}% of overall` : "Unweighted"}</span>
                 </span>
                 <span className="flex items-center gap-2 tabular-nums">
-                  <MiniBar value={r.score} max={100} />
-                  <span className="font-semibold text-fg">{formatScore(r.score)}</span>
+                  {r.score === null ? (
+                    <span className="text-xs text-fg-subtle">{NOT_ENOUGH_EVIDENCE}</span>
+                  ) : (
+                    <>
+                      <MiniBar value={r.score} max={100} />
+                      <span className="font-semibold text-fg">{formatScore(r.score)}</span>
+                    </>
+                  )}
                 </span>
               </div>
             ))}
@@ -283,7 +303,8 @@ export function ReportDocument({ view, index, version, generatedAt, draft = fals
                 <h3 className="flex flex-wrap items-baseline gap-x-2 text-[15px] font-semibold text-fg">
                   {c.label}
                   <span className="text-[13px] font-normal text-fg-muted tabular-nums">
-                    {formatScore(c.score, 10)}/10{c.confidence !== null ? `, ${confidenceLabel(c.confidence).toLowerCase()} confidence` : ""}
+                    {c.score === null ? NOT_ENOUGH_EVIDENCE : `${formatScore(c.score, 10)}/10`}
+                    {c.score !== null && c.confidence !== null ? `, ${confidenceLabel(c.confidence).toLowerCase()} confidence` : ""}
                   </span>
                 </h3>
                 {c.summary ? <p className="text-[13.5px] leading-[1.45rem] text-fg">{c.summary}</p> : null}

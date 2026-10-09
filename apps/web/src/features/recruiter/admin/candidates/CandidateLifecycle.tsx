@@ -2,6 +2,7 @@ import { Archive, ArchiveRestore, MoreHorizontal, ShieldAlert, Trash2 } from "lu
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 
+import { confirmPhraseMatches } from "@/components/domain/DangerDeleteDialog";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
 import { useConfirm } from "@/components/ui/AlertDialog";
@@ -12,7 +13,7 @@ import { Label } from "@/components/ui/Label";
 import { formatBytes, formatDateTime, pluralize } from "@/lib/format";
 import type { CandidateDeletionResult } from "@/lib/types";
 
-import { candidateActionError, REQUEST_REFERENCE, useArchiveCandidate, useEraseCandidate, useRestoreCandidate } from "../api/candidates";
+import { candidateActionError, REQUEST_REFERENCE, useArchiveCandidate, useCandidateDeletionPreview, useEraseCandidate, useRestoreCandidate } from "../api/candidates";
 import type { AdminCandidate } from "../types";
 
 /** What a deletion removed, in one sentence (counts only, as the API returns them). */
@@ -28,7 +29,8 @@ export function deletionSummary(result: CandidateDeletionResult): string {
 
 /**
  * Header actions for the candidate lifecycle: archive (soft, restorable) for anyone
- * who can edit candidates; restore and permanent deletion when archived.
+ * who can edit candidates; restore when archived; permanent deletion for admins
+ * (an active candidate is archived and deleted in one confirmed step).
  */
 export function CandidateLifecycleMenu({
   candidate,
@@ -94,18 +96,47 @@ export function CandidateLifecycleMenu({
               Archive candidate
             </DropdownMenuItem>
           )}
-          {archived && canErase ? (
+          {canErase ? (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem destructive onSelect={() => setEraseOpen(true)}>
+              <DropdownMenuItem destructive onSelect={() => setEraseOpen(true)} data-testid="candidate-delete-permanently">
                 <Trash2 />
-                Delete permanently…
+                Delete candidate permanently…
               </DropdownMenuItem>
             </>
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
       {canErase ? <EraseCandidateDialog candidate={candidate} open={eraseOpen} onOpenChange={setEraseOpen} onErased={onErased} /> : null}
+    </>
+  );
+}
+
+/** Always-visible place for an administrator to delete a candidate for good (sidebar card). */
+export function CandidateDangerZone({ candidate, onErased }: { candidate: AdminCandidate; onErased: () => void }) {
+  const [eraseOpen, setEraseOpen] = useState(false);
+  return (
+    <>
+      <section aria-labelledby="candidate-danger-zone" className="rounded-lg border border-danger-line px-4 py-4">
+        <h2 id="candidate-danger-zone" className="text-sm font-medium text-fg">
+          Danger zone
+        </h2>
+        <p className="mt-1 text-xs leading-5 text-fg-muted">
+          Delete this candidate and all their interviews, recordings, reports and files.{" "}
+          {candidate.archived_at ? "" : "They're archived first, in the same step. "}This can't be undone.
+        </p>
+        <Button
+          size="sm"
+          variant="outline"
+          leftIcon={<Trash2 />}
+          className="mt-3 w-full border-danger-line text-danger-fg hover:bg-danger-soft"
+          onClick={() => setEraseOpen(true)}
+          data-testid="candidate-danger-delete"
+        >
+          Delete candidate permanently…
+        </Button>
+      </section>
+      <EraseCandidateDialog candidate={candidate} open={eraseOpen} onOpenChange={setEraseOpen} onErased={onErased} />
     </>
   );
 }
@@ -152,8 +183,9 @@ export function ArchivedCandidateBanner({ candidate, canWrite, canErase, onErase
 }
 
 /**
- * Data-subject erasure. Irreversible, so it says exactly what goes, asks the
- * admin to type the candidate's email, and records an optional request reference.
+ * Data-subject erasure. Irreversible, so it says exactly what goes (live counts),
+ * asks the admin to type the candidate's full name, and records an optional request
+ * reference. An active candidate is archived first, in the same request.
  */
 export function EraseCandidateDialog({
   candidate,
@@ -167,11 +199,13 @@ export function EraseCandidateDialog({
   onErased: (result: CandidateDeletionResult) => void;
 }) {
   const erase = useEraseCandidate(candidate.id);
+  const preview = useCandidateDeletionPreview(candidate.id, open);
   const [typed, setTyped] = useState("");
   const [reference, setReference] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const emailId = useId();
+  const nameId = useId();
   const refId = useId();
+  const archived = Boolean(candidate.archived_at);
 
   useEffect(() => {
     if (!open) {
@@ -181,14 +215,15 @@ export function EraseCandidateDialog({
     }
   }, [open]);
 
-  const matches = typed.trim().toLowerCase() === candidate.email.trim().toLowerCase();
+  const matches = confirmPhraseMatches(typed, candidate.full_name);
   const referenceValid = reference.trim() === "" || REQUEST_REFERENCE.test(reference.trim());
+  const counts = preview.data;
 
   const submit = async () => {
     if (!matches || !referenceValid) return;
     setError(null);
     try {
-      const result = await erase.mutateAsync(reference.trim() || null);
+      const result = await erase.mutateAsync({ requestReference: reference.trim() || null, archiveFirst: !archived });
       toast.success("Candidate data deleted", { description: deletionSummary(result) });
       onOpenChange(false);
       onErased(result);
@@ -199,29 +234,46 @@ export function EraseCandidateDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !erase.isPending && onOpenChange(next)}>
-      <DialogContent size="md">
+      <DialogContent size="md" data-testid="erase-candidate-dialog">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ShieldAlert className="size-5 text-danger" aria-hidden="true" />
-            Delete {candidate.full_name}'s data permanently?
+            Delete {candidate.full_name} permanently?
           </DialogTitle>
-          <DialogDescription>Use this for a data-subject erasure request. It can't be undone.</DialogDescription>
+          <DialogDescription>
+            {archived
+              ? "Use this for a data-subject erasure request or to remove test data. It can't be undone."
+              : "The candidate is archived first (open invitation links stop working) and then deleted, in one step. It can't be undone."}
+          </DialogDescription>
         </DialogHeader>
         <DialogBody className="grid gap-4">
           <div className="rounded-md border border-danger-line bg-danger-soft px-3.5 py-3 text-sm leading-6 text-fg">
             <p className="font-medium">This removes, for good:</p>
             <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-fg-muted marker:text-danger">
-              <li>the candidate record and every interview invitation</li>
-              <li>all sessions, transcripts, answer evaluations, scores and reports</li>
+              <li>the candidate record, their résumés and profiles, and every interview invitation</li>
+              <li>all sessions, transcripts, answer evaluations, scores, reports and review decisions</li>
+              <li>intake interviews (evaluations, decisions) and open-link registrations</li>
               <li>stored files: résumés, answer audio, camera and screen images, recordings, report files</li>
             </ul>
+            {counts ? (
+              <p className="mt-2 text-fg" data-testid="erase-candidate-counts">
+                Right now: {pluralize(counts.interviews, "interview")}, {pluralize(counts.sessions, "session")}, {pluralize(counts.reports, "report")},{" "}
+                {pluralize(counts.resumes, "résumé")}
+                {counts.intake_interviews ? `, ${pluralize(counts.intake_interviews, "intake interview")}` : ""}
+                {counts.link_registrations ? `, ${pluralize(counts.link_registrations, "link registration")}` : ""}, {pluralize(counts.stored_files, "stored file")} (
+                {formatBytes(counts.stored_bytes)}).
+              </p>
+            ) : null}
+            {counts && counts.blockers.length > 0 ? (
+              <p className="mt-2 font-medium text-danger-fg">An interview or résumé is still being processed; the deletion will be refused until it finishes.</p>
+            ) : null}
             <p className="mt-2 text-fg-muted">The audit log keeps that a deletion happened, with counts and your reference, but no personal data.</p>
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor={emailId}>
-              Type <span className="font-mono text-[13px]">{candidate.email}</span> to confirm
+            <Label htmlFor={nameId}>
+              Type the candidate's full name <span className="font-mono text-[13px]">{candidate.full_name}</span> to confirm
             </Label>
-            <Input id={emailId} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" spellCheck={false} aria-invalid={typed !== "" && !matches ? true : undefined} />
+            <Input id={nameId} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" spellCheck={false} aria-invalid={typed !== "" && !matches ? true : undefined} />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor={refId}>
@@ -252,7 +304,7 @@ export function EraseCandidateDialog({
             Keep the data
           </Button>
           <Button variant="danger" leftIcon={<Trash2 />} onClick={() => void submit()} disabled={!matches || !referenceValid} loading={erase.isPending} loadingText="Deleting…">
-            Delete permanently
+            {archived ? "Delete permanently" : "Archive and delete permanently"}
           </Button>
         </DialogFooter>
       </DialogContent>

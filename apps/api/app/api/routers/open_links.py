@@ -18,11 +18,13 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy import func, select
 
 from app.core.audit import audit
-from app.core.deps import DbSession, OrgScope, PaginationParams, require_permission
+from app.core.deps import DbSession, OrgScope, PaginationParams, require_permission, require_role
 from app.core.errors import Conflict, NotFound
 from app.core.rbac import Permission, Principal
 from app.db.models import Candidate, InterviewLink, LinkRegistration
+from app.domain.enums import Role
 from app.schemas.api.common import ERROR_RESPONSES, Page
+from app.schemas.api.deletion import LinkDeletionOut
 from app.schemas.api.open_links import (
     AccessCodeRequest,
     AdvancedItem,
@@ -55,6 +57,7 @@ from app.schemas.api.open_links import (
     UnblockRequest,
     UnblockResponse,
 )
+from app.services.data_deletion.links import delete_link as delete_link_service
 from app.services.open_links import export as csv_export
 from app.services.open_links import links as svc
 from app.services.open_links import progression
@@ -86,6 +89,10 @@ JobsReader = Annotated[Principal, Depends(require_permission(Permission.JOBS_REA
 Reader = Annotated[Principal, Depends(require_permission(Permission.CANDIDATES_READ))]
 Inviter = Annotated[Principal, Depends(require_permission(Permission.INTERVIEWS_INVITE))]
 Writer = Annotated[Principal, Depends(require_permission(Permission.CANDIDATES_WRITE))]
+Deleter = Annotated[
+    Principal,
+    Depends(require_role(Role.ADMIN, Role.SUPER_ADMIN, perms=(Permission.INTERVIEWS_INVITE,))),
+]
 RS = RegistrationStatus
 
 
@@ -262,6 +269,43 @@ async def update_link(
             details={"warnings": result["new_acks"]},
         )
     return await svc.serialize_link(db, link)
+
+
+@router.delete(
+    "/{link_id}",
+    response_model=LinkDeletionOut,
+    summary="Permanently delete a link nobody registered through (ADMIN)",
+    description=(
+        "Deletes the link and any registrations that never became a candidate (blocked or abandoned "
+        "attempts). A link that already produced a candidate answers 409 `link_has_registrations`: close "
+        "it instead, or delete those candidates first. Candidates, interviews and sessions are never "
+        "touched. Audited with counts only."
+    ),
+)
+async def delete_link(
+    link_id: uuid.UUID, request: Request, principal: Deleter, org_id: OrgScope, db: DbSession
+) -> LinkDeletionOut:
+    link = await svc.get_link(db, link_id, org_id, for_update=True)
+    summary = await delete_link_service(db, link)
+    await audit(
+        db,
+        principal,
+        "link.delete",
+        resource_type="interview_link",
+        resource_id=link_id,
+        request=request,
+        organization_id=org_id,
+        details={
+            "previous_status": summary.previous_status,
+            "registrations_deleted": summary.registrations_deleted,
+        },
+    )
+    return LinkDeletionOut(
+        link_id=link_id,
+        deleted_at=datetime.now(UTC),
+        previous_status=summary.previous_status,
+        registrations_deleted=summary.registrations_deleted,
+    )
 
 
 @router.post("/{link_id}/status", response_model=OpenLink, summary="Pause, resume or close a link")

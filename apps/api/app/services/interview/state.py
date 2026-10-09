@@ -299,6 +299,9 @@ class InterviewState(_State):
     profile_wait_started_at: datetime | None = None
     prepare_attempts: int = 0
     ungrounded_reference: str | None = None  # last reply referenced something never said
+    # Turn understanding (understanding.py): flow replies (audio checks, "go ahead", nudges) on the current question
+    flow_question_id: str | None = None
+    flow_counts: dict[str, int] = Field(default_factory=dict)
     closing_utterance_id: str | None = None
     # Memory
     memory_upto: int = 0  # number of candidate answers covered by memory_summary

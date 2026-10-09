@@ -86,6 +86,25 @@ class CandidateDeletionOut(BaseModel):
     auth_sessions_revoked: int = 0
     link_registrations: int = 0
     link_blocked_registrations_deleted: int = 0
+    intake_interviews: int = 0
+    reports: int = 0
+    archived_in_request: bool = False
+
+
+class CandidateDeletionPreviewOut(BaseModel):
+    """What ``DELETE /candidates/{id}`` would remove right now (counts only)."""
+
+    candidate_id: uuid.UUID
+    archived: bool
+    interviews: int
+    sessions: int
+    resumes: int
+    reports: int
+    intake_interviews: int
+    link_registrations: int
+    stored_files: int
+    stored_bytes: int
+    blockers: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CandidateProfileOut(APIModel):

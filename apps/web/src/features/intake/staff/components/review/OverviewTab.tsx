@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { usePermission } from "@/lib/auth";
 import { formatDate, formatDateTime, formatNumber, pluralize } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { ReviewSummaryCard } from "@/features/recruiter/review/summary/ReviewSummaryCard";
 
 import {
   AVAILABILITY_LABELS,
@@ -36,6 +37,9 @@ function Row({ label, children, className }: { label: ReactNode; children: React
 }
 
 const none = <span className="text-fg-subtle">Not given</span>;
+
+/** Session states after which the AI review summary is written. */
+const FINISHED_SESSION_STATUSES: readonly string[] = ["completed", "aborted", "failed"];
 
 function yesNo(value: boolean | null): ReactNode {
   if (value === null) return <span className="text-fg-muted">Prefers to discuss with the hiring team</span>;
@@ -68,9 +72,15 @@ export function OverviewTab({ detail, nowElapsed }: { detail: IntakeDetail; nowE
   const roleText = ob?.target_role ? (ob.target_role === "other" && ob.target_role_other ? `Other: ${ob.target_role_other}` : TARGET_ROLE_LABELS[ob.target_role]) : detail.target_role ? TARGET_ROLE_LABELS[detail.target_role] : null;
   const openItems = detail.review_items.filter((i) => !i.resolution).length;
   const claims = detail.evaluation?.summary.claims ?? [];
+  const sessionDone = !!detail.session && FINISHED_SESSION_STATUSES.includes(detail.session.status);
 
   return (
     <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)]" data-testid="intake-overview-tab">
+      {sessionDone ? (
+        <div className="min-w-0 lg:col-span-2">
+          <ReviewSummaryCard sessionId={detail.session?.id} />
+        </div>
+      ) : null}
       <div className="grid grid-cols-1 content-start gap-6">
         <Card>
           <CardHeader title="Candidate" description={ob ? `From the onboarding form, ${ob.submitted_at ? formatDate(ob.submitted_at) : "submitted"}.` : "The onboarding form isn't submitted yet."} />

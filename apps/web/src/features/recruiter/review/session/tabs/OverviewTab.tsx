@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 
 import { ConfidenceMeter } from "@/components/domain/ConfidenceMeter";
+import { INSUFFICIENT_EVIDENCE_HEADLINE, NOT_ENOUGH_EVIDENCE } from "@/components/domain/evidenceCopy";
 import { DifficultyBadge } from "@/components/domain/DifficultyBadge";
 import { RecommendationBadge } from "@/components/domain/RecommendationBadge";
 import { scoreTone, TONE_BG } from "@/components/domain/scoreBands";
@@ -28,6 +29,7 @@ import { Fact, FactGrid, QueryError, SignalCounts } from "../../components/primi
 import { groupEvidenceByCompetency, topEvidence } from "../../lib/evidence";
 import { questionLabel } from "../../lib/questions";
 import { readableRationale } from "../../lib/rationale";
+import { ReviewSummaryCard } from "../../summary/ReviewSummaryCard";
 import { useSessionContext } from "../context";
 
 function VerdictStrip() {
@@ -38,6 +40,8 @@ function VerdictStrip() {
   const rationale = apiRationale ?? (isRecord(details) ? (stringOrNull(details.rationale) ?? stringOrNull(details.recommendation_rationale)) : null);
   const counted = evidence.filter((e) => e.signal !== "neutral").length;
   const answered = questions.filter((q) => q.answers.length > 0).length;
+  // No overall score once the interview is over = nothing could be assessed (never shown as a midpoint).
+  const noScore = !inProgress && !scoresQuery.isPending && overallScore === null;
 
   return (
     <section aria-label="Scores and decision" className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-line bg-line shadow-[0_1px_2px_rgb(16_24_40/0.04)] lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.25fr)_minmax(0,1fr)] [&>*]:bg-surface">
@@ -52,10 +56,12 @@ function VerdictStrip() {
         <div className="grid grid-cols-1 min-w-0 gap-1.5">
           <p className="text-[13px] font-medium text-fg-muted">Overall score</p>
           <ConfidenceMeter value={confidence} />
-          <p className="text-xs text-fg-subtle">
+          <p className={cn("text-xs", noScore ? "font-medium text-warning-fg" : "text-fg-subtle")} data-testid={noScore ? "session-insufficient-evidence" : undefined}>
             {inProgress
               ? "Updates as answers are evaluated."
-              : counted
+              : noScore
+                ? INSUFFICIENT_EVIDENCE_HEADLINE
+                : counted
                 ? `From ${pluralize(counted, "evidence item")} across ${pluralize(answered, "answered question")}.`
                 : "No scored evidence yet."}
           </p>
@@ -146,7 +152,7 @@ function CompetencySummary() {
             const positives = record?.positive_count ?? group?.positive.length ?? 0;
             const negatives = record?.negative_count ?? group?.negative.length ?? 0;
             // Nothing observed yet: the score is only the neutral starting estimate, so don't draw it as one.
-            const unassessed = positives + negatives === 0 && (confidence === null || confidence < 0.05);
+            const unassessed = score === null || (positives + negatives === 0 && (confidence === null || confidence < 0.05));
             const tone = scoreTone(score, 10);
             return (
               <li key={key} className="border-b border-line-subtle last:border-b-0">
@@ -154,7 +160,7 @@ function CompetencySummary() {
                   type="button"
                   data-competency-key={key}
                   onClick={() => nav.go({ tab: "competencies", competency: key })}
-                  aria-label={`${index.nameOf(key)}: ${score === null || unassessed ? "not assessed yet, no evidence" : `${formatScore(score, 10)} out of 10`}. See the evidence.`}
+                  aria-label={`${index.nameOf(key)}: ${score === null || unassessed ? "not enough evidence, no score" : `${formatScore(score, 10)} out of 10`}. See the evidence.`}
                   className="-mx-2 grid w-[calc(100%+1rem)] grid-cols-[minmax(0,11rem)_minmax(0,1fr)_2.75rem] items-center gap-x-4 rounded-md px-2 py-2.5 text-left transition-colors hover:bg-surface-hover focus-visible:outline-2 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)_2.75rem_7.5rem_3.5rem]"
                 >
                   <span className="grid grid-cols-1 min-w-0">
@@ -163,7 +169,7 @@ function CompetencySummary() {
                       <span className="truncate text-sm font-medium text-fg">{index.nameOf(key)}</span>
                     </span>
                     <span className="truncate pl-4 text-xs text-fg-subtle">
-                      {insufficient ? <span className="text-warning-fg">Needs more evidence</span> : meta?.required === false ? "Optional" : "Required"}
+                      {unassessed ? <span className="text-fg-subtle">{NOT_ENOUGH_EVIDENCE}</span> : insufficient ? <span className="text-warning-fg">Needs more evidence</span> : meta?.required === false ? "Optional" : "Required"}
                     </span>
                   </span>
                   <span className={cn("relative h-1.5 rounded-full", unassessed ? "border border-dashed border-line-strong" : "bg-track")} aria-hidden="true">
@@ -190,26 +196,31 @@ function CompetencySummary() {
 
 function RubricCard() {
   const { scores, session } = useSessionContext();
-  const rubric: Array<{ key: string; label: string | null; weight: number | null; score: number; confidence: number }> = scores?.rubric?.length ? scores.rubric : (session.rubric ?? []);
+  const rubric: Array<{ key: string; label: string | null; weight: number | null; score: number | null; confidence: number }> = scores?.rubric?.length ? scores.rubric : (session.rubric ?? []);
   if (rubric.length === 0) return null;
   return (
     <Card>
-      <CardHeader title="Rubric" description="Category scores out of 100, weighted into the overall score." />
+      <CardHeader title="Rubric" description="Category scores out of 100, weighted into the overall score. Categories without evidence are not scored." />
       <CardContent className="grid grid-cols-1 gap-3.5">
-        {rubric.map((category) => (
-          <div key={category.key} className="grid grid-cols-1 gap-1.5">
-            <div className="flex items-baseline justify-between gap-3">
-              <span className="min-w-0 truncate text-[13px] font-medium text-fg">{category.label ?? category.key}</span>
-              <span className="flex shrink-0 items-baseline gap-2">
-                {typeof category.weight === "number" ? <span className="text-xs text-fg-subtle tabular-nums">{Math.round(category.weight)}%</span> : null}
-                <span className="text-sm font-semibold text-fg tabular-nums">{formatScore(category.score)}</span>
-              </span>
+        {rubric.map((category) => {
+          const scored = typeof category.score === "number";
+          return (
+            <div key={category.key} className="grid grid-cols-1 gap-1.5" data-rubric-key={category.key} data-scored={scored}>
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 truncate text-[13px] font-medium text-fg">{category.label ?? category.key}</span>
+                <span className="flex shrink-0 items-baseline gap-2">
+                  {typeof category.weight === "number" ? <span className="text-xs text-fg-subtle tabular-nums">{Math.round(category.weight)}%</span> : null}
+                  {scored ? <span className="text-sm font-semibold text-fg tabular-nums">{formatScore(category.score)}</span> : <span className="text-xs font-medium text-fg-subtle">{NOT_ENOUGH_EVIDENCE}</span>}
+                </span>
+              </div>
+              {scored ? (
+                <span className="relative h-1.5 rounded-full bg-track" aria-hidden="true">
+                  <span className={cn("absolute inset-y-0 left-0 rounded-full", TONE_BG[scoreTone(category.score, 100)])} style={{ width: `${Math.min(100, Math.max(1, category.score ?? 0))}%` }} />
+                </span>
+              ) : null}
             </div>
-            <span className="relative h-1.5 rounded-full bg-track" aria-hidden="true">
-              <span className={cn("absolute inset-y-0 left-0 rounded-full", TONE_BG[scoreTone(category.score, 100)])} style={{ width: `${Math.min(100, Math.max(1, category.score))}%` }} />
-            </span>
-          </div>
-        ))}
+          );
+        })}
       </CardContent>
     </Card>
   );
@@ -360,12 +371,13 @@ function NotCovered() {
 }
 
 export function OverviewTab() {
-  const { durationSeconds, questions, evidence, integrity, codingSpans, index, nav, live, questionsQuery } = useSessionContext();
+  const { durationSeconds, questions, evidence, integrity, codingSpans, index, nav, live, questionsQuery, sessionId, inProgress } = useSessionContext();
   const [focus, setFocus] = useState<string>("all");
   const focusOptions = [{ value: "all", label: "All competencies" }, ...index.order.map((key) => ({ value: key, label: index.nameOf(key) }))];
 
   return (
     <div className="grid grid-cols-1 gap-6">
+      <ReviewSummaryCard sessionId={sessionId} enabled={!inProgress} onOpenEvidence={(p) => nav.go({ tab: "transcript", t: p.startMs, answer: p.answerId })} />
       <VerdictStrip />
 
       <Card>

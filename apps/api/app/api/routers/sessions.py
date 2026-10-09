@@ -9,7 +9,7 @@ coding (``/coding``) sub-resources live in their own modules.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -18,14 +18,16 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import load_only
 
 from app.core.audit import audit
-from app.core.deps import DbSession, PaginationParams, require_permission, resolve_org_id
+from app.core.deps import DbSession, PaginationParams, require_permission, require_role, resolve_org_id
 from app.core.errors import Conflict, ValidationFailed
 from app.core.rbac import Permission, Principal
 from app.db.models import Candidate, CompetencyEvidence, InterviewSession, Round, Transcript
-from app.domain.enums import EvidenceSignal, EvidenceSource, Recommendation, RoundType, SessionStatus
+from app.domain.enums import EvidenceSignal, EvidenceSource, Recommendation, Role, RoundType, SessionStatus
 from app.schemas.api.common import ERROR_RESPONSES, Page
+from app.schemas.api.deletion import SessionDeletionOut
 from app.schemas.api.sessions import (
     EvidenceOut,
+    ReviewSummaryOut,
     SessionDetailOut,
     SessionQuestionOut,
     SessionScoresOut,
@@ -34,6 +36,7 @@ from app.schemas.api.sessions import (
     TranscriptOut,
     TranscriptSegmentOut,
 )
+from app.services.data_deletion.sessions import delete_sessions
 from app.services.reports.live import live_events
 from app.services.reports.queries import (
     LIVE_STATUSES,
@@ -44,6 +47,7 @@ from app.services.reports.queries import (
     needs_review_clause,
     not_needs_review_clause,
 )
+from app.services.reports.review_summary import build_review_summary
 from app.services.reports.views import (
     SUMMARY_COLUMNS,
     questions_view,
@@ -62,6 +66,10 @@ TranscriptReader = Annotated[
 ]
 ScoreManager = Annotated[
     Principal, Depends(require_permission(Permission.SESSIONS_READ, Permission.REVIEWS_WRITE))
+]
+SessionDeleter = Annotated[
+    Principal,
+    Depends(require_role(Role.ADMIN, Role.SUPER_ADMIN, perms=(Permission.SESSIONS_READ,))),
 ]
 
 MAX_TRANSCRIPT_PAGE = 5000
@@ -323,6 +331,16 @@ async def get_scores(session_id: uuid.UUID, principal: SessionReader, db: DbSess
     return SessionScoresOut.model_validate(await scores_view(db, session))
 
 
+@router.get(
+    "/{session_id}/review-summary",
+    response_model=ReviewSummaryOut,
+    summary="Reviewer summary: what the candidate did, evidence-backed strengths/weaknesses, AI text when enough evidence",
+)
+async def get_review_summary(session_id: uuid.UUID, principal: SessionReader, db: DbSession) -> ReviewSummaryOut:
+    session = await get_session_for_principal(db, principal, session_id)
+    return ReviewSummaryOut.model_validate(await build_review_summary(db, session))
+
+
 @router.get("/{session_id}/timeline", response_model=TimelineOut, summary="Competency estimates over time")
 async def get_timeline(
     session_id: uuid.UUID,
@@ -403,3 +421,41 @@ async def recompute_scores(
         },
     )
     return SessionScoresOut.model_validate(await scores_view(db, session))
+
+
+@router.delete(
+    "/{session_id}",
+    response_model=SessionDeletionOut,
+    summary="Permanently delete a session and everything it produced (ADMIN, irreversible)",
+    description=(
+        "Removes the session's questions, answers, transcripts, evaluations, evidence, scores, reports "
+        "(and their stored artifacts), review decisions, coding data, integrity events and frames, "
+        "recordings, intake results/evaluations/decisions and every stored file of the session. The "
+        "candidate, their résumés and the interview invitation stay. 409 `session_busy` while the session "
+        "is live or still being scored. Audited with counts only."
+    ),
+)
+async def delete_session(
+    session_id: uuid.UUID, principal: SessionDeleter, db: DbSession, request: Request
+) -> SessionDeletionOut:
+    session = await get_session_for_principal(db, principal, session_id)
+    org_id, interview_id, candidate_id = session.organization_id, session.interview_id, session.candidate_id
+    summary = await delete_sessions(db, [session.id])
+    counts = summary.as_dict()
+    await audit(
+        db,
+        principal,
+        "session.delete",
+        resource_type="session",
+        resource_id=str(session_id),
+        organization_id=org_id,
+        request=request,
+        details={**counts, "interview_id": str(interview_id), "candidate_id": str(candidate_id)},
+    )
+    return SessionDeletionOut(
+        session_id=session_id,
+        interview_id=interview_id,
+        candidate_id=candidate_id,
+        deleted_at=datetime.now(UTC),
+        **counts,
+    )
