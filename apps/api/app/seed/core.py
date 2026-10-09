@@ -34,7 +34,7 @@ from app.schemas.policies import OrganizationSettings
 
 log = get_logger(__name__)
 
-DEMO_ORG_NAME = "Demo Corp"
+DEMO_ORG_NAME = "TechSara Solutions"
 DEMO_ORG_SLUG = "demo"
 
 SeedFn = Callable[..., Awaitable[Any]]

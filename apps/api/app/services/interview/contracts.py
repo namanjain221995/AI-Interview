@@ -44,6 +44,25 @@ UtteranceKind = Literal[
 
 
 @dataclass(slots=True)
+class ActivityCapture:
+    """Intake activity capture (INTAKE_INTERVIEW.md 7.5): one capture phase of a realtime activity
+    (Drill A reading, Drill B relay, topic-card answer) delivered as ``CandidateTurn.activity``."""
+
+    activity_id: str
+    kind: Literal["reading_aloud", "read_relay", "topic_card"]
+    phase: Literal["read", "relay", "speak"]
+    end_reason: Literal["finish_button", "deadline", "silence", "disconnect", "max_audio", "session_end"]
+    started_ms: int  # session clock
+    ended_ms: int
+    voiced_ms: int
+    segments: list[dict[str, Any]]  # [{start_ms, end_ms, speech_ms, vad_prob, no_speech_prob, text}]
+    pauses: list[dict[str, Any]]  # [{start_ms, end_ms, duration_ms}]
+    stt_confidence: float | None = None
+    stt_degraded: bool = False  # a segment failed / stt_degraded notice during the capture
+    typed: bool = False
+
+
+@dataclass(slots=True)
 class CandidateTurn:
     """A completed candidate turn (spoken or typed)."""
 
@@ -55,6 +74,7 @@ class CandidateTurn:
     stt_confidence: float | None = None
     audio_wav: bytes | None = None  # stored when recording policy allows
     speculative: bool = False  # True while the endpoint is not yet confirmed
+    activity: ActivityCapture | None = None  # additive: an intake activity capture (7.5)
 
 
 @dataclass(slots=True)
@@ -94,6 +114,18 @@ class TimerEvent:
     kind: Literal[
         "tick", "time_warning", "time_up", "max_time", "silence_timeout", "resume_after_disconnect", "disconnect"
     ]
+    elapsed_s: float
+    detail: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ActivityEvent:
+    """Intake activity signal from the runtime (7.3): a phase started on the client, or a non-capture
+    phase reached its server deadline / the candidate pressed its finish button."""
+
+    kind: Literal["phase_started", "phase_deadline", "finish_requested"]
+    activity_id: str
+    phase: str
     elapsed_s: float
     detail: dict[str, Any] = field(default_factory=dict)
 
@@ -168,8 +200,41 @@ class StateChanged:
     reason: str
 
 
+@dataclass(slots=True)
+class ActivityStarted:
+    """Intake: an activity is armed (7.3). ``activity`` = {activity_id, kind, stage, title, phases[],
+    attempt, resumed, content, ...}; the runtime starts the first phase once ``start_after_utterance_id``
+    is delivered. ``content`` travels engine -> runtime only (the runtime decides when to show it)."""
+
+    activity: dict[str, Any]
+    start_after_utterance_id: str | None
+
+
+@dataclass(slots=True)
+class ActivityPhaseChanged:
+    """Intake: the next phase of the current activity is armed (started on delivery of the prompt)."""
+
+    activity_id: str
+    kind: str
+    phase: str
+    duration_ms: int
+    capture: bool
+    can_finish: bool
+    content: dict[str, Any] | None
+    hide_content: bool
+    start_after_utterance_id: str | None
+
+
+@dataclass(slots=True)
+class ActivityEnded:
+    activity_id: str
+    kind: str
+    reason: str
+
+
 TurnEvent = (
     UtteranceBegin | SpeechDelta | UtteranceMeta | CodingStarted | CodingHintIssued | CodingEnded | SessionClosing | StateChanged
+    | ActivityStarted | ActivityPhaseChanged | ActivityEnded
 )
 
 
@@ -225,6 +290,11 @@ class TurnEngine(Protocol):
 
     async def mark_utterance_delivered(self, session_id: str, utterance_id: str, *, spoken_text: str) -> None:
         """Runtime confirms playback finished (question asked -> awaiting answer)."""
+        ...
+
+    async def handle_activity_event(self, session_id: str, event: ActivityEvent) -> AsyncIterator[TurnEvent]:
+        """Intake sessions only (other engines need not implement it; the runtime calls it duck-typed):
+        phase started / phase deadline / finish requested for non-capture phases (INTAKE_INTERVIEW.md 7.3)."""
         ...
 
 

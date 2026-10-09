@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 
@@ -129,7 +129,8 @@ describe("room copy", () => {
   it("shows notices with the contract test id and lets reminders be dismissed", () => {
     const store = createInterviewStore();
     store.dispatch({ type: "server", msg: { type: "integrity.warning", seq: 1, event_type: "tab_hidden", message: "Please keep this tab open." }, at: performance.now() });
-    store.dispatch({ type: "server", msg: { type: "notice", seq: 2, level: "warning", code: "stt_degraded", message: "Retrying." }, at: performance.now() });
+    store.dispatch({ type: "server", msg: { type: "transcript.final", seq: 2, speaker: "candidate", segment_id: "s1", text: "I led the migration" }, at: performance.now() } as never);
+    store.dispatch({ type: "server", msg: { type: "notice", seq: 3, level: "warning", code: "stt_degraded", message: "Retrying." }, at: performance.now() });
     const onType = vi.fn();
     render(<NoticeArea store={store} fullscreenPrompt onFullscreen={vi.fn()} onTypeAnswer={onType} screenSharePrompt={false} onShareScreen={vi.fn()} />);
     const area = screen.getByTestId("interview-notice");
@@ -137,7 +138,26 @@ describe("room copy", () => {
     expect(area).toHaveTextContent("This interview is set up to run in full screen.");
     fireEvent.click(screen.getByRole("button", { name: "Type answer" }));
     expect(onType).toHaveBeenCalled();
-    fireEvent.click(screen.getAllByRole("button", { name: "Dismiss" })[0]!);
+    fireEvent.click(screen.getAllByRole("button", { name: "Dismiss" }).at(-1)!);
     expect(area).not.toHaveTextContent("Please keep this tab open.");
+  });
+
+  it("never shows the transcription notice before the candidate has spoken, and lets it be dismissed", () => {
+    const store = createInterviewStore();
+    store.dispatch({ type: "seed", session: { id: "s1", interviewerName: "Maya" } });
+    // A busy speech recogniser during the introduction (room noise opened a segment).
+    store.dispatch({ type: "server", msg: { type: "notice", seq: 1, level: "warning", code: "stt_degraded", message: "Speech recognition is having trouble." }, at: performance.now() });
+    render(<NoticeArea store={store} fullscreenPrompt={false} onFullscreen={vi.fn()} onTypeAnswer={vi.fn()} screenSharePrompt={false} onShareScreen={vi.fn()} />);
+    const area = screen.getByTestId("interview-notice");
+    expect(area).toBeEmptyDOMElement();
+    act(() => store.dispatch({ type: "server", msg: { type: "turn.state", seq: 2, state: "candidate_speaking" }, at: performance.now() } as never));
+    expect(area).toHaveTextContent(/Transcription is slow right now/);
+    expect(area).not.toHaveTextContent(/trouble hearing you/i);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(area).toBeEmptyDOMElement();
+    // Recovery clears it; new trouble later shows it again.
+    act(() => store.dispatch({ type: "server", msg: { type: "notice", seq: 3, level: "info", code: "stt_recovered", message: "Working again." }, at: performance.now() }));
+    act(() => store.dispatch({ type: "server", msg: { type: "notice", seq: 4, level: "warning", code: "stt_degraded", message: "Trouble." }, at: performance.now() }));
+    expect(area).toHaveTextContent(/Transcription is slow right now/);
   });
 });

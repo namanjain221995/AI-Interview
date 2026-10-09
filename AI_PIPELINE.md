@@ -290,6 +290,36 @@ Camera and screen frames are analysed by the 8B VL model (`frame_analysis`, `scr
 appearance, emotion or intent. Results only ever become flags for human review. Details:
 [INTEGRITY_MONITORING.md](INTEGRITY_MONITORING.md#vision-analysis).
 
+## Intake evaluation
+
+Intake interviews (`round_type: intake`, [docs/design/INTAKE_INTERVIEW.md](docs/design/INTAKE_INTERVIEW.md)
+sections 8-9) are never sent to `answer.evaluate`; the job `intake.evaluate` evaluates the whole interview once it has
+ended and its activity transcripts have settled (`app/services/intake/pipeline.py`).
+
+| Step | Model work | Notes |
+|---|---|---|
+| Drill A (read aloud) | none | `reading.align_reading` on the final transcript (live segments as fallback) + VAD pauses -> delivery score 1-5; pronunciation is not assessed |
+| Drill B cue coverage | none | `reading.relay_coverage` (hints for the relay evaluator; the only basis when the model is unavailable) |
+| `communication`, `resume_evidence`, `relay`, `structured`, `trainability`, `composure` | one structured call each, in parallel (`INTAKE_EVAL_CONCURRENCY` = 2) | `ANSWER_EVALUATION`, `prompt_version = intake-eval-<key>@…`, temperature 0.1, 1200-1800 output tokens, 90 s, 2 attempts |
+| `technical` | one structured call after `resume_evidence` | receives the validated claim verdicts |
+| validator + scoring | none | quote verification, support and required-evidence rules, consistency findings, `scoring.summarize_scores` (Decimal, half-open bands) |
+| `training_plan` (in `intake.report`) | one structured call | `REPORT_GENERATION`, `prompt_version = intake-training@…`; catalog defaults on failure |
+
+* Evaluator inputs come from database rows only (questions, answers, activity rows, stage results, the whitelisted
+  onboarding digest, the stage 2 claims); answers are shown as aliases `A<n>` (questions `Q<n>`), the candidate's name
+  is replaced by `[name]`, and each evaluator sees only its own stages (an alias outside its scope is dropped).
+* Outputs are wire models with every field required (`app/services/intake/eval_schemas.py`); a score needs verified
+  quotes (>= 4 a positive one, <= 2 a negative or context one) and the per-competency required evidence, otherwise
+  the competency is `insufficient`. Drill B = covered key concepts with verified quotes (partial = half; cue-only
+  without a model), recited relays capped at 4, misstatements -1 each (max 2). Technical Reading & Relay =
+  0.4 × Drill A + 0.6 × Drill B.
+* Every evaluator is checkpointed in `intake_evaluator_runs`; a retryable failure retries the job (finished
+  evaluators are reused), the job's last attempt turns a still-failing evaluator into `fallback` (its competencies
+  insufficient, review item `evaluator_fallback`). An evaluator without any answers in scope is not called.
+* No MQ1 (work authorisation) text ever reaches a prompt; `assert_prompt_safe` (validator V8) blocks the call
+  otherwise.
+* Expected load: about eight 35B calls per interview, after the interview (zero evaluation load while it is live).
+
 ## Fallbacks
 
 | Failure | Behaviour |
@@ -301,6 +331,8 @@ appearance, emotion or intent. Results only ever become flags for human review. 
 | interview plan / opening fails | deterministic plan from the round configuration; template introduction |
 | answer evaluation fails | neutral evaluation (`is_fallback`, confidence 0.2), no evidence, flagged for human review |
 | report narratives fail | deterministic narratives built from the scores |
+| intake evaluator fails | the job retries (finished evaluators reused); on the last attempt the evaluator falls back: its competencies are insufficient and a review item asks a human to assess them |
+| intake training plan fails | catalog defaults (`generated_by = deterministic`) |
 | profile part fails on the last attempt | that section keeps the deterministic quick parse, profile status `partial` (other parts stay the model's) |
 | reranker down | vector order kept; job match uses calibrated cosine similarity |
 | OCR down | `resume.process` fails and retries (outages propagate) |

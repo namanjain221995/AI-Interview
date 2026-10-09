@@ -47,6 +47,7 @@ describe("static domain lists", () => {
   });
 
   it("orders the candidate journey", () => {
-    expect(CANDIDATE_STEPS.map((s) => s.key)).toEqual(["welcome", "instructions", "consent", "resume", "round", "system-check", "interview"]);
+    // `details` and `resume-review` are intake-only (filtered per interview by features/candidate/journey.ts).
+    expect(CANDIDATE_STEPS.map((s) => s.key)).toEqual(["welcome", "instructions", "consent", "resume", "details", "resume-review", "round", "system-check", "interview"]);
   });
 });

@@ -77,6 +77,22 @@ describe("candidate shell", () => {
     expect(screen.getByTestId("theme-toggle")).toBeInTheDocument();
     expect(screen.getByText("Acme Robotics")).toBeInTheDocument();
   });
+
+  it("shows the TechSara mark next to the organization name when it has no logo (never initials)", () => {
+    const { container } = renderAt(<CandidateShell orgName="TechSara Solutions">step</CandidateShell>);
+    const header = container.querySelector("header")!;
+    expect(header.querySelector("[data-brand-mark]")).not.toBeNull();
+    expect(header).toHaveTextContent("TechSara Solutions");
+    expect(header).not.toHaveTextContent(/^TS/);
+    expect(header.querySelector("[data-org-logo]")).toBeNull();
+  });
+
+  it("uses the organization's own logo when it has one", () => {
+    const { container } = renderAt(<CandidateShell orgName="Acme Robotics" orgLogoUrl="/logos/acme.png">step</CandidateShell>);
+    const header = container.querySelector("header")!;
+    expect(header.querySelector("[data-org-logo]")?.getAttribute("src")).toBe("/logos/acme.png");
+    expect(header.querySelector("[data-brand-mark]")).toBeNull();
+  });
 });
 
 describe("tab bar", () => {

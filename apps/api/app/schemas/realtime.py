@@ -187,6 +187,18 @@ class ClientErrorMsg(_Msg):
     fatal: bool = False
 
 
+ActivityKind = Literal["reading_aloud", "read_relay", "topic_card"]
+ActivityPhase = Literal["read", "relay", "prepare", "speak"]
+
+
+class ActivityFinishMsg(_Msg):
+    """Intake activity finish button ("Finish reading", "I'm ready", "Start now", "I'm done")."""
+
+    type: Literal["activity.finish"] = "activity.finish"
+    activity_id: str = Field(..., max_length=64)
+    phase: ActivityPhase
+
+
 ClientMessage = Annotated[
     HelloMsg
     | StartInterviewMsg
@@ -203,7 +215,8 @@ ClientMessage = Annotated[
     | LanguageChangeMsg
     | IntegrityEventsMsg
     | HeartbeatMsg
-    | ClientErrorMsg,
+    | ClientErrorMsg
+    | ActivityFinishMsg,
     Field(discriminator="type"),
 ]
 client_message_adapter: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
@@ -254,6 +267,33 @@ class CodingStateMsg(_Msg):
     hint_texts: list[str] = Field(default_factory=list)
 
 
+class IntakeStageMsg(_Msg):
+    key: str
+    number: int
+    title: str  # candidate-safe title
+    status: Literal["pending", "current", "done", "incomplete"]
+
+
+class ActivitySnapshotMsg(_Msg):
+    """Content-free snapshot of the current intake activity (inside session.state)."""
+
+    activity_id: str
+    kind: ActivityKind
+    phase: ActivityPhase
+    status: Literal["armed", "running", "ended"]
+    remaining_ms: int | None = None
+
+
+class IntakeStateMsg(_Msg):
+    stage: str
+    stage_number: int
+    stage_title: str
+    stages: list[IntakeStageMsg]
+    activity: ActivitySnapshotMsg | None = None
+    answer_mode: Literal["standard", "long"] = "standard"
+    soft_limit_s: int | None = None  # UI hint only (90 for the self-introduction)
+
+
 class SessionStateMsg(_ServerMsg):
     """Full state sync; sent on connect, on resume and on phase changes."""
 
@@ -275,6 +315,7 @@ class SessionStateMsg(_ServerMsg):
     integrity: dict[str, Any] = Field(default_factory=dict, description="Active monitoring flags for the UI")
     coding: CodingStateMsg | None = None
     avatar_state: AvatarState = AvatarState.IDLE
+    intake: IntakeStateMsg | None = None  # intake rounds only (never any activity content)
 
 
 class TurnStateMsg(_ServerMsg):
@@ -408,6 +449,58 @@ class ErrorMsg(_ServerMsg):
     recoverable: bool = True
 
 
+class ActivityContentMsg(_Msg):
+    title: str
+    paragraphs: list[str] | None = None  # passage text (exact kit paragraphs)
+    bullets: list[str] | None = None  # topic card: exactly 4
+    instruction: str | None = None  # card line "Speak for about 2 minutes, connecting all four points ..."
+
+
+class ActivityPhasePlanMsg(_Msg):
+    phase: ActivityPhase
+    duration_ms: int
+    capture: bool  # microphone capture phase (reading / relay / speak)
+
+
+class ActivityStartMsg(_ServerMsg):
+    """An intake activity is armed (waiting for its instruction to finish). NON-REPLAYABLE; never content."""
+
+    type: Literal["activity.start"] = "activity.start"
+    activity_id: str
+    kind: ActivityKind
+    stage: Literal["reading", "topic"]
+    title: str  # passage / card title (no body text)
+    phases: list[ActivityPhasePlanMsg]
+    status: Literal["armed"] = "armed"
+    attempt: int = 1
+    resumed: bool = False
+
+
+class ActivityPhaseMsg(_ServerMsg):
+    """A phase started or ended (server-authoritative timers). NON-REPLAYABLE. ``content`` only in the
+    message that starts a phase in which it may be shown; ``hide_content`` removes shown content now."""
+
+    type: Literal["activity.phase"] = "activity.phase"
+    activity_id: str
+    kind: ActivityKind
+    phase: ActivityPhase
+    status: Literal["running", "ended"]
+    duration_ms: int
+    remaining_ms: int  # authoritative remaining time when sent (pauses excluded)
+    capture: bool
+    can_finish: bool
+    content: ActivityContentMsg | None = None
+    hide_content: bool = False
+    server_time_ms: float  # epoch ms when sent (diagnostics only)
+
+
+class ActivityEndMsg(_ServerMsg):
+    type: Literal["activity.end"] = "activity.end"
+    activity_id: str
+    kind: ActivityKind
+    reason: Literal["completed", "finished_early", "deadline", "interrupted", "skipped", "session_ended"]
+
+
 class SessionEndedMsg(_ServerMsg):
     type: Literal["session.ended"] = "session.ended"
     reason: str
@@ -441,6 +534,9 @@ ServerMessage = (
     | ErrorMsg
     | SessionEndedMsg
     | HeartbeatAckMsg
+    | ActivityStartMsg
+    | ActivityPhaseMsg
+    | ActivityEndMsg
 )
 
 

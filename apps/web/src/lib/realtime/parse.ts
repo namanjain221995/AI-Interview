@@ -27,6 +27,10 @@ const SERVER_TYPES = new Set<ServerMessage["type"]>([
   "error",
   "session.ended",
   "heartbeat.ack",
+  // Intake activities (non-replayable; INTAKE_INTERVIEW.md §7.1).
+  "activity.start",
+  "activity.phase",
+  "activity.end",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -53,6 +57,9 @@ const REQUIRED: Partial<Record<ServerMessage["type"], string[]>> = {
   error: ["code", "message"],
   "session.ended": ["reason"],
   "heartbeat.ack": ["t"],
+  "activity.start": ["activity_id", "kind", "phases"],
+  "activity.phase": ["activity_id", "phase", "status", "remaining_ms"],
+  "activity.end": ["activity_id"],
 };
 
 /** Parse a text frame; returns null for anything the client does not understand. */

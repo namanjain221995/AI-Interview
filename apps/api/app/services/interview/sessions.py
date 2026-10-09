@@ -495,6 +495,14 @@ class SessionServiceImpl:
         # profile did not extract one (first name only is used in speech).
         if not state.candidate_name:
             state.candidate_name = candidate.full_name
+        from app.services.intake.session_init import build_initial_intake_state, is_intake_round
+
+        if is_intake_round(round_config):
+            # Intake mode (INTAKE_INTERVIEW.md 6.8): the deterministic stage machine; the time limit comes from
+            # the invitation's intake settings (35-50 minutes) + 5 minutes of hard maximum.
+            state.intake, state.time_limit_s, state.max_time_s = await build_initial_intake_state(
+                db, interview=interview, round_config=round_config, candidate_name=candidate.full_name
+            )
         return state
 
     # --------------------------------------------------------------- view

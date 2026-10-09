@@ -162,6 +162,44 @@ One shareable link per job and round pipeline (`docs/design/OPEN_LINKS.md`, sect
 * Tokens are redacted from edge and uvicorn logs (`/j/`, `/r/`, `/link-access/`, `/link-return/`); CSV exports
   escape formula-leading cells and contain no signal hashes; every recruiter action is audited (`link.*`).
 
+### Intake interviews (evaluation, reports, decisions)
+
+The intake module (`round_type: intake`, `docs/design/INTAKE_INTERVIEW.md` sections 8-12) adds evaluation jobs,
+staff review routes and a report type. Controls:
+
+* **Tenant isolation**: every `/api/v1/intake/...` review route resolves the intake row with the caller's
+  organisation (`resolve_org_id`; SUPER_ADMIN passes `?organization_id=`); other organisations' ids answer 404
+  `intake_not_found`. `INTAKE_ENABLED=false` answers 404 `intake_disabled` on every intake route.
+* **RBAC**: detail/decisions `sessions:read`; timeline `sessions:read` + `transcripts:read`; evaluation
+  `sessions:read` + `reports:read`; re-evaluation and decisions `sessions:read` + `reviews:write`; analytics
+  `analytics:read`. Candidates have none of these (403).
+* **MQ1 (work authorisation)** answers live only in `intake_interviews.eligibility`: never asked live, never sent to
+  any model (prompts are built from a whitelisted onboarding digest and the pipeline never loads eligibility into
+  the evaluator inputs), never scored, never in reports, the HTML artifact, exports or analytics. Staff see them in
+  the intake detail only, labelled "for human review only"; the review item `work_authorization_review` carries no
+  answer (its severity is reduced to `info` in reports, and reviewer notes on it are dropped from reports).
+  Validator rule V8 (`assert_prompt_safe`) refuses to send a prompt that contains the MQ1 wording, eligibility field
+  names or any `kit_original` text; an integration test runs the whole pipeline through the real LLM client with
+  payload logging on a throwaway database and asserts no eligibility text and no candidate name in any
+  `model_calls` payload.
+* **Prompt injection**: every candidate-provided string reaching an evaluator (answers and activity transcripts,
+  résumé claims, the onboarding digest, derived evaluator notes) is fenced with the `untrusted` filter
+  (`interview_answers`, `resume_claims`, `candidate_form`, `interview_notes`) and nested closing tags are
+  neutralised; outputs are schema-validated wire models (every field required); quotes are verified against the
+  answers the evaluator was shown (rapidfuzz, never longer than the answer) and an evaluator may only cite answers in
+  its own scope. Scores, the weighted total, bands and review items are computed deterministically; a model can
+  neither change weights nor decide an outcome.
+* **Names are redacted** (`[name]`) from questions and answers before they reach an evaluator (a name is a proxy
+  for protected traits).
+* **Human authority**: the band is a recommendation; review items never reject; decisions require a 10-5000
+  character rationale, are append-only, mirrored into `review_decisions` and audited (`review.create`,
+  `intake.decision.create`); overrides are counted, never blocked. Reads of the detail are audited (`intake.view`,
+  with `eligibility_included`), the timeline as `transcript.view`, re-evaluation as `intake.evaluate`.
+* **Reports**: one `reports` row of type `recruiter` (`content.kind = "intake"`) per report version; no candidate
+  report is ever generated; the HTML artifact is autoescaped, self-contained and carries the report CSP.
+* **Logging hygiene**: the evaluation logs ids, bands, counts and durations only (no answers, transcripts,
+  onboarding values or eligibility).
+
 ### Rate limits
 
 Sliding-window logs in Redis (`rl:{scope}:{key}`, `app/core/ratelimit.py`), 429 `rate_limited` with `Retry-After`,

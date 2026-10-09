@@ -41,6 +41,7 @@ export const RoundType = {
   LEADERSHIP: "leadership",
   CUSTOM: "custom",
   COMBINED: "combined",
+  INTAKE: "intake",
 } as const;
 export type RoundType = ValueOf<typeof RoundType>;
 
@@ -2131,12 +2132,17 @@ export interface SessionIntegrity {
 
 // ---------------------------------------------------------- candidate portal
 
-/** Candidate journey steps, in order; each maps to /candidate/:interviewId/<key>. */
+/**
+ * Candidate journey steps, in order; each maps to /candidate/:interviewId/<key>.
+ * `details` and `resume-review` exist only for intake interviews (features/candidate/journey.ts filters them).
+ */
 export const CANDIDATE_STEPS = [
   { key: "welcome", label: "Welcome" },
   { key: "instructions", label: "Instructions" },
   { key: "consent", label: "Consent" },
   { key: "resume", label: "Résumé" },
+  { key: "details", label: "Your details" },
+  { key: "resume-review", label: "Check résumé" },
   { key: "round", label: "Round" },
   { key: "system-check", label: "System check" },
   { key: "interview", label: "Interview" },

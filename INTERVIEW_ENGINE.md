@@ -40,9 +40,11 @@ Principles carried into the code:
 | `behavior.py` | avatar behaviour per action ([AVATAR_SYSTEM.md](AVATAR_SYSTEM.md)) |
 | `app/services/scoring/` | pure scoring maths and persistence of scores and snapshots |
 | `app/services/reports/` | report assembly, narratives, HTML artifacts, release, reviews, analytics |
+| `app/services/intake/` (live part) | intake mode for `round_type: intake` ([below](#intake-mode-round_type-intake)): stage machine, conductor, activities, capture persistence, final transcript |
 
 Jobs: `session.prepare`, `answer.evaluate`, `memory.summarize` (`app/workers/interview.py`), `scoring.finalize`
-and `report.generate` (`app/workers/reports.py`), `coding.evaluate` (`app/workers/coding.py`). All are retried up
+and `report.generate` (`app/workers/reports.py`), `coding.evaluate` (`app/workers/coding.py`),
+`intake.activity_transcribe` (`app/workers/intake_capture.py`, intake rounds only). All are retried up
 to 3 attempts with exponential backoff unless a handler says otherwise.
 
 ## Session lifecycle
@@ -192,7 +194,7 @@ and the special classification. It is sent to the model and used to validate its
 |---|---|
 | `must_close` | closing already started; elapsed >= maximum duration; remaining <= closing reserve (`CLOSING_RESERVE_SECONDS`, 75 s); or questions asked >= `stopping.max_questions` |
 | `should_wrap_up` | (every required competency sufficient and elapsed >= `min_duration_minutes` and asked >= `min_questions` and no coding outstanding, when `stop_on_sufficient_evidence`) or remaining <= reserve + 150 s; never on the first question. Invites candidate questions once if allowed and more than reserve + 45 s remain; after the invite, any turn that is not a candidate question or clarification closes |
-| `coding_due` | coding enabled, not done or unavailable, remaining >= coding duration + reserve, and one of: forced (test hook), last window (remaining - reserve - duration < 120 s), the plan's coding segment reached, or required technical competencies have >= 60 % of their minimum evidence in aggregate; not before `start_after_minutes` |
+| `coding_due` | coding enabled, not done or unavailable, remaining >= coding duration + reserve, and one of: forced (test hook), last window (remaining - reserve - duration < 120 s), the plan's coding segment reached, or required technical competencies have >= 60 % of their minimum evidence in aggregate; not before `start_after_minutes`. Combined rounds (`coding_start_window`): never before 20 % of the time limit (or `start_after_minutes`), and `round_point` at 40 % starts it at the next turn boundary without waiting for a follow-up; `plan_segments` rescales the segments before coding so the plan's coding segment starts inside that window. The transition utterance announces that the editor is opening |
 | `start_coding` | due, not closing, not the first question; postponed one turn after a vague or partial answer without a follow-up |
 | `open_contradiction` | first open contradiction with severity >= medium that the candidate has not already explained (skipped when every referenced answer is a "not involved" hedge such as "the 120 nodes were managed by a separate platform team"; the record stays for the reviewer) -> `verify_contradiction` (respectful phrasing) |
 | `claim_to_verify` | resume validation enabled and fewer than `max_claims` probed: unverified claims with priority >= `min_priority` not yet attempted, inside the resume-validation segment window (else only claims on the target competency) |
@@ -468,11 +470,13 @@ contradictions, interviewer reasons, transcripts, timeline, paste counts, final 
 notes; the portal strips those keys again before serving a released report.
 
 **Release policy** (`candidate_report_mode`, resolved interview snapshot -> job -> organisation, default
-`after_review`): `immediate` (released at generation), `after_review` (needs at least one human review; otherwise
+`never` since 2026-10-09): `immediate` (released at generation), `after_review` (needs at least one human review; otherwise
 409 `review_required`), `never` (needs `acknowledge_policy_override: true`; otherwise 409
 `policy_override_required`). `POST /api/v1/sessions/{id}/reports/candidate/release` needs `reports:release`; it is
 idempotent and audited (`report.release`). `GET /api/v1/portal/sessions/{id}/report` serves only ready, released
-candidate reports. A demo report can be rebuilt from the latest completed session with
+candidate reports. `GET /api/v1/portal/sessions/{id}` returns the resolved `candidate_report_mode`; with `never`
+the candidate portal shows no feedback card, link or promise (the report route shows a neutral "the hiring team
+will contact you" page). A demo report can be rebuilt from the latest completed session with
 `uv run python -m app.services.reports.demo --latest [--no-llm] [--persist] [--out PATH] [--html-dir DIR]`.
 
 ## Human review
@@ -539,6 +543,75 @@ Where the implementation differs from [`ENGINE_DESIGN.md`](docs/design/ENGINE_DE
   question is a follow-up about complexity, a trade-off or an edge case, never revealing whether the solution was
   right.
 
+## Intake mode (`round_type: intake`)
+
+Contract: [`docs/design/INTAKE_INTERVIEW.md`](docs/design/INTAKE_INTERVIEW.md) sections 6-7 (deviations in its
+section 18). An intake session is an ordinary session driven by the same `InterviewEngine`; `InterviewState.intake`
+(`app/services/intake/state.py`) switches the hook points below to `IntakeConductor`
+(`app/services/intake/conductor.py`, `engine.intake`). Every hook is `if state.intake is not None`, so other round
+types never reach intake code.
+
+| Module (`app/services/intake/`) | Responsibility |
+|---|---|
+| `stages.py` | pure machine: item catalogue (`ItemSpec`; T template, M model-phrased, A activity, X form-only MQ1), `build_stages`, `stage_budgets` (kit midpoints x `(time_limit - 60) / 2520`), compression (`available < 1.15 x required`), soft cap (1.25 x budget), `next_move()`, `apply_*` helpers, answer-text parsers |
+| `selection.py` | level estimate, Drill A/B passages (B never equals A), topic card, language question + fallback, résumé claims (effective profile), scenarios; ties by `sha256(session_id + drill)` |
+| `conductor.py` | moves -> utterances, live `IntakeTurn` calls, activities, persistence, resume, time-up, closing |
+| `prompts.py` | every fixed text (opening, transitions, MQ templates, clarifications, activity prompts, closings), the live turn and verification-grade prompts, post-checks (`intake_speech_issues`) |
+| `turn_schema.py` | `IntakeTurn` (speech first, every field required, `SPEECH_FIRST_TURN`), `VerificationGrade` |
+| `activities.py` | phase plans (reading 180 s; relay read 30 s + relay 150 s; card prepare 60 s + speak 120 s), material content, descriptors |
+| `session_init.py` | initial `IntakeState` at session creation (intake row, frozen settings, onboarding digest, org approved info) |
+| `capture_store.py` | `intake_stage_results` upserts, `intake_activity_results` writes; conditional final-transcript updates |
+| `transcribe.py` | windowed final pass (windows <= 25 s cut at VAD pauses >= 300 ms) |
+
+Hook points in `engine.py`: `prepare_session` (intake branch replaces plan, opening, first question, prefix
+warm-up and bank retrieval: claims, ladder items, stage rows, opening template, a plan mirroring the 7 stages,
+`plan_source = "intake"`), `_start_events` (opening + `greeting.intro`), `_handle_candidate_turn` (paused turns
+and live turns go to the conductor before the coding branch), `_accept_answer` (`evaluate = False`),
+`_commit_decision` (no `memory.summarize`), `_speculate` (off), `_timer` (silence prompts suppressed while an
+activity is armed/running; `time_up` -> compressed close, deferred until a running activity ends), `_silence_events`
+(after the two prompts the item closes as unanswered and the plan moves on), `pause` (reveal / remaining-time
+accounting of a running non-capture phase), `_resume_events` and `_backchannel_resume` (activity-aware re-ask and
+re-arm), `_closing_text` (intake templates), `_closing_events` (ends an active activity, final stage statuses,
+enqueues `intake.evaluate` `{session_id, reason: "session_completed"}` with dedupe `intake.evaluate:{sid}:initial`
+and `INTAKE_EVAL_START_DELAY_SECONDS` instead of `scoring.finalize` + `report.generate`), new
+`handle_activity_event`. `sessions._initial_state` builds the intake state (409 `intake_disabled` when
+`INTAKE_ENABLED=false`) and sets `time_limit_s` / `max_time_s` from the invitation's intake settings (+5 min).
+`turns.stream_speech_object` applies the speech filters to any schema with `SPEECH_FIRST_TURN`.
+
+Turn flow: the answer is persisted (`answers` + candidate transcript, audio when consented, never
+`answer.evaluate`), `stages.next_move()` decides deterministically, then a template utterance (committed first), a
+streamed `IntakeTurn` (UtteranceBegin first, the stage bridge as the first delta when known, model speech, commit
+after the stream) or an activity (instruction utterance + `ActivityStarted`). Follow-ups are offered only inside the
+budgets of `IntakeFollowupLimits`; when the next item is model-phrased the model chooses `follow_up` or `ask_item`
+in the same call, otherwise `followup_warranted()` (short or hedged answer) decides before the call. Each committed
+utterance writes a `questions` row (`segment = "intake:<stage>"`, `decision.intake` = `IntakeQuestionMeta`), the
+interviewer transcript, the touched `intake_stage_results` rows and the durable state in one transaction. Model
+post-checks (generic speech issues, grounding, intake decision words / material restatement / unapproved facts in
+stage 7) are logged as deviations; an intake issue makes the next model utterance use its template.
+
+Activities: the runtime owns phase deadlines and capture (see
+[REALTIME_DESIGN.md section 10](docs/design/REALTIME_DESIGN.md#10-intake-activities-round_type-intake)); the
+conductor arms an activity (row `armed`, instruction question), records phase starts (`phases`, read_relay
+`reveal`, a new capture attempt resets the transcript columns), asks for the next phase's prompt after a
+non-capture phase ends, and commits a capture (`capture`, `answer_id`, `transcript_live`, audio) as `completed`.
+A capture that ended by disconnect is only an `attempts_log` entry; the resume restarts the phase as a new
+attempt (at most 2 restarts, then `interrupted`), re-shows a read_relay passage only for the time left (straight to
+the relay below 3 s) and a topic card for the prepare time left. A normal turn that arrives while the conductor
+still has a phase running means the runtime lost that phase (a failed job; the runtime released the floor): the
+conductor closes it (at its deadline at the latest) and re-arms with "Sure — let me explain again." on the next
+capture phase, or on the same capture phase as a new attempt; a Drill B passage is never re-shown by a recovery.
+
+Measured with mock AI on the shared dev Postgres (2026-10-09): `next_move` ~0.24 ms; first event of a turn with a
+model item ~16 ms after the turn arrives (answer persisted first), template items ~70 ms (committed before they
+are spoken); `session.prepare` ~70 ms. No live model run was made (shared GPU busy).
+
+Intake test hooks (`app/api/routers/test_hooks_intake.py`, same gating as the hooks below):
+`POST /api/v1/test/intake/sessions/{id}/jump {stage}`, `POST .../capture {activity_id, phase, text, segments?,
+pauses?, end_reason?, typed?}` (an injected spoken capture has no audio and settles `live_only`), and
+`POST .../activity-deadline {activity_id}`. With a live runtime in the process they act through it.
+
+Tests: `uv run pytest tests/unit/intake tests/unit/realtime/test_activity_capture.py tests/integration/intake -m "not live"`.
+
 ## Prompts
 
 * Order is static -> dynamic, and the system prompt is byte-stable per session, for vLLM prefix caching. Note:
@@ -592,7 +665,7 @@ Per round (`RoundConfig`, `apps/api/app/schemas/rounds.py`, edited in the recrui
 | Passing guidance | strong proceed 80, proceed 65, borderline 50, `min_confidence` 0.6, `min_required_coverage` 0.75 |
 
 The candidate report release mode is part of the organisation/job policy (`candidate_report_mode`, default
-`after_review`), not of the round.
+`never`), not of the round.
 
 ## Test hooks
 

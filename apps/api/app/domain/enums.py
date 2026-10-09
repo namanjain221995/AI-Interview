@@ -37,6 +37,7 @@ class RoundType(StrEnum):
     LEADERSHIP = "leadership"
     CUSTOM = "custom"
     COMBINED = "combined"
+    INTAKE = "intake"  # Intake Interview (training-program screening, docs/design/INTAKE_INTERVIEW.md)
 
 
 class Difficulty(StrEnum):

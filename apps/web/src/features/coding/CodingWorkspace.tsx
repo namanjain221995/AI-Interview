@@ -127,7 +127,7 @@ function HintsPanel({ coding, onHint }: { coding: CodingView; onHint: () => void
       >
         Request a hint
       </Button>
-      <p className="text-xs leading-[1.125rem] text-fg-subtle">Hints are fine to use. They're noted in your feedback, and each one gives a little more direction.</p>
+      <p className="text-xs leading-[1.125rem] text-fg-subtle">Hints are fine to use. Each one gives a little more direction; the number you used is noted for the reviewers.</p>
       {coding.hints.length ? (
         <ol className="grid gap-2">
           {coding.hints.map((hint) => (

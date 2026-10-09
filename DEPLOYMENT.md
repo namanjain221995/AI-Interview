@@ -117,7 +117,7 @@ First administrator: the seed's core step is the only way to create the first SU
 set `SEED_SUPERADMIN_EMAIL` (and the other `SEED_*_EMAIL` values) to real addresses and `SEED_PASSWORD` to a strong
 temporary password before `make seed` (or `uv run python -m app.seed --core-only` in `apps/api`), change each
 password after the first sign-in (`POST /api/v1/auth/password`), then create the real organisation (super admin:
-`POST /api/v1/organizations`; there is no organisations page in the SPA) or rename the seeded "Demo Corp"
+`POST /api/v1/organizations`; there is no organisations page in the SPA) or rename the seeded "TechSara Solutions"
 (`PATCH /api/v1/organizations/{id}`), create users in the recruiter app (Users page), and deactivate the accounts
 you do not need.
 
@@ -127,6 +127,23 @@ downgrades). The edge retries a refused upstream for 5 seconds
 (`lb_try_duration 5s`), so a quick API restart surfaces as a short delay rather than errors, and candidates'
 WebSockets reconnect and resume from the server outbox. `api` has `stop_grace_period: 20s` (live sessions pause
 cleanly), `worker` 40 s (in-flight jobs get 30 s to finish).
+
+### Intake interviews (migration 0005)
+
+The Intake Interview module (`docs/design/INTAKE_INTERVIEW.md`) adds migration `0005_intake_interviews` (eight new
+`intake_*` tables, purely additive; `migrate` applies it on `make up`, `alembic heads` = `0005`). The kit content is
+read from `$SAMPLES_DIR/intake/intake_kit_v1.yaml` (compose mounts `samples/` at `/srv/interview/samples`); without
+it intake create/send answers 503 `intake_kit_unavailable`. The seed catalog adds the `intake` round template, five
+competencies (`technical_reading`, `structured_answer`, `technical`, `trainability`, `composure`) and the demo job
+"AI/ML Training Program — Intake" (`samples/jobs/ai_ml_training_intake.yaml`).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `INTAKE_ENABLED` | `true` | `false`: every `/api/v1/intake/*` and `/api/v1/portal/intake/*` route answers 404 `intake_disabled`, new intake sessions 409 `intake_disabled`, generic invitations skip the intake row; sessions already running finish normally |
+| `INTAKE_BATCH_MAX_ROWS` | `200` | most candidates per batch create (the request schema also caps it at 200) |
+| `INTAKE_EVAL_CONCURRENCY` | `2` | parallel evaluator calls per intake evaluation |
+| `INTAKE_EVAL_START_DELAY_SECONDS` | `30` | delay before `intake.evaluate` starts after the closing |
+| `INTAKE_ACTIVITY_FINAL_PASS_WAIT_SECONDS` | `60` | wait for a spare Whisper replica before the final transcript of an activity moves to the worker |
 
 ### API image (ffmpeg)
 

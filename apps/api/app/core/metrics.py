@@ -89,6 +89,36 @@ OPEN_LINK_REGISTRATIONS = Counter(
     ["outcome"],
 )
 
+# Intake interviews (docs/design/INTAKE_INTERVIEW.md section 12): T3 counts invitations,
+# T1 activities and stages, T2 evaluations and decisions.
+INTAKE_INVITATIONS = Counter(
+    "interview_intake_invitations_total",
+    "Intake invitations sent by mode (single, batch, draft_sent)",
+    ["mode"],
+)
+INTAKE_ACTIVITIES = Counter(
+    "interview_intake_activities_total",
+    "Intake activities ended, by kind and end reason",
+    ["kind", "end_reason"],
+)
+INTAKE_STAGE_SECONDS = Histogram(
+    "interview_intake_stage_seconds",
+    "Intake stage duration on the interview clock",
+    ["stage"],
+    buckets=(30.0, 60.0, 120.0, 180.0, 240.0, 300.0, 420.0, 600.0, 900.0, 1200.0),
+)
+INTAKE_EVALUATIONS = Counter(
+    "interview_intake_evaluations_total", "Intake evaluations finished by status", ["status"]
+)
+INTAKE_EVALUATION_SECONDS = Histogram(
+    "interview_intake_evaluation_seconds",
+    "Intake evaluation duration (all evaluators + scoring)",
+    buckets=(5.0, 10.0, 20.0, 30.0, 60.0, 90.0, 120.0, 180.0, 300.0, 600.0, 900.0),
+)
+INTAKE_DECISIONS = Counter(
+    "interview_intake_decisions_total", "Human intake decisions by outcome", ["outcome", "overrides_ai"]
+)
+
 
 def render_latest() -> tuple[bytes, str]:
     return generate_latest(REGISTRY), PROM_CONTENT_TYPE

@@ -4,7 +4,8 @@
  * matching preset.
  */
 
-import type { Recommendation, SessionStatus, SessionSummary } from "@/lib/types";
+import { ROUND_TYPE_LABELS } from "@/lib/labels";
+import type { Recommendation, RoundType, SessionStatus, SessionSummary } from "@/lib/types";
 
 import type { SessionFilters } from "../api/types";
 
@@ -28,6 +29,7 @@ const PRESET_STATUSES: Record<ViewPreset, SessionStatus[] | undefined> = {
 };
 
 const RECOMMENDATIONS: readonly Recommendation[] = ["strong_proceed", "proceed", "human_review", "borderline_evidence", "insufficient_evidence"];
+const ROUND_TYPES = Object.keys(ROUND_TYPE_LABELS) as RoundType[];
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export interface SessionListState {
@@ -45,6 +47,10 @@ export function readSessionListState(params: URLSearchParams): SessionListState 
     view = key === "completed" ? "completed" : key === "live,paused" || key === "live" ? "live" : key === "aborted,failed" ? "ended_early" : view;
   }
   const recommendation = params.get("rec");
+  const roundTypes = params
+    .getAll("type")
+    .flatMap((t) => t.split(","))
+    .filter((t): t is RoundType => (ROUND_TYPES as readonly string[]).includes(t));
   const from = params.get("from");
   const to = params.get("to");
   return {
@@ -55,6 +61,7 @@ export function readSessionListState(params: URLSearchParams): SessionListState 
       needs_review: view === "needs_review" || undefined,
       job_id: params.get("job") ?? undefined,
       round_id: params.get("round") ?? undefined,
+      round_type: roundTypes.length ? roundTypes : undefined,
       recommendation: recommendation && (RECOMMENDATIONS as readonly string[]).includes(recommendation) ? (recommendation as Recommendation) : undefined,
       from: from && DATE.test(from) ? from : undefined,
       to: to && DATE.test(to) ? to : undefined,
@@ -68,6 +75,7 @@ export function writeSessionListState(state: { view: ViewPreset; filters: Sessio
   if (state.view !== "all") next.set("view", state.view);
   if (state.filters.job_id) next.set("job", state.filters.job_id);
   if (state.filters.round_id) next.set("round", state.filters.round_id);
+  if (state.filters.round_type?.length) next.set("type", state.filters.round_type.join(","));
   if (state.filters.recommendation) next.set("rec", state.filters.recommendation);
   if (state.filters.from) next.set("from", state.filters.from);
   if (state.filters.to) next.set("to", state.filters.to);
@@ -78,7 +86,7 @@ export function writeSessionListState(state: { view: ViewPreset; filters: Sessio
 
 /** True when any filter beyond the view preset is active. */
 export function hasExtraFilters(filters: SessionFilters): boolean {
-  return !!(filters.job_id || filters.round_id || filters.recommendation || filters.from || filters.to || filters.q);
+  return !!(filters.job_id || filters.round_id || filters.round_type?.length || filters.recommendation || filters.from || filters.to || filters.q);
 }
 
 /**
@@ -93,6 +101,7 @@ export function applyClientFilters(items: readonly SessionSummary[], filters: Se
     if (filters.status?.length && !filters.status.includes(s.status)) return false;
     if (filters.job_id && s.job_id !== filters.job_id) return false;
     if (filters.round_id && s.round_id !== filters.round_id) return false;
+    if (filters.round_type?.length && s.round && !filters.round_type.includes(s.round.round_type)) return false;
     if (filters.recommendation && s.recommendation !== filters.recommendation) return false;
     if (filters.needs_review && (s.status !== "completed" || s.review_decision)) return false;
     // The API filters on creation time; mirror it so client and server agree.

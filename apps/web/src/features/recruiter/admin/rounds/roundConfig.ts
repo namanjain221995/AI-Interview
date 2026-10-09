@@ -24,6 +24,8 @@ import type {
 } from "@/lib/types";
 import { ROUND_TYPE_LABELS } from "@/lib/labels";
 
+import { readIntakeRound, validateIntakeRound } from "@/features/intake/staff/lib/roundIntake";
+
 import { blankToNull, cleanList } from "../lib/utils";
 import { normalizeDistribution } from "./distribution";
 import { isRubricBalanced, rubricBalanceMessage } from "./rubric";
@@ -133,7 +135,51 @@ export function defaultPassingGuidance(): PassingGuidance {
 export const DEFAULT_INSTRUCTIONS =
   "Answer naturally, as you would with a human interviewer. Take a moment to think when you need it.";
 
+/**
+ * A round config that may carry the intake section (`RoundConfig.intake`, intake rounds
+ * only; docs/design/INTAKE_INTERVIEW.md 4.1). The editor keeps it as an opaque object.
+ */
+export type RoundConfigWithIntake = RoundConfig & { intake?: Record<string, unknown> | null };
+
+export const INTAKE_DURATION = { min: 35, max: 50, default: 45 } as const;
+
+/** Intake rounds start from the default intake template (samples/catalog/round_templates.yaml). */
+function intakeRoundConfig(name?: string): RoundConfigWithIntake {
+  const competencies: Array<[string, number, string]> = [
+    ["communication", 2.0, "Communication & Presentation"],
+    ["technical_reading", 2.0, "Technical Reading & Relay"],
+    ["structured_answer", 1.5, "Structured Answer / Gap-Filling"],
+    ["technical", 1.5, "Actual Technical Ability"],
+    ["trainability", 1.5, "Trainability & Learning Attitude"],
+    ["composure", 1.0, "Confidence & Composure"],
+    ["adaptability", 0.5, "Niche-Fit & Adaptability"],
+  ];
+  return {
+    round_type: "intake",
+    name: name ?? "Intake Interview",
+    duration_minutes: INTAKE_DURATION.default,
+    max_duration_minutes: INTAKE_DURATION.max,
+    expected_difficulty: "medium",
+    difficulty_distribution: { easy: 0.3, medium: 0.4, hard: 0.3 },
+    competencies: competencies.map(([key, weight]) => ({ key, name: null, weight, required: true, min_evidence: null, target_difficulty: null, focus_areas: [] })),
+    rubric: competencies.map(([key, weight, label]) => ({ key, label, weight: weight * 10, competency_keys: [key], dimensions: [], description: null })),
+    question_strategy: { style: ["experience_deep_dive", "resume_claim_verification"], max_followup_depth: 2, prefer_curated_ratio: 0, allow_generated_questions: true, adaptive_difficulty: false, allow_candidate_questions_at_end: true },
+    min_evidence_per_competency: 3,
+    confidence_threshold: 0.7,
+    stopping: { stop_on_sufficient_evidence: false, min_duration_minutes: 30, max_questions: null, min_questions: 10 },
+    coding: { ...defaultCoding(), enabled: false },
+    resume_validation: { enabled: true, max_claims: 6, min_priority: 1 },
+    passing_guidance: defaultPassingGuidance(),
+    instructions:
+      "This intake interview has seven short parts: an introduction, your experience, a few standard questions, a reading exercise, a short speaking exercise, how you learn, and your questions. It takes about 45 minutes. Answer in your own words; it's fine to say when you don't know something.",
+    interviewer_notes: "Intake mode is driven by the deterministic stage machine; these notes are not used.",
+    candidate_selectable: false,
+    intake: {},
+  };
+}
+
 export function defaultRoundConfig(roundType: RoundType = "technical_screening", name?: string): RoundConfig {
+  if (roundType === "intake") return intakeRoundConfig(name);
   return {
     round_type: roundType,
     name: name ?? ROUND_TYPE_LABELS[roundType] ?? "Interview round",
@@ -236,7 +282,7 @@ function rubricCategory(raw: unknown): RubricCategory | null {
  * missing or malformed values take the backend defaults. The difficulty mix is
  * normalised to whole percentages.
  */
-export function withDefaults(partial: Loose<RoundConfig> | Record<string, unknown>, overrides?: { round_type?: RoundType; name?: string }): RoundConfig {
+export function withDefaults(partial: Loose<RoundConfig> | Record<string, unknown>, overrides?: { round_type?: RoundType; name?: string }): RoundConfigWithIntake {
   const p = (partial ?? {}) as Record<string, unknown>;
   const roundType = (overrides?.round_type ?? (ROUND_TYPES.includes(p.round_type as RoundType) ? p.round_type : undefined) ?? "technical_screening") as RoundType;
   const base = defaultRoundConfig(roundType, overrides?.name ?? (typeof p.name === "string" && p.name ? p.name : undefined));
@@ -305,6 +351,8 @@ export function withDefaults(partial: Loose<RoundConfig> | Record<string, unknow
     instructions: str(p.instructions, base.instructions),
     interviewer_notes: strOrNull(p.interviewer_notes, base.interviewer_notes),
     candidate_selectable: bool(p.candidate_selectable, base.candidate_selectable),
+    // The intake section travels untouched (opaque) and only on intake rounds.
+    ...(roundType === "intake" ? { intake: p.intake && typeof p.intake === "object" && !Array.isArray(p.intake) ? { ...(p.intake as Record<string, unknown>) } : {} } : {}),
   };
 }
 
@@ -314,7 +362,7 @@ export function withDefaults(partial: Loose<RoundConfig> | Record<string, unknow
  * The exact RoundConfig JSON the API accepts: schema keys only, trimmed
  * strings, blank optional text as null, list entries cleaned.
  */
-export function toRoundConfig(config: RoundConfig): RoundConfig {
+export function toRoundConfig(config: RoundConfigWithIntake): RoundConfigWithIntake {
   return {
     round_type: config.round_type,
     name: config.name.trim(),
@@ -377,6 +425,8 @@ export function toRoundConfig(config: RoundConfig): RoundConfig {
     instructions: config.instructions.trim() || DEFAULT_INSTRUCTIONS,
     interviewer_notes: blankToNull(config.interviewer_notes),
     candidate_selectable: config.candidate_selectable,
+    // `intake` exists in the schema only for intake rounds; other rounds never send it.
+    ...(config.round_type === "intake" ? { intake: JSON.parse(JSON.stringify(config.intake ?? {})) as Record<string, unknown> } : {}),
   };
 }
 
@@ -406,16 +456,30 @@ function rangeIssue(path: string, label: string, value: number | null | undefine
  * Mirrors the backend RoundConfig validators (ranges, rubric total) and adds
  * consistency checks the schema cannot express (warnings never block saving).
  */
-export function validateRoundConfig(config: RoundConfig): ConfigIssue[] {
+export function validateRoundConfig(config: RoundConfigWithIntake): ConfigIssue[] {
   const issues: ConfigIssue[] = [];
   const push = (issue: ConfigIssue | null) => {
     if (issue) issues.push(issue);
   };
+  const intake = config.round_type === "intake";
 
   if (!config.name.trim()) push({ path: "name", message: "Give the round a name.", severity: "error" });
   else if (config.name.trim().length > 200) push({ path: "name", message: "Keep the name under 200 characters.", severity: "error" });
 
-  push(rangeIssue("duration_minutes", "Duration", config.duration_minutes, 5, 240));
+  if (intake) {
+    // Server rules for intake rounds (app/schemas/rounds.py intake branch).
+    if (!isInt(config.duration_minutes) || config.duration_minutes < INTAKE_DURATION.min || config.duration_minutes > INTAKE_DURATION.max) {
+      push({ path: "duration_minutes", message: `Intake rounds last ${INTAKE_DURATION.min}-${INTAKE_DURATION.max} minutes.`, severity: "error" });
+    } else if (config.max_duration_minutes > config.duration_minutes + 5) {
+      push({ path: "max_duration_minutes", message: `For intake rounds the hard stop is at most 5 minutes past the duration (${config.duration_minutes + 5} min); it's capped when saved.`, severity: "warning" });
+    }
+    if (config.coding.enabled) push({ path: "intake", message: "Intake rounds don't include coding. Turn coding off.", severity: "error" });
+    if (config.candidate_selectable) push({ path: "candidate_selectable", message: "Candidates can't pick an intake round; it's assigned by invitation.", severity: "error" });
+    if (!config.resume_validation.enabled) push({ path: "intake", message: "Intake rounds always check résumé claims; this turns back on when saved.", severity: "warning" });
+    for (const issue of validateIntakeRound(readIntakeRound(config.intake))) push(issue);
+  } else {
+    push(rangeIssue("duration_minutes", "Duration", config.duration_minutes, 5, 240));
+  }
   push(rangeIssue("max_duration_minutes", "Maximum duration", config.max_duration_minutes, 5, 300));
   if (isInt(config.duration_minutes) && isInt(config.max_duration_minutes) && config.max_duration_minutes < config.duration_minutes) {
     push({ path: "max_duration_minutes", message: "The maximum can't be shorter than the planned duration.", severity: "error" });
@@ -532,7 +596,7 @@ export function issuesToErrors(issues: readonly ConfigIssue[], severity: IssueSe
 
 // ----------------------------------------------------------------- sections
 
-export type RoundSection = "setup" | "scoring" | "flow" | "coding" | "candidate";
+export type RoundSection = "setup" | "scoring" | "flow" | "coding" | "intake" | "candidate";
 
 export const ROUND_SECTIONS: ReadonlyArray<{ key: RoundSection; label: string }> = [
   { key: "setup", label: "Setup" },
@@ -541,6 +605,36 @@ export const ROUND_SECTIONS: ReadonlyArray<{ key: RoundSection; label: string }>
   { key: "coding", label: "Coding" },
   { key: "candidate", label: "Candidate" },
 ];
+
+/** Editor tabs for a round type: intake rounds swap Coding for their Intake settings. */
+export function sectionsFor(roundType: RoundType): ReadonlyArray<{ key: RoundSection; label: string }> {
+  if (roundType !== "intake") return ROUND_SECTIONS;
+  return ROUND_SECTIONS.map((section) => (section.key === "coding" ? { key: "intake" as const, label: "Intake" } : section));
+}
+
+/**
+ * Changing the round type: intake rounds get their fixed rules (35-50 minutes, no
+ * coding, not candidate-selectable, résumé claims on, an `intake` section); leaving
+ * intake drops the section.
+ */
+export function applyRoundTypeChange(config: RoundConfigWithIntake, roundType: RoundType): RoundConfigWithIntake {
+  if (roundType === config.round_type) return config;
+  if (roundType === "intake") {
+    const duration = config.duration_minutes >= INTAKE_DURATION.min && config.duration_minutes <= INTAKE_DURATION.max ? config.duration_minutes : INTAKE_DURATION.default;
+    return {
+      ...config,
+      round_type: roundType,
+      duration_minutes: duration,
+      max_duration_minutes: Math.min(Math.max(config.max_duration_minutes, duration), duration + 5),
+      coding: { ...config.coding, enabled: false },
+      candidate_selectable: false,
+      resume_validation: { ...config.resume_validation, enabled: true },
+      intake: config.intake ?? {},
+    };
+  }
+  const { intake: _intake, ...rest } = config;
+  return { ...rest, round_type: roundType };
+}
 
 /** Which editor tab owns a config path. */
 export function sectionForPath(path: string): RoundSection {
@@ -557,6 +651,8 @@ export function sectionForPath(path: string): RoundSection {
       return "flow";
     case "coding":
       return "coding";
+    case "intake":
+      return "intake";
     case "instructions":
     case "interviewer_notes":
     case "candidate_selectable":
@@ -567,7 +663,7 @@ export function sectionForPath(path: string): RoundSection {
 }
 
 export function countBySection(paths: Iterable<string>): Record<RoundSection, number> {
-  const counts: Record<RoundSection, number> = { setup: 0, scoring: 0, flow: 0, coding: 0, candidate: 0 };
+  const counts: Record<RoundSection, number> = { setup: 0, scoring: 0, flow: 0, coding: 0, intake: 0, candidate: 0 };
   for (const path of paths) counts[sectionForPath(path)] += 1;
   return counts;
 }

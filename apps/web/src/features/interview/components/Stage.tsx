@@ -18,7 +18,7 @@ export function AvatarPanel({ controller, className, compact = false }: { contro
       {controller ? <AvatarStage controller={controller} framing="bust" occludedCorner={compact ? "bottom-right" : undefined} className="size-full" /> : null}
       {!controller || mode === "none" ? (
         <div className="absolute inset-0 flex items-center justify-center">
-          <span className={cn("rounded-full bg-surface-raised ring-1 ring-line", compact ? "size-14" : "size-24")} aria-hidden="true" />
+          <span className={cn("max-h-full max-w-full rounded-full bg-surface-raised ring-1 ring-line", compact ? "size-14" : "size-24")} aria-hidden="true" />
         </div>
       ) : null}
     </div>

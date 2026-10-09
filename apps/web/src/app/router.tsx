@@ -61,6 +61,16 @@ const links = {
   personal: page(() => import("@/features/links/pages/PersonalLinkPage")),
 };
 
+// Intake interviews, staff side (docs/design/INTAKE_INTERVIEW.md section 11.1).
+const intake = {
+  list: page(() => import("@/features/intake/staff/pages/IntakeListPage")),
+  create: page(() => import("@/features/intake/staff/pages/IntakeCreatePage")),
+  review: page(() => import("@/features/intake/staff/pages/IntakeReviewPage")),
+  analytics: page(() => import("@/features/intake/staff/pages/IntakeAnalyticsPage")),
+  settings: page(() => import("@/features/intake/staff/pages/IntakeSettingsPage")),
+  bySession: page(() => import("@/features/intake/staff/pages/IntakeSessionRedirectPage")),
+};
+
 const candidate = {
   inviteEntry: page(() => import("@/features/candidate/pages/InviteEntryPage")),
   dashboard: page(() => import("@/features/candidate/pages/CandidateDashboardPage")),
@@ -73,6 +83,9 @@ const candidate = {
   interview: page(() => import("@/features/candidate/pages/InterviewPage")),
   complete: page(() => import("@/features/candidate/pages/CompletePage")),
   report: page(() => import("@/features/candidate/pages/CandidateReportPage")),
+  // Intake interviews only (docs/design/INTAKE_INTERVIEW.md section 11.2).
+  intakeDetails: page(() => import("@/features/intake/candidate/pages/IntakeDetailsPage")),
+  intakeResumeReview: page(() => import("@/features/intake/candidate/pages/IntakeResumeReviewPage")),
 };
 
 export const routes: RouteObject[] = [
@@ -129,6 +142,12 @@ export const routes: RouteObject[] = [
                 ],
               },
               { path: "links/:linkId", lazy: links.detail },
+              { path: "intake", lazy: intake.list },
+              { element: <PermissionGate permission="interviews:invite" />, children: [{ path: "intake/new", lazy: intake.create }] },
+              { element: <PermissionGate permission="analytics:read" />, children: [{ path: "intake/analytics", lazy: intake.analytics }] },
+              { element: <PermissionGate permission="settings:manage" />, children: [{ path: "intake/settings", lazy: intake.settings }] },
+              { path: "intake/session/:sessionId", lazy: intake.bySession },
+              { path: "intake/:intakeId", lazy: intake.review },
               { path: "*", element: <NotFoundPanel /> },
             ],
           },
@@ -172,6 +191,8 @@ export const routes: RouteObject[] = [
                   { path: ":interviewId/instructions", lazy: candidate.instructions },
                   { path: ":interviewId/consent", lazy: candidate.consent },
                   { path: ":interviewId/resume", lazy: candidate.resume },
+                  { path: ":interviewId/details", lazy: candidate.intakeDetails },
+                  { path: ":interviewId/resume-review", lazy: candidate.intakeResumeReview },
                   { path: ":interviewId/round", lazy: candidate.round },
                   { path: ":interviewId/system-check", lazy: candidate.systemCheck },
                   { path: ":interviewId/complete", lazy: candidate.complete },

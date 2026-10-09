@@ -119,3 +119,59 @@ Implemented in `app/api/routers/portal.py` and `candidate_access.py` per CONTRAC
 when allowed), system-check record, session create/resume (`SessionService.create_or_resume`), WebSocket ticket, frame
 upload (`IntegrityService.submit_frame`), integrity event batches, recording chunks (only when policy + consent enable
 video recording), candidate report (released only).
+
+## 10. Intake activities (`round_type: intake`)
+
+Contract: [`INTAKE_INTERVIEW.md`](INTAKE_INTERVIEW.md) section 7 (deviations in its section 18). Implemented in
+`app/realtime/runtime.py` (activity block, `RuntimeActivity`) on top of the existing transport; no new endpoint.
+
+* **Messages.** Server `activity.start` (armed, title + phase plan, never content), `activity.phase`
+  (`running` / `ended`, authoritative `remaining_ms`, `content` only in the message that starts a phase where it may
+  be visible, `hide_content` to remove it now), `activity.end`; client `activity.finish {activity_id, phase}`
+  (rate 2/s per connection). All three server messages are sequenced but **non-replayable**
+  (`outbox.NON_REPLAYABLE_TYPES`): never in the in-memory or Redis outbox. A delayed finish button (reading after
+  5 s, relay read after 10 s) is announced by a second `activity.phase {running, can_finish: true}` without content.
+  `session.state.intake` carries the stage list (candidate-safe titles), `answer_mode`, `soft_limit_s` and a
+  content-free activity snapshot with the remaining time.
+* **Lifecycle.** The engine yields the instruction utterance then `ActivityStarted` (`start_after_utterance_id`);
+  the runtime posts `activity.start` and starts the phase when that utterance is delivered (`playback.finished` or
+  estimated end): deadline on the interview clock, `activity.phase`, a capture for capture phases, and the engine
+  event `phase_started` (enqueued with turn priority so it precedes a capture that ends at once). A non-capture
+  phase (relay read, card prepare) ends at its deadline or on `activity.finish`: `activity.phase {ended}` first
+  (`hide_content: true` for the Drill B passage, which is also dropped from memory), then the engine event
+  (`phase_deadline` / `finish_requested`) whose prompt utterance arms the next phase (`ActivityPhaseChanged`).
+* **Capture mode.** One `TurnCapture` spans the whole capture phase: speech bursts never open new captures,
+  endpointing is replaced by the activity rules, and there are no acknowledgements, commit wait, "didn't catch that"
+  prompts, silence prompts or barge-in (the interviewer is silent). VAD `SpeechEnded -> SpeechStarted` gaps
+  >= 300 ms are recorded as pauses in session ms (`started_session_ms + (t_ms - capture.start_ms)`). The phase ends
+  on the finish button (`control.end_turn` counts as finish), the silence rule (`ACTIVITY_SILENCE`: reading 4 s once
+  70 % of the passage's words were heard or 8 s after any speech; relay 6 s after 15 words; topic answer 10 s after
+  30 words; never before the candidate spoke), the deadline (grace up to 3 s for a >= 300 ms pause), the 300 s audio
+  cap or a disconnect. The capture becomes one `CandidateTurn` with `activity = ActivityCapture` (segments with
+  timing and text, pauses, confidence, degraded flag). Speech during a non-capture phase is never captured or
+  transcribed. Typed answers: refused during the reading (`typed_not_allowed_for_reading`) and non-capture phases
+  (`activity_in_progress`); during relay/speak they become the capture when typed answers are allowed.
+* **Final transcript.** After a spoken capture the runtime re-transcribes the audio in windows of at most 25 s cut
+  at VAD pauses (`app/services/intake/transcribe.py`), each on a spare Whisper replica (`background=True`), waiting at
+  most `INTAKE_ACTIVITY_FINAL_PASS_WAIT_SECONDS`; the result goes to `transcript_final` through a conditional update
+  (same attempt, status still pending) and revises the answer text when the pass kept >= 80 % of the words. If it
+  cannot run, the status becomes `pending_worker` and `intake.activity_transcribe` repeats the pass from the stored
+  WAV 30 s later (`live_only` without a stored WAV or after the last attempt; `unavailable` without speech).
+* **Disconnects.** A running capture ends with `disconnect` and still runs offline (kept as an interrupted attempt);
+  a non-capture phase stops and its reveal time is accounted (runtime `shown_ms`, engine `reveal_shown_s`). On
+  re-attach the client gets `session.state` (no content) and the engine's resume re-arms the activity with
+  `activity.start {resumed: true}`: a capture phase restarts in full as a new attempt, a Drill B read phase is
+  re-shown only for the time left (capped again by the runtime so the passage is never visible for more than 30 s
+  in total; below 3 s it goes straight to the relay), a card prepare phase for the prepare time left. Queued phase
+  events are dropped on detach so a stale `phase_started` can never mark a re-armed phase running. A re-armed read
+  phase with no reveal time left still sends `phase_started` (duration 0) before its `phase_deadline`.
+* **Failure recovery.** When the engine answers a finished phase or an activity capture without a next step (the job
+  failed or was stale), the runtime releases the floor (`realtime.activity_stalled`, activity `interrupted`) so the
+  candidate's speech is never blocked; the job runner's "something went wrong" notice invites the candidate to
+  continue. The engine re-arms the activity on the next turn: a lost non-capture phase moves on to its capture phase
+  (the Drill B passage is never re-shown by a recovery), a lost capture phase restarts as a new attempt.
+* **Long answers.** `UtteranceMeta.decision.intake.answer_mode = "long"` (self-introduction, project, résumé
+  ownership/mechanics rungs, scenarios, three-weeks plan, teach-me) makes the next capture use
+  `base 1500 / short 1100 / long 2600 ms`; every other answer keeps the settings values.
+* **Glossary.** Intake sessions add the kit passages' technical terms to the session glossary (Whisper ignores
+  prompts, so the reading transcript is corrected towards them).

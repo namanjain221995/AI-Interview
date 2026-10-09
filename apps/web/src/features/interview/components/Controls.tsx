@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/Dialog";
 import { Kbd } from "@/components/ui/Kbd";
 import { Textarea } from "@/components/ui/Textarea";
+import { activityDockMode } from "@/features/intake/candidate/room/activityModel";
 import { createInterviewStore, useInterviewState, type InterviewStore } from "@/features/realtime/store";
 import { cn } from "@/lib/utils";
 
@@ -33,14 +34,17 @@ export function ControlDock({
   const preparing = useInterviewState(store, (s) => s.preparing);
   const coding = useInterviewState(store, (s) => Boolean(s.coding && !s.coding.ended));
   const asked = useInterviewState(store, (s) => Boolean(s.lastInterviewerText.trim()));
+  // Intake reading/speaking exercises: the panel owns the finish action; typing only where an answer is spoken.
+  const activityMode = useInterviewState(store, (s) => activityDockMode(s.activity));
+  const inActivity = activityMode !== "none";
   const [flash, setFlash] = useState<"done" | "repeat" | null>(null);
   const { microphone: micOn } = useRuntimeMedia(runtime);
   const yourTurn = turn === "listening" || turn === "candidate_speaking";
   const live = connected && !ended && begun && !preparing;
   // In the coding exercise the floor is open: "Done speaking" only ends something you said.
-  const canFinish = live && (coding ? turn === "candidate_speaking" : yourTurn);
-  const canRepeat = live && asked && (yourTurn || turn === "coding");
-  const canType = live && turn !== "idle" && turn !== "ended";
+  const canFinish = !inActivity && live && (coding ? turn === "candidate_speaking" : yourTurn);
+  const canRepeat = live && asked && (inActivity ? activityMode === "listening" : yourTurn || turn === "coding");
+  const canType = live && turn !== "idle" && turn !== "ended" && (activityMode === "none" || activityMode === "capture");
 
   useEffect(() => {
     if (!flash) return;
@@ -63,21 +67,23 @@ export function ControlDock({
           {micOn ? <MicMeter runtime={runtime} surface="panel" /> : null}
         </div>
 
-        <Button
-          size="lg"
-          variant={canFinish ? "primary" : "secondary"}
-          leftIcon={<Check />}
-          disabled={!canFinish}
-          onClick={() => {
-            runtime?.endTurn();
-            setFlash("done");
-          }}
-          aria-label={doneLabel}
-          className="col-span-3 h-11 sm:h-10"
-          data-testid="done-answering-button"
-        >
-          {flash === "done" ? "Got it" : doneLabel}
-        </Button>
+        {inActivity ? null : (
+          <Button
+            size="lg"
+            variant={canFinish ? "primary" : "secondary"}
+            leftIcon={<Check />}
+            disabled={!canFinish}
+            onClick={() => {
+              runtime?.endTurn();
+              setFlash("done");
+            }}
+            aria-label={doneLabel}
+            className="col-span-3 h-11 sm:h-10"
+            data-testid="done-answering-button"
+          >
+            {flash === "done" ? "Got it" : doneLabel}
+          </Button>
+        )}
         <Button
           size="lg"
           variant="secondary"
@@ -87,7 +93,7 @@ export function ControlDock({
             runtime?.repeat();
             setFlash("repeat");
           }}
-          aria-label="Repeat question"
+          aria-label={inActivity ? "Repeat instructions" : "Repeat question"}
           className="max-sm:h-9 max-sm:px-3 max-sm:text-sm"
           data-testid="repeat-question-button"
         >
@@ -96,7 +102,7 @@ export function ControlDock({
           ) : (
             <>
               <span className="sm:hidden">Repeat</span>
-              <span className="hidden sm:inline">Repeat question</span>
+              <span className="hidden sm:inline">{inActivity ? "Repeat instructions" : "Repeat question"}</span>
             </>
           )}
         </Button>
@@ -119,7 +125,8 @@ export function ControlDock({
           <span className="sm:hidden" />
         )}
 
-        <div className="col-start-3 row-start-2 flex justify-end sm:flex-1">
+        {/* Without "Done answering" (an intake exercise) the dock fits one row on phones. */}
+        <div className={cn("col-start-3 flex justify-end sm:flex-1", inActivity ? "row-start-1" : "row-start-2")}>
           <Button
             variant="ghost"
             leftIcon={<LogOut />}

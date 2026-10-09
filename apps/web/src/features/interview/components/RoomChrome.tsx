@@ -3,6 +3,7 @@ import { Eye, Wifi, WifiOff } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/Popover";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { StageIndicator, StageStrip } from "@/features/intake/candidate/room/StageIndicator";
 import { codingRemainingSeconds, clockRunning, remainingSeconds, useInterviewState, type ConnectionStatus, type InterviewStore } from "@/features/realtime/store";
 import { formatClock } from "@/lib/format";
 import type { TurnState } from "@/lib/realtime/protocol";
@@ -131,8 +132,10 @@ export function RoomTopBar({
   const interviewer = useInterviewState(store, (s) => s.session?.interviewerName) || fallbackInterviewer;
   const status = useInterviewState(store, (s) => s.session?.status);
   const preparing = useInterviewState(store, (s) => s.preparing);
+  // Intake interviews: "Part 4 of 7  Reading exercise" and the seven-part strip along the bottom edge.
+  const intake = useInterviewState(store, (s) => s.intake);
   return (
-    <div className="flex h-14 items-center justify-between gap-3 border-b border-line-subtle px-3 sm:gap-4 sm:px-6">
+    <div className="relative flex h-14 items-center justify-between gap-3 border-b border-line-subtle px-3 sm:gap-4 sm:px-6">
       <div className="flex min-w-0 items-center gap-3">
         {status === "live" && !preparing ? (
           <span className="relative flex size-2 shrink-0" aria-hidden="true">
@@ -142,7 +145,7 @@ export function RoomTopBar({
         ) : null}
         <div className="grid min-w-0">
           <p className="truncate text-sm font-medium text-fg">{roundName || "Interview"}</p>
-          <p className="truncate text-xs text-fg-muted">with {interviewer}, AI interviewer</p>
+          {intake ? <StageIndicator intake={intake} /> : <p className="truncate text-xs text-fg-muted">with {interviewer}, AI interviewer</p>}
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1 sm:gap-4">
@@ -150,6 +153,7 @@ export function RoomTopBar({
         <ConnectionIndicator store={store} />
         <InterviewTimer store={store} />
       </div>
+      {intake ? <StageStrip intake={intake} className="absolute inset-x-0 -bottom-px" /> : null}
     </div>
   );
 }

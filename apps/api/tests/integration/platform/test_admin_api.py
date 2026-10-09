@@ -150,7 +150,7 @@ async def test_organization_crud(auth_client, db_session):
     assert created.status_code == 201, created.text
     org_id = created.json()["id"]
     org = await db_session.get(Organization, org_id)
-    assert org.settings["candidate_report_mode"] == "after_review"
+    assert org.settings["candidate_report_mode"] == "never"  # platform default since 2026-10-09
     assert (await root.post("/api/v1/organizations", json={"name": "Dup", "slug": "acme"})).status_code == 409
     assert (await root.post("/api/v1/organizations", json={"name": "Bad", "slug": "Bad Slug"})).status_code == 422
     listing = (await root.get("/api/v1/organizations", params={"q": "acm"})).json()
@@ -171,7 +171,7 @@ async def test_settings_read_and_update(auth_client, db_session):
     current = await recruiter.get("/api/v1/settings")
     assert current.status_code == 200
     body = current.json()
-    assert body["candidate_report_mode"] == "after_review" and body["integrity"]["camera_required"] is True
+    assert body["candidate_report_mode"] == "never" and body["integrity"]["camera_required"] is True
     body["integrity"]["camera_required"] = False
     body["candidate_report_mode"] = "immediate"
     assert (await recruiter.put("/api/v1/settings", json=body)).status_code == 403

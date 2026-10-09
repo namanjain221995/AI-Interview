@@ -29,6 +29,7 @@ import type {
   ReportStatus,
   ReviewDecisionValue,
   RoundRef,
+  RoundType,
   ScoreRecord,
   ScoreSnapshot,
   SessionDetail,
@@ -117,6 +118,8 @@ export interface SessionFilters {
   status?: SessionStatus[];
   job_id?: string;
   round_id?: string;
+  /** Round types (sent as repeated `round_type`). */
+  round_type?: RoundType[];
   recommendation?: Recommendation;
   /** ISO date (YYYY-MM-DD), inclusive. */
   from?: string;

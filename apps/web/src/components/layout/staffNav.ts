@@ -1,6 +1,7 @@
 import {
   BarChart3,
   BriefcaseBusiness,
+  ClipboardCheck,
   FileText,
   LayoutDashboard,
   LayoutTemplate,
@@ -47,6 +48,7 @@ export const STAFF_NAV: StaffNavGroup[] = [
       { key: "links", label: "Interview links", to: "/app/links", icon: Link2, permission: "jobs:read", keywords: "open link campus drive registration share" },
       { key: "candidates", label: "Candidates", to: "/app/candidates", icon: Users, permission: "candidates:read", keywords: "people applicants resumes" },
       { key: "sessions", label: "Sessions", to: "/app/sessions", icon: MonitorPlay, permission: "sessions:read", keywords: "interviews live" },
+      { key: "intake", label: "Intake interviews", to: "/app/intake", icon: ClipboardCheck, permission: "sessions:read", keywords: "intake screening training onboarding" },
       { key: "reports", label: "Reports", to: "/app/reports", icon: FileText, permission: "reports:read", keywords: "results evaluations" },
       { key: "integrity", label: "Integrity review", to: "/app/integrity", icon: ShieldCheck, permission: "integrity:review", keywords: "flags proctoring" },
     ],

@@ -156,17 +156,20 @@ export default function InviteEntryPage() {
   if (["expired", "cancelled", "completed"].includes(data.status)) return <InviteClosed invite={data} />;
 
   const greeting = data.candidateFirstName ? `Hi ${data.candidateFirstName}, welcome` : "Welcome to your interview";
+  // Intake interviews: "Intake interview · about 45 minutes" before verification (InviteInfo.round_type).
+  const intake = data.roundType === "intake";
 
   return (
     <div>
       <h1 className="text-title text-fg sm:text-[1.75rem] sm:leading-9">{greeting}</h1>
       <p className="mt-2 text-[15px] leading-6 text-fg-muted">
-        {data.organizationName} has invited you to an interview for <span className="font-medium text-fg">{data.jobTitle}</span>. First, confirm it's you.
+        {data.organizationName} has invited you to {intake ? "an intake interview" : "an interview"} for <span className="font-medium text-fg">{data.jobTitle}</span>. First, confirm it's
+        you.
       </p>
 
       <dl className="mt-8 grid grid-cols-2 gap-x-6 gap-y-5 border-y border-line py-5">
         <Fact label="Role">{data.jobTitle}</Fact>
-        {data.roundName ? <Fact label="Interview">{data.roundName}</Fact> : null}
+        {intake ? <Fact label="Interview">Intake interview</Fact> : data.roundName ? <Fact label="Interview">{data.roundName}</Fact> : null}
         {data.durationMinutes ? <Fact label="Length">About {data.durationMinutes} minutes</Fact> : null}
         {data.expiresAt ? <Fact label="Link valid until">{formatDateTime(data.expiresAt)}</Fact> : null}
       </dl>

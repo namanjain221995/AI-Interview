@@ -17,6 +17,7 @@ repository root; `docs/design/` holds the design-time contracts the modules were
 | [CODING_INTERVIEW.md](../CODING_INTERVIEW.md) | add a coding problem or language, or review sandbox isolation |
 | [INTEGRITY_MONITORING.md](../INTEGRITY_MONITORING.md) | change integrity signals, rules, consent text or retention |
 | [SECURITY.md](../SECURITY.md) | review the threat model and controls before shipping a change |
+| [INTAKE_INTERVIEW_GUIDE.md](INTAKE_INTERVIEW_GUIDE.md) | run intake interviews (create, share, review, decide) or work on the intake module (architecture pointers, commands, the mock-AI end-to-end test) |
 
 ## Design-time documents (`docs/design/`)
 
@@ -30,6 +31,7 @@ formulas in [INTERVIEW_ENGINE.md](../INTERVIEW_ENGINE.md#documented-deviations-f
 | [ENGINE_DESIGN.md](design/ENGINE_DESIGN.md) | intended engine design: lifecycle, turn algorithm, policy directive, difficulty, scoring, evaluation, prompts, coding, reports |
 | [REALTIME_DESIGN.md](design/REALTIME_DESIGN.md) | intended voice pipeline: WebSocket rationale, runtime structure, audio in, end of turn, speech out, barge-in, reconnection |
 | [UI_TEST_IDS.md](design/UI_TEST_IDS.md) | `data-testid` contract used by the Playwright suite (stable API, do not rename) |
+| [INTAKE_INTERVIEW.md](design/INTAKE_INTERVIEW.md) | intake module contract: decisions, data model and migration `0005`, stage machine, activity protocol, evaluation, APIs, web, security, test plan, per-track deviations |
 
 `docs/design/briefs/` holds the work briefs given to the build agents; they are historical and not maintained.
 

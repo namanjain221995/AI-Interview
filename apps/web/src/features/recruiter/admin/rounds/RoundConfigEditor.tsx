@@ -19,6 +19,8 @@ import { DIFFICULTY_LABELS, ROUND_TYPE_LABELS } from "@/lib/labels";
 import type { CodingQuestion, Competency, Difficulty, RoundConfig, RoundType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+import { IntakeRoundBlueprint, IntakeRoundPanel } from "@/features/intake/staff/components/round/IntakeRoundPanel";
+
 import { FieldShell, NumberInput, SectionBlock, ToggleRow } from "../components/Field";
 import type { FieldErrors } from "../lib/serverErrors";
 import { CodingSectionEditor } from "./CodingSectionEditor";
@@ -26,12 +28,15 @@ import { CompetencyListEditor, competencyOptionsFrom } from "./CompetencyListEdi
 import { DifficultyMixEditor } from "./DifficultyMixEditor";
 import { RoundBlueprint } from "./RoundBlueprint";
 import {
+  applyRoundTypeChange,
   countBySection,
+  INTAKE_DURATION,
   issuesToErrors,
   QUESTION_STYLES,
-  ROUND_SECTIONS,
   ROUND_TYPES,
+  sectionsFor,
   validateRoundConfig,
+  type RoundConfigWithIntake,
   type RoundSection,
 } from "./roundConfig";
 import { RubricEditor } from "./RubricEditor";
@@ -68,6 +73,10 @@ export function RoundConfigEditor({ value, onChange, catalog, problems, serverEr
   const counts = countBySection(Object.keys(errors));
 
   const set = <K extends keyof RoundConfig>(key: K, next: RoundConfig[K]) => onChange({ ...value, [key]: next });
+  // Intake rounds (docs/design/INTAKE_INTERVIEW.md 4.1): 35-50 minutes, no coding or difficulty mix, an Intake tab.
+  const isIntake = value.round_type === "intake";
+  const sections = sectionsFor(value.round_type);
+  const activeTab: RoundSection = sections.some((section) => section.key === tab) ? tab : "setup";
   const roundCompetencyOptions: ComboboxOption[] = useMemo(() => {
     const names = competencyOptionsFrom(catalog);
     return value.competencies
@@ -77,11 +86,18 @@ export function RoundConfigEditor({ value, onChange, catalog, problems, serverEr
 
   return (
     <div className={cn("grid min-w-0 gap-5", className)}>
-      <RoundBlueprint config={value} catalog={catalog} compact className="rounded-lg border border-line bg-surface-subtle/60 p-4" />
+      {isIntake ? (
+        <IntakeRoundBlueprint
+          durationMinutes={value.duration_minutes >= INTAKE_DURATION.min && value.duration_minutes <= INTAKE_DURATION.max ? value.duration_minutes : INTAKE_DURATION.default}
+          className="rounded-lg border border-line bg-surface-subtle/60 p-4"
+        />
+      ) : (
+        <RoundBlueprint config={value} catalog={catalog} compact className="rounded-lg border border-line bg-surface-subtle/60 p-4" />
+      )}
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as RoundSection)}>
+      <Tabs value={activeTab} onValueChange={(v) => setTab(v as RoundSection)}>
         <TabsList aria-label="Round settings">
-          {ROUND_SECTIONS.map((section) => (
+          {sections.map((section) => (
             <TabsTrigger key={section.key} value={section.key}>
               {section.label}
               {counts[section.key] > 0 ? (
@@ -105,33 +121,46 @@ export function RoundConfigEditor({ value, onChange, catalog, problems, serverEr
                 </FieldShell>
                 <FieldShell label="Round type" description="Shapes the interviewer's opening and segment plan.">
                   {(control) => (
-                    <Select<RoundType> id={control.id} value={value.round_type} options={ROUND_TYPE_OPTIONS} onValueChange={(v) => set("round_type", v)} />
+                    <Select<RoundType> id={control.id} value={value.round_type} options={ROUND_TYPE_OPTIONS} onValueChange={(v) => onChange(applyRoundTypeChange(value as RoundConfigWithIntake, v))} />
                   )}
                 </FieldShell>
               </div>
-              <div className="grid gap-4 sm:grid-cols-3">
-                <FieldShell label="Planned duration" error={errors.duration_minutes}>
-                  {(control) => <NumberInput {...control} value={value.duration_minutes} min={5} max={240} unit="min" onChange={(v) => set("duration_minutes", v ?? 0)} />}
-                </FieldShell>
-                <FieldShell label="Hard stop" error={errors.max_duration_minutes} description="The interview always ends by here.">
-                  {(control) => <NumberInput {...control} value={value.max_duration_minutes} min={5} max={300} unit="min" onChange={(v) => set("max_duration_minutes", v ?? 0)} />}
-                </FieldShell>
-                <FieldShell label="Starting difficulty">
+              <div className={cn("grid gap-4", isIntake ? "sm:grid-cols-2" : "sm:grid-cols-3")}>
+                <FieldShell label="Planned duration" error={errors.duration_minutes} description={isIntake ? `Intake rounds last ${INTAKE_DURATION.min}-${INTAKE_DURATION.max} minutes.` : undefined}>
                   {(control) => (
-                    <Select<Difficulty> id={control.id} value={value.expected_difficulty} options={DIFFICULTY_OPTIONS} onValueChange={(v) => set("expected_difficulty", v)} />
+                    <NumberInput
+                      {...control}
+                      value={value.duration_minutes}
+                      min={isIntake ? INTAKE_DURATION.min : 5}
+                      max={isIntake ? INTAKE_DURATION.max : 240}
+                      unit="min"
+                      onChange={(v) => set("duration_minutes", v ?? 0)}
+                    />
                   )}
                 </FieldShell>
+                <FieldShell label="Hard stop" error={errors.max_duration_minutes} warning={warnings.max_duration_minutes} description="The interview always ends by here.">
+                  {(control) => <NumberInput {...control} value={value.max_duration_minutes} min={5} max={300} unit="min" onChange={(v) => set("max_duration_minutes", v ?? 0)} />}
+                </FieldShell>
+                {!isIntake ? (
+                  <FieldShell label="Starting difficulty">
+                    {(control) => (
+                      <Select<Difficulty> id={control.id} value={value.expected_difficulty} options={DIFFICULTY_OPTIONS} onValueChange={(v) => set("expected_difficulty", v)} />
+                    )}
+                  </FieldShell>
+                ) : null}
               </div>
             </div>
           </SectionBlock>
 
-          <SectionBlock
-            variant="plain"
-            title="Difficulty mix"
-            description="Target share of questions at each level. With adaptive difficulty on, the interviewer moves up or down from here based on the answers."
-          >
-            <DifficultyMixEditor value={value.difficulty_distribution} onChange={(d) => set("difficulty_distribution", d)} error={errors.difficulty_distribution} disabled={readOnly} />
-          </SectionBlock>
+          {!isIntake ? (
+            <SectionBlock
+              variant="plain"
+              title="Difficulty mix"
+              description="Target share of questions at each level. With adaptive difficulty on, the interviewer moves up or down from here based on the answers."
+            >
+              <DifficultyMixEditor value={value.difficulty_distribution} onChange={(d) => set("difficulty_distribution", d)} error={errors.difficulty_distribution} disabled={readOnly} />
+            </SectionBlock>
+          ) : null}
 
           <SectionBlock
             variant="plain"
@@ -390,11 +419,17 @@ export function RoundConfigEditor({ value, onChange, catalog, problems, serverEr
         </TabsContent>
 
         {/* --------------------------------------------------------- Coding */}
-        <TabsContent value="coding">
-          <fieldset disabled={readOnly} className="min-w-0">
-          <CodingSectionEditor value={value.coding} onChange={(coding) => set("coding", coding)} problems={problems} roundDuration={value.duration_minutes} errors={errors} warnings={warnings} />
-          </fieldset>
-        </TabsContent>
+        {!isIntake ? (
+          <TabsContent value="coding">
+            <fieldset disabled={readOnly} className="min-w-0">
+            <CodingSectionEditor value={value.coding} onChange={(coding) => set("coding", coding)} problems={problems} roundDuration={value.duration_minutes} errors={errors} warnings={warnings} />
+            </fieldset>
+          </TabsContent>
+        ) : (
+          <TabsContent value="intake">
+            <IntakeRoundPanel value={value as RoundConfigWithIntake} onChange={onChange} errors={errors} warnings={warnings} readOnly={readOnly} />
+          </TabsContent>
+        )}
 
         {/* ------------------------------------------------------ Candidate */}
         <TabsContent value="candidate">
@@ -407,10 +442,12 @@ export function RoundConfigEditor({ value, onChange, catalog, problems, serverEr
               <ToggleRow
                 className="py-0"
                 label="Candidates can pick this round"
-                description="When a job lets candidates choose, only rounds marked here are offered."
+                description={isIntake ? "Intake rounds are assigned by invitation; candidates can't pick them." : "When a job lets candidates choose, only rounds marked here are offered."}
                 checked={value.candidate_selectable}
+                disabled={isIntake && !value.candidate_selectable}
                 onCheckedChange={(v) => set("candidate_selectable", v)}
               />
+              {errors.candidate_selectable ? <p className="text-xs font-medium text-danger-fg">{errors.candidate_selectable}</p> : null}
             </div>
           </SectionBlock>
           <SectionBlock variant="plain" title="For the interviewer" description="Private guidance for the AI interviewer. Never shown to candidates.">

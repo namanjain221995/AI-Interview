@@ -91,7 +91,7 @@ class OrganizationSettings(_Model):
     recording: RecordingPolicy = Field(default_factory=RecordingPolicy)
     retention: RetentionPolicy = Field(default_factory=RetentionPolicy)
     avatar: AvatarSettings = Field(default_factory=AvatarSettings)
-    candidate_report_mode: CandidateReportMode = CandidateReportMode.AFTER_REVIEW
+    candidate_report_mode: CandidateReportMode = CandidateReportMode.NEVER
     require_access_code: bool = False
     data_processing_notice: str = (
         "Your interview is conducted by an AI interviewer. Audio is transcribed to evaluate your answers. "
@@ -107,4 +107,4 @@ class PolicySnapshot(_Model):
     recording: RecordingPolicy = Field(default_factory=RecordingPolicy)
     retention: RetentionPolicy = Field(default_factory=RetentionPolicy)
     avatar: AvatarSettings = Field(default_factory=AvatarSettings)
-    candidate_report_mode: CandidateReportMode = CandidateReportMode.AFTER_REVIEW
+    candidate_report_mode: CandidateReportMode = CandidateReportMode.NEVER

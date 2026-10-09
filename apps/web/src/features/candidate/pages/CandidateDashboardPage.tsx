@@ -16,7 +16,7 @@ import { NextRoundCard } from "@/features/links/components/NextRoundCard";
 import { type PortalInterviewView } from "../api";
 import { usePortalInterview, usePortalMe } from "../hooks";
 import { readLocal, resumeStep } from "../journey";
-import { isReportReady, reportMode, useCandidateReport } from "../reportAccess";
+import { isReportReady, reportMode, useCandidateReport, useReportMode } from "../reportAccess";
 import { selectedRound } from "../round";
 
 export default function CandidateDashboardPage() {
@@ -65,7 +65,7 @@ export default function CandidateDashboardPage() {
   return (
     <div>
       <h1 className="text-title text-fg">{me.data?.firstName ? `Hi ${me.data.firstName}` : "Your interviews"}</h1>
-      <p className="mt-2 text-fg-muted">Your interview, where you left off, and your feedback once it's shared.</p>
+      <p className="mt-2 text-fg-muted">{interview.data && reportMode(interview.data) !== "never" ? "Your interview, where you left off, and your feedback once it's shared." : "Your interview and where you left off."}</p>
       {interview.data ? <InterviewCard interview={interview.data} /> : null}
       {interview.data ? <NextRoundCard className="mt-6" /> : null}
     </div>
@@ -76,8 +76,9 @@ function InterviewCard({ interview }: { interview: PortalInterviewView }) {
   const round = selectedRound(interview);
   const sessionId = readLocal<string | null>(interview.id, "session", null) ?? interview.latestSession?.id ?? null;
   const done = interview.status === "completed" || ["completed", "completing"].includes(interview.latestSession?.status ?? "");
-  const mode = reportMode(interview);
-  const report = useCandidateReport(done && mode !== "never" ? sessionId : null, { poll: false });
+  const { mode, pending: modePending } = useReportMode(interview, done ? sessionId : null);
+  const sharesFeedback = !modePending && mode !== "never";
+  const report = useCandidateReport(done && sharesFeedback ? sessionId : null, { poll: false });
   const reportReady = isReportReady(report.data ?? undefined);
   const next = resumeStep(interview, readLocal<string[]>(interview.id, "visited", []));
   const closed = interview.status === "expired" || interview.status === "cancelled";
@@ -107,13 +108,15 @@ function InterviewCard({ interview }: { interview: PortalInterviewView }) {
             <dd className="font-medium text-fg">{formatDateTime(interview.expiresAt)}</dd>
           </div>
         ) : null}
-        <div>
-          <dt className="text-[13px] text-fg-muted">Feedback</dt>
-          <dd className="font-medium text-fg">{mode === "never" ? "Not shared" : reportReady ? "Ready" : done ? (mode === "immediate" ? "Being prepared" : "After review") : "After the interview"}</dd>
-        </div>
+        {sharesFeedback ? (
+          <div>
+            <dt className="text-[13px] text-fg-muted">Feedback</dt>
+            <dd className="font-medium text-fg">{reportReady ? "Ready" : done ? (mode === "immediate" ? "Being prepared" : "After review") : "After the interview"}</dd>
+          </div>
+        ) : null}
       </dl>
       <div className="mt-5 flex flex-wrap gap-2">
-        {reportReady ? (
+        {sharesFeedback && reportReady ? (
           <Button asChild>
             <Link to={`/candidate/${interview.id}/report${sessionId ? `?session=${encodeURIComponent(sessionId)}` : ""}`}>View your feedback</Link>
           </Button>

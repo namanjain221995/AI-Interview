@@ -118,12 +118,29 @@ async def regenerate_reports(
     # A failed session (technical failure) gets a report of what was collected;
     # the reason is recorded on the report versions and in the audit trail.
     reason = "regenerate_after_failure" if session.status == SessionStatus.FAILED.value else "regenerate"
-    job_id = await enqueue(
-        "report.generate",
-        {"session_id": str(session.id), "reason": reason, "requested_by": str(principal.user_id)},
-        dedupe_key=f"report.generate:{session.id}:regenerate",
-        db=db,
-    )
+    if (session.round_config or {}).get("round_type") == "intake":
+        # Intake sessions: the intake report job renders the newest ready evaluation (no candidate report).
+        from app.services.intake.pipeline import latest_ready_evaluation
+
+        evaluation = await latest_ready_evaluation(db, session.id)
+        if evaluation is None:
+            raise Conflict(
+                "The intake evaluation is not ready yet; the report follows it automatically.",
+                code="evaluation_not_ready",
+            )
+        job_id = await enqueue(
+            "intake.report",
+            {"session_id": str(session.id), "evaluation_id": str(evaluation.id), "reason": reason},
+            dedupe_key=f"intake.report:{evaluation.id}:regenerate",
+            db=db,
+        )
+    else:
+        job_id = await enqueue(
+            "report.generate",
+            {"session_id": str(session.id), "reason": reason, "requested_by": str(principal.user_id)},
+            dedupe_key=f"report.generate:{session.id}:regenerate",
+            db=db,
+        )
     await audit(
         db,
         principal,

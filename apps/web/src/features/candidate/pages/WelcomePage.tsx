@@ -2,6 +2,8 @@ import { FileText, Headphones, Laptop, TimerReset } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/Button";
+import { IntakeOverview } from "@/features/intake/candidate/components/IntakeOverview";
+import { isIntakeInterview } from "@/features/intake/candidate/journey";
 import { useDocumentTitle } from "@/lib/hooks";
 
 import { Fact, StepFooter } from "../components/StepLayout";
@@ -40,6 +42,9 @@ function Welcome({ ctx }: { ctx: NonNullable<ReturnType<typeof useJourney>["ctx"
   const firstName = me.data?.firstName ?? interview.candidateName?.split(/\s+/)[0] ?? null;
   const minutes = round?.durationMinutes ?? null;
   const interviewer = interview.interviewerName;
+
+  // Intake interviews: seven parts, timed exercises, privacy and who decides.
+  if (isIntakeInterview(interview)) return <IntakeOverview ctx={ctx} firstName={firstName} />;
 
   return (
     <div>

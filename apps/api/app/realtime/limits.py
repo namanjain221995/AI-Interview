@@ -50,6 +50,7 @@ TYPE_LIMITS: dict[str, tuple[float, float]] = {
     "answer.text": (1, 3),
     "client.error": (2, 10),
     "playback.progress": (20, 40),
+    "activity.finish": (2, 4),  # intake activity finish button (2/s per connection)
 }
 
 

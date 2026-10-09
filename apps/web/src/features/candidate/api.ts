@@ -5,6 +5,7 @@
  * were written in parallel). Normalisers accept the documented shapes and the
  * obvious variants, and never throw on missing optional fields.
  */
+import type { PortalIntakeBriefView } from "@/features/intake/candidate/types";
 import { api, isApiError, type UploadProgress } from "@/lib/api";
 import type { ClientIntegrityEvent } from "@/lib/realtime/protocol";
 import type {
@@ -71,6 +72,8 @@ export interface InviteView {
   status: InterviewStatus | string;
   interviewerName: string | null;
   durationMinutes: number | null;
+  /** Round type of the invited round (`intake` switches the copy); null when not sent. */
+  roundType: RoundType | string | null;
 }
 
 export function normalizeInvite(raw: unknown): InviteView {
@@ -89,6 +92,7 @@ export function normalizeInvite(raw: unknown): InviteView {
     status,
     interviewerName: firstStr(r.interviewer_name),
     durationMinutes: num(r.duration_minutes) ?? num(rec(r.round).duration_minutes),
+    roundType: firstStr(r.round_type, rec(r.round).round_type),
   };
 }
 
@@ -180,6 +184,8 @@ export interface PortalInterviewView {
   id: string;
   status: InterviewStatus | string;
   organizationName: string;
+  /** The organization's own logo, when it has one (the shell shows the TechSara mark otherwise). */
+  organizationLogoUrl: string | null;
   job: { id: string | null; title: string; department: string | null; location: string | null; description: string | null };
   rounds: PortalRoundView[];
   selectedRoundId: string | null;
@@ -192,12 +198,30 @@ export interface PortalInterviewView {
   candidateName: string | null;
   /** The résumé step can be skipped when false. */
   requiresResume: boolean;
+  /**
+   * Intake interviews (`PortalInterview.intake`); null for every other round type. Set by
+   * `normalizeInterview` (optional so hand-built views in tests stay valid).
+   */
+  intake?: PortalIntakeBriefView | null;
+}
+
+function normalizeIntakeBrief(raw: unknown): PortalIntakeBriefView | null {
+  if (!isRec(raw)) return null;
+  return {
+    intakeId: str(raw.intake_id),
+    title: str(raw.title) ?? "Intake interview",
+    estimatedMinutes: num(raw.estimated_minutes),
+    presence: raw.presence === "none" ? "none" : "orb",
+  };
 }
 
 /** Server step names vary ("system_check", "round_selected"...); map them onto route segments. */
 export function normalizeStepKey(step: string): string {
   const s = step.toLowerCase().replace(/_/g, "-");
   if (s.startsWith("consent")) return "consent";
+  // Intake steps: the résumé review must not collapse into "resume".
+  if (s.startsWith("resume-review") || s === "resume-confirmed") return "resume-review";
+  if (s === "details" || s.startsWith("onboarding")) return "details";
   if (s.startsWith("resume")) return "resume";
   if (s.startsWith("round")) return "round";
   if (s.startsWith("system")) return "system-check";
@@ -224,6 +248,7 @@ export function normalizeInterview(raw: unknown, fallbackId = ""): PortalIntervi
     id: str(r.id) ?? fallbackId,
     status: str(r.status) ?? "invited",
     organizationName: firstStr(rec(r.organization).name, r.organization_name) ?? "",
+    organizationLogoUrl: firstStr(rec(r.organization).logo_url, r.organization_logo_url),
     job: {
       id: str(job.id),
       title: firstStr(job.title, r.job_title) ?? "",
@@ -241,6 +266,7 @@ export function normalizeInterview(raw: unknown, fallbackId = ""): PortalIntervi
     latestSession: str(latest.id) ? { id: str(latest.id)!, status: str(latest.status) ?? "created" } : null,
     candidateName: firstStr(rec(r.candidate).full_name, r.candidate_name),
     requiresResume: bool(r.requires_resume, true),
+    intake: normalizeIntakeBrief(r.intake),
   };
 }
 
@@ -667,6 +693,8 @@ export interface PortalSessionView {
   status: SessionStatus | string;
   endReason: string | null;
   candidateReportAvailable: boolean;
+  /** The session's candidate feedback policy (`never` hides every feedback element); null from older APIs. */
+  candidateReportMode: string | null;
   reportStatus: string | null;
   roundName: string | null;
   startedAt: string | null;
@@ -680,6 +708,7 @@ export function normalizeSession(raw: unknown, fallbackId = ""): PortalSessionVi
     status: str(r.status) ?? "created",
     endReason: str(r.end_reason),
     candidateReportAvailable: bool(r.candidate_report_available, bool(r.report_available)),
+    candidateReportMode: firstStr(r.candidate_report_mode),
     reportStatus: firstStr(r.report_status, rec(r.report).status),
     roundName: firstStr(r.round_name, rec(r.round).name),
     startedAt: str(r.started_at),

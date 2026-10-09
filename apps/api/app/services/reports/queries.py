@@ -302,7 +302,7 @@ async def resolve_candidate_report_mode(db: AsyncSession, session: InterviewSess
             (org.settings if org else None) or {}
         ).candidate_report_mode
     except ValidationError:
-        return CandidateReportMode.AFTER_REVIEW
+        return CandidateReportMode.NEVER  # the platform default: never promise feedback
 
 
 async def report_retention_days(db: AsyncSession, session: InterviewSession) -> int:

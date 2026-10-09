@@ -4,6 +4,16 @@ the complete metadata."""
 from app.db.models.candidates import Candidate, CandidateProfile, CandidateResume, ResumeChunk
 from app.db.models.coding import CodeRun, CodeSnapshot, CodingHint, CodingSession
 from app.db.models.identity import AuditLog, AuthSession, Organization, SystemNote, User
+from app.db.models.intake import (
+    IntakeActivityResult,
+    IntakeCompetencyScore,
+    IntakeDecision,
+    IntakeEvaluation,
+    IntakeEvaluatorRun,
+    IntakeInterview,
+    IntakeOrgSettings,
+    IntakeStageResult,
+)
 from app.db.models.integrity import IntegrityEvent, MediaAsset
 from app.db.models.interviews import (
     Answer,
@@ -43,6 +53,14 @@ __all__ = [
     "Competency",
     "CompetencyEvidence",
     "Consent",
+    "IntakeActivityResult",
+    "IntakeCompetencyScore",
+    "IntakeDecision",
+    "IntakeEvaluation",
+    "IntakeEvaluatorRun",
+    "IntakeInterview",
+    "IntakeOrgSettings",
+    "IntakeStageResult",
     "IntegrityEvent",
     "Interview",
     "InterviewEvent",

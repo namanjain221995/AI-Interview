@@ -27,11 +27,14 @@ import { AudioCapture, MIC_CONSTRAINTS } from "@/features/realtime/audioCapture"
 import { AudioPlayback, type PlaybackReport, type RecordingMix, type SpeechCueOut } from "@/features/realtime/audioPlayback";
 import { RealtimeClient } from "@/features/realtime/client";
 import { BrowserSpeech, estimateReadingMs } from "@/features/realtime/speechFallback";
+import { activityDockMode } from "@/features/intake/candidate/room/activityModel";
 import { clockRunning, type InterviewStore } from "@/features/realtime/store";
 import { isApiError } from "@/lib/api";
 import {
   FRAME_TTS_AUDIO,
   unpackFrame,
+  type ActivityPhase,
+  type ActivityPhaseMsg,
   type ClientInfo,
   type ClientMessage,
   type CodeLanguage,
@@ -144,6 +147,9 @@ export class InterviewRuntime {
   private endFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   private ttsMode: ClientPrefs["ttsMode"];
   private micAvailable = true;
+  /** Intake read-and-relay: removes the passage at the local countdown zero even if the server is late. */
+  private relayHideTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastActivityFinishAt = Number.NEGATIVE_INFINITY;
   private cameraOnly: MediaStream | null = null;
   private readonly mediaListeners = new Set<() => void>();
   private pendingFullscreenDecline: string | null = null;
@@ -257,7 +263,12 @@ export class InterviewRuntime {
     this.client.on("status", (status, info) => {
       if (status === "connected") this.lastConnectedAt = performance.now();
       this.store.dispatch({ type: "connection", status, attempt: info.attempt, reason: info.reason, at: performance.now() });
-      if (status !== "connected" && status !== "idle") this.stopSpeaking(false);
+      if (status !== "connected" && status !== "idle") {
+        this.stopSpeaking(false);
+        // The read-and-relay passage is never on screen without a live connection.
+        this.clearRelayHideTimer();
+        this.store.dispatch({ type: "activity.hide_local", reason: "disconnect", at: performance.now() });
+      }
       // Closed by the server because the session is over (4011): leave the room.
       if (status === "offline" && info.reason === "session_ended") this.finish();
     });
@@ -655,11 +666,36 @@ export class InterviewRuntime {
         break;
       }
       case "session.ended":
+        this.clearRelayHideTimer();
         this.finish();
+        break;
+      case "activity.phase":
+        this.onActivityPhase(msg);
+        break;
+      case "activity.start":
+      case "activity.end":
+        this.clearRelayHideTimer();
         break;
       default:
         break;
     }
+  }
+
+  /** Arms the local hide for the read-and-relay passage: at its countdown zero, whatever the network does. */
+  private onActivityPhase(msg: ActivityPhaseMsg): void {
+    this.clearRelayHideTimer();
+    if (msg.kind !== "read_relay" || msg.phase !== "read" || msg.status !== "running" || msg.hide_content) return;
+    const activityId = msg.activity_id;
+    const remaining = Math.max(0, Number.isFinite(msg.remaining_ms) ? msg.remaining_ms : 0);
+    this.relayHideTimer = setTimeout(() => {
+      this.relayHideTimer = null;
+      this.store.dispatch({ type: "activity.hide_local", reason: "countdown", activityId, at: performance.now() });
+    }, remaining);
+  }
+
+  private clearRelayHideTimer(): void {
+    if (this.relayHideTimer) clearTimeout(this.relayHideTimer);
+    this.relayHideTimer = null;
   }
 
   private onBinary(data: ArrayBuffer): void {
@@ -914,9 +950,31 @@ export class InterviewRuntime {
     this.send({ type: "control.repeat" });
   }
 
+  /**
+   * Ends the current activity phase early ("Finish reading", "I'm ready", "Start now",
+   * "I'm done"). Double presses inside 600 ms are dropped (the server allows 2/s).
+   */
+  activityFinish(activityId: string, phase: ActivityPhase): boolean {
+    const now = performance.now();
+    if (now - this.lastActivityFinishAt < 600) return false;
+    this.lastActivityFinishAt = now;
+    // Never queued while offline (a press must not end a restarted attempt after a reconnect).
+    if (!this.send({ type: "activity.finish", activity_id: activityId, phase })) return false;
+    // The local hide stays armed: the server ends the phase (and hides the passage) right away.
+    this.store.dispatch({ type: "activity.finish_requested", activityId, phase, at: now });
+    return true;
+  }
+
+  /** Typing is for answers: never while reading aloud, never in a silent reading or preparation phase. */
+  typingAllowed(): boolean {
+    const mode = activityDockMode(this.store.getState().activity);
+    return mode === "none" || mode === "capture";
+  }
+
   sendTypedAnswer(text: string): boolean {
     const trimmed = text.trim().slice(0, 8000);
     if (!trimmed) return false;
+    if (!this.typingAllowed()) return false;
     this.send({ type: "answer.text", text: trimmed });
     this.store.dispatch({ type: "candidate.typed", text: trimmed, at: performance.now() });
     return true;
@@ -1006,6 +1064,7 @@ export class InterviewRuntime {
     this.disposed = true;
     window.removeEventListener("pagehide", this.onPageHide);
     if (this.endFallbackTimer) clearTimeout(this.endFallbackTimer);
+    this.clearRelayHideTimer();
     for (const t of this.noAudioTimers.values()) clearTimeout(t);
     for (const track of this.textTracks.values()) if (track.timer) clearTimeout(track.timer);
     this.client?.close(1000, "page closed");

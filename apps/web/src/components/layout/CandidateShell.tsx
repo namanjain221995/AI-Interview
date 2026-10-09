@@ -5,13 +5,14 @@ import { create } from "zustand";
 import { BrandMark, PRODUCT_NAME } from "@/components/brand/Logo";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { Stepper, type StepperStep } from "@/components/ui/Stepper";
-import { initials } from "@/lib/format";
 import { CANDIDATE_STEPS } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export interface CandidateShellProps {
   /** Hiring organization shown in the header. */
   orgName?: string | null;
+  /** The organization's own logo; without one the header shows the TechSara mark. */
+  orgLogoUrl?: string | null;
   /** Second header line, e.g. the job title. */
   subtitle?: ReactNode;
   /** Journey progress (usually a <Stepper/>). */
@@ -25,8 +26,9 @@ export interface CandidateShellProps {
 const WIDTHS = { narrow: "max-w-xl", default: "max-w-3xl", wide: "max-w-5xl" } as const;
 
 /** Calm, minimal frame for every candidate-facing page outside the interview room. */
-export function CandidateShell({ orgName, subtitle, stepper, headerAside, width = "default", children }: CandidateShellProps) {
+export function CandidateShell({ orgName, orgLogoUrl, subtitle, stepper, headerAside, width = "default", children }: CandidateShellProps) {
   const name = orgName || null;
+  const logo = orgLogoUrl || null;
   return (
     <div className="flex min-h-dvh flex-col bg-surface-muted text-[15px] leading-6">
       <a
@@ -38,10 +40,8 @@ export function CandidateShell({ orgName, subtitle, stepper, headerAside, width 
       <header className="sticky top-0 z-30 border-b border-line bg-surface/90 backdrop-blur-md supports-[backdrop-filter]:bg-surface/75">
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-3 px-4 sm:h-16 sm:gap-4 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
-            {name ? (
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-primary text-[13px] font-semibold text-primary-fg" aria-hidden="true">
-                {initials(name)}
-              </span>
+            {logo ? (
+              <img src={logo} alt="" aria-hidden="true" data-org-logo="" className="size-9 shrink-0 rounded-[10px] object-contain" />
             ) : (
               <BrandMark size={34} />
             )}
@@ -87,6 +87,7 @@ export function CandidateShell({ orgName, subtitle, stepper, headerAside, width 
 
 export interface CandidateChrome {
   orgName?: string | null;
+  orgLogoUrl?: string | null;
   subtitle?: string | null;
   /** Override the journey steps (e.g. drop "Round" when the round is fixed). */
   steps?: readonly StepperStep[];
@@ -108,7 +109,7 @@ export function useCandidateChrome(chrome: CandidateChrome): void {
   useEffect(() => {
     setChrome(chrome);
     // Re-run only when the described values change, not on every new object.
-  }, [setChrome, chrome.orgName, chrome.subtitle, chrome.hideStepper, chrome.width, stepKeys, completedKeys]);
+  }, [setChrome, chrome.orgName, chrome.orgLogoUrl, chrome.subtitle, chrome.hideStepper, chrome.width, stepKeys, completedKeys]);
 }
 
 const STEP_KEYS = new Set<string>(CANDIDATE_STEPS.map((s) => s.key));
@@ -129,9 +130,15 @@ export function CandidateShellLayout() {
   return (
     <CandidateShell
       orgName={chrome.orgName}
+      orgLogoUrl={chrome.orgLogoUrl}
       subtitle={chrome.subtitle}
       width={chrome.width}
-      stepper={showStepper ? <Stepper steps={steps} current={current} completed={chrome.completed} aria-label="Interview steps" /> : undefined}
+      stepper={
+        showStepper ? (
+          // More than seven steps (the intake journey) only fit side by side from lg up.
+          <Stepper steps={steps} current={current} completed={chrome.completed} compactBelow={steps.length > 7 ? "lg" : "sm"} aria-label="Interview steps" />
+        ) : undefined
+      }
     >
       <Outlet />
     </CandidateShell>

@@ -105,7 +105,7 @@ def test_policy_snapshot_parsing_is_lenient() -> None:
     assert snapshot.recording.record_answer_audio is False
     assert snapshot.recording.show_live_subtitles is False
     assert snapshot.integrity.camera_required is True  # invalid section -> defaults
-    assert snapshot.candidate_report_mode.value == "after_review"
+    assert snapshot.candidate_report_mode.value == "never"  # invalid -> the platform default
 
 
 def test_session_policy_requires_consent_for_recording_and_analysis() -> None:

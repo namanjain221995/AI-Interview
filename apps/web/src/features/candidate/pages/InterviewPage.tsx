@@ -4,6 +4,7 @@ import { useEffect, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import { StageShell } from "@/components/layout/StageShell";
+import { INTAKE_GUARD_STEPS } from "@/features/intake/candidate/journey";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
 import { InterviewRoom } from "@/features/interview/InterviewRoom";
@@ -67,6 +68,7 @@ export default function InterviewPage() {
     // The server knows exactly which step is missing; take the candidate there.
     if (code === "consent_required") navigate(`/candidate/${interviewId}/consent`, { replace: true });
     else if (code === "round_required") navigate(`/candidate/${interviewId}/round`, { replace: true });
+    else if (INTAKE_GUARD_STEPS[code]) navigate(`/candidate/${interviewId}/${INTAKE_GUARD_STEPS[code]}`, { replace: true });
     else if (code === "interview_completed" || code === "session_ended") navigate(`/candidate/${interviewId}/complete`, { replace: true });
   }, [code, interviewId, navigate]);
   if (error) {
@@ -79,7 +81,7 @@ export default function InterviewPage() {
         />
       );
     }
-    if (isApiError(error) && ["consent_required", "round_required", "interview_completed", "session_ended"].includes(error.code)) {
+    if (isApiError(error) && (["consent_required", "round_required", "interview_completed", "session_ended"].includes(error.code) || INTAKE_GUARD_STEPS[error.code])) {
       return (
         <StageShell>
           <DocumentTitle title="Interview" />

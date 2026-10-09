@@ -103,6 +103,19 @@ def _profile_terms(profile: dict[str, Any]) -> list[str]:
     return terms
 
 
+def intake_glossary_terms() -> list[str]:
+    """Technical terms of the intake kit passages (Drill A / Drill B): Whisper ignores prompts, so the reading
+    transcript is corrected towards these terms by the session glossary (INTAKE_INTERVIEW.md 7.4)."""
+    try:
+        from app.services.intake.kit import load_intake_kit
+
+        kit = load_intake_kit()
+    except Exception as exc:  # noqa: BLE001 - the glossary is an optimisation
+        log.warning("realtime.intake_terms_unavailable", error=type(exc).__name__)
+        return []
+    return [term for passage in kit.passages for term in passage.terms]
+
+
 def merge_vocabulary(*groups: list[str], limit: int = MAX_VOCABULARY) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -175,6 +188,8 @@ async def load_session_context(session_id: uuid.UUID) -> SessionContext | None:
             status = SessionStatus(row.status)
         except ValueError:
             status = SessionStatus.CREATED
+        round_type = str(config.get("round_type") or (round_.round_type if round_ else "custom"))
+        intake_terms = intake_glossary_terms() if round_type == "intake" else []
         return SessionContext(
             session_id=str(row.id),
             interview_id=str(row.interview_id),
@@ -194,7 +209,12 @@ async def load_session_context(session_id: uuid.UUID) -> SessionContext | None:
             candidate_first_name=first_name(candidate.full_name if candidate else None),
             vocabulary=merge_vocabulary(requirement_names, competency_names, profile_terms),
             glossary_terms=merge_vocabulary(
-                profile_terms, requirement_names, competency_names, catalog_names, limit=MAX_GLOSSARY_TERMS
+                intake_terms,
+                profile_terms,
+                requirement_names,
+                competency_names,
+                catalog_names,
+                limit=MAX_GLOSSARY_TERMS,
             ),
             reconnect_count=row.reconnect_count or 0,
             started_at=row.started_at,

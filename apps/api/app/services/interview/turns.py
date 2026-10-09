@@ -412,7 +412,7 @@ async def stream_speech_object(
         msgs = attempts[index]
         index += 1
         outcome.attempts += 1
-        speech_turn = schema is TurnDecision
+        speech_turn = schema is TurnDecision or getattr(schema, "SPEECH_FIRST_TURN", False)
         extractor = StreamingJsonFieldExtractor("speech")
         filters = SpeechFilters(
             opener=OpenerFilter() if speech_turn else None,

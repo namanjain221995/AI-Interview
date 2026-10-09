@@ -22,7 +22,12 @@ export interface StepperProps {
   onStepClick?: (key: string) => void;
   "aria-label"?: string;
   className?: string;
+  /** Show the compact "Step n of N" form below this breakpoint (long journeys need `lg`). */
+  compactBelow?: "sm" | "lg";
 }
+
+// Static class names (Tailwind scans them): compact form / horizontal list per breakpoint.
+const COMPACT_CLASSES = { sm: ["sm:hidden", "hidden sm:flex"], lg: ["lg:hidden", "hidden lg:flex"] } as const;
 
 export function stepStatus(steps: readonly StepperStep[], key: string, current: string | null, completed?: readonly string[]): StepStatus {
   if (key === current) return "current";
@@ -50,7 +55,8 @@ function Marker({ status, index }: { status: StepStatus; index: number }) {
 }
 
 /** Journey progress (candidate flow). Collapses to "Step n of N" on narrow screens. */
-export function Stepper({ steps, current, completed, orientation = "horizontal", onStepClick, className, ...aria }: StepperProps) {
+export function Stepper({ steps, current, completed, orientation = "horizontal", onStepClick, className, compactBelow = "sm", ...aria }: StepperProps) {
+  const [compactClass, listClass] = COMPACT_CLASSES[compactBelow];
   const currentIndex = steps.findIndex((s) => s.key === current);
   const currentStep = currentIndex >= 0 ? steps[currentIndex] : undefined;
   const label = aria["aria-label"] ?? "Progress";
@@ -95,7 +101,7 @@ export function Stepper({ steps, current, completed, orientation = "horizontal",
   return (
     <nav aria-label={label} className={className}>
       {/* Compact form for narrow screens */}
-      <div className="grid gap-2 sm:hidden">
+      <div className={cn("grid gap-2", compactClass)}>
         <p className="flex items-baseline justify-between text-xs text-fg-muted">
           <span>
             Step {Math.max(currentIndex, 0) + 1} of {steps.length}
@@ -115,7 +121,7 @@ export function Stepper({ steps, current, completed, orientation = "horizontal",
         </div>
       </div>
 
-      <ol className="hidden items-center sm:flex">
+      <ol className={cn("items-center", listClass)}>
         {steps.map((step, index) => {
           const status = stepStatus(steps, step.key, current, completed);
           const clickable = status === "complete" && onStepClick;

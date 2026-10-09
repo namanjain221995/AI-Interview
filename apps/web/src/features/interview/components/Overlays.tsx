@@ -1,5 +1,5 @@
 import { CircleAlert, Expand, Eye, Keyboard, MonitorUp, RefreshCw, WifiOff, X } from "lucide-react";
-import { useEffect, useId, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/Button";
@@ -310,7 +310,13 @@ export function NoticeArea({
   const notices = useInterviewState(store, (s) => s.notices);
   const warnings = useInterviewState(store, (s) => s.warnings);
   const sttDegraded = useInterviewState(store, (s) => s.sttDegraded);
+  const candidateSpoke = useInterviewState(store, (s) => s.candidateSpoke);
   const fatal = useInterviewState(store, (s) => s.fatalError);
+  // The transcription notice is dismissible; it comes back only if trouble starts again.
+  const [sttDismissed, setSttDismissed] = useState(false);
+  useEffect(() => {
+    if (!sttDegraded) setSttDismissed(false);
+  }, [sttDegraded]);
 
   // Informational notices and gentle integrity reminders fade on their own; degradation
   // warnings stay until dismissed or resolved.
@@ -351,16 +357,19 @@ export function NoticeArea({
       ),
     });
   }
-  if (sttDegraded && onTypeAnswer) {
+  // Only after the candidate has actually spoken (the server also requires failed
+  // transcription of real speech): never during the introduction or on silence.
+  if (sttDegraded && candidateSpoke && onTypeAnswer && !sttDismissed) {
     items.push({
       id: "stt",
-      tone: "warning",
-      message: "We're having trouble hearing you clearly. You can keep speaking, or type your answer instead.",
+      tone: "info",
+      message: "Transcription is slow right now. Keep talking, or type your answer.",
       action: (
-        <Button size="xs" variant="outline" leftIcon={<Keyboard />} onClick={onTypeAnswer}>
+        <Button size="xs" variant="ghost" leftIcon={<Keyboard />} onClick={onTypeAnswer}>
           Type answer
         </Button>
       ),
+      onDismiss: () => setSttDismissed(true),
     });
   }
   for (const w of warnings) {

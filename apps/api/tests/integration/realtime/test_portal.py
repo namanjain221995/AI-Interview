@@ -290,6 +290,28 @@ async def test_portal_journey_consent_resume_round_system_check_session_ticket(
     await http.aclose()
 
 
+async def test_portal_session_reports_the_candidate_feedback_mode(app, org_factory, portal_fakes) -> None:
+    """The portal hides every feedback element when the session's mode is "never" (the default)."""
+    org = await org_factory()
+    default = await create_interview(org, consent_items={"microphone": True})
+    http = await verified_client(app, default)
+    session = (await http.get(f"/api/v1/portal/sessions/{default['session_id']}")).json()
+    interview = (await http.get(f"/api/v1/portal/interviews/{default['interview_id']}")).json()
+    assert session["candidate_report_mode"] == "never" == interview["policy"]["candidate_report_mode"]
+    assert session["candidate_report_available"] is False
+    await http.aclose()
+
+    immediate = await create_interview(
+        org,
+        consent_items={"microphone": True},
+        policy={**DEFAULT_POLICY, "candidate_report_mode": "immediate"},
+    )
+    http = await verified_client(app, immediate)
+    session = (await http.get(f"/api/v1/portal/sessions/{immediate['session_id']}")).json()
+    assert session["candidate_report_mode"] == "immediate"  # an organisation that opts in keeps it
+    await http.aclose()
+
+
 async def test_portal_is_scoped_to_own_interview(app, org_factory, portal_fakes) -> None:
     org = await org_factory()
     mine = await create_interview(org, consent_items={"microphone": True})

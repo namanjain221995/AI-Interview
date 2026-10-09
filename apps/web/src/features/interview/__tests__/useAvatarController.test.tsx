@@ -20,7 +20,8 @@ function interview(overrides: Partial<PortalInterviewView> = {}): PortalIntervie
   return {
     id: "i1",
     status: "in_progress",
-    organizationName: "Demo Corp",
+    organizationName: "TechSara Solutions",
+    organizationLogoUrl: null,
     job: { id: "j1", title: "Senior DevOps Engineer", department: null, location: null, description: null },
     rounds: [],
     selectedRoundId: "r1",

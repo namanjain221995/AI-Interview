@@ -9,6 +9,8 @@ import { DEFAULT_PREFS, readLocal, writeLocal, type ClientPrefs } from "@/featur
 import { useInterviewReadiness } from "@/features/candidate/readiness";
 import { selectedRound } from "@/features/candidate/round";
 import { CodingWorkspace } from "@/features/coding/CodingWorkspace";
+import { ActivityPanel, DONE_REASONS } from "@/features/intake/candidate/room/ActivityPanel";
+import { ActivityCue, ActivityStage } from "@/features/intake/candidate/room/ActivityStage";
 import { effectivePolicy, monitoringSummary, type ConsentFlags } from "@/features/integrity/policy";
 import { ScreenShareManager, type ScreenShareEvent } from "@/features/integrity/screenShare";
 import { codingRemainingSeconds, clockRunning, createInterviewStore, useInterviewState } from "@/features/realtime/store";
@@ -20,10 +22,13 @@ import { ControlDock, EndInterviewDialog, TypedAnswerPanel } from "./components/
 import { PersistentSlot, usePersistentNode } from "./components/PersistentSlot";
 import { BeginGate, NoticeArea, ReconnectOverlay } from "./components/Overlays";
 import { RoomTopBar, TurnCue } from "./components/RoomChrome";
-import { AvatarPanel, CameraPip, PreparingPanel, PresenceLine, Subtitles } from "./components/Stage";
+import { AvatarPanel, CameraPip, MicMeter, PreparingPanel, PresenceLine, Subtitles } from "./components/Stage";
 import { useFullscreen, useNow } from "./hooks";
 import { InterviewRuntime, MediaAccessError } from "./runtime";
 import { useAvatarController } from "./useAvatarController";
+
+/** How long the brief "Done" stays after an intake activity ends. */
+const ACTIVITY_DONE_MS = 1400;
 
 function describeBeginError(error: unknown): string {
   if (error instanceof MediaAccessError) {
@@ -72,6 +77,9 @@ export function InterviewRoom({ interview, sessionId, sessionStatus }: Interview
   const hasUtterance = useInterviewState(store, (s) => s.utterances.length > 0);
   const coding = useInterviewState(store, (s) => s.coding);
   const codingActive = Boolean(coding && !coding.ended);
+  // Intake: a reading or speaking exercise takes over the stage (never during coding).
+  const activity = useInterviewState(store, (s) => s.activity);
+  const activityActive = Boolean(activity) && !codingActive;
 
   useEffect(() => {
     // Until the server's first state sync, show the round's full length (paused).
@@ -87,6 +95,21 @@ export function InterviewRoom({ interview, sessionId, sessionStatus }: Interview
   useEffect(() => {
     runtime?.setAvatar(avatar);
   }, [runtime, avatar]);
+
+  // After activity.end: a brief "Done" (finished exercises only), then the conversation layout returns.
+  const endedActivityId = activity?.status === "ended" ? activity.id : null;
+  const endedWithDone = activity?.status === "ended" && DONE_REASONS.has(activity.endReason ?? "");
+  useEffect(() => {
+    if (!endedActivityId) return;
+    const timer = setTimeout(() => store.dispatch({ type: "activity.dismiss", activityId: endedActivityId }), endedWithDone ? ACTIVITY_DONE_MS : 0);
+    return () => clearTimeout(timer);
+  }, [endedActivityId, endedWithDone, store]);
+
+  // Typing is for answers: close the panel while reading aloud, reading silently or preparing.
+  const activityKey = activity ? `${activity.id}:${activity.status}:${activity.phase ?? ""}` : "";
+  useEffect(() => {
+    if (activityKey && runtimeRef.current && !runtimeRef.current.typingAllowed()) setTyping(false);
+  }, [activityKey]);
 
   useEffect(
     () => () => {
@@ -189,7 +212,21 @@ export function InterviewRoom({ interview, sessionId, sessionStatus }: Interview
   const gateUp = !begun || (!runtime && !starting);
   const ready = readiness.ready || startAnyway || resuming;
 
-  useDocumentTitle(gateUp ? (ready ? "Ready to begin" : "Preparing your interview") : preparing ? "Starting soon" : codingActive ? "Coding exercise" : "Interview in progress");
+  useDocumentTitle(
+    gateUp
+      ? ready
+        ? "Ready to begin"
+        : "Preparing your interview"
+      : preparing
+        ? "Starting soon"
+        : codingActive
+          ? "Coding exercise"
+          : activityActive
+            ? activity?.kind === "topic_card"
+              ? "Speaking exercise"
+              : "Reading exercise"
+            : "Interview in progress",
+  );
 
   const notices = (placement: "overlay" | "inline") => (
     <NoticeArea
@@ -238,12 +275,14 @@ export function InterviewRoom({ interview, sessionId, sessionStatus }: Interview
         data-session-status={status}
         data-coding={codingActive ? "true" : "false"}
         data-preparing={preparingNow ? "true" : "false"}
+        data-activity-kind={activityActive ? activity?.kind : undefined}
+        data-activity-phase={activityActive ? (activity?.phase ?? "armed") : undefined}
         className="relative h-full min-h-0"
       >
         {createPortal(<AvatarPanel controller={avatar} compact={codingActive} className="size-full" />, avatarNode)}
 
         <div className="relative h-full min-h-0" inert={gateUp || undefined}>
-          {!codingActive ? notices("overlay") : null}
+          {!codingActive && !activityActive ? notices("overlay") : null}
 
           {codingActive && coding ? (
             <CodingWorkspace
@@ -260,9 +299,9 @@ export function InterviewRoom({ interview, sessionId, sessionStatus }: Interview
               aside={
                 <div className="grid gap-3">
                   {notices("inline")}
-                  <div className="relative aspect-[4/3] overflow-hidden rounded-lg bg-surface-sunken ring-1 ring-line">
+                  <div className="relative aspect-[4/3]">
                     <PersistentSlot node={avatarNode} className="absolute inset-0" />
-                    <CameraPip runtime={runtime} begun={begun} className="absolute right-2 bottom-2 aspect-[4/3] w-[36%] shadow-overlay" />
+                    <CameraPip runtime={runtime} begun={begun} className="absolute right-0 bottom-0 aspect-[4/3] w-[36%] rounded-xl shadow-overlay" />
                   </div>
                   <PresenceLine runtime={runtime} store={store} className="-my-2" />
                   <TurnCue store={store} className="justify-start text-[13px]" />
@@ -270,14 +309,27 @@ export function InterviewRoom({ interview, sessionId, sessionStatus }: Interview
                 </div>
               }
             />
+          ) : activityActive ? (
+            <ActivityStage
+              presence={<PersistentSlot node={avatarNode} className="absolute inset-0" />}
+              cue={<ActivityCue store={store} />}
+              camera={<CameraPip runtime={runtime} begun={begun} className="aspect-[4/3] w-full rounded-xl shadow-overlay" />}
+              notices={notices("inline")}
+            >
+              <ActivityPanel
+                store={store}
+                onFinish={(activityId, phase) => runtimeRef.current?.activityFinish(activityId, phase)}
+                micMeter={<MicMeter runtime={runtime} surface="panel" />}
+                recording={(policy.recording.record_answer_audio && consent?.audio_recording !== false) || policy.recordVideo}
+                interviewId={interview.id}
+              />
+            </ActivityStage>
           ) : (
             <div className="mx-auto flex h-full max-w-6xl flex-col px-3 pt-3 pb-2 sm:px-6 sm:pt-4 sm:pb-3">
               <div className="relative mx-auto min-h-0 w-full max-w-4xl flex-1">
-                <PersistentSlot
-                  node={avatarNode}
-                  className="absolute inset-0 overflow-hidden rounded-2xl bg-[radial-gradient(80%_70%_at_50%_30%,var(--surface-raised),var(--surface-sunken))] ring-1 ring-line-subtle"
-                />
-                <CameraPip runtime={runtime} begun={begun} className="absolute right-2.5 bottom-2.5 aspect-[4/3] w-24 shadow-overlay sm:right-3 sm:bottom-3 sm:w-40 lg:w-48" />
+                {/* No frame: the orb floats on the room background with its own glow. */}
+                <PersistentSlot node={avatarNode} className="absolute inset-0" />
+                <CameraPip runtime={runtime} begun={begun} className="absolute right-1 bottom-1 aspect-[4/3] w-24 rounded-xl shadow-overlay sm:right-2 sm:bottom-2 sm:w-40 lg:w-44" />
               </div>
               <div className={cn("contents", gateUp && "invisible")}>
                 <PresenceLine runtime={runtime} store={store} className="mx-auto mt-2 w-full max-w-3xl" />

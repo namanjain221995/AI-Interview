@@ -1,0 +1,243 @@
+{% extends "base.html.j2" %}
+{% set a = c.A_candidate_summary %}
+{% set b = c.B_overall %}
+{% set f = c.F_reading %}
+{% set g = c.G_structured %}
+{% set h = c.H_trainability %}
+{% set e = c.E_technical %}
+{% set k = c.K_human_review %}
+{% block title %}Intake report — {{ a.candidate_name or "Candidate" }}{% endblock %}
+{% block body %}
+<style>
+  .table-wrap { width: 100%; overflow-x: auto; }
+  .table-wrap table { min-width: 0; }
+  @media (max-width: 560px) {
+    .hide-sm { display: none; }
+    .page { padding: 20px 16px 32px; }
+    .meta-grid { grid-template-columns: 1fr 1fr; }
+    th, td { padding: 6px 5px; }
+  }
+</style>
+<header class="report">
+  <div>
+    <div class="eyebrow">Intake interview report · Confidential · Staff only</div>
+    <h1>{{ a.candidate_name or "Candidate" }}</h1>
+    <div class="muted">Target role: {{ a.target_role or "not stated" }} · Kit {{ c.kit_version }} · {{ c.scoring_version }}</div>
+    <div class="meta-grid">
+      <div><span>Interview date</span><strong>{{ a.interview_date | date }}</strong></div>
+      <div><span>Interview time</span><strong>{{ a.duration_s | duration }}</strong></div>
+      <div><span>Hands-on experience (form)</span><strong>{% if a.years_hands_on is not none %}{{ a.years_hands_on | num(1) }} years{% else %}–{% endif %}</strong></div>
+      <div><span>Evaluation</span><strong>v{{ c.evaluation_version }}</strong></div>
+    </div>
+  </div>
+  <div class="score-hero">
+    <div class="small muted">Weighted total (1-5)</div>
+    {% if b.weighted_total is not none %}
+    <div class="value">{{ b.weighted_total | total }}<small>/5</small></div>
+    <div class="conf">{{ b.normalized_100 | total(1) }} out of 100 (conversion)</div>
+    {% else %}
+    <div class="value">–</div>
+    {% if b.partial_total is not none %}<div class="conf">Partial total {{ b.partial_total | total }} — {{ b.partial_label }}</div>{% endif %}
+    {% endif %}
+  </div>
+</header>
+
+<section class="banner">
+  <div class="small muted">AI recommendation</div>
+  <div class="rec">{{ b.band_label }}</div>
+  {% if b.band_guidance %}<p>{{ b.band_guidance }}</p>{% endif %}
+  <p class="small"><strong>{{ b.recommendation_note }}</strong> Human review: {{ b.human_review_status }}{% if b.latest_decision %} — latest decision “{{ b.latest_decision.outcome_label }}” by {{ b.latest_decision.reviewer.full_name }}{% endif %}.</p>
+</section>
+
+<h2>A. Candidate summary</h2>
+<div class="grid-2">
+  <div class="card">
+    <h3>Background (onboarding form)</h3>
+    <p>{{ a.technical_background or "Not provided." }}</p>
+    {% if a.resume_summary %}<h3>Résumé summary</h3><p>{{ a.resume_summary }}</p>{% endif %}
+    {% if a.resume_experience_years is not none %}<p class="small muted">Experience on the résumé: {{ a.resume_experience_years | num(1) }} years.</p>{% endif %}
+  </div>
+  <div class="card">
+    <h3>Stages</h3>
+    <table>
+      <tbody>
+      {% for s in a.completed_stages %}
+        <tr><td>{{ loop.index }}. {{ s.title }}</td><td><span class="pill {{ s.status | pill }}">{{ s.status | label }}</span></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<h2>B. Overall</h2>
+<p>Evidence sufficiency: <strong>{{ (b.evidence_sufficiency or "unknown") | label }}</strong>.{% if b.partial_total is not none %} {{ b.partial_label }}: {{ b.partial_total | total }}.{% endif %}</p>
+<div class="grid-2">
+  <div class="card"><h3>Strengths</h3>{% if b.strengths %}<ul class="clean">{% for s in b.strengths %}<li>{{ s }}</li>{% endfor %}</ul>{% else %}<p class="muted">None recorded.</p>{% endif %}</div>
+  <div class="card"><h3>Areas to improve</h3>{% if b.improvements %}<ul class="clean">{% for s in b.improvements %}<li>{{ s }}</li>{% endfor %}</ul>{% else %}<p class="muted">None recorded.</p>{% endif %}</div>
+</div>
+
+<h2>C. Competencies</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Competency</th><th class="num">Weight</th><th class="num">Score (1-5)</th><th class="num hide-sm">Weighted</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for comp in c.C_competencies %}
+    <tr>
+      <td>{{ comp.label }}</td>
+      <td class="num">{{ comp.weight }}</td>
+      <td class="num">{{ comp.score | score5 }}</td>
+      <td class="num hide-sm">{{ comp.weighted or "–" }}</td>
+      <td>{% if comp.status == "scored" %}<span class="pill pos">scored</span>{% else %}<span class="pill warn">insufficient</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% for comp in c.C_competencies %}
+<div class="card">
+  <h3>{{ comp.label }} — {{ comp.score | score5 }}{% if comp.status != "scored" %} (insufficient evidence){% endif %}</h3>
+  {% if comp.explanation %}<p>{{ comp.explanation }}</p>{% endif %}
+  {% if comp.sub_scores and comp.sub_scores.formula is defined %}
+  <p class="small">Drill A {{ comp.sub_scores.drill_a.score | score5 }} · Drill B {{ comp.sub_scores.drill_b.score | score5 }} · {{ comp.sub_scores.formula }}</p>
+  {% endif %}
+  {% if comp.observations %}<ul class="clean">{% for o in comp.observations %}<li>{{ o }}</li>{% endfor %}</ul>{% endif %}
+  {% for ev in comp.evidence %}{% if ev.quote %}<div class="evidence {{ ev.supports }}"><q>{{ ev.quote }}</q> <span class="small muted">{{ (ev.stage or ev.source) | label }}{% if ev.start_ms is not none %} · {{ ev.start_ms | ms }}{% endif %}</span></div>{% endif %}{% endfor %}
+  {% if comp.improvements %}<p class="small"><strong>To improve:</strong> {{ comp.improvements | join("; ") }}</p>{% endif %}
+</div>
+{% endfor %}
+
+<h2>D. Résumé verification</h2>
+{% for claim in c.D_resume_verification %}
+<div class="card">
+  <h3>{{ claim.claim_ref }} · {{ claim.claim }} <span class="pill {{ claim.verdict | pill }}">{{ claim.verdict | label }}</span></h3>
+  {% if claim.note %}<p>{{ claim.note }}</p>{% endif %}
+  {% for q in claim.questions %}<p class="small"><strong>{{ (q.rung or "question") | label }}:</strong> {{ q.text }}</p>{% endfor %}
+  {% for ev in claim.supporting_evidence %}{% if ev.quote %}<div class="evidence {{ ev.supports }}"><q>{{ ev.quote }}</q></div>{% endif %}{% endfor %}
+  {% if claim.unresolved %}<p class="small"><strong>Still to ask:</strong> {{ claim.unresolved | join("; ") }}</p>{% endif %}
+</div>
+{% else %}
+<p class="muted">No résumé claims were selected.</p>
+{% endfor %}
+
+<h2>E. Technical ability</h2>
+<p>Language: <strong>{{ e.language or "not recorded" }}</strong> · self-rating {{ e.self_rating if e.self_rating is not none else "–" }}/10 · scripting {{ (e.scripting or "–") | label }}{% if e.data_ml_libraries %} · data/ML libraries: {{ e.data_ml_libraries }}{% endif %} · rating supported: <span class="pill {{ e.rating_supported | pill }}">{{ e.rating_supported | label }}</span></p>
+{% for v in e.verification %}
+<div class="card qa">
+  <div class="question">{{ v.question }}</div>
+  {% if v.answer_excerpt %}<div class="answer">{{ v.answer_excerpt }}</div>{% endif %}
+  {% if v.quality %}<p class="small">Quality: <span class="pill {{ v.quality | pill }}">{{ v.quality | label }}</span>{% if v.matched_key_points %} · key points matched: {{ v.matched_key_points | join(", ") }}{% endif %}</p>{% endif %}
+</div>
+{% endfor %}
+{% if e.technical_understanding %}<p>{{ e.technical_understanding }}</p>{% endif %}
+{% if e.accuracy_notes %}<p class="small muted">{{ e.accuracy_notes }}</p>{% endif %}
+
+<h2>F. Technical reading</h2>
+<div class="grid-2">
+  <div class="card">
+    <h3>Drill A — reading aloud{% if f.drill_a.passage_key %} (passage {{ f.drill_a.passage_key }}: {{ f.drill_a.passage_title }}){% endif %}</h3>
+    <p>Score: <strong>{{ f.drill_a.score | score5 }}</strong> · pronunciation: not assessed</p>
+    {% set m = f.drill_a.metrics %}
+    {% if m %}
+    <table><tbody>
+      <tr><td>Completeness</td><td class="num">{{ m.completeness | percent }}</td></tr>
+      <tr><td>Word error rate (tolerant / strict)</td><td class="num">{{ m.wer | num(2) }} / {{ m.strict_wer | num(2) }}</td></tr>
+      <tr><td>Duration</td><td class="num">{{ m.duration_seconds | duration }}</td></tr>
+      <tr><td>Words per minute</td><td class="num">{{ m.words_per_minute | num(0) }}</td></tr>
+      <tr><td>Pauses (long)</td><td class="num">{{ m.pause_count if m.pause_count is not none else "–" }} ({{ m.long_pause_count if m.long_pause_count is not none else "–" }})</td></tr>
+      <tr><td>Sentences read / partial / skipped</td><td class="num">{{ m.sentences_read }} / {{ m.sentences_partial }} / {{ m.sentences_skipped }}</td></tr>
+    </tbody></table>
+    {% endif %}
+    {% if f.drill_a.basis %}<ul class="clean small">{% for line in f.drill_a.basis %}<li>{{ line }}</li>{% endfor %}</ul>{% endif %}
+    {% if f.drill_a.transcript %}<p class="small muted">Transcript ({{ f.drill_a.transcript_source | source_label }}):</p><div class="qa"><div class="answer">{{ f.drill_a.transcript }}</div></div>{% endif %}
+  </div>
+  <div class="card">
+    <h3>Drill B — read and relay{% if f.drill_b.passage_key %} (passage {{ f.drill_b.passage_key }}: {{ f.drill_b.passage_title }}){% endif %}</h3>
+    <p>Score: <strong>{{ f.drill_b.score | score5 }}</strong>{% if f.drill_b.shown_seconds is not none %} · passage shown {{ f.drill_b.shown_seconds | num(0) }} s{% endif %}{% if f.drill_b.paraphrase %} · paraphrase: {{ f.drill_b.paraphrase | label }}{% endif %}</p>
+    <table><thead><tr><th>Concept</th><th>Status</th></tr></thead><tbody>
+    {% for concept in f.drill_b.concepts %}
+      <tr><td>{{ concept.text }}{% if concept.quote %}<div class="small muted"><q>{{ concept.quote }}</q></div>{% endif %}</td><td><span class="pill {{ concept.status | pill }}">{{ concept.status | label }}</span></td></tr>
+    {% endfor %}
+    </tbody></table>
+    {% if f.drill_b.basis %}<ul class="clean small">{% for line in f.drill_b.basis %}<li>{{ line }}</li>{% endfor %}</ul>{% endif %}
+    {% if f.drill_b.explanation %}<p class="small muted">Relay:</p><div class="qa"><div class="answer">{{ f.drill_b.explanation }}</div></div>{% endif %}
+    {% for fu in f.drill_b.followups %}<p class="small"><strong>{{ fu.question or "Follow-up" }}</strong>{% if fu.answer_excerpt %} — {{ fu.answer_excerpt }}{% endif %}{% if fu.note %} <span class="muted">({{ fu.note }})</span>{% endif %}</p>{% endfor %}
+  </div>
+</div>
+<p><strong>Technical Reading &amp; Relay:</strong> {{ f.technical_reading.score | score5 }} = {{ f.technical_reading.formula }}</p>
+
+<h2>G. Structured answer (topic card)</h2>
+{% if g.card_title %}
+<p>Card {{ g.card_number }}: <strong>{{ g.card_title }}</strong> · score {{ g.score | score5 }}{% if g.flow %} · flow {{ g.flow | label }}{% endif %}{% if g.examples_used is not none %} · examples {{ "used" if g.examples_used else "not used" }}{% endif %}{% if g.gap_handling %} · gaps {{ g.gap_handling | label }}{% endif %}</p>
+<table><thead><tr><th>Point</th><th>Status</th></tr></thead><tbody>
+{% for bullet in g.bullets %}
+  <tr><td>{{ bullet.index }}. {{ bullet.text }}{% if bullet.excerpt %}<div class="small muted"><q>{{ bullet.excerpt }}</q></div>{% endif %}</td><td><span class="pill {{ bullet.status | pill }}">{{ bullet.status | label }}</span></td></tr>
+{% endfor %}
+</tbody></table>
+{% if g.followup.question %}<p class="small"><strong>{{ g.followup.question }}</strong>{% if g.followup.answer_excerpt %} — {{ g.followup.answer_excerpt }}{% endif %}</p>{% endif %}
+{% if g.followup.analysis %}<p class="small muted">{{ g.followup.analysis }}</p>{% endif %}
+{% else %}
+<p class="muted">The speaking exercise was not completed.</p>
+{% endif %}
+
+<h2>H. Trainability</h2>
+<div class="card">
+  {% if h.learning_strategy %}<p><strong>Learning strategy:</strong> {{ h.learning_strategy }}</p>{% endif %}
+  {% if h.teaching_exercise %}<p><strong>Teach-back:</strong> {{ h.teaching_exercise }}</p>{% endif %}
+  {% if h.problem_solving %}<p><strong>Learning evidence:</strong> {{ h.problem_solving }}</p>{% endif %}
+  {% if h.training_readiness %}<p><strong>Training readiness:</strong> {{ h.training_readiness }}</p>{% endif %}
+  <p><strong>Openness to AI/ML:</strong> {{ h.ai_ml_openness | label }}</p>
+  {% if h.development_areas %}<p class="small"><strong>Development areas:</strong> {{ h.development_areas | join("; ") }}</p>{% endif %}
+</div>
+
+<h2>I. Integrity observations</h2>
+<p class="small muted">{{ c.I_integrity.note }}{% if c.I_integrity.unreviewed %} {{ c.I_integrity.unreviewed }} flagged signal(s) not reviewed yet.{% endif %}</p>
+{% if c.I_integrity.observations %}
+<div class="table-wrap"><table><thead><tr><th>Observation</th><th class="num">Count</th><th>First seen</th><th>Review</th></tr></thead><tbody>
+{% for o in c.I_integrity.observations %}
+  <tr><td>{{ o.title }}</td><td class="num">{{ o.count }}</td><td>{{ o.first_at | date }}</td><td>{{ (o.review_status or "–") | label }}</td></tr>
+{% endfor %}
+</tbody></table></div>
+{% else %}
+<p class="muted">No integrity signals were recorded.</p>
+{% endif %}
+
+<h2>J. Training plan</h2>
+{% set plan = c.J_training_plan %}
+{% if plan %}
+<p>{{ plan.summary }}</p>
+{% for module in plan.modules %}
+<div class="card">
+  <h3>{{ module.priority }}. {{ module.title }}</h3>
+  <p>{{ module.why }}</p>
+  <ul class="clean">{% for o in module.objectives %}<li>{{ o }}</li>{% endfor %}</ul>
+  <table><thead><tr><th>Week</th><th>Milestone</th><th>Measure</th></tr></thead><tbody>
+  {% for ms in module.milestones %}<tr><td>{{ ms.week }}</td><td>{{ ms.milestone }}</td><td>{{ ms.measure }}</td></tr>{% endfor %}
+  </tbody></table>
+</div>
+{% endfor %}
+{% else %}
+<p class="muted">No training plan yet.</p>
+{% endif %}
+
+<h2>K. Human review</h2>
+{% for item in k.review_items %}
+<div class="card">
+  <h3><span class="pill {{ item.severity | pill }}">{{ item.severity }}</span> {{ item.title }}</h3>
+  <p>{{ item.detail }}</p>
+  {% for ev in item.evidence %}{% if ev.quote %}<div class="evidence {{ ev.supports }}"><q>{{ ev.quote }}</q></div>{% endif %}{% endfor %}
+</div>
+{% else %}
+<p class="muted">No review items.</p>
+{% endfor %}
+{% if k.decisions %}
+<div class="table-wrap"><table><thead><tr><th>Decision</th><th>Reviewer</th><th class="hide-sm">Date</th><th>Rationale</th></tr></thead><tbody>
+{% for d in k.decisions %}
+  <tr><td>{{ d.outcome_label }}{% if d.overrides_ai %} <span class="pill warn">differs from AI recommendation</span>{% endif %}</td><td>{{ d.reviewer.full_name }}</td><td class="hide-sm">{{ d.created_at | date }}</td><td>{{ d.rationale }}</td></tr>
+{% endfor %}
+</tbody></table></div>
+{% else %}
+<p class="small"><strong>Pending human review.</strong> The AI recommendation is advisory; a reviewer records the decision with a rationale.</p>
+{% endif %}
+<p class="small muted">{{ c.eligibility_note }}</p>
+{% endblock %}
+{% block footer_note %}Intake Interview report · AI recommendations only; a human reviewer decides.{% endblock %}

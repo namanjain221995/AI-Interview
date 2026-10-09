@@ -98,7 +98,7 @@ own transaction:
 
 | Step | Runs with | Creates |
 |---|---|---|
-| `core` | always | organisation "Demo Corp" and four staff accounts (`superadmin@`, `admin@`, `recruiter@`, `interviewer@demo.local`, password `SEED_PASSWORD`) |
+| `core` | always | organisation "TechSara Solutions" and four staff accounts (`superadmin@`, `admin@`, `recruiter@`, `interviewer@demo.local`, password `SEED_PASSWORD`) |
 | `catalog` | default and `--demo` | global catalog from `samples/`: 43 competencies, 12 round templates, 181 questions, 16 coding problems (13 function problems in 6 languages + 3 SQL) |
 | `catalog_embeddings` | default and `--demo` | enqueues `question_bank.embed` jobs; the worker computes the vectors (and re-checks on start and hourly) |
 | `demo_jobs` | `--demo` only | 4 demo jobs with requirements and rounds; "Senior DevOps Engineer" (combined round, 30 minutes, with a coding problem) is the main demo |

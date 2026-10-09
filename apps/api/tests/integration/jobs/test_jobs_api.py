@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db.models import AuditLog, InterviewTemplate, Job, JobRequirement
-from app.domain.enums import Role
+from app.domain.enums import Role, RoundType
 from tests.integration.resume.helpers import API, create_job
 
 pytestmark = pytest.mark.integration
@@ -23,7 +23,7 @@ async def test_job_crud_requirements_and_embeddings(auth_client, mock_ai, db_ses
         coding_requirements={"enabled": True, "languages": ["python", "go"], "difficulty": "hard"},
     )
     assert job["status"] == "open" and job["has_embedding"] is True
-    assert job["candidate_report_mode"] == "after_review"  # organization default
+    assert job["candidate_report_mode"] == "never"  # organization default
     assert [r["name"] for r in job["requirements"]][:2] == ["Kubernetes", "Terraform"]
     assert all(r["has_embedding"] for r in job["requirements"])
     assert job["requirements_count"] == 5 and job["rounds_count"] == 0
@@ -107,7 +107,7 @@ async def test_job_validation_and_permissions(auth_client, org_factory, mock_ai)
 async def test_round_types_and_rounds(auth_client, mock_ai, seeded_catalog) -> None:
     client = await auth_client(Role.RECRUITER)
     types = (await client.get(f"{API}/round-types")).json()
-    assert types["total"] == 12
+    assert types["total"] == len(RoundType)  # one default template per round type (incl. intake)
     by_type = {item["round_type"]: item for item in types["items"]}
     assert by_type["combined"]["source"] == "database" and by_type["combined"]["template_id"]
     assert by_type["coding"]["config"]["coding"]["enabled"] is True
@@ -188,13 +188,13 @@ async def test_round_types_and_rounds(auth_client, mock_ai, seeded_catalog) -> N
 async def test_round_types_fall_back_to_samples(auth_client) -> None:
     client = await auth_client(Role.RECRUITER)
     types = (await client.get(f"{API}/round-types")).json()
-    assert types["total"] == 12 and {item["source"] for item in types["items"]} == {"samples"}
+    assert types["total"] == len(RoundType) and {item["source"] for item in types["items"]} == {"samples"}
 
 
 async def test_templates(auth_client, org_factory, mock_ai, seeded_catalog, db_session) -> None:
     client = await auth_client(Role.RECRUITER)
     templates = (await client.get(f"{API}/templates")).json()
-    assert templates["total"] == 12 and all(t["is_global"] for t in templates["items"])
+    assert templates["total"] == len(RoundType) and all(t["is_global"] for t in templates["items"])
     global_id = templates["items"][0]["id"]
     assert (await client.patch(f"{API}/templates/{global_id}", json={"name": "Mine"})).status_code == 403
     assert (await client.delete(f"{API}/templates/{global_id}")).status_code == 403
@@ -237,7 +237,7 @@ async def test_templates(auth_client, org_factory, mock_ai, seeded_catalog, db_s
 
     outsider = await auth_client(Role.ADMIN, organization_id=await org_factory())
     assert (await outsider.get(f"{API}/templates/{template['id']}")).status_code == 404
-    assert (await outsider.get(f"{API}/templates")).json()["total"] == 12
+    assert (await outsider.get(f"{API}/templates")).json()["total"] == len(RoundType)
     interviewer = await auth_client(Role.INTERVIEWER, organization_id=client.user.organization_id)
     assert (
         await interviewer.post(f"{API}/templates", json={"name": "x", "round_type": "coding"})

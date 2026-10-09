@@ -61,6 +61,7 @@ from app.services.interview.closing import (
     SPOKEN_REASONS,
     acceptable_closing,
     closing_prompt,
+    report_note,
     template_closing,
 )
 from app.services.interview.coding_bridge import (
@@ -74,6 +75,7 @@ from app.services.interview.coding_bridge import (
 from app.services.interview.config import EngineConfig, get_engine_config
 from app.services.interview.context import coding_user_prompt, system_prompt, turn_messages, user_prompt
 from app.services.interview.contracts import (
+    ActivityEvent,
     BehaviorSpec,
     CandidateTurn,
     CodingActivity,
@@ -278,6 +280,16 @@ class InterviewEngine:
     @property
     def scoring(self) -> ScoringPort:
         return self._scoring or get_scoring()
+
+    @property
+    def intake(self) -> Any:
+        """Intake mode (``app.services.intake.conductor.IntakeConductor``), used only when ``state.intake``."""
+        conductor = getattr(self, "_intake_conductor", None)
+        if conductor is None:
+            from app.services.intake.conductor import IntakeConductor
+
+            conductor = self._intake_conductor = IntakeConductor(self)
+        return conductor
 
     @property
     def redis(self):  # noqa: ANN201
@@ -497,6 +509,9 @@ class InterviewEngine:
         elif not state.candidate_profile:
             profile_status = profile_status or "missing"
         state.profile_status = profile_status
+        if state.intake is not None:
+            await self._prepare_intake(state, profile_doc, profile_status)
+            return
 
         started = time.monotonic()
         timings: dict[str, float] = {}
@@ -598,6 +613,53 @@ class InterviewEngine:
             duration_ms=duration_ms,
             version=saved.version if saved else None,
         )
+
+    async def _prepare_intake(
+        self, state: InterviewState, profile_doc: dict[str, Any] | None, profile_status: str | None
+    ) -> None:
+        """session.prepare for intake rounds (INTAKE_INTERVIEW.md 6.8): claims, stage rows, plan mirror and
+        opening from the conductor; no model plan, first question, prefix warm-up or bank retrieval."""
+        session_id = state.session_id
+        started = time.monotonic()
+        intake, plan, opening = await self.intake.prepare(state, profile_doc)
+        applied: dict[str, Any] = {}
+
+        def _apply(s: InterviewState) -> bool:
+            if s.status not in (SessionStatus.CREATED, SessionStatus.PREPARING):
+                applied["skipped"] = s.status.value
+                return False
+            if profile_doc is not None:
+                attach_profile(s, profile_doc, profile_status=profile_status)
+            s.profile_status = profile_status
+            s.intake = intake
+            s.plan = plan
+            s.plan_source = "intake"
+            s.opening_text = opening
+            s.prepared_first_question = None
+            s.prepared_at = self.now()
+            s.status = SessionStatus.READY
+            return True
+
+        await self.store.save_with_retry(session_id, _apply, durable=True)
+        if applied.get("skipped"):
+            log.info("engine.prepare_discarded", session_id=session_id, status=applied["skipped"])
+            return
+        duration_ms = round((time.monotonic() - started) * 1000.0, 1)
+        async with session_scope() as db:
+            await log_event(
+                db,
+                session_id,
+                "session.prepared",
+                {
+                    "plan_source": "intake",
+                    "opening_source": "template",
+                    "profile_status": profile_status,
+                    "claims": len(intake.claims),
+                    "duration_ms": duration_ms,
+                },
+            )
+        await publish_session_event(session_id, {"type": "session.ready", "session_id": session_id})
+        log.info("engine.session_prepared", session_id=session_id, plan_source="intake", duration_ms=duration_ms)
 
     async def _profile_gate(self, state: InterviewState) -> tuple[str, Any | None]:
         """("ok"|"wait"|"timeout", newly found profile row). Waits only while a
@@ -749,6 +811,8 @@ class InterviewEngine:
                     )
             elif gate == "timeout":
                 state.profile_status = "timeout"
+        if state.intake is not None:
+            await self.intake.ensure_prepared(state)
         if state.plan is None:
             state.plan = fallback_plan(state)
             state.plan_source = "fallback"
@@ -802,6 +866,11 @@ class InterviewEngine:
             decision={"action": TurnAction.INTRODUCE.value},
             full_text=intro_text,
         )
+        if state.intake is not None:
+            async with aclosing(self.intake.first_item(state)) as _relay:
+                async for event in _relay:
+                    yield event
+            return
 
         prepared = state.prepared_first_question
         directive = compute_directive(
@@ -849,6 +918,10 @@ class InterviewEngine:
             if replay and state.conversation and state.conversation[-1].speaker != "candidate":
                 log.info("engine.duplicate_turn_ignored", session_id=session_id)
                 return
+            if state.status == SessionStatus.PAUSED and state.intake is not None:
+                await self.intake.paused_turn(state, turn, text, replay=replay)
+                log.info("engine.answer_while_paused", session_id=session_id, intake=True)
+                return
             if state.status == SessionStatus.PAUSED:
                 # Transcription finished just after a disconnect: keep the answer
                 # (and its evaluation) and reply when the session resumes.
@@ -866,6 +939,11 @@ class InterviewEngine:
             if state.status != SessionStatus.LIVE:
                 state.status = SessionStatus.LIVE
                 state.resume(self.now())
+            if state.intake is not None:
+                async with aclosing(self.intake.candidate_turn(state, turn, text, replay=replay)) as _relay:
+                    async for event in _relay:
+                        yield event
+                return
             if state.coding.active:
                 async with aclosing(self._coding_turn(state, turn, text, replay=replay)) as _relay:
                     async for event in _relay:
@@ -964,6 +1042,8 @@ class InterviewEngine:
         )
         question_id = state.current_question_id
         evaluate = bool(question_id and text and (special.kind in (SpecialKind.NONE, SpecialKind.DONT_KNOW)))
+        if state.intake is not None:
+            evaluate = False  # intake answers are judged by intake.evaluate after the session (8.1)
         record_answer(
             state,
             answer_id=str(answer_id),
@@ -1474,7 +1554,7 @@ class InterviewEngine:
                 name="engine.after_question",
             )
         self._spawn(self._prefetch(state.model_copy(deep=True)), name="engine.prefetch")
-        if needs_summary(state, self.config):
+        if state.intake is None and needs_summary(state, self.config):
             self._spawn(self._enqueue_memory(state.session_id, len(state.answers)), name="engine.memory")
         return UtteranceMeta(
             utterance_id=utterance_id,
@@ -1707,7 +1787,7 @@ class InterviewEngine:
 
     async def _speculate(self, session_id: str, text: str) -> None:
         state = await self.store.load(session_id)
-        if state is None or state.status in ENDED_STATUSES or state.coding.active:
+        if state is None or state.status in ENDED_STATUSES or state.coding.active or state.intake is not None:
             return
         special = classify(text, awaiting_answer=True, questions_invited=state.candidate_questions_invited)
         quick = None
@@ -1943,6 +2023,11 @@ class InterviewEngine:
                         ),
                     )
                     await self._save(state, db=db)
+            if not remaining and state.intake is not None:
+                async with aclosing(self.intake.regenerate_events(state)) as _relay:
+                    async for event in _relay:
+                        yield event
+                return
             if not remaining:
                 last_answer = next((a.text for a in reversed(state.answers)), None)
                 directive = compute_directive(
@@ -1967,6 +2052,11 @@ class InterviewEngine:
                 decision={"action": "resume_after_backchannel", "resumes": interrupted.utterance_id},
                 full_text=remaining,
             )
+            if state.intake is not None:
+                rearmed = self.intake.rearm_after(state, utterance_id, interrupted.utterance_id)
+                if rearmed is not None:
+                    await self._save(state)
+                    yield rearmed
 
     # ============================================================== delivery
     async def mark_utterance_delivered(self, session_id: str, utterance_id: str, *, spoken_text: str) -> None:
@@ -2016,6 +2106,11 @@ class InterviewEngine:
                     async for event in _relay:
                         yield event
                 return
+            if timer.kind == "time_up" and state.intake is not None:
+                async with aclosing(self.intake.time_up_events(state)) as _relay:
+                    async for event in _relay:
+                        yield event
+                return
             if timer.kind == "time_up":
                 async with aclosing(
                     self._closing_events(state, SessionEndReason.TIME_LIMIT, last_answer=None)
@@ -2033,6 +2128,8 @@ class InterviewEngine:
                 await self._save(state)
                 yield StateChanged(reason="time_warning")
                 return
+            if timer.kind == "silence_timeout" and self.intake_activity_active(state):
+                return  # intake activity armed/running: the runtime owns its timing (7.2)
             if timer.kind == "silence_timeout":
                 async with aclosing(self._silence_events(state)) as _relay:
                     async for event in _relay:
@@ -2111,6 +2208,11 @@ class InterviewEngine:
             )
             return
         # Move on: treat the silence as "no answer" after the gentle prompts.
+        if state.intake is not None:
+            async with aclosing(self.intake.silence_move_on(state)) as _relay:
+                async for event in _relay:
+                    yield event
+            return
         state.simplify_attempts = max(state.simplify_attempts, 2)
         special = SpecialResult(SpecialKind.DONT_KNOW, 1.0, "silence")
         directive = compute_directive(
@@ -2163,6 +2265,8 @@ class InterviewEngine:
             if last is not None and not last.delivered:
                 last.interrupted = True  # will be re-spoken on resume
             async with session_scope() as db:
+                if state.intake is not None:
+                    await self.intake.on_pause(state, db)
                 await log_event(
                     db, session_id, "session.paused", {"reason": reason}, elapsed_s=state.elapsed_seconds(now)
                 )
@@ -2199,6 +2303,24 @@ class InterviewEngine:
             state.reconnects += 1
         elapsed = state.elapsed_seconds(now)
         mid_answer = bool(self._partial.get(state.session_id))
+        if state.intake is not None:
+            async with session_scope() as db:
+                await log_event(
+                    db,
+                    state.session_id,
+                    "session.resumed",
+                    {"reconnect": reconnect, "mid_answer": mid_answer, "intake": True},
+                    elapsed_s=elapsed,
+                )
+                await self._save(
+                    state, durable=True, db=db, extra_columns={"reconnect_count": state.reconnects} if reconnect else None
+                )
+            async with aclosing(
+                self.intake.resume_events(state, reconnect=reconnect, mid_answer=mid_answer)
+            ) as _relay:
+                async for event in _relay:
+                    yield event
+            return
         text: str | None = None
         question_id: str | None = None
         regenerate = False
@@ -2319,6 +2441,8 @@ class InterviewEngine:
     async def _closing_text(
         self, state: InterviewState, reason: SessionEndReason, last_answer: str | None, generated: bool
     ) -> tuple[str, str]:
+        if state.intake is not None:
+            return self.intake.closing_text(state, reason), "template"
         if generated and reason in GENERATED_REASONS:
             try:
                 result = await self.ai.llm.structured(
@@ -2336,7 +2460,7 @@ class InterviewEngine:
                     max_attempts=1,
                 )
                 text = " ".join(result.value.speech.split())
-                if acceptable_closing(text):
+                if acceptable_closing(text, report_allowed=report_note(state) is not None):
                     return text, "model"
             except AIError as exc:
                 log.info("engine.closing_template", session_id=state.session_id, reason=type(exc).__name__)
@@ -2359,6 +2483,9 @@ class InterviewEngine:
             state.coding.problems_done += 1
             state.coding.completed = True
             yield CodingEnded(coding_session_id=cs_id, reason="session_ended")
+        if state.intake is not None:
+            for ended in await self.intake.before_closing(state):
+                yield ended
         now = self.now()
         elapsed = state.elapsed_seconds(now)
         text: str | None = None
@@ -2421,7 +2548,9 @@ class InterviewEngine:
                     completed_at=now if not aborted else None,
                 )
             )
-            if not aborted:
+            if state.intake is not None:
+                await self.intake.closing_db(state, db, reason=reason, spoken=bool(text), aborted=aborted)
+            elif not aborted:
                 await enqueue(
                     "scoring.finalize",
                     {"session_id": state.session_id},
@@ -3117,6 +3246,32 @@ class InterviewEngine:
         ) as _relay:
             async for event in _relay:
                 yield event
+
+    # ========================================================= intake activities
+    def intake_activity_active(self, state: InterviewState) -> bool:
+        return state.intake is not None and self.intake.activity_active(state)
+
+    def handle_activity_event(self, session_id: str, event: ActivityEvent) -> EventStream:
+        """Intake activity phase events from the runtime (INTAKE_INTERVIEW.md 7.3). Other rounds: nothing."""
+        return EventStream(self._activity_event(session_id, event))
+
+    async def _activity_event(self, session_id: str, event: ActivityEvent) -> AsyncGenerator[TurnEvent, None]:
+        async with self._session_lock(session_id):
+            state = await self._load(session_id)
+            if state.status in ENDED_STATUSES or state.intake is None:
+                return
+            async with aclosing(self.intake.activity_event(state, event)) as _relay:
+                async for item in _relay:
+                    yield item
+
+    async def intake_jump(self, session_id: str, stage: str) -> InterviewState:
+        """Test hook: move an intake session to the start of ``stage``."""
+        async with self._session_lock(session_id):
+            state = await self._load(session_id)
+            if state.intake is None:
+                raise SessionNotFound(f"session {session_id} is not an intake session")
+            await self.intake.jump(state, stage)
+        return state
 
     # ============================================================ test hooks
     async def advance_clock(self, session_id: str, seconds: float) -> InterviewState:

@@ -130,7 +130,10 @@ def preferred_language(state: InterviewState) -> CodeLanguage:
 def transition_speech(state: InterviewState, *, title: str, minutes: int, ack: str | None) -> str:
     hints = state.round_config.coding.hints_enabled and state.round_config.coding.max_hints > 0
     lead = f"{ack} " if ack else ""
-    first = f"{lead}Let's switch to a short coding exercise: it's called {title}, and the full description is on your screen."
+    first = (
+        f"{lead}Let's move to a short coding exercise; the editor is opening on your screen now. "
+        f"The problem is called {title}, and the full description is right there."
+    )
     second = (
         f"Pick whichever language you're most comfortable with, think out loud as you go, and run the tests whenever "
         f"you're ready; you have about {minutes} minutes"

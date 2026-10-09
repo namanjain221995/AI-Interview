@@ -93,12 +93,14 @@ Background jobs (all idempotent; the `background_jobs` row is the source of trut
 | `memory.summarize` | sessions with more than 12 answers | rolling summary of older turns (8B) |
 | `coding.evaluate` | coding submission or time limit | coding evaluation (35B) on top of sandbox ground truth |
 | `integrity.analyze_frame` | camera/screen frame upload | frame analysis (8B VL) |
-| `scoring.finalize`, `report.generate` | interview end | final scores; candidate and recruiter narratives (35B) |
+| `scoring.finalize`, `report.generate` | interview end | final scores; candidate and recruiter narratives (35B); both skip intake sessions (`report.generate` hands over to `intake.report`) |
+| `intake.evaluate` | intake interview end (engine closing, delay 30 s; dedupe `intake.evaluate:{sid}:initial`), staff re-evaluation (`…:v{n}`) | waits for settled activity transcripts (re-enqueues itself 10 s, at most 12 times), deterministic Drill A/B metrics, seven schema-validated evaluator calls (35B, `INTAKE_EVAL_CONCURRENCY` = 2, checkpointed per evaluator), validator, weighted total + band, review items, generic `scores` rows; concurrency 2, timeout 900 s |
+| `intake.report` | end of `intake.evaluate`; regenerate on an intake session | training plan (one 35B call, deterministic fallback), the `reports` row (`type = recruiter`, `content.kind = "intake"`), HTML artifact, session `COMPLETING -> COMPLETED`; concurrency 2, timeout 600 s |
 | `retention.sweep` | hourly | deletes expired media |
 | `recording.finalize` | the browser finished a recording part, `recording.sweep` (every 2 minutes: session ended, page reloaded), staff "Process now" | none: joins the part's MediaRecorder segments and remuxes them with ffmpeg (stream copy) into one seekable file |
 
 Session-scoped results are announced on the Redis pub/sub channel `session:{id}:bus` (`evaluation.ready`,
-`coding.evaluated`, `integrity.event`, `report.ready`, ...) so the live runtime and the staff live monitor update
+`coding.evaluated`, `integrity.event`, `intake.evaluated`, `report.ready`, ...) so the live runtime and the staff live monitor update
 without polling. Details: [INTERVIEW_ENGINE.md](INTERVIEW_ENGINE.md), [AI_PIPELINE.md](AI_PIPELINE.md).
 
 ## Data stores

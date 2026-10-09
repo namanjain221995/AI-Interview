@@ -74,6 +74,7 @@ from app.schemas.api.portal import (
     IntegrityEventsResponse,
     IntegrityWarningOut,
     PortalCandidate,
+    PortalIntakeBrief,
     PortalInterview,
     PortalJob,
     PortalMe,
@@ -96,6 +97,7 @@ from app.services.integrity.contracts import Disclosure
 from app.services.recordings.constants import FINALIZE_JOB
 from app.services.recordings.segments import SegmentTiming, accept_segment, base_type, uploads_open
 from app.services.recordings.sweep import finalize_dedupe_key
+from app.services.reports.queries import resolve_candidate_report_mode
 from app.services.storage.signing import signed_url_with_expiry
 
 log = get_logger(__name__)
@@ -271,6 +273,7 @@ async def _steps_completed(db: AsyncSession, interview: Interview) -> list[str]:
     resume = await _latest_resume(db, interview)
     if resume is not None and resume.status not in (ResumeStatus.FAILED.value, ResumeStatus.REJECTED.value):
         steps.append("resume")
+    steps += await _intake_steps(db, interview)
     if interview.round_id is not None:
         steps.append("round")
     if isinstance(interview.system_check, dict) and interview.system_check.get("passed"):
@@ -377,6 +380,50 @@ async def _open_link_resume_guard(db: AsyncSession, interview: Interview) -> Non
         log.warning("portal.open_link_guard_failed", interview_id=str(interview.id), error=type(exc).__name__)
 
 
+async def _intake_steps(db: AsyncSession, interview: Interview) -> list[str]:
+    """Intake-only journey steps (``details``, ``resume-review``); never breaks the portal."""
+    try:
+        from app.services.intake.access import intake_round_of_interview, intake_steps
+
+        if await intake_round_of_interview(db, interview) is None:
+            return []
+        async with db.begin_nested():
+            return await intake_steps(db, interview)
+    except Exception as exc:  # noqa: BLE001 - the intake layer must never break the portal
+        log.warning("portal.intake_steps_failed", interview_id=str(interview.id), error=type(exc).__name__)
+        return []
+
+
+async def _intake_brief(db: AsyncSession, interview: Interview) -> Any | None:
+    """``PortalInterview.intake`` data for intake interviews; never breaks the portal."""
+    try:
+        from app.services.intake.access import intake_round_of_interview, portal_brief
+
+        if await intake_round_of_interview(db, interview) is None:
+            return None
+        async with db.begin_nested():
+            return await portal_brief(db, interview)
+    except Exception as exc:  # noqa: BLE001 - the intake layer must never break the portal
+        log.warning("portal.intake_brief_failed", interview_id=str(interview.id), error=type(exc).__name__)
+        return None
+
+
+async def _intake_start_guard(db: AsyncSession, interview: Interview) -> None:
+    """Intake interviews start only after the résumé, details and résumé-review steps (409 ``intake_*``,
+    ``intake_disabled``); any other failure of the intake layer is only logged."""
+    try:
+        from app.services.intake.access import enforce_start_guard, intake_round_of_interview
+
+        if await intake_round_of_interview(db, interview) is None:
+            return
+        async with db.begin_nested():
+            await enforce_start_guard(db, interview)
+    except AppError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the intake layer must never break the portal
+        log.warning("portal.intake_guard_failed", interview_id=str(interview.id), error=type(exc).__name__)
+
+
 async def _open_link_resume_uploaded(db: AsyncSession, interview: Interview, resume: Any) -> None:
     """Copy the resume hash to an open-link registration and flag duplicates (never fails the upload)."""
     if resume is None:
@@ -438,6 +485,7 @@ async def portal_interview(
     rounds = await _offered_rounds(db, interview)
     latest = await _latest_session(db, interview.id)
     steps = await _steps_completed(db, interview)
+    intake = await _intake_brief(db, interview)
     return PortalInterview(
         id=interview.id,
         status=InterviewStatus(interview.status)
@@ -461,7 +509,15 @@ async def portal_interview(
         latest_session=PortalSessionBrief(id=latest.id, status=_session_status(latest))
         if latest is not None
         else None,
-        requires_resume="resume" not in steps,
+        requires_resume="resume" not in steps and (intake is None or intake.resume_required),
+        intake=PortalIntakeBrief(
+            intake_id=intake.intake_id,
+            title=intake.title,
+            estimated_minutes=intake.estimated_minutes,
+            presence=intake.presence,
+        )
+        if intake is not None
+        else None,
     )
 
 
@@ -811,6 +867,7 @@ async def portal_create_session(
     if interview.allow_round_selection and interview.round_id is None:
         raise Conflict("Please choose a round first.", code="round_required")
     await _open_link_resume_guard(db, interview)
+    await _intake_start_guard(db, interview)
     service = deps.get_session_service()
     session = await _call(
         service.create_or_resume, db, interview_id=interview.id, round_id=interview.round_id
@@ -853,6 +910,7 @@ async def portal_session(
     except ServiceUnavailable:
         details = {}
     report = await _released_report(db, row.id)
+    report_mode = await resolve_candidate_report_mode(db, row)
     return PortalSession(
         id=row.id,
         interview_id=row.interview_id,
@@ -864,6 +922,7 @@ async def portal_session(
         ended_at=row.ended_at,
         end_reason=row.end_reason,
         candidate_report_available=report is not None,
+        candidate_report_mode=report_mode.value,
         details={k: v for k, v in details.items() if k not in CANDIDATE_REPORT_HIDDEN_KEYS},
     )
 

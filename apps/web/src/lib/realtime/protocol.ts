@@ -167,6 +167,8 @@ export type ClientMessage =
   | { type: "code.hint_request"; coding_session_id: string }
   | { type: "code.language"; coding_session_id: string; language: CodeLanguage }
   | { type: "integrity.events"; events: ClientIntegrityEvent[] }
+  /** Intake activities: end the current phase early ("Finish reading", "I'm ready", "Start now", "I'm done"). */
+  | { type: "activity.finish"; activity_id: string; phase: ActivityPhase }
   | { type: "heartbeat"; t: number }
   | {
       type: "client.error";
@@ -240,6 +242,100 @@ export interface SessionStateMsg extends ServerBase {
   integrity: Record<string, unknown>;
   coding?: CodingState | null;
   avatar_state: AvatarState;
+  /** Intake interviews only: stage progress and a content-free activity snapshot. */
+  intake?: IntakeStateMsg | null;
+}
+
+// ------------------------------------------------- intake activities (INTAKE_INTERVIEW.md §7.1)
+
+export type ActivityKind = "reading_aloud" | "read_relay" | "topic_card";
+export type ActivityPhase = "read" | "relay" | "prepare" | "speak";
+export type ActivityEndReason = "completed" | "finished_early" | "deadline" | "interrupted" | "skipped" | "session_ended";
+export type IntakeStageStatus = "pending" | "current" | "done" | "incomplete";
+
+/** Passage or topic-card content. Only ever sent in the phase message that may show it. */
+export interface ActivityContentMsg {
+  title: string;
+  /** Passage text, exact kit paragraphs. */
+  paragraphs?: string[] | null;
+  /** Topic card: exactly four points. */
+  bullets?: string[] | null;
+  /** Topic card line, e.g. "Speak for about 2 minutes, connecting all four points below ...". */
+  instruction?: string | null;
+}
+
+export interface ActivityPhasePlanMsg {
+  phase: ActivityPhase;
+  duration_ms: number;
+  /** The microphone is captured in this phase (reading, relay, speaking). */
+  capture: boolean;
+}
+
+/** Armed: waiting for the instruction utterance to finish. Never carries content. Non-replayable. */
+export interface ActivityStartMsg extends ServerBase {
+  type: "activity.start";
+  activity_id: string;
+  kind: ActivityKind;
+  stage: "reading" | "topic";
+  /** Passage or card title (no body text). */
+  title: string;
+  phases: ActivityPhasePlanMsg[];
+  status: "armed";
+  attempt: number;
+  resumed: boolean;
+}
+
+/** A phase started or ended. `remaining_ms` is authoritative when sent (pauses excluded). Non-replayable. */
+export interface ActivityPhaseMsg extends ServerBase {
+  type: "activity.phase";
+  activity_id: string;
+  kind: ActivityKind;
+  phase: ActivityPhase;
+  status: "running" | "ended";
+  duration_ms: number;
+  remaining_ms: number;
+  capture: boolean;
+  can_finish: boolean;
+  content?: ActivityContentMsg | null;
+  /** Remove any shown content now (the read-and-relay passage at 30 s). */
+  hide_content: boolean;
+  /** Epoch ms when sent (diagnostics only; the client counts from receipt). */
+  server_time_ms: number;
+}
+
+export interface ActivityEndMsg extends ServerBase {
+  type: "activity.end";
+  activity_id: string;
+  kind: ActivityKind;
+  reason: ActivityEndReason;
+}
+
+export interface IntakeStageMsg {
+  key: string;
+  number: number;
+  /** Candidate-safe title ("Reading exercise"). */
+  title: string;
+  status: IntakeStageStatus;
+}
+
+/** Inside session.state: never any content. */
+export interface ActivitySnapshotMsg {
+  activity_id: string;
+  kind: ActivityKind;
+  phase: ActivityPhase;
+  status: "armed" | "running" | "ended";
+  remaining_ms?: number | null;
+}
+
+export interface IntakeStateMsg {
+  stage: string;
+  stage_number: number;
+  stage_title: string;
+  stages: IntakeStageMsg[];
+  activity?: ActivitySnapshotMsg | null;
+  answer_mode: "standard" | "long";
+  /** UI hint only (90 for the self-introduction). */
+  soft_limit_s?: number | null;
 }
 
 export interface TurnStateMsg extends ServerBase {
@@ -408,7 +504,10 @@ export type ServerMessage =
   | NoticeMsg
   | ErrorMsg
   | SessionEndedMsg
-  | HeartbeatAckMsg;
+  | HeartbeatAckMsg
+  | ActivityStartMsg
+  | ActivityPhaseMsg
+  | ActivityEndMsg;
 
 export function packMicFrame(seq: number, pcm16: Int16Array): ArrayBuffer {
   const buf = new ArrayBuffer(FRAME_HEADER_BYTES + pcm16.byteLength);

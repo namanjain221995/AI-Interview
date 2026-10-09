@@ -8,6 +8,7 @@ import { CandidateShellLayout } from "@/components/layout/CandidateShell";
 import { TooltipProvider } from "@/components/ui/Tooltip";
 import { api, ApiError } from "@/lib/api";
 
+import CandidateDashboardPage from "../pages/CandidateDashboardPage";
 import CandidateReportPage from "../pages/CandidateReportPage";
 import CompletePage from "../pages/CompletePage";
 import ConsentPage from "../pages/ConsentPage";
@@ -48,6 +49,7 @@ const DISCLOSURE = {
 };
 
 let interviewState = { ...INTERVIEW };
+let sessionState: Record<string, unknown> = {};
 
 function renderAt(path: string, routes: Array<{ path: string; Component: ComponentType }>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -71,6 +73,7 @@ function renderAt(path: string, routes: Array<{ path: string; Component: Compone
 
 beforeEach(() => {
   interviewState = { ...INTERVIEW, steps_completed: [] };
+  sessionState = { id: "s1", interview_id: "i1", status: "completed", candidate_report_available: true };
   sessionStorage.clear();
   vi.spyOn(api, "get").mockImplementation(async (path: string) => {
     if (path.startsWith("/candidate-access/")) return { organization_name: "Demo Corp", job_title: "Senior DevOps Engineer", round_name: "Combined AI Round", candidate_first_name: "Jane", requires_access_code: false, expires_at: "2026-10-09T12:00:00Z", status: "invited" } as never;
@@ -78,7 +81,7 @@ beforeEach(() => {
     if (path === "/portal/interviews/i1") return interviewState as never;
     if (path === "/portal/interviews/i1/disclosure") return DISCLOSURE as never;
     if (path === "/portal/interviews/i1/resume") throw new ApiError({ status: 404, code: "not_found", message: "No resume" });
-    if (path === "/portal/sessions/s1") return { id: "s1", interview_id: "i1", status: "completed", candidate_report_available: true } as never;
+    if (path === "/portal/sessions/s1") return sessionState as never;
     if (path === "/portal/sessions/s1/report")
       return {
         status: "ready",
@@ -239,5 +242,46 @@ describe("Completion and report", () => {
     expect(screen.getByTestId("report-overall-score")).toHaveTextContent("74 out of 100");
     expect(screen.getByText("Practise quoting baselines.")).toBeInTheDocument();
     expect(screen.getByText("FinOps")).toBeInTheDocument();
+  });
+
+  it("hides every feedback element when the session's report mode is never (the session wins over the invitation)", async () => {
+    interviewState = { ...INTERVIEW, organization: { name: "TechSara Solutions" }, status: "completed", steps_completed: ["consent", "resume", "system_check"] };
+    sessionState = { id: "s1", interview_id: "i1", status: "completed", candidate_report_available: false, candidate_report_mode: "never" };
+    const router = renderAt("/candidate/i1/complete?session=s1", [
+      { path: ":interviewId/complete", Component: CompletePage },
+      { path: ":interviewId/report", Component: CandidateReportPage },
+    ]);
+    const page = await screen.findByTestId("complete-page");
+    await waitFor(() => expect(page).toHaveTextContent("TechSara Solutions will review it"));
+    await waitFor(() => expect(vi.mocked(api.get)).toHaveBeenCalledWith("/portal/sessions/s1"));
+    expect(screen.queryByTestId("feedback-card")).not.toBeInTheDocument();
+    expect(page).not.toHaveTextContent(/feedback|preparing/i);
+    expect(screen.queryByTestId("report-link")).not.toBeInTheDocument();
+    // Branding: the TechSara mark next to the organization name, never initials.
+    const header = document.querySelector("header")!;
+    expect(header.querySelector("[data-brand-mark]")).not.toBeNull();
+    expect(header).toHaveTextContent("TechSara Solutions");
+    // A direct visit to the report route gets a neutral next-steps page.
+    await router.navigate("/candidate/i1/report?session=s1");
+    expect(await screen.findByTestId("report-not-shared")).toHaveTextContent("The hiring team will contact you");
+    expect(screen.queryByTestId("candidate-report")).not.toBeInTheDocument();
+    expect(vi.mocked(api.get)).not.toHaveBeenCalledWith("/portal/sessions/s1/report");
+  });
+
+  it("keeps the dashboard free of feedback promises when the invitation shares none", async () => {
+    interviewState = { ...INTERVIEW, policy: { ...INTERVIEW.policy, candidate_report_mode: "never" }, status: "completed", latest_session: { id: "s1", status: "completed" } } as never;
+    sessionState = { id: "s1", interview_id: "i1", status: "completed", candidate_report_available: false, candidate_report_mode: "never" };
+    renderAt("/candidate", [{ path: "", Component: CandidateDashboardPage }]);
+    expect(await screen.findByText("Senior DevOps Engineer")).toBeInTheDocument();
+    await waitFor(() => expect(vi.mocked(api.get)).toHaveBeenCalledWith("/portal/sessions/s1"));
+    expect(document.body).not.toHaveTextContent(/feedback/i);
+    expect(screen.getByRole("link", { name: "What happens next" })).toBeInTheDocument();
+  });
+
+  it("still promises feedback when the organisation shares it immediately", async () => {
+    interviewState = { ...INTERVIEW, status: "completed", steps_completed: ["consent", "resume", "system_check"] };
+    sessionState = { id: "s1", interview_id: "i1", status: "completed", candidate_report_available: false, candidate_report_mode: "immediate" };
+    renderAt("/candidate/i1/complete?session=s1", [{ path: ":interviewId/complete", Component: CompletePage }]);
+    expect(await screen.findByTestId("feedback-card")).toHaveTextContent("Preparing");
   });
 });

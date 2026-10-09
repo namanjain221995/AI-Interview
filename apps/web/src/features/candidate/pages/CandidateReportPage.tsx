@@ -1,4 +1,4 @@
-import { ArrowLeft, BookOpen, Download, Printer } from "lucide-react";
+import { ArrowLeft, BookOpen, Download, Mail, Printer } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useParams } from "react-router";
 
@@ -16,7 +16,7 @@ import type { CodeLanguage } from "@/lib/types";
 
 import type { CandidateReportView } from "../api";
 import { JourneyBoundary, JourneyError, usePortalInterview } from "../hooks";
-import { isReportReady, reportMode, useCandidateReport, useSessionId } from "../reportAccess";
+import { isReportReady, useCandidateReport, useReportMode, useSessionId } from "../reportAccess";
 
 function Section({ title, children, id }: { title: string; children: ReactNode; id: string }) {
   return (
@@ -30,17 +30,40 @@ function Section({ title, children, id }: { title: string; children: ReactNode; 
 }
 
 export default function CandidateReportPage() {
-  useDocumentTitle("Your interview feedback");
   const { interviewId = "" } = useParams();
   const interview = usePortalInterview(interviewId);
   const data = interview.data;
-  useCandidateChrome({ orgName: data?.organizationName || null, subtitle: data?.job.title || null, hideStepper: true, width: "wide" });
+  useCandidateChrome({ orgName: data?.organizationName || null, orgLogoUrl: data?.organizationLogoUrl ?? null, subtitle: data?.job.title || null, hideStepper: true, width: "wide" });
   const sessionId = useSessionId(interviewId, data);
-  const report = useCandidateReport(sessionId, { poll: false });
+  const { mode, pending: modePending } = useReportMode(data, sessionId);
+  // Feedback is not shared (the platform default): a neutral next-steps page, no report fetch.
+  const noFeedback = Boolean(data) && !modePending && mode === "never";
+  useDocumentTitle(noFeedback ? "Next steps" : "Your interview feedback");
+  const report = useCandidateReport(data && !modePending && mode !== "never" ? sessionId : null, { poll: false });
+  const org = data?.organizationName || "The hiring team";
 
   return (
     <JourneyBoundary query={interview}>
-      {report.isPending && sessionId ? (
+      {modePending ? (
+        <div className="grid gap-6" aria-busy="true" aria-label="Loading">
+          <Skeleton className="h-10 w-2/3" />
+          <SkeletonText lines={4} />
+        </div>
+      ) : noFeedback ? (
+        <div data-testid="report-not-shared">
+          <EmptyState
+            bordered
+            icon={<Mail />}
+            title="The hiring team will contact you"
+            description={`Thank you for completing your interview. ${org} reviews every interview and will contact you directly about next steps.`}
+            actions={
+              <Button variant="outline" asChild leftIcon={<ArrowLeft />}>
+                <Link to={`/candidate/${interviewId}/complete`}>Back</Link>
+              </Button>
+            }
+          />
+        </div>
+      ) : report.isPending && sessionId ? (
         <div className="grid gap-6" aria-busy="true" aria-label="Loading your feedback">
           <Skeleton className="h-10 w-2/3" />
           <SkeletonText lines={4} />
@@ -52,13 +75,11 @@ export default function CandidateReportPage() {
         <EmptyState
           bordered
           icon={<BookOpen />}
-          title={reportMode(data) === "never" ? "Feedback isn't shared for this interview" : "Your feedback isn't available yet"}
+          title="Your feedback isn't available yet"
           description={
-            reportMode(data) === "immediate"
+            mode === "immediate"
               ? "It's still being prepared. This usually takes a few minutes after the interview ends."
-              : reportMode(data) === "never"
-                ? `${data?.organizationName || "The hiring team"} doesn't share individual interview feedback.`
-                : `It's shared after ${data?.organizationName || "the hiring team"} reviews your interview.`
+              : `It's shared after ${data?.organizationName || "the hiring team"} reviews your interview.`
           }
           actions={
             <Button variant="outline" asChild leftIcon={<ArrowLeft />}>

@@ -44,8 +44,8 @@ async def test_seed_core_is_idempotent(test_database, _db_cleanup):
     assert set(first["users"]) == {"SUPER_ADMIN", "ADMIN", "RECRUITER", "INTERVIEWER"}
     async with session_scope() as db:
         org = await db.scalar(select(Organization).where(Organization.slug == DEMO_ORG_SLUG))
-        assert org is not None and org.name == "Demo Corp"
-        assert org.settings["candidate_report_mode"] == "after_review"
+        assert org is not None and org.name == "TechSara Solutions"
+        assert org.settings["candidate_report_mode"] == "never"
         roles = {u.role for u in (await db.scalars(select(User).where(User.organization_id == org.id))).all()}
         assert roles == {"SUPER_ADMIN", "ADMIN", "RECRUITER", "INTERVIEWER"}
 
@@ -94,7 +94,7 @@ async def test_seed_cli_core_only_hides_credentials(test_database, _db_cleanup):
     )
     assert result.returncode == 0, result.stderr[-2000:]
     password = get_settings().seed_password.get_secret_value()
-    assert "Demo Corp" in result.stdout and password not in result.stdout + result.stderr
+    assert "TechSara Solutions" in result.stdout and password not in result.stdout + result.stderr
     shown = await asyncio.to_thread(
         subprocess.run,
         [sys.executable, "-m", "app.seed", "--core-only", "--print-credentials"],

@@ -14,11 +14,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domain.enums import IntegrityEventType, InterviewStatus, SessionEndReason, SessionStatus
 from app.schemas.api.common import Email
+from app.schemas.intake import PresenceMode
 from app.schemas.realtime import ClientIntegrityEvent
 
+# "details" and "resume-review" are intake-only journey steps (INTAKE_INTERVIEW.md 10.4).
 CandidateStepKey = Literal[
-    "welcome", "instructions", "consent", "resume", "round", "system-check", "interview", "complete", "report"
-]
+    "welcome", "instructions", "consent", "resume", "details", "resume-review", "round", "system-check",
+    "interview", "complete", "report",
+]  # fmt: skip
 
 
 class _In(BaseModel):
@@ -47,6 +50,9 @@ class InviteInfo(_Out):
     # Planned length of the round ("About 30 minutes"); None when the candidate
     # still chooses between rounds of different lengths.
     duration_minutes: int | None = None
+    # Additive (intake): the invited round's type, so /i/:token can show intake copy
+    # before verification; None while the candidate still chooses a round.
+    round_type: str | None = None
 
 
 class CandidateVerifyRequest(_In):
@@ -105,6 +111,15 @@ class PortalSessionBrief(_Out):
     status: SessionStatus
 
 
+class PortalIntakeBrief(_Out):
+    """``PortalInterview.intake``: present for intake interviews (switches the candidate journey)."""
+
+    intake_id: uuid.UUID
+    title: str
+    estimated_minutes: int
+    presence: PresenceMode
+
+
 class PortalInterview(_Out):
     id: uuid.UUID
     status: InterviewStatus
@@ -119,6 +134,8 @@ class PortalInterview(_Out):
     interviewer_name: str | None = None
     latest_session: PortalSessionBrief | None = None
     requires_resume: bool = True
+    # Additive (intake): set for intake interviews only.
+    intake: PortalIntakeBrief | None = None
 
 
 class DisclosureItemOut(_Out):
@@ -254,6 +271,9 @@ class PortalSession(_Out):
     ended_at: datetime | None = None
     end_reason: SessionEndReason | str | None = None
     candidate_report_available: bool = False
+    # Additive: the session's candidate feedback policy (immediate | after_review |
+    # never); the portal hides every feedback element when it is "never".
+    candidate_report_mode: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
 
 

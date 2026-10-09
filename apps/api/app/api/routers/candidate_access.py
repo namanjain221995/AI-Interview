@@ -126,6 +126,7 @@ async def invite_info(token: str, db: DbSession) -> InviteInfo:
         status=status,
         interviewer_name=policy.avatar.interviewer_name,
         duration_minutes=await _planned_minutes(db, interview, round_),
+        round_type=round_.round_type if round_ else None,
     )
 
 
@@ -141,6 +142,10 @@ def round_minutes(round_: Round) -> int | None:
 
 
 async def _planned_minutes(db: AsyncSession, interview: Interview, round_: Round | None) -> int | None:
+    if round_ is not None and round_.round_type == "intake":
+        intake_minutes = await _intake_minutes(db, interview)
+        if intake_minutes is not None:
+            return intake_minutes
     if round_ is not None:
         return round_minutes(round_)
     # Round chosen by the candidate: only a duration every selectable round shares.
@@ -151,6 +156,18 @@ async def _planned_minutes(db: AsyncSession, interview: Interview, round_: Round
     ).all()
     durations = {round_minutes(r) for r in rounds}
     return durations.pop() if len(durations) == 1 else None
+
+
+async def _intake_minutes(db: AsyncSession, interview: Interview) -> int | None:
+    """Planned minutes frozen in the intake invitation (None when there is no intake row yet)."""
+    try:
+        from app.services.intake.access import intake_for_interview, parse_settings
+
+        row = await intake_for_interview(db, interview.id)
+        return parse_settings(row).duration_minutes if row is not None else None
+    except Exception as exc:  # noqa: BLE001 - the intake layer must never break invite info
+        log.warning("candidate_access.intake_minutes_failed", error=type(exc).__name__)
+        return None
 
 
 async def _lock_remaining(interview_id: uuid.UUID) -> int:

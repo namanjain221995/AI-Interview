@@ -275,7 +275,7 @@ async def test_load_demo_jobs_creates_jobs_rounds_and_requirements(
         assert {j.title for j in jobs} == {j.title for j in catalog.jobs}
         by_title = {j.title: j for j in jobs}
         devops = by_title["Senior DevOps Engineer"]
-        assert devops.candidate_report_mode == "immediate"
+        assert devops.candidate_report_mode == "never"  # owner: candidates never see reports
         assert devops.created_by_id == user_id
         IntegrityPolicy.model_validate(devops.integrity_settings)
         RecordingPolicy.model_validate(devops.recording_settings)
@@ -340,12 +340,13 @@ async def test_seed_runner_steps(seed_sessions: Sessions, make_org: MakeOrg) -> 
     async with seed_sessions() as session:
         demo_ctx = await demo_jobs_seed_step(session, {"organization_id": org_id, "recruiter_id": user_id})
         await session.commit()
-    assert demo_ctx["demo_jobs_created"] == 4
+    assert demo_ctx["demo_jobs_created"] == 5
     assert set(demo_ctx["demo_job_ids"]) == {
         "senior_devops_engineer",
         "backend_engineer_python",
         "frontend_engineer_react",
         "ml_engineer_llm",
+        "ai_ml_training_intake",
     }
 
 

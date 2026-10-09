@@ -29,6 +29,7 @@ from app.domain.enums import (
 )
 from app.schemas.ai import ClaimToVerify, InterviewPlan
 from app.schemas.rounds import RoundConfig
+from app.services.intake.state import IntakeState
 
 
 class _State(BaseModel):
@@ -306,6 +307,8 @@ class InterviewState(_State):
     deviations: int = 0
     fallbacks_used: int = 0
     reconnects: int = 0
+    # Intake mode (round_type intake; INTAKE_INTERVIEW.md 6.7): None for every other round type.
+    intake: IntakeState | None = None
 
     # ------------------------------------------------------------------ time
     def elapsed_seconds(self, now: datetime | None = None) -> float:

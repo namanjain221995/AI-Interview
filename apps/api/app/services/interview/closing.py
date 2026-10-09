@@ -9,6 +9,7 @@ termination, technical failure). Closings never evaluate the candidate."""
 from __future__ import annotations
 
 import hashlib
+import re
 
 from app.domain.enums import CandidateReportMode, SessionEndReason
 from app.services.interview.prompts import CLOSING
@@ -44,6 +45,11 @@ GENERATED_REASONS = frozenset(
 
 def _pick(options: list[str], seed: str) -> str:
     return options[int(hashlib.sha1(seed.encode()).hexdigest(), 16) % len(options)]  # noqa: S324 - variation only
+
+
+#: A closing that promises the candidate feedback / a report / results (only allowed when the
+#: candidate report mode is ``immediate``; otherwise the template closing is used).
+_REPORT_PROMISE = re.compile(r"\b(?:feedback|report|summary|scorecard|results?|portal)\b", re.IGNORECASE)
 
 
 def report_note(state: InterviewState) -> str | None:
@@ -95,12 +101,14 @@ def closing_prompt(state: InterviewState, reason: SessionEndReason, last_answer:
     )
 
 
-def acceptable_closing(text: str) -> bool:
+def acceptable_closing(text: str, *, report_allowed: bool = False) -> bool:
     from app.services.interview.speech import style_issues
 
     lowered = text.lower()
     if "?" in text:
         return False
+    if not report_allowed and _REPORT_PROMISE.search(text):
+        return False  # candidate_report_mode is not "immediate": never promise feedback or a report
     if any(issue in ("praise", "critique") for issue in style_issues(text)):
         return False  # "Thank you for that detailed explanation" judges the candidate
     if len(text.split()) > 80 or len(text.split()) < 8:

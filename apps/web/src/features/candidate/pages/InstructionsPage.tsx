@@ -6,6 +6,8 @@ import { useDocumentTitle } from "@/lib/hooks";
 import { formatList } from "@/lib/format";
 
 import { DEFAULT_INTEGRITY, DEFAULT_RECORDING, monitoringSummary } from "@/features/integrity/policy";
+import { INTAKE_INSTRUCTIONS_LEDE, INTAKE_INSTRUCTIONS_TITLE, IntakeInstructions } from "@/features/intake/candidate/components/IntakeInstructions";
+import { isIntakeInterview } from "@/features/intake/candidate/journey";
 
 import { StepFooter, StepHeader } from "../components/StepLayout";
 import { JourneyBoundary, useJourney, type JourneyContext } from "../hooks";
@@ -14,11 +16,16 @@ import { selectedRound } from "../round";
 export default function InstructionsPage() {
   useDocumentTitle("How the interview works");
   const { query, ctx } = useJourney("instructions");
+  const intake = ctx ? isIntakeInterview(ctx.interview) : false;
   return (
     <div>
-      <StepHeader title="How the interview works" lede={ctx ? (selectedRound(ctx.interview)?.instructions ?? DEFAULT_LEDE) : DEFAULT_LEDE} />
+      {intake ? (
+        <StepHeader title={INTAKE_INSTRUCTIONS_TITLE} lede={INTAKE_INSTRUCTIONS_LEDE} />
+      ) : (
+        <StepHeader title="How the interview works" lede={ctx ? (selectedRound(ctx.interview)?.instructions ?? DEFAULT_LEDE) : DEFAULT_LEDE} />
+      )}
       <div className="mt-10">
-        <JourneyBoundary query={query}>{ctx ? <Instructions ctx={ctx} /> : null}</JourneyBoundary>
+        <JourneyBoundary query={query}>{ctx ? intake ? <IntakeInstructions ctx={ctx} /> : <Instructions ctx={ctx} /> : null}</JourneyBoundary>
       </div>
     </div>
   );

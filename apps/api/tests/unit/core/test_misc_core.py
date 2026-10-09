@@ -66,7 +66,7 @@ def test_audit_details_are_json_safe_and_redacted():
     assert details["color"] == "red" and details["raw"] == "<2 bytes>"
     assert details["nested"]["refresh_token"] == "[redacted]" and details["nested"]["password_hash"] == "[redacted]"
     assert details["nested"]["ok"] == [1, 2, [3]]
-    assert details["settings"]["candidate_report_mode"] == "after_review"
+    assert details["settings"]["candidate_report_mode"] == "never"
     assert len(details["long"]) < 2100 and len(details["items"]) == 100
     assert sanitize_details(None) == {}
 

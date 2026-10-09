@@ -13,7 +13,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Select } from "@/components/ui/Select";
 import { useDebounce, useDocumentTitle } from "@/lib/hooks";
 import { labelFor, RECOMMENDATION_LABELS, ROUND_TYPE_LABELS } from "@/lib/labels";
-import type { Recommendation } from "@/lib/types";
+import type { Recommendation, RoundType } from "@/lib/types";
 
 import { useJobOptions, useJobRounds, useSessionList } from "../api/hooks";
 import type { SessionFilters } from "../api/types";
@@ -121,6 +121,15 @@ export function SessionsListView() {
         />
         <Select
           size="sm"
+          className="w-full sm:w-52"
+          aria-label="Filter by round type"
+          data-testid="sessions-filter-round-type"
+          value={state.filters.round_type?.[0] ?? ALL}
+          onValueChange={(v) => update({ filters: { round_type: v === ALL ? undefined : [v as RoundType] } })}
+          options={[{ value: ALL, label: "All round types" }, ...(Object.keys(ROUND_TYPE_LABELS) as RoundType[]).map((t) => ({ value: t, label: ROUND_TYPE_LABELS[t] }))]}
+        />
+        <Select
+          size="sm"
           className="w-full sm:w-60"
           aria-label="Filter by AI suggestion"
           value={state.filters.recommendation ?? ALL}
@@ -140,7 +149,7 @@ export function SessionsListView() {
             leftIcon={<X />}
             onClick={() => {
               setSearch("");
-              update({ filters: { job_id: undefined, round_id: undefined, recommendation: undefined, from: undefined, to: undefined, q: undefined } });
+              update({ filters: { job_id: undefined, round_id: undefined, round_type: undefined, recommendation: undefined, from: undefined, to: undefined, q: undefined } });
             }}
           >
             Clear filters

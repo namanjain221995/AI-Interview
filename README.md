@@ -13,6 +13,7 @@ Written for: engineers who operate, extend or review the platform.
 |---|---|
 | Open interview links | One shareable link per job and round(s) for many candidates (campus drives, job posts): configurable registration form with a fairness guard (protected-trait fields are blocked), one attempt per person (same email/phone blocked; same device/resume/network flagged for review), personal "continue later" link, multi-round progression (immediately or after recruiter review), registrations table with advance/retake/CSV export, QR code |
 | Candidate journey | Invite link or open link -> identity check (email + optional access code) -> consent to a policy-specific disclosure -> resume upload (PDF, DOCX, TXT, PNG/JPEG, scanned PDF via OCR; a quick profile shows in under a second, the full AI profile in ~15-20 s) -> optional round selection -> system check -> live interview -> candidate report once released |
+| Intake interviews | Training-program screening (`round_type: intake`): single or batch invitations (links shown once), a candidate details form and résumé check, then a 35-50 minute voice interview in seven fixed parts with a read-aloud drill, a 30-second read-and-relay drill (the server hides the passage) and a timed topic card; seven weighted competency scores with quoted evidence and an advisory band; reviewers record one of five decisions with a rationale; work-authorisation answers never reach a model or a score ([guide](docs/INTAKE_INTERVIEW_GUIDE.md)) |
 | AI interviewer | Adaptive turn engine: a deterministic policy directive decides what is allowed (time, coverage, difficulty, claims to verify, contradictions, coding), the 35B model phrases one question per turn; speech streams to TTS while the model is still generating |
 | Voice loop | Browser AudioWorklet (16 kHz PCM) over one WebSocket -> Silero VAD -> pause-delimited Whisper segments -> adaptive end-of-turn -> Kokoro TTS with viseme timings -> audio-reactive interviewer presence; barge-in, reconnect and resume |
 | Interviewer presence | Client-side animated voice orb (three.js shader, three palettes) that breathes when idle, ripples with the candidate's voice while listening, swirls while thinking and pulses in sync with the interviewer's audio (playback loudness + visemes on the audio clock); 2D and text fallbacks; a realistic 3D avatar (CC0 MPFB model with viseme lip-sync) stays selectable |
@@ -62,7 +63,7 @@ Everything except the edge (`:3200`, `:3443`) listens on `127.0.0.1` only. Port 
 
 ## Development credentials
 
-`make seed` creates four staff accounts in the organisation "Demo Corp":
+`make seed` creates four staff accounts in the organisation "TechSara Solutions":
 
 | Role | Email (overridable with `SEED_*_EMAIL` in `.env`) |
 |---|---|
@@ -91,7 +92,7 @@ services/sandbox/    code execution service + per-language runtime images
 infra/               Caddy edge, Prometheus rules and tests, Grafana dashboards, Postgres init
 samples/             validated catalog: competencies, round templates, question bank, coding problems, demo jobs, resumes
 scripts/             setup, asset download, backups and restores, smoke test, edge CA export
-tests/e2e/           Playwright end-to-end test of the full candidate journey
+tests/e2e/           Playwright end-to-end tests (full voice interview; intake interview on a mock-AI stack)
 docs/design/         design-time contracts (CONTRACTS, ENGINE_DESIGN, REALTIME_DESIGN, UI_TEST_IDS)
 ```
 
@@ -105,7 +106,8 @@ docs/design/         design-time contracts (CONTRACTS, ENGINE_DESIGN, REALTIME_D
 | Live model tests | `make test-live` (`-m live`) | the local model endpoints; they are shared with production, keep runs small |
 | Coding sandbox tests | `cd services/sandbox && uv run pytest` (unit); `uv run pytest -m integration tests/integration` | integration: running sandbox + runtime images |
 | TTS service tests | `cd services/tts && uv run pytest`; `uv run pytest -m live` | live: running tts service |
-| End-to-end | `make test-e2e` (Playwright in `tests/e2e`, base URL `E2E_BASE_URL`, default `http://localhost:3200`) | full stack, `ENABLE_TEST_HOOKS=true`, `make demo`, live models; one spec (`full-interview.spec.ts`, 30-minute timeout) that drives a voice interview through a fake microphone fed with recorded WAV clips; credentials from `E2E_RECRUITER_EMAIL` / `E2E_PASSWORD` or `SEED_PASSWORD` in `.env`, test-hook token from `E2E_TEST_HOOKS_TOKEN` or `TEST_HOOKS_TOKEN` in `.env` |
+| End-to-end | `make test-e2e` (Playwright in `tests/e2e`, base URL `E2E_BASE_URL`, default `http://localhost:3200`) | full stack, `ENABLE_TEST_HOOKS=true`, `make demo`, live models; `full-interview.spec.ts` (30-minute timeout) drives a voice interview through a fake microphone fed with recorded WAV clips (`intake.spec.ts` is skipped there unless `E2E_INTAKE_LIVE=1`, see the next row); credentials from `E2E_RECRUITER_EMAIL` / `E2E_PASSWORD` or `SEED_PASSWORD` in `.env`, test-hook token from `E2E_TEST_HOOKS_TOKEN` or `TEST_HOOKS_TOKEN` in `.env` |
+| Intake end-to-end (mock AI) | `cd apps/api && uv run python ../../tests/e2e/mock-stack/stack.py --run specs/intake.spec.ts` | postgres + redis (`make infra-up`), `npm ci` in `apps/web` and `tests/e2e`; the script builds and removes its own throwaway stack (`interview_test_*` database seeded with `--demo`, leased Redis DB, API on :8480 with test hooks, worker, Vite on :5280, mock AI registry: no model calls); staff create -> candidate journey -> seven stages and the three exercises -> evaluation, report, decision in about 4 minutes; details in the [intake guide](docs/INTAKE_INTERVIEW_GUIDE.md#end-to-end-test-mock-ai) |
 | Infrastructure | `make test-infra` | Docker (Caddy validate, promtool, compose invariants, dashboards, shellcheck, edge behaviour tests) |
 
 Pytest markers (`apps/api/pyproject.toml`): `integration`, `live`, `sandbox`; `live` tests are excluded unless
@@ -124,4 +126,5 @@ selected with `-m live`.
 | [CODING_INTERVIEW.md](CODING_INTERVIEW.md) | languages, signatures, sandbox isolation and attack tests, hints, observer, evaluation |
 | [INTEGRITY_MONITORING.md](INTEGRITY_MONITORING.md) | signals, rules, vision constraints, consent, retention, limitations, reviewer workflow |
 | [SECURITY.md](SECURITY.md) | threat model, controls, data protection, responsible-AI constraints |
+| [docs/INTAKE_INTERVIEW_GUIDE.md](docs/INTAKE_INTERVIEW_GUIDE.md) | intake interviews: running them (recruiters, admins) and the module (engineers) |
 | [docs/](docs/README.md) | design-time contracts and the documentation index |

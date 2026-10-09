@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy import func, select
 
 from app.core.deps import DbSession, PaginationParams, require_permission
-from app.core.errors import AppError
+from app.core.errors import AppError, Conflict
 from app.core.rbac import Permission, Principal
 from app.db.models import ReviewDecision, User
 from app.schemas.api.common import ERROR_RESPONSES
@@ -82,6 +82,13 @@ async def post_review(
     session_id: uuid.UUID, body: ReviewCreate, principal: ReviewWriter, db: DbSession, request: Request
 ) -> ReviewOut:
     session = await get_session_for_principal(db, principal, session_id)
+    if (session.round_config or {}).get("round_type") == "intake":
+        # Intake decisions (five outcomes, rationale, override flag) go through the intake review API, which also
+        # mirrors them into review_decisions; a plain review here would leave the intake awaiting review.
+        raise Conflict(
+            "Record intake decisions from the intake review page.",
+            code="intake_decision_required",
+        )
     review = await create_review(
         db, principal, session, decision=body.decision, notes=body.notes, request=request
     )

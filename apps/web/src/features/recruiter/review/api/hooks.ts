@@ -102,6 +102,7 @@ export function sessionListParams(query: SessionListQuery) {
     needs_review: query.needs_review ? true : undefined,
     job_id: query.job_id,
     round_id: query.round_id,
+    round_type: query.round_type && query.round_type.length ? query.round_type : undefined,
     recommendation: query.recommendation,
     created_from: dayStartIso(query.from),
     created_to: dayStartIso(query.to, 1),

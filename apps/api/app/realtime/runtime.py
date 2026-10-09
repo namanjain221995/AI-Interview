@@ -27,7 +27,7 @@ import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.ai.base import AIError, CallContext, PartialSkipped
@@ -83,6 +83,13 @@ from app.schemas.realtime import (
     FRAME_MIC_AUDIO,
     MIC_SAMPLE_RATE,
     PROTOCOL_VERSION,
+    ActivityContentMsg,
+    ActivityEndMsg,
+    ActivityFinishMsg,
+    ActivityPhaseMsg,
+    ActivityPhasePlanMsg,
+    ActivitySnapshotMsg,
+    ActivityStartMsg,
     AvatarBehaviorMsg,
     BargeInMsg,
     ClientErrorMsg,
@@ -101,6 +108,8 @@ from app.schemas.realtime import (
     HeartbeatMsg,
     HelloMsg,
     HintRequestMsg,
+    IntakeStageMsg,
+    IntakeStateMsg,
     IntegrityEventsMsg,
     LanguageChangeMsg,
     LocalVadMsg,
@@ -123,6 +132,11 @@ from app.schemas.realtime import (
     unpack_frame,
 )
 from app.services.interview.contracts import (
+    ActivityCapture,
+    ActivityEnded,
+    ActivityEvent,
+    ActivityPhaseChanged,
+    ActivityStarted,
     BehaviorSpec,
     CandidateTurn,
     CodingActivity,
@@ -157,6 +171,13 @@ ACK_MIN_SPEECH_MS = 2500
 MAX_TURN_AUDIO_BYTES = 16000 * 2 * 300  # 5 minutes of PCM16 for answer audio
 SEND_QUEUE_LIMIT = 2000
 UNRESOLVED_RETRY_DELAYS = (2.0, 4.0, 8.0, 15.0, 30.0)
+# The "trouble hearing you" notice needs real evidence: Whisper failed on this much
+# voiced candidate audio since the last good final. Segments shorter or less
+# speech-like than the floor below (silence, breaths, room noise, a cough) never
+# count, so a busy STT replica during the intro or a quiet room cannot raise it.
+STT_DEGRADED_SPEECH_MS = 1500
+STT_DEGRADED_SEGMENT_SPEECH_MS = 600
+STT_DEGRADED_SEGMENT_PROB = 0.6
 TIME_WARNING_REMAINING_S = 300.0
 # Segmentation, tuned with tests/integration/realtime/test_stt_harness.py
 # (2026-10-07, real Whisper): once a segment holds 2.5 s of audio a 200 ms pause
@@ -182,6 +203,32 @@ FULL_PASS_MIN_VOICED_MS = 3000
 FULL_PASS_MAX_AUDIO_BYTES = 16000 * 2 * 120
 FULL_PASS_WAIT_S = 15.0  # waiting for a spare Whisper replica
 FULL_PASS_MATERIAL_RATIO = 0.08  # share of words that must differ to revise the stored transcript
+
+# Intake activities (INTAKE_INTERVIEW.md 7.2, 7.4): capture-phase silence rules. A capture phase ends after
+# ``silence_ms`` of silence once the condition holds (words heard, share of the passage read); it never ends on
+# silence before the candidate has spoken (the deadline governs). Deadline grace: a candidate still speaking
+# at the deadline gets up to ACTIVITY_GRACE_MAX_S for a >= ACTIVITY_GRACE_PAUSE_MS pause.
+
+
+@dataclass(frozen=True, slots=True)
+class SilenceRule:
+    silence_ms: int
+    min_words: int = 0
+    min_reference_ratio: float = 0.0
+
+
+ACTIVITY_SILENCE: dict[tuple[str, str], tuple[SilenceRule, ...]] = {
+    ("reading_aloud", "read"): (SilenceRule(4000, min_reference_ratio=0.70), SilenceRule(8000)),
+    ("read_relay", "relay"): (SilenceRule(6000, min_words=15),),
+    ("topic_card", "speak"): (SilenceRule(10000, min_words=30),),
+}
+ACTIVITY_GRACE_PAUSE_MS = 300
+ACTIVITY_GRACE_MAX_S = 3.0
+ACTIVITY_PAUSE_MIN_MS = 300  # VAD pauses shorter than this inside a capture are not recorded
+ACTIVITY_RETRY_TIMEOUT_S = 10.0
+ACTIVITY_TIMER_STEP_S = 0.25
+# Long-answer endpointing for intake items marked answer_mode "long" (7.11).
+LONG_ANSWER_ENDPOINT = {"base_ms": 1500, "short_ms": 1100, "long_ms": 2600}
 
 PRIORITY_END = 0
 PRIORITY_TURN = 1
@@ -285,6 +332,7 @@ class ActiveUtterance:
     delivered: bool = False
     delivery_task: asyncio.Task[None] | None = None
     audio_ms: int | None = None  # known audio length (pre-synthesized acknowledgements)
+    answer_mode: str | None = None  # intake: "standard" | "long" (endpointing of the next answer)
 
     @property
     def text(self) -> str:
@@ -349,6 +397,44 @@ class TurnCapture:
         if not self.record_audio or not self.audio:
             return None
         return pcm16_to_wav(bytes(self.audio))
+
+
+@dataclass
+class RuntimeActivity:
+    """An intake activity as the runtime runs it (phase timers, capture, reveal accounting). ``content`` lives
+    only here (memory) and is dropped when it may no longer be shown (read_relay after its read phase)."""
+
+    activity_id: str
+    kind: str
+    stage: str
+    title: str
+    phases: list[dict[str, Any]]
+    rules: dict[str, dict[str, Any]]
+    content: dict[str, Any] | None
+    attempt: int = 1
+    resumed: bool = False
+    reference_words: int = 0
+    status: str = "armed"  # armed | running | waiting (between phases) | interrupted | ended
+    phase: str = ""
+    duration_ms: int = 0
+    start_after: str | None = None
+    phase_started_elapsed: float | None = None  # runtime clock (s)
+    deadline: float | None = None  # runtime clock (s)
+    capture: TurnCapture | None = None
+    pauses: list[dict[str, int]] = field(default_factory=list)
+    pause_started_ms: int | None = None  # audio clock of the last SpeechEnded inside the capture
+    spoken: bool = False
+    ending: bool = False
+    finish_announced: bool = False
+    shown_ms: int = 0  # read_relay: passage visible so far (all reveal windows)
+    timer: asyncio.Task[None] | None = None
+
+    def rule(self, phase: str | None = None) -> dict[str, Any]:
+        return self.rules.get(phase or self.phase) or {}
+
+    @property
+    def capture_phase(self) -> bool:
+        return bool(self.rule().get("capture"))
 
 
 @dataclass(order=True)
@@ -501,6 +587,7 @@ class SessionRuntime:
         self.audio_frames = 0
         self.local_vad_hints = 0
         self._stt_degraded_notified = False
+        self._stt_failed_speech_ms = 0  # voiced audio Whisper failed on since the last good final
         self._pause_warned = False
         self.latency: list[dict[str, Any]] = []
         self._drive_capture: TurnCapture | None = None
@@ -509,6 +596,11 @@ class SessionRuntime:
         self._engine_spoke = False  # the engine produced an utterance in this runtime
         self.glossary = Glossary(ctx.glossary_terms or ctx.vocabulary)
         self._unclear_prompts = 0  # consecutive "didn't catch that" prompts
+        # Intake (INTAKE_INTERVIEW.md 7): the current activity and the answer mode of the last delivered question.
+        self.activity: RuntimeActivity | None = None
+        self._answer_mode = "standard"
+        self._base_endpoint = self.endpointer.params
+        self._long_endpoint = replace(self._base_endpoint, **LONG_ANSWER_ENDPOINT)
 
     # ================================================================ start/stop
     async def start(self) -> None:
@@ -870,6 +962,7 @@ class SessionRuntime:
             )
             if not keep_running:
                 await self._interrupt_current("disconnect", notify_client=False)
+            await self._activity_detached()
             await self._discard_capture()
             self.paused_reason = "disconnect"
             self.turns.to(TurnState.PAUSED, "disconnect")
@@ -1009,6 +1102,63 @@ class SessionRuntime:
             integrity=self.ctx.policy.integrity_flags(),
             coding=coding_payload,
             avatar_state=AVATAR_FOR_TURN.get(self.turns.state, AvatarState.IDLE),
+            intake=self._intake_state(state),
+        )
+
+    def _intake_state(self, state: Any) -> IntakeStateMsg | None:
+        """``session.state.intake`` (7.10): stage, candidate-safe titles, statuses and a content-free activity
+        snapshot (remaining time from the runtime's authoritative deadline)."""
+        ik = getattr(state, "intake", None)
+        if ik is None or not getattr(ik, "stages", None):
+            return None
+        from app.services.intake.stages import CANDIDATE_TITLES
+
+        current = ik.stage
+        stages = []
+        for index, stage in enumerate(ik.stages):
+            if stage.status == "completed":
+                status = "done"
+            elif stage.status == "incomplete":
+                status = "incomplete"
+            elif index == ik.stage_index:
+                status = "current"
+            else:
+                status = "pending"
+            stages.append(
+                IntakeStageMsg(
+                    key=stage.key, number=stage.number, title=CANDIDATE_TITLES.get(stage.key, stage.key), status=status
+                )
+            )
+        snapshot = None
+        act = self.activity
+        if act is not None and act.status != "ended":
+            remaining = None
+            if act.status == "running" and act.deadline is not None:
+                remaining = max(0, int((act.deadline - self.clock.elapsed()) * 1000))
+            snapshot = ActivitySnapshotMsg(
+                activity_id=act.activity_id,
+                kind=act.kind,  # type: ignore[arg-type]
+                phase=act.phase,  # type: ignore[arg-type]
+                status="running" if act.status == "running" else "armed",
+                remaining_ms=remaining,
+            )
+        elif ik.activity is not None and ik.activity.status in ("armed", "running"):
+            snapshot = ActivitySnapshotMsg(
+                activity_id=ik.activity.activity_id,
+                kind=ik.activity.kind,
+                phase=ik.activity.phase,
+                status="armed",
+                remaining_ms=None,
+            )
+        key = current.key if current is not None else ik.stages[0].key
+        return IntakeStateMsg(
+            stage=key,
+            stage_number=current.number if current is not None else 1,
+            stage_title=CANDIDATE_TITLES.get(key, key),
+            stages=stages,
+            activity=snapshot,
+            answer_mode="long" if ik.answer_mode == "long" else "standard",
+            soft_limit_s=ik.soft_limit_s,
         )
 
     async def push_state(self, reason: str, *, coding: CodingStateMsg | None = None) -> None:
@@ -1275,6 +1425,9 @@ class SessionRuntime:
                     elif full and full.startswith(streamed) and len(full) > len(streamed):
                         self._feed(target, full[len(streamed) :])
                     target.full_text = full or streamed
+                    intake_meta = (event.decision or {}).get("intake") if isinstance(event.decision, dict) else None
+                    if isinstance(intake_meta, dict):
+                        target.answer_mode = str(intake_meta.get("answer_mode") or "standard")
                     await self._end_utterance(target)
                     utt = None
                 elif isinstance(event, CodingStarted):
@@ -1293,6 +1446,12 @@ class SessionRuntime:
                 elif isinstance(event, CodingEnded):
                     self.coding_bridge.ended(event.coding_session_id)
                     self.post(CodingEndMsg(coding_session_id=event.coding_session_id, reason=event.reason))
+                elif isinstance(event, ActivityStarted):
+                    self._on_activity_started(event)
+                elif isinstance(event, ActivityPhaseChanged):
+                    self._on_activity_phase_changed(event)
+                elif isinstance(event, ActivityEnded):
+                    self._on_activity_ended(event)
                 elif isinstance(event, SessionClosing):
                     self.ending = event.reason
                 elif isinstance(event, StateChanged):
@@ -1430,6 +1589,7 @@ class SessionRuntime:
         except Exception as exc:  # noqa: BLE001
             metrics.ERRORS.labels(component="realtime_engine").inc()
             log.warning("realtime.mark_delivered_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+        self._on_delivered(utt)
 
     def _trim_utterances(self) -> None:
         if len(self.utterances) <= 64:
@@ -1564,6 +1724,8 @@ class SessionRuntime:
         self.ended = True
         self.ending = reason
         self._jobs.clear()
+        if self.activity is not None:
+            self._stop_activity(self.activity)
         await self._discard_capture()
         self.turns.to(TurnState.ENDED, reason.value)
         status, end_reason = None, None
@@ -1629,6 +1791,7 @@ class SessionRuntime:
         if self.ended or self.paused_reason == "policy":
             return
         await self._interrupt_current("policy_pause", notify_client=True)
+        await self._activity_detached(notify=True)
         await self._discard_capture()
         self.paused_reason = "policy"
         self.turns.to(TurnState.PAUSED, f"policy:{event_type.value}")
@@ -1703,7 +1866,13 @@ class SessionRuntime:
             )
             return
         if isinstance(msg, EndTurnMsg):
-            await self.end_turn("manual")
+            act = self.activity
+            if act is not None and act.status == "running" and act.capture is not None:
+                await self._on_activity_finish(act.activity_id, act.phase)  # "Done answering" = finish (7.4)
+            else:
+                await self.end_turn("manual")
+        elif isinstance(msg, ActivityFinishMsg):
+            await self._on_activity_finish(msg.activity_id, msg.phase)
         elif isinstance(msg, TypedAnswerMsg):
             await self._on_typed_answer(msg.text)
         elif isinstance(msg, RepeatQuestionMsg):
@@ -1770,6 +1939,10 @@ class SessionRuntime:
     async def _on_typed_answer(self, text: str) -> None:
         text = text.strip()
         if not text:
+            return
+        act = self.activity
+        if act is not None and act.status in ("running", "waiting"):
+            await self._activity_typed(act, text)
             return
         if not self.ctx.policy.allow_typed_answers and self._unresolved is None:
             self.send_error(
@@ -1890,6 +2063,8 @@ class SessionRuntime:
         )
 
     def _open_capture(self, start_ms: int, *, reason: str) -> TurnCapture:
+        # Intake long-answer items (7.11) get a more patient end of turn; every other answer the settings values.
+        self.endpointer.params = self._long_endpoint if self._answer_mode == "long" else self._base_endpoint
         now_ms = self.segmenter.now_ms
         session_now = self._session_ms()
         capture = TurnCapture(
@@ -1910,9 +2085,14 @@ class SessionRuntime:
 
     async def _on_vad_event(self, event: Any) -> None:
         state = self.turns.state
+        act = self.activity
+        if act is not None and act.capture is not None and act.capture is self._capture:
+            self._activity_vad(act, event)
         if isinstance(event, SpeechStarted):
             if self._capture is not None:
                 return
+            if self._activity_blocks_speech():
+                return  # non-capture activity phase: thinking aloud is never captured or transcribed (7.2)
             if state in (TurnState.LISTENING, TurnState.CODING):
                 self._open_capture(event.segment_start_ms, reason="speech")
                 self.turns.to(TurnState.CANDIDATE_SPEAKING, "speech")
@@ -2011,6 +2191,10 @@ class SessionRuntime:
 
     async def _check_endpoint(self, *, wallclock_silence_ms: int | None = None) -> None:
         capture = self._capture
+        act = self.activity
+        if capture is not None and act is not None and act.capture is capture:
+            await self._check_activity_silence(act, wallclock_silence_ms=wallclock_silence_ms)
+            return  # activity capture mode: the activity rules replace endpointing (7.4)
         if capture is None or self.turns.state is not TurnState.CANDIDATE_SPEAKING:
             return
         self._notify_silence(capture)
@@ -2064,13 +2248,18 @@ class SessionRuntime:
                 self.post(TranscriptMsg(type="transcript.partial", segment_id=capture.capture_id, text=text))
 
     def _on_segment_final(self, job: SegmentJob) -> None:
+        self._stt_failed_speech_ms = 0
         if self._stt_degraded_notified:
             self._stt_degraded_notified = False
             self.notice("stt_recovered", "Speech recognition is working again.", "info")
 
     def _on_segment_failure(self, job: SegmentJob, exc: BaseException) -> None:
         metrics.ERRORS.labels(component="realtime_stt").inc()
-        if not self._stt_degraded_notified:
+        speech_ms = job.speech_ms or 0
+        if speech_ms < STT_DEGRADED_SEGMENT_SPEECH_MS or (job.vad_prob or 0.0) < STT_DEGRADED_SEGMENT_PROB:
+            return  # not candidate speech: nothing the candidate could do differently
+        self._stt_failed_speech_ms += speech_ms
+        if self._stt_failed_speech_ms >= STT_DEGRADED_SPEECH_MS and not self._stt_degraded_notified:
             self._stt_degraded_notified = True
             self.notice(
                 "stt_degraded",
@@ -2548,6 +2737,746 @@ class SessionRuntime:
         if "first_audio_ms" in fields:
             log.info("realtime.turn_latency", session_id=self.session_id, **record)
 
+    # ========================================================= intake activities
+    # INTAKE_INTERVIEW.md 7: the engine arms an activity (ActivityStarted after its instruction utterance); the
+    # runtime starts each phase when the arming utterance is delivered, owns the phase deadline on the interview
+    # clock, ends non-capture phases itself (read_relay: hide the passage at exactly 30 s) and turns a capture
+    # phase into one CandidateTurn with ``activity`` (capture mode: no endpointing, acknowledgements, commit wait
+    # or "didn't catch that" prompts).
+
+    def _activity_blocks_speech(self) -> bool:
+        act = self.activity
+        if act is None:
+            return False
+        if act.status == "waiting":
+            return True
+        return act.status == "running" and not act.capture_phase
+
+    @staticmethod
+    def _capture_session_ms(capture: TurnCapture, t_ms: int) -> int:
+        return int(capture.started_session_ms + max(0, int(t_ms) - capture.start_ms))
+
+    def _phase_msg(
+        self,
+        act: RuntimeActivity,
+        *,
+        status: str,
+        remaining_ms: int,
+        can_finish: bool,
+        content: dict[str, Any] | None = None,
+        hide_content: bool = False,
+    ) -> ActivityPhaseMsg:
+        return ActivityPhaseMsg(
+            activity_id=act.activity_id,
+            kind=act.kind,  # type: ignore[arg-type]
+            phase=act.phase,  # type: ignore[arg-type]
+            status=status,  # type: ignore[arg-type]
+            duration_ms=int(act.duration_ms),
+            remaining_ms=max(0, int(remaining_ms)),
+            capture=act.capture_phase,
+            can_finish=can_finish,
+            content=ActivityContentMsg(**content) if content else None,
+            hide_content=hide_content,
+            server_time_ms=time.time() * 1000.0,
+        )
+
+    def _on_activity_started(self, event: ActivityStarted) -> None:
+        data = event.activity
+        activity_id = str(data.get("activity_id") or "")
+        old = self.activity
+        shown_ms = old.shown_ms if old is not None and old.activity_id == activity_id else 0
+        if old is not None:
+            self._stop_activity(old)
+        phases = [dict(p) for p in data.get("phases") or []]
+        first: dict[str, Any] = (
+            phases[0] if phases else {"phase": str(data.get("start_phase") or "read"), "duration_ms": 0}
+        )
+        act = RuntimeActivity(
+            activity_id=activity_id,
+            kind=str(data.get("kind") or ""),
+            stage=str(data.get("stage") or ""),
+            title=str(data.get("title") or ""),
+            phases=phases,
+            rules={str(k): dict(v) for k, v in (data.get("phase_rules") or {}).items()},
+            content=dict(data["content"]) if isinstance(data.get("content"), dict) else None,
+            attempt=int(data.get("attempt") or 1),
+            resumed=bool(data.get("resumed")),
+            reference_words=int(data.get("reference_words") or 0),
+            phase=str(data.get("start_phase") or first.get("phase") or ""),
+            duration_ms=int(first.get("duration_ms") or 0),
+            start_after=event.start_after_utterance_id,
+            shown_ms=shown_ms,
+        )
+        if act.kind == "read_relay" and act.phase != "read":
+            act.content = None  # never shown again once the read phase is over (7.9)
+        self.activity = act
+        self.post(
+            ActivityStartMsg(
+                activity_id=act.activity_id,
+                kind=act.kind,  # type: ignore[arg-type]
+                stage=act.stage,  # type: ignore[arg-type]
+                title=act.title,
+                phases=[
+                    ActivityPhasePlanMsg(
+                        phase=p["phase"], duration_ms=int(p.get("duration_ms") or 0), capture=bool(p.get("capture"))
+                    )
+                    for p in phases
+                ],
+                attempt=act.attempt,
+                resumed=act.resumed,
+            )
+        )
+        log.info(
+            "realtime.activity_armed",
+            session_id=self.session_id,
+            kind=act.kind,
+            phase=act.phase,
+            attempt=act.attempt,
+            resumed=act.resumed,
+        )
+        self._maybe_start_armed(act)
+
+    def _on_activity_phase_changed(self, event: ActivityPhaseChanged) -> None:
+        act = self.activity
+        if act is None or act.activity_id != event.activity_id:
+            return
+        self._cancel_activity_timer(act)
+        act.phase = event.phase
+        act.duration_ms = int(event.duration_ms)
+        act.status = "armed"
+        act.start_after = event.start_after_utterance_id
+        act.phase_started_elapsed = None
+        act.deadline = None
+        act.ending = False
+        act.finish_announced = False
+        if event.hide_content or act.kind == "read_relay":
+            act.content = None
+        if event.content is not None and act.rule(event.phase).get("content_visible"):
+            act.content = dict(event.content)
+        self._maybe_start_armed(act)
+
+    def _on_activity_ended(self, event: ActivityEnded) -> None:
+        act = self.activity
+        if act is not None and act.activity_id == event.activity_id:
+            self._stop_activity(act)
+        reason = event.reason if event.reason in (
+            "completed", "finished_early", "deadline", "interrupted", "skipped", "session_ended"
+        ) else "completed"  # fmt: skip
+        self.post(
+            ActivityEndMsg(activity_id=event.activity_id, kind=event.kind, reason=reason)  # type: ignore[arg-type]
+        )
+
+    def _maybe_start_armed(self, act: RuntimeActivity) -> None:
+        if act.status != "armed":
+            return
+        if act.start_after is None:
+            self._start_activity_phase(act)
+            return
+        utt = self.utterances.get(act.start_after)
+        if utt is not None and utt.delivered:
+            self._start_activity_phase(act)
+
+    def _on_delivered(self, utt: ActiveUtterance) -> None:
+        if utt.answer_mode in ("standard", "long"):
+            self._answer_mode = utt.answer_mode
+        act = self.activity
+        if act is not None and act.status == "armed" and act.start_after == utt.utterance_id:
+            self._start_activity_phase(act)
+
+    def _start_activity_phase(self, act: RuntimeActivity) -> None:
+        if self.ended or self.closed or self.transport is None or self.paused_reason is not None:
+            return  # offline: the resume re-arms the activity
+        rule = act.rule()
+        duration = int(act.duration_ms or rule.get("duration_ms") or 0)
+        if act.kind == "read_relay" and act.phase == "read":
+            total = int(rule.get("duration_ms") or 30_000)
+            duration = min(duration, max(0, total - act.shown_ms))  # never more than 30 s in total (7.9)
+        now = self.clock.elapsed()
+        act.status = "running"
+        act.phase_started_elapsed = now
+        act.duration_ms = duration
+        act.deadline = now + duration / 1000.0
+        act.ending = False
+        phase = act.phase
+        if duration <= 0:
+            # Nothing left to show (the 30 s reveal is used up): the engine still sees phase_started first, so
+            # the phase_deadline that follows ends a phase it knows about.
+            self._enqueue(
+                "activity",
+                lambda: self._run_activity_event("phase_started", act, phase, {"duration_ms": 0}, now),
+                PRIORITY_TURN,
+                needs_idle=False,
+            )
+            self.spawn(self._end_noncapture_phase(act, "phase_deadline"), "activity_skip_phase")
+            return
+        finish_after = int(rule.get("finish_after_ms") or 0)
+        act.finish_announced = finish_after == 0
+        content = act.content if rule.get("content_visible") else None
+        self.post(
+            self._phase_msg(
+                act,
+                status="running",
+                remaining_ms=duration,
+                can_finish=finish_after == 0,
+                content=content,
+                hide_content=bool(rule.get("hide_on_entry")),
+            )
+        )
+        if act.capture_phase:
+            self._open_activity_capture(act)
+        act.timer = self.track(
+            asyncio.create_task(self._activity_timer(act), name=f"realtime.activity_timer.{self.session_id}")
+        )
+        self._enqueue(
+            "activity",
+            lambda: self._run_activity_event("phase_started", act, phase, {"duration_ms": duration}, now),
+            PRIORITY_TURN,  # same priority as turns: ordered before a capture that ends right away
+            needs_idle=False,
+        )
+        log.info(
+            "realtime.activity_phase",
+            session_id=self.session_id,
+            kind=act.kind,
+            phase=phase,
+            duration_ms=duration,
+            capture=act.capture_phase,
+        )
+
+    def _open_activity_capture(self, act: RuntimeActivity) -> None:
+        old = self._capture
+        if old is not None:
+            self._capture = None
+            self.spawn(old.transcriber.aclose(), "capture_superseded")
+        start = (
+            self.segmenter.open_segment_start_ms
+            if self.segmenter.segment_open and self.segmenter.open_segment_start_ms is not None
+            else self.segmenter.now_ms
+        )
+        capture = self._open_capture(start, reason="activity")
+        act.capture = capture
+        act.pauses = []
+        act.pause_started_ms = None
+        act.spoken = bool(self.segmenter.in_speech)
+        self.turns.to(TurnState.CANDIDATE_SPEAKING, "activity")
+        self.avatar(AvatarState.LISTENING)
+
+    def _activity_vad(self, act: RuntimeActivity, event: Any) -> None:
+        """VAD pauses inside a capture (audio clock -> session ms), recorded for the Drill A metrics (7.4)."""
+        capture = act.capture
+        if capture is None:
+            return
+        if isinstance(event, SpeechStarted):
+            act.spoken = True
+            if act.pause_started_ms is not None:
+                if event.t_ms - act.pause_started_ms >= ACTIVITY_PAUSE_MIN_MS:
+                    start = self._capture_session_ms(capture, act.pause_started_ms)
+                    end = self._capture_session_ms(capture, event.t_ms)
+                    act.pauses.append({"start_ms": start, "end_ms": end, "duration_ms": end - start})
+            act.pause_started_ms = None
+        elif isinstance(event, SpeechEnded):
+            act.pause_started_ms = int(event.t_ms)
+        elif isinstance(event, SegmentClosed) and event.speech_ms > 0:
+            act.spoken = True
+
+    async def _check_activity_silence(self, act: RuntimeActivity, *, wallclock_silence_ms: int | None = None) -> None:
+        capture = act.capture
+        if capture is None or act.ending or act.status != "running":
+            return
+        if len(capture.audio) >= MAX_TURN_AUDIO_BYTES:
+            await self._end_activity_capture(act, "max_audio")
+            return
+        if not (act.spoken or capture.voiced_ms > 0 or capture.transcriber.segments):
+            return  # never on silence before the candidate has spoken: the deadline governs
+        silence = 0 if self.segmenter.in_speech else self.segmenter.silence_ms
+        if wallclock_silence_ms is not None:
+            silence = max(silence, wallclock_silence_ms)
+        if silence <= 0:
+            return
+        words = len(capture.transcriber.text_with_partial().split())
+        for rule in ACTIVITY_SILENCE.get((act.kind, act.phase), ()):
+            if silence < rule.silence_ms or words < rule.min_words:
+                continue
+            if rule.min_reference_ratio and words < rule.min_reference_ratio * max(1, act.reference_words):
+                continue
+            await self._end_activity_capture(act, "silence")
+            return
+
+    async def _activity_timer(self, act: RuntimeActivity) -> None:
+        """Phase deadline on the interview clock (pauses excluded); also enables a delayed finish button."""
+        while True:
+            if self.activity is not act or act.status != "running" or act.deadline is None or self.closed:
+                return
+            now = self.clock.elapsed()
+            step = ACTIVITY_TIMER_STEP_S
+            if not act.finish_announced and act.phase_started_elapsed is not None:
+                enable_at = act.phase_started_elapsed + int(act.rule().get("finish_after_ms") or 0) / 1000.0
+                if now >= enable_at:
+                    act.finish_announced = True
+                    self.post(
+                        self._phase_msg(
+                            act, status="running", remaining_ms=int((act.deadline - now) * 1000), can_finish=True
+                        )
+                    )
+                else:
+                    step = min(step, max(0.01, enable_at - now))
+            remaining = act.deadline - now
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(step, remaining))
+        await self._activity_deadline(act)
+
+    async def _activity_deadline(self, act: RuntimeActivity) -> None:
+        if self.activity is not act or act.status != "running":
+            return
+        if not act.capture_phase:
+            await self._end_noncapture_phase(act, "phase_deadline")
+            return
+        started = time.monotonic()
+        while self.activity is act and act.status == "running" and not act.ending:
+            if not self.segmenter.in_speech and self.segmenter.silence_ms >= ACTIVITY_GRACE_PAUSE_MS:
+                break
+            if time.monotonic() - started >= ACTIVITY_GRACE_MAX_S:
+                break
+            if self._last_audio_rx is None or time.monotonic() - self._last_audio_rx > AUDIO_STALL_S:
+                break
+            await asyncio.sleep(0.05)
+        if self.activity is act and act.status == "running" and not act.ending:
+            await self._end_activity_capture(act, "deadline")
+
+    def _cancel_activity_timer(self, act: RuntimeActivity) -> None:
+        timer = act.timer
+        act.timer = None
+        if timer is not None and timer is not asyncio.current_task() and not timer.done():
+            timer.cancel()
+
+    async def _end_noncapture_phase(self, act: RuntimeActivity, kind: str) -> None:
+        """End a phase without capture (read_relay read: hide the passage now; topic prepare), then ask the
+        engine for the next phase's prompt."""
+        if act.status != "running" or act.capture_phase:
+            return
+        now = self.clock.elapsed()
+        shown = max(0.0, now - (act.phase_started_elapsed if act.phase_started_elapsed is not None else now))
+        remaining = int(max(0.0, ((act.deadline if act.deadline is not None else now) - now)) * 1000)
+        hide = False
+        if act.kind == "read_relay" and act.phase == "read":
+            act.shown_ms += int(round(shown * 1000))
+            act.content = None  # dropped from memory once hidden (7.5)
+            hide = True
+        act.status = "waiting"
+        self._cancel_activity_timer(act)
+        self.post(self._phase_msg(act, status="ended", remaining_ms=remaining, can_finish=False, hide_content=hide))
+        phase = act.phase
+        detail = {"shown_ms": act.shown_ms} if act.kind == "read_relay" else {}
+        self._enqueue(
+            "activity",
+            lambda: self._run_activity_event(kind, act, phase, detail, now),
+            PRIORITY_TURN,
+            needs_idle=False,
+        )
+        log.info("realtime.activity_phase_ended", session_id=self.session_id, kind=act.kind, phase=phase, reason=kind)
+
+    async def _run_activity_event(
+        self, kind: str, act: RuntimeActivity, phase: str, detail: dict[str, Any], elapsed: float
+    ) -> None:
+        handler = getattr(self.engine, "handle_activity_event", None)
+        if handler is None:
+            return
+        event = ActivityEvent(
+            kind=kind,  # type: ignore[arg-type]
+            activity_id=act.activity_id,
+            phase=phase,
+            elapsed_s=round(float(elapsed), 3),
+            detail=dict(detail),
+        )
+        expects_transition = kind != "phase_started"
+        try:
+            await self._drive(handler(self.session_id, event), origin=f"activity_{kind}")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if expects_transition:
+                self._release_stalled_activity(act, origin=f"activity_{kind}")
+            raise
+        if expects_transition:
+            self._release_stalled_activity(act, origin=f"activity_{kind}")
+
+    async def _end_activity_capture(
+        self, act: RuntimeActivity, reason: str, *, typed_text: str | None = None
+    ) -> None:
+        """End the capture phase (finish_button | silence | deadline | disconnect | max_audio) and run it as one
+        activity turn."""
+        capture = act.capture
+        if capture is None or act.ending:
+            return
+        act.ending = True
+        self._cancel_activity_timer(act)
+        if self._capture is capture:
+            self._capture = None
+        if typed_text is None:
+            seg = self.segmenter.flush()
+            if seg is not None and seg.end_ms > capture.start_ms:
+                capture.transcriber.submit(
+                    seg.samples,
+                    start_ms=max(seg.start_ms, capture.start_ms),
+                    end_ms=seg.end_ms,
+                    speech_ms=seg.speech_ms,
+                    vad_prob=seg.mean_prob,
+                )
+                capture.voiced_ms += seg.speech_ms
+        else:
+            capture.typed_text = typed_text
+        capture.end_ms = self.segmenter.now_ms
+        capture.ended_session_ms = self._session_ms()
+        capture.end_at = time.monotonic()
+        capture.end_reason = f"activity_{reason}"
+        now = self.clock.elapsed()
+        remaining = int(max(0.0, ((act.deadline if act.deadline is not None else now) - now)) * 1000)
+        if self.transport is not None:
+            self.post(self._phase_msg(act, status="ended", remaining_ms=remaining, can_finish=False))
+        act.status = "waiting"
+        if self.paused_reason is None and reason != "disconnect":
+            self.turns.to(TurnState.PROCESSING, f"activity_{reason}")
+            self.avatar(AvatarState.THINKING, expression=AvatarExpression.THOUGHTFUL)
+        self._enqueue(
+            "turn", lambda: self._run_activity_turn(act, capture, reason), PRIORITY_TURN, capture=capture,
+            needs_idle=False,
+        )  # fmt: skip
+        log.info(
+            "realtime.activity_capture_ended",
+            session_id=self.session_id,
+            kind=act.kind,
+            phase=act.phase,
+            reason=reason,
+            voiced_ms=capture.voiced_ms,
+            segments=len(capture.transcriber.segments),
+            pauses=len(act.pauses),
+        )
+
+    async def _run_activity_turn(self, act: RuntimeActivity, capture: TurnCapture, reason: str) -> None:
+        typed = capture.typed_text is not None
+        degraded = False
+        corrections: list[Any] = []
+        if typed:
+            text = capture.typed_text or ""
+        else:
+            ok = await capture.transcriber.wait_finals(timeout=STT_FINAL_TIMEOUT_S)
+            if not ok or not capture.transcriber.resolved:
+                degraded = not await capture.transcriber.retry_failed(timeout=ACTIVITY_RETRY_TIMEOUT_S)
+            text, corrections = self.glossary.correct(capture.transcriber.text())
+            log_corrections(corrections, session_id=self.session_id)
+        segments = (
+            []
+            if typed
+            else [
+                {
+                    "start_ms": self._capture_session_ms(capture, job.start_ms),
+                    "end_ms": self._capture_session_ms(capture, job.end_ms),
+                    "speech_ms": job.speech_ms,
+                    "vad_prob": job.vad_prob,
+                    "no_speech_prob": job.no_speech_prob,
+                    "text": job.text,
+                }
+                for job in capture.transcriber.segments
+                if job.status == "done"
+            ]
+        )
+        ended_ms = int(capture.ended_session_ms if capture.ended_session_ms is not None else self._session_ms())
+        activity_capture = ActivityCapture(
+            activity_id=act.activity_id,
+            kind=act.kind,  # type: ignore[arg-type]
+            phase=act.phase,  # type: ignore[arg-type]
+            end_reason=reason,  # type: ignore[arg-type]
+            started_ms=int(capture.started_session_ms),
+            ended_ms=ended_ms,
+            voiced_ms=int(capture.voiced_ms),
+            segments=segments,
+            pauses=list(act.pauses),
+            stt_confidence=None if typed else capture.transcriber.confidence(),
+            stt_degraded=degraded or self._stt_degraded_notified,
+            typed=typed,
+        )
+        turn = CandidateTurn(
+            text=text,
+            started_ms=int(capture.started_session_ms),
+            ended_ms=ended_ms,
+            typed=typed,
+            stt_confidence=activity_capture.stt_confidence,
+            audio_wav=None if typed else capture.wav(),
+            activity=activity_capture,
+        )
+        capture.engine_called = True
+        await capture.transcriber.aclose()
+        self._latency_note(
+            capture,
+            turn_id=capture.capture_id,
+            end_reason=capture.end_reason,
+            voiced_ms=capture.voiced_ms,
+            segments=len(segments),
+            typed=typed,
+            activity=act.kind,
+        )
+        if self.transport is not None and text:
+            self.post(
+                TranscriptMsg(
+                    type="transcript.final",
+                    segment_id=capture.capture_id,
+                    text=text,
+                    start_ms=capture.started_session_ms,
+                    end_ms=ended_ms,
+                )
+            )
+        if not typed and reason != "disconnect" and segments and capture.audio:
+            self._schedule_activity_final_pass(act, capture, activity_capture, text)
+        try:
+            await self._drive(
+                self.engine.handle_candidate_turn(self.session_id, turn),
+                origin="activity_turn",
+                turn_end_at=capture.end_at,
+                capture=capture,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._release_stalled_activity(act, origin="activity_turn")
+            raise
+        self._release_stalled_activity(act, origin="activity_turn")
+
+    def _release_stalled_activity(self, act: RuntimeActivity, *, origin: str) -> None:
+        """The engine answered a finished phase without a next step (a failed or stale job): never leave the
+        candidate's speech blocked between phases. The engine re-arms the activity on the next turn."""
+        if self.activity is not act or act.status != "waiting" or self.paused_reason is not None or self.closed:
+            return
+        act.status = "interrupted"
+        if act.kind == "read_relay":
+            act.content = None
+        log.warning(
+            "realtime.activity_stalled", session_id=self.session_id, kind=act.kind, phase=act.phase, origin=origin
+        )
+
+    def _schedule_activity_final_pass(
+        self, act: RuntimeActivity, capture: TurnCapture, activity_capture: ActivityCapture, live_text: str
+    ) -> None:
+        """Windowed whole-audio transcription (<= 25 s windows) on a spare replica; worker fallback (7.7)."""
+        pcm = bytes(capture.audio)
+        attempt = act.attempt
+        activity_id = act.activity_id
+        segments = list(activity_capture.segments)
+        pauses = list(activity_capture.pauses)
+        origin = int(activity_capture.started_ms)
+        started_ms, ended_ms = activity_capture.started_ms, activity_capture.ended_ms
+
+        async def run() -> None:
+            from app.core.queue import enqueue
+            from app.services.intake import capture_store
+            from app.services.intake.transcribe import keeps_words, windowed_final_pass
+
+            result = await windowed_final_pass(
+                pcm,
+                segments,
+                pauses,
+                origin_ms=origin,
+                stt=get_ai().stt,
+                context=CallContext(
+                    task=ModelTask.STT, session_id=self.session_id, organization_id=self.ctx.organization_id
+                ),
+                language=self.settings.whisper_language or None,
+                wait_s=float(getattr(self.settings, "intake_activity_final_pass_wait_seconds", 60)),
+                correct=lambda value: self.glossary.correct(value)[0],
+            )
+            applied = False
+            if result.status == "final":
+                stored = await capture_store.store_final_transcript(
+                    self.session_id,
+                    activity_id,
+                    attempt=attempt,
+                    text_value=result.text,
+                    windows=result.window_records(),
+                    source="final_pass_live",
+                )
+                if stored and result.text != live_text and keeps_words(live_text, result.text):
+                    for retry in range(2):  # the engine may still be persisting the answer row
+                        applied = await revise_answer_transcript(
+                            self.session_id,
+                            started_ms=started_ms,
+                            ended_ms=ended_ms,
+                            live_text=live_text,
+                            revised_text=result.text,
+                        )
+                        if applied or retry:
+                            break
+                        await asyncio.sleep(1.5)
+            elif result.status == "empty":
+                await capture_store.mark_transcript_status(
+                    self.session_id, activity_id, attempt=attempt, status="unavailable"
+                )
+            else:
+                await capture_store.mark_transcript_status(
+                    self.session_id, activity_id, attempt=attempt, status="pending_worker"
+                )
+                await enqueue(
+                    "intake.activity_transcribe",
+                    {"session_id": self.session_id, "activity_id": activity_id, "attempt": attempt},
+                    dedupe_key=f"intake.activity_transcribe:{activity_id}:{attempt}",
+                    delay_seconds=30,
+                )
+            log.info(
+                "realtime.intake.final_pass",
+                session_id=self.session_id,
+                kind=act.kind,
+                status=result.status,
+                windows=len(result.windows),
+                answer_revised=applied,
+                latency_ms=round(result.latency_ms),
+            )
+
+        self.spawn(run(), "intake_final_pass")
+
+    async def _on_activity_finish(self, activity_id: str, phase: str) -> None:
+        act = self.activity
+        if act is None or act.activity_id != activity_id or act.phase != phase or act.status != "running" or act.ending:
+            return  # stale button press (another phase already started): ignored
+        elapsed_ms = (self.clock.elapsed() - (act.phase_started_elapsed or 0.0)) * 1000.0
+        if elapsed_ms + 50 < int(act.rule().get("finish_after_ms") or 0):
+            self.send_error("finish_not_available", "You can finish in a few seconds.", recoverable=True)
+            return
+        if act.capture_phase:
+            await self._end_activity_capture(act, "finish_button")
+        else:
+            await self._end_noncapture_phase(act, "finish_requested")
+
+    async def _activity_typed(self, act: RuntimeActivity, text: str) -> None:
+        if act.status == "running" and act.capture_phase and act.capture is not None and not act.ending:
+            if act.kind == "reading_aloud":
+                self.send_error(
+                    "typed_not_allowed_for_reading",
+                    "The reading exercise needs your voice: please read the passage aloud.",
+                    recoverable=True,
+                )
+                return
+            if not self.ctx.policy.allow_typed_answers:
+                self.send_error(
+                    "typed_answers_disabled", "Typed answers are not enabled for this interview.", recoverable=True
+                )
+                return
+            await self._end_activity_capture(act, "finish_button", typed_text=text)
+            return
+        self.send_error("activity_in_progress", "Please wait for the exercise to continue.", recoverable=True)
+
+    async def _activity_detached(self, *, notify: bool = False) -> None:
+        """Disconnect / policy pause during an activity: a running capture ends ``disconnect`` (the turn still runs
+        offline and is kept as an interrupted attempt); a non-capture phase stops (reveal time accounted). The
+        engine's resume decides what restarts (7.8)."""
+        act = self.activity
+        if act is None:
+            return
+        self._jobs = [job for job in self._jobs if job.kind != "activity"]
+        self._cancel_activity_timer(act)
+        if act.status == "running" and act.capture_phase and act.capture is not None and not act.ending:
+            await self._end_activity_capture(act, "disconnect")
+        elif act.status == "running":
+            now = self.clock.elapsed()
+            if act.kind == "read_relay" and act.phase == "read":
+                start = act.phase_started_elapsed if act.phase_started_elapsed is not None else now
+                act.shown_ms += int(round(max(0.0, now - start) * 1000))
+            if notify and self.transport is not None:
+                self.post(
+                    self._phase_msg(
+                        act, status="ended", remaining_ms=0, can_finish=False, hide_content=act.kind == "read_relay"
+                    )
+                )
+        if act.kind == "read_relay":
+            act.content = None
+        act.status = "interrupted"
+
+    def _stop_activity(self, act: RuntimeActivity) -> None:
+        self._cancel_activity_timer(act)
+        capture = act.capture
+        if capture is not None and self._capture is capture and not capture.engine_called:
+            self._capture = None
+            self.segmenter.reset_speech()
+            self.spawn(capture.transcriber.aclose(), "activity_capture_close")
+        act.capture = None
+        act.content = None
+        act.status = "ended"
+        if self.activity is act:
+            self.activity = None
+
+    # ------------------------------------------------------- test hook helpers
+    async def force_activity_deadline(self, activity_id: str) -> bool:
+        """Test hook: the current phase of ``activity_id`` reaches its deadline now."""
+        act = self.activity
+        if act is None or act.activity_id != activity_id or act.status != "running":
+            return False
+        if act.capture_phase:
+            await self._end_activity_capture(act, "deadline")
+        else:
+            await self._end_noncapture_phase(act, "phase_deadline")
+        return True
+
+    async def inject_activity_capture(
+        self,
+        activity_id: str,
+        *,
+        phase: str,
+        text: str,
+        segments: list[dict[str, Any]] | None = None,
+        pauses: list[dict[str, Any]] | None = None,
+        end_reason: str = "finish_button",
+        typed: bool = False,
+    ) -> bool:
+        """Test hook: replace the running capture of ``activity_id`` with ``text`` (as the runtime would send it)."""
+        act = self.activity
+        if act is None or act.activity_id != activity_id:
+            return False
+        self._cancel_activity_timer(act)
+        capture = act.capture
+        if capture is not None and self._capture is capture:
+            self._capture = None
+            self.segmenter.reset_speech()
+            await capture.transcriber.aclose()
+        act.capture = None
+        act.ending = True
+        now_ms = self._session_ms()
+        segs = segments
+        if segs is None:
+            segs = (
+                [{"start_ms": max(0, now_ms - 4000), "end_ms": now_ms, "speech_ms": 3600, "vad_prob": 0.95,
+                  "no_speech_prob": 0.0, "text": text}]
+                if text and not typed
+                else []
+            )  # fmt: skip
+        started_ms = int(segs[0]["start_ms"]) if segs else now_ms
+        activity_capture = ActivityCapture(
+            activity_id=act.activity_id,
+            kind=act.kind,  # type: ignore[arg-type]
+            phase=phase,  # type: ignore[arg-type]
+            end_reason=end_reason,  # type: ignore[arg-type]
+            started_ms=started_ms,
+            ended_ms=now_ms,
+            voiced_ms=sum(int(s.get("speech_ms") or 0) for s in segs),
+            segments=[dict(s) for s in segs],
+            pauses=[dict(p) for p in pauses or []],
+            typed=typed,
+        )
+        turn = CandidateTurn(text=text, started_ms=started_ms, ended_ms=now_ms, typed=typed, activity=activity_capture)
+        if self.transport is not None and act.status == "running":
+            self.post(self._phase_msg(act, status="ended", remaining_ms=0, can_finish=False))
+        act.status = "waiting"
+        attempt = act.attempt
+
+        async def run() -> None:
+            await self._drive(self.engine.handle_candidate_turn(self.session_id, turn), origin="activity_turn")
+            if segs and not typed:
+                from app.services.intake import capture_store
+
+                await capture_store.mark_transcript_status(
+                    self.session_id, activity_id, attempt=attempt, status="live_only", source="live_segments"
+                )
+
+        self.turns.to(TurnState.PROCESSING, "activity_injected")
+        self._enqueue("turn", run, PRIORITY_TURN, needs_idle=False)
+        return True
+
     # ---------------------------------------------------------------- barge-in
     async def _barge_in_cancel(self, reason: str) -> ActiveUtterance | None:
         utt = self._speaking_utterance()
@@ -2633,9 +3562,14 @@ class SessionRuntime:
                 wallclock_silence_ms=int((now - self._last_audio_rx) * 1000) + self.segmenter.silence_ms
             )
         idle = self._floor_idle() and self._current_task is None and not self._jobs
-        # Silence prompt: no answer ~25 s after the question was delivered.
+        act = self.activity
+        if act is not None and act.status == "running" and act.deadline is not None:
+            if act.timer is None or act.timer.done():
+                act.timer = self.track(asyncio.create_task(self._activity_timer(act), name="realtime.activity_timer"))
+        # Silence prompt: no answer ~25 s after the question was delivered (never during an intake activity).
         if (
             idle
+            and (act is None or act.status in ("ended", "interrupted"))
             and self.turns.state is TurnState.LISTENING
             and self._listening_since is not None
             and now - self._listening_since >= SILENCE_PROMPT_S * (1 + self._silence_prompts)

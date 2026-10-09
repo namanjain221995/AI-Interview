@@ -126,8 +126,12 @@ def test_question_bank_covers_domains_and_competencies(catalog: SeedCatalog) -> 
     # Competencies used by the default templates and demo jobs have bank
     # questions. Appended competencies and roles.yaml coverage are reported by
     # `python -m app.seed.validate --stats` while content is being authored.
-    used = {k for t in catalog.round_templates for k in t.config.competency_keys()}
-    used |= {r.competency_key for j in catalog.jobs for r in j.requirements if r.competency_key}
+    # Intake rounds never draw from the bank (the deterministic intake kit drives them), so
+    # competencies used only by intake templates/jobs need no bank questions.
+    bank_templates = [t for t in catalog.round_templates if t.round_type is not RoundType.INTAKE]
+    bank_jobs = [j for j in catalog.jobs if any(r.template is not RoundType.INTAKE for r in j.rounds)]
+    used = {k for t in bank_templates for k in t.config.competency_keys()}
+    used |= {r.competency_key for j in bank_jobs for r in j.requirements if r.competency_key}
     assert sorted(used - covered) == []
     for round_type in (
         RoundType.TECHNICAL_SCREENING,
@@ -189,6 +193,7 @@ def test_demo_jobs_present(catalog: SeedCatalog) -> None:
         "Backend Engineer (Python)",
         "Frontend Engineer (React)",
         "ML Engineer (LLM)",
+        "AI/ML Training Program — Intake",
     }
     assert sum(j.allow_candidate_round_selection for j in catalog.jobs) == 1
 
@@ -197,7 +202,7 @@ def test_devops_demo_job_matches_brief(catalog: SeedCatalog) -> None:
     job = next(j for j in catalog.jobs if j.key == "senior_devops_engineer")
     required = {r.competency_key for r in job.requirements if r.kind == RequirementKind.REQUIRED_SKILL}
     assert required == {"kubernetes", "aws", "terraform", "ci_cd", "observability", "incident_response"}
-    assert job.candidate_report_mode == CandidateReportMode.IMMEDIATE
+    assert job.candidate_report_mode == CandidateReportMode.NEVER  # owner: candidates never see reports
     rounds = resolve_job_rounds(job, catalog.templates_by_type())
     assert [(r.name, r.round_type) for r in rounds] == [
         ("Combined AI Round", RoundType.COMBINED),

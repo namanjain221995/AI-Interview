@@ -185,6 +185,26 @@ staff `GET|POST /open-links`, `GET /open-links/form/catalog`, `POST /open-links/
 `GET /link-access/{token}`, `POST /link-access/{token}/register`, `GET /link-return/{token}`,
 `POST /link-return/{token}/verify`; candidate `GET /portal/link/progress`, `POST /portal/link/continue`.
 
+**Intake interviews** (docs/design/INTAKE_INTERVIEW.md section 10; round type `intake`; every route answers 404
+`intake_disabled` when `INTAKE_ENABLED=false`; other organisations' ids answer 404 `intake_not_found`):
+staff admin (T3, `intake.py`) `GET /intake/config` (`jobs:read`), `GET /intake/settings` (`jobs:read`),
+`PUT /intake/settings` (`settings:manage`), `POST /intake/interviews` and `POST /intake/interviews/batch`
+(`interviews:invite` + `candidates:write`; links and access codes shown once; batch rate limit
+`intake_batch_create` 10/min/user, at most `INTAKE_BATCH_MAX_ROWS` rows, per-row `created`/`failed{code}`),
+`GET /intake/interviews` (`sessions:read`; `bucket`, `q`, `job_id`, `target_role`, `band`, `outcome`, `reviewer_id`,
+`batch_id`, `created_from`, `created_to`, `sort`, paging), `GET /intake/stats` (`sessions:read`),
+`PATCH /intake/interviews/{id}`, `POST /intake/interviews/{id}/send|cancel|regenerate-link` (`interviews:invite`);
+staff review (T2, `intake_review.py`) `GET /intake/interviews/{id}`, `/timeline`, `/evaluation`,
+`POST /intake/interviews/{id}/evaluate`, `GET|POST /intake/interviews/{id}/decisions`, `GET /intake/analytics`;
+candidate (T3, `portal_intake.py`, own interview only, 409 `intake_not_applicable` for other round types)
+`GET /portal/intake/{interview_id}`, `PUT /portal/intake/{interview_id}/onboarding` (rate limit
+`portal_intake_onboarding` 30/min/interview), `GET|PUT /portal/intake/{interview_id}/resume-review` (rate limit
+`portal_intake_resume_review` 30/min/interview). `POST /portal/interviews/{id}/session` answers 409
+`intake_disabled`, `intake_resume_required`, `intake_onboarding_required` or `intake_resume_review_required` before a
+new intake session; `PortalInterview.intake`, `InviteInfo.round_type` and the step keys `details` and `resume-review`
+are additive. Validation errors of these routes carry `details.field`; intake-specific types
+(`work_authorization_country_required`, `target_role_other_required`, ...) become the error code.
+
 **Health**: `GET /healthz` (liveness, no dependencies), `GET /readyz` (DB, Redis, storage),
 `GET /metrics` (Prometheus; the edge blocks it from the outside).
 
@@ -219,6 +239,9 @@ with exponential backoff (max 3), moves exhausted jobs to `jobs:dead`, reclaims 
 | `recording.sweep` | (scheduled every 2 minutes) | recordings |
 | `open_link.round_finished` | session_id (enqueued by `scoring.finalize`) | open-links |
 | `open_link.sweep` | (scheduled every 5 minutes) | open-links |
+| `intake.activity_transcribe` | session_id, activity_id | intake (T1, `app/workers/intake_capture.py`) |
+| `intake.evaluate` | session_id, reason, requested_by?, deferrals? (enqueued by the intake closing; replaces `scoring.finalize` + `report.generate` for intake sessions) | intake (T2, `app/workers/intake.py`) |
+| `intake.report` | session_id, evaluation_id, reason? | intake (T2, `app/workers/intake.py`) |
 
 Session-scoped results are announced on Redis pub/sub channel `session:{id}:bus` as JSON
 `{"type": "evaluation.ready"|"integrity.event"|"report.ready"|"coding.evaluated", ...}` so the live
@@ -283,7 +306,10 @@ Defined once in `app/core/metrics.py` and imported elsewhere:
 `interview_http_request_seconds{method,route}`, `interview_auth_events_total{event}`,
 `interview_rate_limited_total{scope}`, `interview_jobs_in_flight{type}`, `interview_circuit_breaker_state{endpoint}`,
 `interview_model_call_ledger_dropped_total` (added during the build),
-`interview_open_link_registrations_total{outcome}` (open links).
+`interview_open_link_registrations_total{outcome}` (open links),
+`interview_intake_invitations_total{mode}` (single, batch, draft_sent), `interview_intake_activities_total{kind,end_reason}`,
+`interview_intake_stage_seconds{stage}` (histogram), `interview_intake_evaluations_total{status}`,
+`interview_intake_evaluation_seconds` (histogram), `interview_intake_decisions_total{outcome,overrides_ai}` (intake).
 The worker serves `/metrics` and `/healthz` on `WORKER_METRICS_PORT`; tts and sandbox expose `/metrics`.
 
 ## 9. Model routing (measured, see AI_PIPELINE.md)

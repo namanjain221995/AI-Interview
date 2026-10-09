@@ -50,6 +50,10 @@ ROUND_TYPE_INFO: dict[RoundType, tuple[str, str]] = {
         "Combined AI round",
         "Resume validation, technical depth and optional coding in one session.",
     ),
+    RoundType.INTAKE: (
+        "Intake interview",
+        "Seven-stage intake screening before a training program, with a reading and a speaking exercise.",
+    ),
 }
 
 

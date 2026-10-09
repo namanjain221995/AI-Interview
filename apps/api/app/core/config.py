@@ -208,6 +208,15 @@ class Settings(BaseSettings):
     open_link_register_ip_limit_per_hour: int = 600
     open_link_default_round_window_hours: int = 72
 
+    # ---------------------------------------------------- intake interviews
+    # docs/design/INTAKE_INTERVIEW.md section 12. INTAKE_ENABLED=false: intake routes
+    # answer 404 intake_disabled, new intake sessions 409; live sessions finish.
+    intake_enabled: bool = True
+    intake_eval_concurrency: int = 2
+    intake_eval_start_delay_seconds: int = 30
+    intake_activity_final_pass_wait_seconds: int = 60
+    intake_batch_max_rows: int = 200
+
     # ------------------------------------------------------- observability
     metrics_enabled: bool = True
     otel_enabled: bool = False

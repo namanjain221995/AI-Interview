@@ -19,10 +19,10 @@ from sqlalchemy.orm import load_only
 
 from app.core.audit import audit
 from app.core.deps import DbSession, PaginationParams, require_permission, resolve_org_id
-from app.core.errors import ValidationFailed
+from app.core.errors import Conflict, ValidationFailed
 from app.core.rbac import Permission, Principal
-from app.db.models import Candidate, CompetencyEvidence, InterviewSession, Transcript
-from app.domain.enums import EvidenceSignal, EvidenceSource, Recommendation, SessionStatus
+from app.db.models import Candidate, CompetencyEvidence, InterviewSession, Round, Transcript
+from app.domain.enums import EvidenceSignal, EvidenceSource, Recommendation, RoundType, SessionStatus
 from app.schemas.api.common import ERROR_RESPONSES, Page
 from app.schemas.api.sessions import (
     EvidenceOut,
@@ -87,6 +87,22 @@ def _statuses(values: list[str] | None) -> list[str]:
     return out
 
 
+def _round_types(values: list[str] | None) -> list[str]:
+    out: list[str] = []
+    for raw in values or []:
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                out.append(RoundType(part).value)
+            except ValueError as exc:
+                raise ValidationFailed(
+                    f"Unknown round type {part!r}.", details={"field": "round_type"}
+                ) from exc
+    return out
+
+
 @router.get("", response_model=Page[SessionSummaryOut], summary="List interview sessions")
 async def list_sessions(
     principal: SessionReader,
@@ -99,6 +115,9 @@ async def list_sessions(
     job_id: uuid.UUID | None = None,
     candidate_id: uuid.UUID | None = None,
     round_id: uuid.UUID | None = None,
+    round_type: Annotated[
+        list[str] | None, Query(description="Repeat or comma-separate round types (e.g. intake)")
+    ] = None,
     interview_id: uuid.UUID | None = None,
     recommendation: Recommendation | None = None,
     live: bool | None = None,
@@ -133,6 +152,9 @@ async def list_sessions(
         stmt = stmt.where(InterviewSession.candidate_id == candidate_id)
     if round_id is not None:
         stmt = stmt.where(InterviewSession.round_id == round_id)
+    round_types = _round_types(round_type)
+    if round_types:
+        stmt = stmt.where(InterviewSession.round_id.in_(select(Round.id).where(Round.round_type.in_(round_types))))
     if interview_id is not None:
         stmt = stmt.where(InterviewSession.interview_id == interview_id)
     if recommendation is not None:
@@ -359,6 +381,11 @@ async def recompute_scores(
     final: Annotated[bool | None, Query(description="Default: final once the session has ended")] = None,
 ) -> SessionScoresOut:
     session = await get_session_for_principal(db, principal, session_id)
+    if (session.round_config or {}).get("round_type") == RoundType.INTAKE.value:
+        raise Conflict(
+            "Intake scores come from the intake evaluation. Re-evaluate the intake interview instead.",
+            code="intake_scores_managed",
+        )
     is_final = final if final is not None else session.status in TERMINAL_STATUSES
     result = await recompute_session_scores(db, session.id, final=is_final, trigger="manual")
     await audit(

@@ -81,9 +81,37 @@ async def _maybe_defer(job_type: str, sid: uuid.UUID, payload: dict[str, Any]) -
     return None
 
 
+async def _intake_guard(
+    sid: uuid.UUID, *, job_id: str | None = None, report: bool = False
+) -> dict[str, Any] | None:
+    """Intake sessions are scored and reported by the intake pipeline (``app.workers.intake``): generic jobs skip
+    them; ``report.generate`` hands over to ``intake.report`` for the newest ready evaluation."""
+    async with session_scope() as db:
+        session = await db.get(InterviewSession, sid)
+        if session is None or (session.round_config or {}).get("round_type") != "intake":
+            return None
+        evaluation_id = None
+        if report:
+            from app.services.intake.pipeline import latest_ready_evaluation
+
+            evaluation = await latest_ready_evaluation(db, sid)
+            evaluation_id = evaluation.id if evaluation is not None else None
+    if evaluation_id is not None:
+        await enqueue(
+            "intake.report",
+            {"session_id": str(sid), "evaluation_id": str(evaluation_id), "reason": "regenerate"},
+            dedupe_key=f"intake.report:{evaluation_id}:generic:{job_id or 'none'}",
+        )
+    log.info("reports.intake_skipped", session_id=str(sid), handed_over=evaluation_id is not None)
+    return {"skipped": "intake", "intake_report_enqueued": evaluation_id is not None}
+
+
 @job_handler("scoring.finalize", concurrency=2, timeout_seconds=120)
 async def finalize_scores(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     sid = _session_id(payload)
+    skipped = await _intake_guard(sid)
+    if skipped is not None:
+        return skipped
     # Open interview links: unlock the next round / route to review as soon as
     # the session has closed (does not wait for scores or reports).
     try:
@@ -113,6 +141,9 @@ async def finalize_scores(payload: dict[str, Any], ctx: JobContext) -> dict[str,
 @job_handler("report.generate", concurrency=2, timeout_seconds=600)
 async def generate_report(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     sid = _session_id(payload)
+    skipped = await _intake_guard(sid, job_id=ctx.job_id, report=True)
+    if skipped is not None:
+        return skipped
     deferred = await _maybe_defer("report.generate", sid, payload)
     if deferred is not None:
         return deferred

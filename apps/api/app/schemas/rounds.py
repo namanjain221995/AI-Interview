@@ -7,6 +7,13 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.domain.enums import CodeLanguage, Difficulty, RoundType
+from app.schemas.intake import (
+    INTAKE_DEFAULT_MINUTES,
+    INTAKE_MAX_EXTRA_MINUTES,
+    INTAKE_MAX_MINUTES,
+    INTAKE_MIN_MINUTES,
+    IntakeRoundConfig,
+)
 
 
 class _Model(BaseModel):
@@ -137,6 +144,8 @@ class RoundConfig(_Model):
     )
     interviewer_notes: str | None = Field(None, description="Private guidance for the AI interviewer")
     candidate_selectable: bool = False
+    # Intake Interview settings (round_type "intake" only; other round types ignore the field).
+    intake: IntakeRoundConfig | None = None
 
     @field_validator("rubric")
     @classmethod
@@ -151,6 +160,32 @@ class RoundConfig(_Model):
     def _durations(self) -> RoundConfig:
         if self.max_duration_minutes < self.duration_minutes:
             self.max_duration_minutes = self.duration_minutes
+        return self
+
+    @model_validator(mode="after")
+    def _intake_rules(self) -> RoundConfig:
+        """Intake rounds (INTAKE_INTERVIEW.md 4.1): 35-50 minutes (45 when not given), at most 5 extra minutes,
+        no coding, never candidate-selectable, résumé claims always validated."""
+        if self.round_type is not RoundType.INTAKE:
+            return self
+        if self.intake is None:
+            self.intake = IntakeRoundConfig()
+        given = self.model_fields_set
+        if "duration_minutes" not in given:
+            self.duration_minutes = INTAKE_DEFAULT_MINUTES
+        if not INTAKE_MIN_MINUTES <= self.duration_minutes <= INTAKE_MAX_MINUTES:
+            raise ValueError(f"Intake rounds last {INTAKE_MIN_MINUTES}-{INTAKE_MAX_MINUTES} minutes")
+        if "max_duration_minutes" not in given:
+            self.max_duration_minutes = self.duration_minutes + INTAKE_MAX_EXTRA_MINUTES
+        self.max_duration_minutes = min(
+            max(self.max_duration_minutes, self.duration_minutes),
+            self.duration_minutes + INTAKE_MAX_EXTRA_MINUTES,
+        )
+        if self.coding.enabled:
+            raise ValueError("Intake rounds cannot include a coding section")
+        if self.candidate_selectable:
+            raise ValueError("Intake rounds cannot be selected by the candidate")
+        self.resume_validation.enabled = True
         return self
 
     def competency_keys(self) -> list[str]:

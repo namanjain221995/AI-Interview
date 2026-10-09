@@ -58,6 +58,7 @@ export function useJourney(step: StepKey, chrome: Pick<CandidateChrome, "width" 
 
   useCandidateChrome({
     orgName: interview?.organizationName || null,
+    orgLogoUrl: interview?.organizationLogoUrl ?? null,
     subtitle: interview?.job.title || null,
     steps,
     completed,
@@ -66,7 +67,14 @@ export function useJourney(step: StepKey, chrome: Pick<CandidateChrome, "width" 
   });
 
   // Local evidence (this browser just completed the step) counts too, so a slow server refresh never bounces the candidate back.
-  const redirect = interview ? requiredRedirect(step, { stepsCompleted: [...interview.stepsCompleted, ...visited] }) : null;
+  const redirect = interview
+    ? requiredRedirect(step, {
+        stepsCompleted: [...interview.stepsCompleted, ...visited],
+        intake: interview.intake,
+        rounds: interview.rounds,
+        selectedRoundId: interview.selectedRoundId,
+      })
+    : null;
   useEffect(() => {
     if (redirect) navigate(`/candidate/${interviewId}/${redirect}`, { replace: true });
   }, [redirect, interviewId, navigate]);

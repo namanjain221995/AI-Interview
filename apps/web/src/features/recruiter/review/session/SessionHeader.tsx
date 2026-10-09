@@ -1,4 +1,4 @@
-import { BriefcaseBusiness, CalendarClock, Copy, Ellipsis, FileText, Layers, MessagesSquare, RefreshCcw, Timer, UserRound } from "lucide-react";
+import { BriefcaseBusiness, CalendarClock, ClipboardCheck, Copy, Ellipsis, FileText, Layers, MessagesSquare, RefreshCcw, Timer, UserRound } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 
@@ -36,6 +36,8 @@ export function SessionHeader() {
   const name = session.candidate?.full_name ?? "Candidate";
   const round = session.round;
   const questionCount = session.question_count ?? session.state_digest?.question_count ?? questions.length;
+  // Intake sessions have their own review page (docs/design/INTAKE_INTERVIEW.md 11.1) and scores the intake pipeline manages.
+  const intake = round?.round_type === "intake";
 
   const copyLink = async () => {
     try {
@@ -89,6 +91,11 @@ export function SessionHeader() {
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {intake ? (
+            <Button variant="outline" leftIcon={<ClipboardCheck />} asChild data-testid="session-intake-review-link">
+              <Link to={`/app/intake/session/${sessionId}`}>Open intake review</Link>
+            </Button>
+          ) : null}
           {watchable ? (
             nav.tab !== "live" ? (
               <Button variant="outline" onClick={() => nav.go({ tab: "live" })} leftIcon={<span className="size-2 rounded-full bg-signal animate-pulse-soft" />}>
@@ -117,7 +124,7 @@ export function SessionHeader() {
                 <Copy />
                 Copy link to this session
               </DropdownMenuItem>
-              {canRecompute && !inProgress ? (
+              {canRecompute && !inProgress && !intake ? (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem disabled={recompute.isPending} onSelect={() => recompute.mutate()}>

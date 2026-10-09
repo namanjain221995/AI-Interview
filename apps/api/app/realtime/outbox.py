@@ -29,7 +29,11 @@ from app.core.metrics import ERRORS
 
 log = get_logger(__name__)
 
-NON_REPLAYABLE_TYPES: frozenset[str] = frozenset({"tts.chunk", "heartbeat.ack"})
+#: Never stored for replay (still sequenced). Intake activity messages are non-replayable so the Drill B
+#: passage (only ever inside an ``activity.phase`` message) never reaches the in-memory or Redis outbox.
+NON_REPLAYABLE_TYPES: frozenset[str] = frozenset(
+    {"tts.chunk", "heartbeat.ack", "activity.start", "activity.phase", "activity.end"}
+)
 OUTBOX_TTL_SECONDS = 6 * 3600
 
 

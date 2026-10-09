@@ -14,9 +14,34 @@ export function useSessionId(interviewId: string, interview: PortalInterviewView
   return params.get("session") || readLocal<string | null>(interviewId, "session", null) || interview?.latestSession?.id || null;
 }
 
+function asMode(value: unknown): CandidateReportMode | null {
+  return value === "immediate" || value === "after_review" || value === "never" ? value : null;
+}
+
+/**
+ * The invitation's candidate feedback policy. Missing or unknown values count as
+ * `never` (the platform default): the portal never promises feedback it was not
+ * told it will share.
+ */
 export function reportMode(interview: PortalInterviewView | null | undefined): CandidateReportMode {
-  const mode = interview?.policy.candidate_report_mode;
-  return mode === "immediate" || mode === "never" ? mode : "after_review";
+  return asMode(interview?.policy.candidate_report_mode) ?? "never";
+}
+
+/**
+ * The feedback policy for one session: the session's own `candidate_report_mode`
+ * (what the report pipeline uses) when the portal session endpoint returns it,
+ * else the invitation's policy. `pending` is true until the session answered, so
+ * pages can hold back feedback copy instead of flashing the wrong promise.
+ */
+export function useReportMode(interview: PortalInterviewView | null | undefined, sessionId: string | null): { mode: CandidateReportMode; pending: boolean } {
+  const session = useQuery({
+    queryKey: queryKeys.portal.session(sessionId ?? "none"),
+    queryFn: () => getPortalSession(sessionId!),
+    enabled: Boolean(sessionId),
+    meta: { errorToast: false },
+  });
+  const fromSession = asMode(session.data?.candidateReportMode);
+  return { mode: fromSession ?? reportMode(interview), pending: Boolean(sessionId) && session.isPending };
 }
 
 export function isReportReady(report: CandidateReportView | undefined): boolean {

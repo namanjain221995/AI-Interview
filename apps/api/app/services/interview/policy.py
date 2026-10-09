@@ -21,6 +21,7 @@ from app.domain.enums import (
     AnswerQuality,
     ClaimStatus,
     Difficulty,
+    RoundType,
     SegmentKind,
     SessionEndReason,
     TurnAction,
@@ -125,6 +126,13 @@ QUICK_MIN_CONFIDENCE = 0.6
 WRAP_UP_WINDOW_S = 150.0  # invite candidate questions this long before the closing reserve
 MIN_INVITE_TIME_S = 45.0
 CODING_URGENCY_S = 120.0
+#: Rounds where a short coding exercise sits between conversation segments. The interviewer talks
+#: first, then the editor opens inside [EARLIEST, LATEST] x time limit, whatever the model plan
+#: says (a plan with coding last left only the last-window start at ~60 %, after many candidates
+#: had already ended). ``coding.start_after_minutes`` replaces the earliest start when set.
+MIXED_CODING_ROUNDS: frozenset[RoundType] = frozenset({RoundType.COMBINED})
+MIXED_CODING_EARLIEST_SHARE = 0.2
+MIXED_CODING_LATEST_SHARE = 0.4
 SEGMENT_OVERRUN_FACTOR = 1.15
 MAX_SIMPLIFY_INCORRECT = 2
 MAX_SIMPLIFY_NO_ANSWER = 1
@@ -333,18 +341,67 @@ def is_technical_competency(key: str, comp: CompetencyState | None) -> bool:
     return not (comp and comp.category in NON_TECHNICAL_CATEGORIES)
 
 
-def plan_segments(state: InterviewState) -> list[tuple[str, str, float, float, list[str]]]:
-    """(key, kind, start_s, budget_s, competency_keys) scaled to the time limit."""
+def coding_start_window(state: InterviewState) -> tuple[float, float | None]:
+    """(earliest_s, latest_s) for opening the coding exercise; ``latest_s`` None = no deadline.
+
+    ``coding.start_after_minutes`` is the explicit earliest start. Mixed rounds (combined) default
+    to 20 % of the time limit and open the editor by 40 % (never before the earliest start)."""
+    rc = state.round_config
+    explicit = rc.coding.start_after_minutes * 60.0 if rc.coding.start_after_minutes is not None else None
+    if rc.round_type not in MIXED_CODING_ROUNDS:
+        return explicit or 0.0, None
+    earliest = explicit if explicit is not None else MIXED_CODING_EARLIEST_SHARE * state.time_limit_s
+    return earliest, max(earliest, MIXED_CODING_LATEST_SHARE * state.time_limit_s)
+
+
+Segment = tuple[str, str, float, float, list[str]]
+
+
+def _fit_coding_start(segments: list[Segment], earliest: float, latest: float) -> list[Segment]:
+    """Move the coding segment's start into [earliest, latest] by rescaling the segments before it
+    (and those after it by the time difference), keeping order, keys and the total."""
+    idx = next((i for i, s in enumerate(segments) if s[1] == SegmentKind.CODING.value), None)
+    if not idx:  # no coding segment, or coding first (nothing to rescale before it)
+        return segments
+    start = segments[idx][2]
+    target = min(max(start, earliest), latest)
+    if abs(target - start) < 1.0:
+        return segments
+    total = segments[-1][2] + segments[-1][3]
+    post_total = sum(s[3] for s in segments[idx + 1 :])
+    coding_budget = min(segments[idx][3], max(0.0, total - target)) if post_total > 0 else total - target
+    post_scale = max(0.0, total - target - coding_budget) / post_total if post_total > 0 else 0.0
+    out: list[Segment] = []
+    at = 0.0
+    for i, (key, kind, _start, budget, keys) in enumerate(segments):
+        if i < idx:
+            budget *= target / start
+        elif i == idx:
+            budget = coding_budget
+        else:
+            budget *= post_scale
+        out.append((key, kind, at, budget, keys))
+        at += budget
+    return out
+
+
+def plan_segments(state: InterviewState) -> list[Segment]:
+    """(key, kind, start_s, budget_s, competency_keys) scaled to the time limit; in mixed rounds
+    the coding segment starts inside :func:`coding_start_window`."""
     if state.plan is None or not state.plan.segments:
         return []
     total = sum(s.time_budget_minutes for s in state.plan.segments) * 60.0
     scale = (state.time_limit_s / total) if total > 0 else 1.0
-    out: list[tuple[str, str, float, float, list[str]]] = []
+    out: list[Segment] = []
     start = 0.0
     for seg in state.plan.segments:
         budget = seg.time_budget_minutes * 60.0 * scale
         out.append((seg.key, seg.kind.value, start, budget, list(seg.competency_keys)))
         start += budget
+    if state.round_config.coding.enabled:
+        earliest, latest = coding_start_window(state)
+        if latest is not None:
+            out = _fit_coding_start(out, earliest, latest)
     return out
 
 
@@ -725,10 +782,13 @@ def coding_due(
         return False, None
     if state.force_coding:
         return True, "forced"
-    if cs.start_after_minutes is not None and elapsed_s < cs.start_after_minutes * 60.0:
+    earliest, latest = coding_start_window(state)
+    if elapsed_s < earliest:
         return False, None
     if remaining_s - closing_reserve_s - duration < CODING_URGENCY_S:
         return True, "last_window"
+    if latest is not None and elapsed_s >= latest:
+        return True, "round_point"  # mixed-round deadline: not deferred for a follow-up
     plan_start = coding_plan_start_s(state)
     if plan_start is not None and elapsed_s >= plan_start:
         return True, "plan_point"
@@ -1637,6 +1697,7 @@ __all__ = [
     "check_decision",
     "claim_to_verify",
     "coding_due",
+    "coding_start_window",
     "contradiction_probes",
     "competency_matches",
     "coverage_gap",

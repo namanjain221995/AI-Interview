@@ -240,7 +240,7 @@ describe("sections and server errors", () => {
     expect(sectionForPath("stopping.max_questions")).toBe("flow");
     expect(sectionForPath("instructions")).toBe("candidate");
     expect(sectionForPath("competencies.1.key")).toBe("setup");
-    expect(countBySection(["rubric", "coding.languages", "name", "rubric.1.label"])).toEqual({ setup: 1, scoring: 2, flow: 0, coding: 1, candidate: 0 });
+    expect(countBySection(["rubric", "coding.languages", "name", "rubric.1.label"])).toEqual({ setup: 1, scoring: 2, flow: 0, coding: 1, intake: 0, candidate: 0 });
   });
 
   it("maps pydantic errors from a round payload onto config paths", () => {

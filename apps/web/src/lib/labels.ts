@@ -58,6 +58,7 @@ export const ROUND_TYPE_LABELS: Record<RoundType, string> = {
   leadership: "Leadership",
   custom: "Custom",
   combined: "Combined",
+  intake: "Intake interview",
 };
 
 export const DIFFICULTY_LABELS: Record<Difficulty, string> = {

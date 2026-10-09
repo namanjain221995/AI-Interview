@@ -8,7 +8,21 @@
 // would trigger a dependency re-optimisation and a full page reload mid-interview).
 import { createStore, useStore, type StoreApi } from "zustand";
 
+import {
+  freezeActivity,
+  hideActivityContent,
+  normalizeIntake,
+  reconcileActivity,
+  reduceActivityEnd,
+  reduceActivityPhase,
+  reduceActivityStart,
+  resumeActivityClock,
+  type ActivityView,
+  type HideReason,
+  type IntakeView,
+} from "@/features/intake/candidate/room/activityModel";
 import type {
+  ActivityPhase,
   AvatarBehaviorMsg,
   AvatarState,
   CodeLanguage,
@@ -151,6 +165,12 @@ export interface InterviewViewState {
   notices: NoticeView[];
   warnings: IntegrityWarningView[];
   sttDegraded: boolean;
+  /**
+   * The candidate has spoken in this room (the server heard speech on their floor or
+   * returned a transcript). Speech-recognition trouble is only surfaced after this,
+   * never during the introduction or before the first answer.
+   */
+  candidateSpoke: boolean;
   ttsDegraded: boolean;
   ended: EndedView | null;
   fatalError: { code: string; message: string } | null;
@@ -160,6 +180,10 @@ export interface InterviewViewState {
    * it begins by itself. The clock is stopped meanwhile.
    */
   preparing: boolean;
+  /** Intake interviews: stage progress from session.state (null for every other round type). */
+  intake: IntakeView | null;
+  /** Intake interviews: the reading or speaking exercise on screen (content lives only here, in memory). */
+  activity: ActivityView | null;
 }
 
 export type LocalAction =
@@ -178,11 +202,23 @@ export type LocalAction =
   | { type: "notice.local"; code: string; level: NoticeView["level"]; message: string; at: number }
   | { type: "notice.dismiss"; code: string }
   | { type: "warning.dismiss"; id: string }
-  | { type: "warning.local"; eventType: IntegrityEventType | null; message: string; at: number };
+  | { type: "warning.local"; eventType: IntegrityEventType | null; message: string; at: number }
+  /** Remove the read-and-relay passage now (countdown zero, "I'm ready", lost connection). */
+  | { type: "activity.hide_local"; reason: HideReason; activityId?: string; at: number }
+  | { type: "activity.finish_requested"; activityId: string; phase: ActivityPhase; at: number }
+  /** The brief "Done" after activity.end is over: close the panel. */
+  | { type: "activity.dismiss"; activityId: string };
 
 export type InterviewAction = { type: "server"; msg: ServerMessage; at: number } | LocalAction;
 
 const MAX_NOTICES = 4;
+
+/** Intake activity errors shown as calm information (server wording first, these as fallbacks). */
+const ACTIVITY_HINTS: Record<string, string> = {
+  finish_not_available: "You can finish in a few seconds.",
+  activity_in_progress: "Please wait for the exercise to continue.",
+  typed_not_allowed_for_reading: "The reading exercise needs your voice: please read the passage aloud.",
+};
 const MAX_WARNINGS = 3;
 const MAX_UTTERANCES = 6;
 
@@ -199,11 +235,14 @@ export function initialInterviewState(): InterviewViewState {
     notices: [],
     warnings: [],
     sttDegraded: false,
+    candidateSpoke: false,
     ttsDegraded: false,
     ended: null,
     fatalError: null,
     begun: false,
     preparing: false,
+    intake: null,
+    activity: null,
   };
 }
 
@@ -351,10 +390,15 @@ function reduceServer(state: InterviewViewState, msg: ServerMessage, at: number)
         avatarState: msg.avatar_state ?? "IDLE",
       };
       const coding = msg.coding ? codingFromState(state.coding, msg.coding, at) : state.coding?.ended ? state.coding : null;
+      // Intake: stage progress, and the activity reconciled with the content-free snapshot.
+      const intake = msg.intake === undefined ? state.intake : normalizeIntake(msg.intake);
+      const activity = intake ? reconcileActivity(state.activity, intake.activity, at) : msg.intake === null ? null : state.activity;
       return {
         ...state,
         session,
         coding,
+        intake,
+        activity,
         lastInterviewerText: state.lastInterviewerText || msg.current_question || "",
       };
     }
@@ -367,6 +411,7 @@ function reduceServer(state: InterviewViewState, msg: ServerMessage, at: number)
       else if (["ai_speaking", "listening", "candidate_speaking", "coding"].includes(msg.state)) next = { ...next, preparing: false };
       // The floor is the candidate's: whatever the interviewer said has been delivered.
       if (msg.state === "listening" || msg.state === "candidate_speaking") next = settleEnded(next);
+      if (msg.state === "candidate_speaking" && !next.candidateSpoke) next = { ...next, candidateSpoke: true };
       return next;
     }
     case "avatar.behavior":
@@ -425,7 +470,7 @@ function reduceServer(state: InterviewViewState, msg: ServerMessage, at: number)
     case "transcript.final": {
       if (msg.speaker === "interviewer") return state;
       const candidate = candidateWithSegment(state.candidate, { id: msg.segment_id, text: msg.text, final: msg.type === "transcript.final" });
-      return { ...state, candidate };
+      return { ...state, candidate, candidateSpoke: state.candidateSpoke || Boolean(msg.text.trim()) };
     }
     case "coding.start": {
       // The same exercise re-announced (e.g. after code.language) keeps the last run and hints.
@@ -473,6 +518,12 @@ function reduceServer(state: InterviewViewState, msg: ServerMessage, at: number)
     }
     case "error": {
       if (msg.recoverable === false) return { ...state, fatalError: { code: msg.code, message: msg.message } };
+      // Intake activity refusals are calm hints, not failures; a refused finish frees the button again.
+      const hint = ACTIVITY_HINTS[msg.code];
+      if (hint) {
+        const activity = msg.code === "finish_not_available" && state.activity ? { ...state.activity, finishRequested: false } : state.activity;
+        return { ...state, activity, notices: pushNotice(state.notices, { id: `e${msg.seq || at}`, level: "info", code: msg.code, message: msg.message?.trim() || hint, at }) };
+      }
       return { ...state, notices: pushNotice(state.notices, { id: `e${msg.seq || at}`, level: "error", code: msg.code, message: msg.message, at }) };
     }
     case "session.ended": {
@@ -482,10 +533,16 @@ function reduceServer(state: InterviewViewState, msg: ServerMessage, at: number)
         candidateReportAvailable: Boolean(msg.candidate_report_available),
       };
       const coding = state.coding && !state.coding.ended ? { ...state.coding, ended: "session_ended" as const } : state.coding;
-      return { ...withSession(state, { turnState: "ended", status: state.session?.status === "live" ? "completing" : (state.session?.status ?? "completing") }), ended, coding };
+      return { ...withSession(state, { turnState: "ended", status: state.session?.status === "live" ? "completing" : (state.session?.status ?? "completing") }), ended, coding, activity: null };
     }
     case "heartbeat.ack":
       return state;
+    case "activity.start":
+      return { ...state, activity: reduceActivityStart(state.activity, msg, at) };
+    case "activity.phase":
+      return { ...state, activity: reduceActivityPhase(state.activity, msg, at) };
+    case "activity.end":
+      return { ...state, activity: reduceActivityEnd(state.activity, msg, at) };
     default:
       return state;
   }
@@ -505,9 +562,15 @@ export function reduceInterview(state: InterviewViewState, action: InterviewActi
         session = { ...session, remainingS: remaining, syncedAtMs: action.at };
       }
       if (connected && session) session = { ...session, syncedAtMs: action.at };
+      // The activity clock pauses with the interview clock; the relay passage never outlives the socket.
+      let activity = state.activity;
+      if (!connected && prev.status === "connected") activity = freezeActivity(activity, action.at);
+      else if (!connected) activity = hideActivityContent(activity, "disconnect", action.at);
+      else if (prev.status !== "connected") activity = resumeActivityClock(activity, action.at);
       return {
         ...state,
         session,
+        activity,
         connection: {
           ...prev,
           status: action.status,
@@ -591,6 +654,18 @@ export function reduceInterview(state: InterviewViewState, action: InterviewActi
     }
     case "warning.dismiss":
       return { ...state, warnings: state.warnings.filter((w) => w.id !== action.id) };
+    case "activity.hide_local":
+      if (action.activityId && state.activity?.id !== action.activityId) return state;
+      return { ...state, activity: hideActivityContent(state.activity, action.reason, action.at) };
+    case "activity.finish_requested": {
+      const a = state.activity;
+      if (!a || a.id !== action.activityId || a.phase !== action.phase || a.status !== "running") return state;
+      // The passage stays until the server ends the phase (immediately on "I'm ready"): a refused finish
+      // (finish_not_available) must not cost reading time.
+      return { ...state, activity: { ...a, finishRequested: true } };
+    }
+    case "activity.dismiss":
+      return state.activity?.id === action.activityId && state.activity.status === "ended" ? { ...state, activity: null } : state;
     default:
       return state;
   }

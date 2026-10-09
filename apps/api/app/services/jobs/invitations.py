@@ -97,10 +97,16 @@ async def create_invitation(
     invited_by_id: uuid.UUID | None,
     body: InterviewCreate,
     skip_access_code: bool = False,
+    intake_managed: bool = False,
 ) -> IssuedInvite:
     """``skip_access_code=True`` (open interview links): never issue an access
     code, even when the organization requires one - the candidate enters
-    through cookies or a personal link, never through this invite token."""
+    through cookies or a personal link, never through this invite token.
+
+    ``intake_managed=True`` (intake create/send/batch flows, which write their
+    own ``intake_interviews`` row): skip the intake hook. Otherwise an
+    invitation for an intake round gets its intake row here (never breaks the
+    invitation; see :func:`_ensure_intake_row`)."""
     candidate = await db.get(Candidate, body.candidate_id)
     if candidate is None or candidate.organization_id != organization_id:
         raise NotFound("Candidate not found.")
@@ -184,7 +190,29 @@ async def create_invitation(
         access_code=bool(access_code),
         ttl_hours=_ttl_hours(body.expires_in_hours),
     )
+    if not intake_managed:
+        await _ensure_intake_row(db, interview)
     return IssuedInvite(interview, token, access_code)
+
+
+async def _ensure_intake_row(db: AsyncSession, interview: Interview) -> None:
+    """Intake rounds (generic job invite, open-link round): create the
+    ``intake_interviews`` row in a savepoint. Any failure is only logged - the
+    candidate portal creates the row lazily later."""
+    try:
+        from app.services.intake.access import intake_enabled, intake_round_of_interview
+
+        if not intake_enabled():
+            return
+        round_ = await intake_round_of_interview(db, interview)
+        if round_ is None:
+            return
+        from app.services.intake.invitations import ensure_intake_for_interview
+
+        async with db.begin_nested():
+            await ensure_intake_for_interview(db, interview, round_=round_)
+    except Exception as exc:  # noqa: BLE001 - the intake layer must never break invitations
+        log.warning("interview.intake_hook_failed", interview_id=str(interview.id), error=type(exc).__name__)
 
 
 async def revoke_candidate_sessions(db: AsyncSession, interview_id: uuid.UUID, *, reason: str) -> int:

@@ -1,5 +1,6 @@
-import { History, Info, Lock } from "lucide-react";
+import { ClipboardCheck, History, Info, Lock } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router";
 
 import { ConfidenceMeter } from "@/components/domain/ConfidenceMeter";
 import { RecommendationBadge } from "@/components/domain/RecommendationBadge";
@@ -185,11 +186,35 @@ function HistoryCard() {
   );
 }
 
+/**
+ * Intake sessions record decisions on the intake review (five outcomes and a written
+ * rationale, mirrored into this history; docs/design/INTAKE_INTERVIEW.md 9.4 and 11.1),
+ * so the generic form is replaced by a pointer there.
+ */
+function IntakeDecisionPointer({ sessionId }: { sessionId: string }) {
+  return (
+    <Card data-testid="session-intake-decision-pointer">
+      <CardHeader
+        title="Record the decision on the intake review"
+        description="Intake interviews use five outcomes and a written rationale, kept with the scorecard and the report. Decisions recorded there also appear in this history."
+      />
+      <CardContent>
+        <Button variant="outline" leftIcon={<ClipboardCheck />} asChild>
+          <Link to={`/app/intake/session/${sessionId}?tab=decision`}>Open intake review</Link>
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function ReviewTab() {
   const canReview = usePermission("reviews:write");
+  const { session, sessionId } = useSessionContext();
   return (
     <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-      {canReview ? (
+      {session.round?.round_type === "intake" ? (
+        <IntakeDecisionPointer sessionId={sessionId} />
+      ) : canReview ? (
         <DecisionForm />
       ) : (
         <Card>
