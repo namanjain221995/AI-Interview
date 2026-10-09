@@ -1,0 +1,616 @@
+# System design: reliability and observability (3 of 4) — tracing, profiling, real-user and synthetic
+# monitoring, and telemetry pipelines. Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [sre, platform, devops]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.reliability_observability.first_tracing_rollout
+    competency_key: observability
+    topic: Introducing tracing to a handful of services
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your team runs about ten services that call each other over HTTP and a message queue, and nobody can tell where a
+      slow request spends its time. How would you design a first tracing setup for them?
+    expected_concepts:
+      - instrumentation library or auto-instrumentation per language
+      - propagating trace context across HTTP and messages
+      - a collector between services and the backend
+      - sampling to control volume
+      - a backend that shows traces as a waterfall
+    rubric:
+      excellent: Picks a standard instrumentation approach, ensures context propagates across both HTTP and the queue, routes spans through a collector, starts with a sensible sampling rate and explains how engineers will use the waterfall view.
+      good: Describes instrumentation, propagation and a backend with some mention of sampling.
+      weak: Proposes adding timing log lines in each service and correlating them by hand.
+    followups:
+      - Where does context propagation usually break first?
+      - What sampling rate would you start with, and why?
+    common_errors:
+      - Instrumenting HTTP calls but losing the trace at the message queue.
+
+  - external_key: system_design.reliability_observability.health_endpoint_design
+    competency_key: system_design
+    topic: Designing health check endpoints
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      You're defining a standard for health check endpoints that load balancers and orchestrators will call on every
+      service. What would your design say each endpoint should check, and what should it deliberately not check?
+    expected_concepts:
+      - separate liveness and readiness semantics
+      - liveness checks only the process itself
+      - readiness reflects ability to serve, including warm-up
+      - avoiding deep dependency checks that cause cascading removal
+      - fast, cheap responses with timeouts
+      - a separate detailed status endpoint for humans
+    rubric:
+      excellent: Distinguishes liveness from readiness, keeps liveness shallow, explains how deep dependency checks can take an entire fleet out of rotation at once and offers a separate diagnostic endpoint.
+      good: Separates liveness and readiness with reasonable checks.
+      weak: Has every endpoint check the database and all downstream services.
+    followups:
+      - The database goes down. What should readiness report, and what happens to traffic?
+      - What would you put on the detailed status endpoint?
+    common_errors:
+      - Failing liveness on a dependency outage, causing restart loops across the fleet.
+
+  - external_key: system_design.reliability_observability.synthetic_user_flows
+    competency_key: observability
+    topic: Scripted synthetic checks of critical user flows
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Simple ping checks keep showing green while customers can't complete a purchase. How would you design synthetic
+      tests that exercise login and checkout end to end in production?
+    expected_concepts:
+      - scripted browser or API flows for key journeys
+      - dedicated test accounts and test payment paths
+      - cleaning up test data or marking it for exclusion
+      - running from several locations on a schedule
+      - capturing screenshots or traces on failure
+    rubric:
+      excellent: Scripts the real journeys, isolates synthetic accounts and transactions from business data, runs from several locations, captures debugging evidence on failure and plans for flaky scripts.
+      good: Proposes scripted end-to-end checks with test accounts.
+      weak: Proposes hitting the checkout URL and checking for a 200.
+    followups:
+      - How do you stop synthetic orders from showing up in revenue reports?
+      - What would you do about a script that fails intermittently?
+    common_errors:
+      - Using real customer accounts or payment methods for synthetic tests.
+
+  - external_key: system_design.reliability_observability.request_id_correlation
+    competency_key: observability
+    topic: Correlating one request across services
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A customer reports that a specific action failed, and today it takes an hour to find the matching log lines across
+      five services. How would you design request correlation so that's a one-minute search?
+    expected_concepts:
+      - generating a request or trace ID at the edge
+      - propagating it through headers and messages
+      - including it in every log line automatically
+      - returning it to the client or support tooling
+      - using the trace ID standard so logs and traces line up
+    rubric:
+      excellent: Generates an ID at the entry point, propagates it through every hop including async work, injects it into logs automatically via libraries and exposes it to support so a report can be traced quickly.
+      good: Proposes a correlation ID propagated in headers and logged.
+      weak: Proposes searching logs by timestamp and user name.
+    followups:
+      - How would support staff get the ID from a customer?
+      - What happens to the ID when work is handed to a background job?
+    common_errors:
+      - Relying on each developer to remember to add the ID to log calls.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.reliability_observability.trace_collector_tier
+    competency_key: observability
+    topic: Agent and gateway collector tiers for telemetry
+    difficulty: medium
+    text: >-
+      You're rolling out tracing across several hundred services. How would you design the collector layer between the
+      services and the tracing backend, and what jobs would you give to each tier?
+    expected_concepts:
+      - local agent per node or sidecar for low-latency export
+      - central gateway tier for batching, sampling and routing
+      - enrichment with infrastructure metadata
+      - retries and bounded queues
+      - horizontal scaling and load balancing of gateways
+      - collector self-monitoring
+    rubric:
+      excellent: Splits responsibilities between a local agent and a scalable gateway, places sampling, enrichment and routing deliberately, bounds queues and monitors the collectors themselves.
+      good: Proposes agents and a gateway with batching and retries.
+      weak: Has every service export directly to the backend with no buffering layer.
+    followups:
+      - What happens if the gateway tier is down for ten minutes?
+      - Why does load balancing matter for some sampling strategies?
+    common_errors:
+      - Load balancing spans randomly when the sampler needs all spans of a trace together.
+
+  - external_key: system_design.reliability_observability.tail_sampling_tier
+    competency_key: distributed_systems
+    topic: A stateful tier for tail-based trace sampling
+    difficulty: medium
+    text: >-
+      You want to keep every trace that has an error or is unusually slow, and only a small sample of the rest, which
+      means deciding after the trace finishes. How would you design the collector tier that makes those decisions?
+    expected_concepts:
+      - routing all spans of a trace to the same node by trace ID hash
+      - buffering spans for a decision window
+      - policies for errors, latency and baseline probability
+      - memory sizing and handling of long or incomplete traces
+      - rebalancing when nodes are added or removed
+      - recording the sampling rate so counts can be re-weighted
+    rubric:
+      excellent: Routes by trace ID to stateful samplers, sizes the decision window and memory from traffic numbers, handles late and incomplete traces and rebalancing, and keeps sampling metadata for accurate estimates.
+      good: Describes trace-ID routing and buffered decisions with policies.
+      weak: Proposes sampling each span independently and hoping complete traces survive.
+    followups:
+      - How long would you wait before deciding, and what happens to spans that arrive late?
+      - How do you keep rate metrics correct when most traces are dropped?
+    common_errors:
+      - Ignoring that adding a sampler node reshuffles trace ownership mid-flight.
+
+  - external_key: system_design.reliability_observability.trace_storage_backend
+    competency_key: databases
+    topic: Storing and querying trace data
+    difficulty: medium
+    text: >-
+      Design the storage behind a tracing system that must fetch a full trace by ID instantly and also find traces by
+      service, operation, duration and a few attributes over the last week. How would you lay the data out?
+    expected_concepts:
+      - primary store keyed by trace ID
+      - secondary index or columnar store for attribute search
+      - time partitioning and retention
+      - wide-column store or object storage trade-offs
+      - limiting indexed attributes to control cost
+    rubric:
+      excellent: Separates trace-by-ID storage from attribute search, chooses data stores with reasons, partitions by time, limits which attributes are indexed and estimates volume.
+      good: Proposes a trace-ID keyed store plus an index for search.
+      weak: Puts spans in a relational table with an index on every column.
+    followups:
+      - Which attributes would you index, and who decides?
+      - How do you assemble a trace whose spans arrived over several minutes?
+    common_errors:
+      - Indexing every span attribute and making storage cost explode.
+
+  - external_key: system_design.reliability_observability.signal_correlation_ui
+    competency_key: observability
+    topic: Linking metrics, traces and logs
+    difficulty: medium
+    text: >-
+      During incidents, engineers see a latency spike on a dashboard and then spend ages hunting for a related trace and
+      logs in three separate tools. How would you design the platform so they can jump between those signals directly?
+    expected_concepts:
+      - shared resource attributes across all signals (service, environment, version)
+      - exemplars linking metric points to trace IDs
+      - trace ID in logs for log-to-trace links
+      - deep links between tools with preserved time range
+      - semantic conventions enforced through libraries
+    rubric:
+      excellent: Standardises shared attributes, uses exemplars and trace IDs in logs to connect signals, designs links that preserve context and enforces conventions through shared instrumentation.
+      good: Proposes exemplars or trace IDs in logs with consistent labels.
+      weak: Proposes putting all three tools on one dashboard page.
+    followups:
+      - What breaks if two teams name the service attribute differently?
+      - How do exemplars work when traces are heavily sampled?
+    common_errors:
+      - Linking signals only by timestamp, which fails on busy services.
+
+  - external_key: system_design.reliability_observability.real_user_monitoring
+    competency_key: observability
+    topic: Real user monitoring for a web application
+    difficulty: medium
+    text: >-
+      Server metrics say your pages are fast, but users in some areas complain the site feels slow. How would you design
+      real user monitoring that measures what browsers actually experience?
+    expected_concepts:
+      - browser timing APIs and core web vitals
+      - sending beacons reliably when the page is closing
+      - sampling and batching to control volume
+      - segmenting by device, browser, network and geography
+      - privacy rules for what is collected
+      - an ingest endpoint that handles bot traffic and bad data
+    rubric:
+      excellent: Collects standard browser timings and vitals with reliable beacons, samples sensibly, segments results to reveal where slowness lives, filters bots and junk, and respects privacy.
+      good: Collects page timings from the browser with segmentation.
+      weak: Proposes measuring server response time more precisely.
+    followups:
+      - How would you tell whether the slowness is the network, the backend or the page itself?
+      - What would you never collect from the browser?
+    common_errors:
+      - Reporting only averages, which hide the slow tail that users complain about.
+
+  - external_key: system_design.reliability_observability.global_probe_network
+    competency_key: networking
+    topic: A global network of monitoring probes
+    difficulty: medium
+    text: >-
+      You need to know within two minutes when your service is unreachable from any major region, but past probes caused
+      false alarms when the probe's own network had trouble. How would you design the probe network and its alerting?
+    expected_concepts:
+      - probes in many regions and providers
+      - quorum or multi-location agreement before alerting
+      - monitoring the probes themselves with control checks
+      - DNS, TCP, TLS and HTTP timing breakdown
+      - distinguishing regional reachability problems from global outages
+    rubric:
+      excellent: Spreads probes across providers and regions, alerts only on multi-location agreement, uses control targets to detect probe-side problems and records per-phase timings to localise failures.
+      good: Proposes multiple locations with an agreement rule.
+      weak: Relies on a single probe location with retries.
+    followups:
+      - How would you tell your outage apart from an ISP problem in one country?
+      - What does a control check look like?
+    common_errors:
+      - Alerting on any single location failing, which pages for problems you can't fix.
+
+  - external_key: system_design.reliability_observability.vendor_neutral_telemetry
+    competency_key: observability
+    topic: Vendor-neutral telemetry pipeline
+    difficulty: medium
+    text: >-
+      Your company is locked into one observability vendor, with their agents and SDKs embedded in hundreds of services,
+      and leadership wants the option to switch. How would you design the telemetry pipeline so changing backends is a
+      configuration change rather than a migration project?
+    expected_concepts:
+      - open instrumentation standard such as OpenTelemetry in services
+      - collectors that export to one or more backends
+      - dual-shipping during evaluation or migration
+      - consistent semantic conventions
+      - mapping vendor-specific features and dashboards
+      - phased migration plan
+    rubric:
+      excellent: Standardises on open instrumentation, centralises export in collectors, supports dual-shipping for comparison, and plans a phased migration including dashboards, alerts and features the vendor provided.
+      good: Proposes an open standard with collectors that can export anywhere.
+      weak: Proposes writing a custom wrapper library around the current vendor SDK.
+    followups:
+      - What doesn't move automatically when you switch backends?
+      - How would you prove the new backend shows the same numbers as the old one?
+    common_errors:
+      - Forgetting that alerts, dashboards and runbooks are tied to the old vendor's query language.
+
+  - external_key: system_design.reliability_observability.continuous_profiling_platform
+    competency_key: observability
+    topic: Fleet-wide continuous profiling
+    difficulty: medium
+    text: >-
+      Teams can only profile CPU and memory when they reproduce a problem locally, and production-only slowdowns stay a
+      mystery. How would you design a continuous profiling platform for the whole fleet?
+    expected_concepts:
+      - low-overhead sampling profilers per language or via eBPF
+      - periodic upload of aggregated profiles
+      - storage keyed by service, version and time
+      - flame graphs and comparison between versions or time ranges
+      - symbolisation and overhead budget
+      - linking profiles to traces or incidents
+    rubric:
+      excellent: Uses low-overhead sampling with a defined overhead budget, aggregates and stores profiles by service and version, supports diffing between releases and connects profiles to other signals.
+      good: Proposes always-on sampling profilers with central storage and flame graphs.
+      weak: Proposes enabling heavy debug profilers on production when needed.
+    followups:
+      - How would you show what changed in CPU usage between two releases?
+      - What overhead would you accept, and how would you measure it?
+    common_errors:
+      - Choosing a profiler whose overhead is never measured in production.
+
+  - external_key: system_design.reliability_observability.service_dependency_map
+    competency_key: system_design
+    topic: Automatically derived service dependency map
+    difficulty: medium
+    text: >-
+      Nobody has an accurate picture of which services call which, and architecture diagrams are years out of date. How
+      would you design a system that builds and maintains a live dependency map from telemetry?
+    expected_concepts:
+      - deriving edges from trace parent and child spans
+      - supplementing with network flow or mesh data for uninstrumented services
+      - aggregating edge metrics (rate, errors, latency)
+      - ageing out edges not seen recently
+      - joining with ownership metadata
+      - uses in incident response and change review
+    rubric:
+      excellent: Builds edges from traces and network data, aggregates health per edge, handles stale and missing edges, adds ownership and explains how responders and reviewers would use it.
+      good: Derives a graph from traces with per-edge metrics.
+      weak: Proposes asking teams to maintain a diagram.
+    followups:
+      - How would you include a dependency that is called only once a month?
+      - How would you detect a service that isn't instrumented at all?
+    common_errors:
+      - Treating the absence of an edge as proof that no dependency exists.
+
+  - external_key: system_design.reliability_observability.async_messaging_observability
+    competency_key: observability
+    topic: Observability for queues and asynchronous consumers
+    difficulty: medium
+    text: >-
+      Your order flow goes through several queues and consumers, and when orders are delayed nobody can tell where they
+      are stuck. How would you design observability for this asynchronous pipeline?
+    expected_concepts:
+      - consumer lag and age of oldest message
+      - end-to-end latency using enqueue timestamps
+      - trace links across producer and consumer
+      - dead-letter queue volume and reasons
+      - per-stage throughput and error rates
+      - SLO on freshness or completion time
+    rubric:
+      excellent: Measures lag and oldest-message age per stage, tracks end-to-end delay from producer timestamps, links traces across hops, monitors dead letters and defines an SLO on how quickly work completes.
+      good: Monitors lag, throughput and errors per queue with some end-to-end view.
+      weak: Monitors only queue depth.
+    followups:
+      - Why can queue depth look fine while messages are badly delayed?
+      - How would you find one specific stuck order?
+    common_errors:
+      - Alerting on queue depth instead of how old the oldest message is.
+
+  - external_key: system_design.reliability_observability.database_fleet_observability
+    competency_key: databases
+    topic: Query-level visibility across a database fleet
+    difficulty: medium
+    text: >-
+      You operate around two hundred relational database instances, and slow queries are usually discovered by an
+      application team after an outage. How would you design observability that surfaces problem queries across the
+      fleet early?
+    expected_concepts:
+      - collecting normalised query statistics per instance
+      - top queries by total time, not just per-call latency
+      - tracking plan changes and regressions
+      - lock waits, replication lag and connection saturation
+      - mapping queries back to owning services
+      - alerting on regressions after deploys
+    rubric:
+      excellent: Collects normalised statistics fleet-wide, ranks by total load, detects plan or latency regressions, covers locks, replication and connections, and routes findings to the owning team.
+      good: Collects slow query logs centrally with some ranking and core database metrics.
+      weak: Proposes lowering the slow query log threshold on every instance.
+    followups:
+      - How would you tie a query back to the service and code that issued it?
+      - A query's plan changes overnight. How would you catch it?
+    common_errors:
+      - Ranking queries by per-call latency and missing cheap queries run millions of times.
+
+  - external_key: system_design.reliability_observability.edge_traffic_observability
+    competency_key: networking
+    topic: Observability for CDN and load balancer traffic
+    difficulty: medium
+    text: >-
+      Some outages start at your CDN or load balancers before they ever reach the application, and your current
+      monitoring can't see them. How would you design observability for the edge layer?
+    expected_concepts:
+      - edge access logs streamed to the pipeline
+      - edge versus origin status codes and latency
+      - cache hit ratio and origin load
+      - TLS handshake and connection error rates
+      - per point of presence and per region breakdown
+      - comparing edge and application request counts
+    rubric:
+      excellent: Collects edge logs and metrics, separates edge from origin behaviour, tracks cache and TLS signals per location and reconciles edge with application traffic to expose losses in between.
+      good: Collects edge logs and monitors status codes and cache ratio.
+      weak: Relies only on the provider's status page.
+    followups:
+      - How would you detect requests that reach the edge but never reach your origin?
+      - What would a sudden drop in cache hit ratio tell you?
+    common_errors:
+      - Monitoring only origin traffic, which looks healthy when the edge is rejecting requests.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.reliability_observability.tracing_platform_at_scale
+    competency_key: distributed_systems
+    topic: Tracing platform at millions of spans per second
+    difficulty: hard
+    text: >-
+      Design a tracing platform for an organisation emitting about five million spans per second at peak across three
+      regions, with a two-week retention target. Take me through the architecture and the numbers behind it.
+    expected_concepts:
+      - span size and volume estimates leading to storage and network numbers
+      - sampling strategy (head, tail or both) to fit budget
+      - regional collection and storage with global trace lookup
+      - ingest buffering through a queue
+      - indexing limits and cheap storage for full traces
+      - platform self-observability and SLOs
+    rubric:
+      excellent: Derives storage and bandwidth from span estimates, chooses a sampling mix that fits budget while keeping valuable traces, keeps data regional with global lookup, buffers ingest and defines the platform's own SLOs.
+      good: Proposes a solid pipeline with sampling and some sizing.
+      weak: Proposes storing every span with full indexing without estimating the cost.
+    followups:
+      - A trace crosses two regions. How is it assembled?
+      - What would you cut first if storage cost had to halve?
+    common_errors:
+      - Ignoring cross-region traffic cost when centralising all spans.
+
+  - external_key: system_design.reliability_observability.span_derived_metrics
+    competency_key: observability
+    topic: Accurate metrics derived from sampled spans
+    difficulty: hard
+    text: >-
+      You want request rate, errors and latency per service and endpoint generated from tracing data so teams don't
+      instrument metrics separately, but you sample heavily. How would you design this so the numbers are accurate?
+    expected_concepts:
+      - generating metrics before sampling in the collector
+      - or weighting sampled spans by their inverse probability
+      - controlling dimension cardinality from span attributes
+      - histograms for latency
+      - consistency between derived metrics and trace views
+      - handling services that are not instrumented
+    rubric:
+      excellent: Computes metrics before sampling or re-weights correctly, bounds cardinality, uses mergeable latency histograms and explains where derived metrics diverge from directly instrumented ones.
+      good: Recognises that sampling distorts counts and derives metrics pre-sampling.
+      weak: Counts sampled spans directly as if they were all requests.
+    followups:
+      - What happens to these metrics if the collector restarts?
+      - Which attributes would you allow as metric dimensions?
+    common_errors:
+      - Counting stored spans after tail sampling, which over-represents errors.
+
+  - external_key: system_design.reliability_observability.critical_path_latency_attribution
+    competency_key: distributed_systems
+    topic: Attributing journey latency to services from traces
+    difficulty: hard
+    text: >-
+      Product asks why checkout got two hundred milliseconds slower this month, and the trace waterfall involves dozens
+      of parallel and sequential calls. How would you design an analysis system that tells you which services and calls
+      are responsible?
+    expected_concepts:
+      - critical path computation through parallel spans
+      - aggregating critical-path contribution across many traces
+      - comparing distributions between time periods or releases
+      - handling clock skew between hosts
+      - segmenting by tail percentiles, not only the mean
+      - presenting results with links to example traces
+    rubric:
+      excellent: Computes critical paths that account for parallelism, aggregates contributions across many traces and periods, corrects for clock skew, focuses on the tail and supports conclusions with example traces.
+      good: Aggregates span durations by service over time with awareness of parallel calls.
+      weak: Sums span durations per service, double-counting parallel work.
+    followups:
+      - How would clock skew between hosts distort your results?
+      - The slowdown only affects the p99. How would your analysis reveal that?
+    common_errors:
+      - Attributing latency to a service whose calls ran in parallel and never held up the response.
+
+  - external_key: system_design.reliability_observability.telemetry_surge_during_incident
+    competency_key: distributed_systems
+    topic: Telemetry pipelines under incident-time surges
+    difficulty: hard
+    text: >-
+      During your last major outage, logs and traces spiked tenfold, the telemetry pipeline fell behind and engineers
+      were blind exactly when they needed data most. How would you redesign the pipeline to stay useful under that kind
+      of surge?
+    expected_concepts:
+      - capacity planning for peak, not average
+      - priority classes with load shedding of low-value data
+      - adaptive sampling that keeps errors
+      - keeping metrics and alerting on a separate, smaller path
+      - backpressure and bounded buffering at every hop
+      - freshness monitoring and game days with synthetic surges
+    rubric:
+      excellent: Separates critical alerting signals from bulk telemetry, sheds load by priority with adaptive sampling that preserves errors, bounds every buffer and validates the design with surge tests.
+      good: Adds prioritisation and sampling with some surge capacity.
+      weak: Proposes doubling the cluster size.
+    followups:
+      - Which signals must never be shed, and how do you guarantee that?
+      - How would you rehearse a tenfold surge safely?
+    common_errors:
+      - Routing alerting metrics through the same congested pipeline as debug logs.
+
+  - external_key: system_design.reliability_observability.ebpf_auto_instrumentation
+    competency_key: observability
+    topic: Kernel-level auto-instrumentation for unowned services
+    difficulty: hard
+    text: >-
+      A third of your services are legacy or vendor software that nobody can modify, and they're invisible in your
+      telemetry. How would you design a platform that observes them using kernel-level techniques like eBPF, and where
+      would that approach fall short?
+    expected_concepts:
+      - capturing network calls, latency and errors at the kernel level
+      - protocol parsing for HTTP, gRPC or database traffic
+      - limits with encrypted traffic and the need for TLS library hooks
+      - kernel version compatibility and privileges required
+      - overhead budget and safety of probes
+      - mapping observations to services and containers
+    rubric:
+      excellent: Explains what can be observed without code changes, handles encryption and protocol parsing realistically, addresses kernel compatibility, privileges and overhead, and is clear about what still needs in-process instrumentation.
+      good: Describes eBPF-based capture of network-level signals with some limitations.
+      weak: Treats eBPF as a complete replacement for application instrumentation.
+    followups:
+      - How would you see request paths inside TLS traffic?
+      - What security concerns come with running privileged probes on every node?
+    common_errors:
+      - Assuming kernel-level capture can propagate trace context through the application.
+
+  - external_key: system_design.reliability_observability.frontend_backend_session_link
+    competency_key: system_design
+    topic: Linking user sessions to backend traces with privacy
+    difficulty: hard
+    text: >-
+      Support wants to see exactly what a user did in the browser and how each click flowed through the backend, but
+      privacy rules limit what you can record. How would you design that end-to-end session visibility?
+    expected_concepts:
+      - browser-side spans with context propagated to backend calls
+      - session identifiers separate from personal identity
+      - CORS and header constraints for propagation
+      - masking of inputs and sensitive page content
+      - consent, retention limits and access auditing
+      - sampling policy with on-demand capture for reported issues
+    rubric:
+      excellent: Propagates trace context from browser to backend, separates session from identity, masks sensitive content by default, enforces consent, retention and audited access, and offers targeted capture for support cases.
+      good: Links browser and backend traces with some masking and retention rules.
+      weak: Proposes recording full sessions including inputs for every user.
+    followups:
+      - How do you propagate trace headers to third-party domains without leaking them?
+      - What would you mask by default, and who can unmask it?
+    common_errors:
+      - Capturing form fields and page contents without masking.
+
+  - external_key: system_design.reliability_observability.synthetic_platform_scheduling
+    competency_key: distributed_systems
+    topic: Scheduling a large synthetic monitoring platform
+    difficulty: hard
+    text: >-
+      Your synthetic monitoring service has grown to fifty thousand checks from hundreds of teams, running from twenty
+      locations at intervals down to thirty seconds, and checks are firing late or bunching up. How would you redesign
+      scheduling and execution?
+    expected_concepts:
+      - distributed scheduler with partitioned ownership of checks
+      - spreading start times with jitter to avoid bursts
+      - capacity planning per location and per check type (browser versus API)
+      - isolation of heavy browser checks
+      - detecting late or skipped runs as a platform SLO
+      - per-team quotas
+    rubric:
+      excellent: Partitions scheduling with failover, spreads load deliberately, sizes per-location capacity by check type, isolates expensive browser checks and measures schedule adherence as a platform SLO.
+      good: Proposes a distributed scheduler with jitter and capacity planning.
+      weak: Proposes one cron server with more threads.
+    followups:
+      - How would you know that checks are running late?
+      - A scheduler node dies. What happens to the checks it owned?
+    common_errors:
+      - Starting every check on the same interval boundary, creating synchronised bursts.
+
+  - external_key: system_design.reliability_observability.telemetry_data_lake
+    competency_key: data_engineering
+    topic: Long-term telemetry lake for reliability analysis
+    difficulty: hard
+    text: >-
+      Your reliability team wants to answer questions like how incident frequency relates to deploy volume over the past
+      two years, but raw telemetry is kept only for weeks. How would you design a long-term store that makes that kind
+      of analysis possible at reasonable cost?
+    expected_concepts:
+      - choosing what to keep (aggregates, events, incidents, deploys) rather than raw everything
+      - columnar storage on object storage with partitioning
+      - consistent dimensions such as service and team over time
+      - joining operational data with change and incident records
+      - handling renamed services and reorganised teams
+      - query engine and access for analysts
+    rubric:
+      excellent: Keeps curated aggregates and events instead of raw data, designs partitioned columnar storage, maintains stable dimensions across renames and reorganisations and enables joins with deploy and incident records.
+      good: Proposes rolled-up telemetry in a warehouse alongside change and incident data.
+      weak: Proposes extending raw retention of all telemetry to two years.
+    followups:
+      - A service was renamed last year. How do your queries still see its full history?
+      - Which questions would this store still be unable to answer?
+    common_errors:
+      - Losing history whenever a service or team is renamed because names are used as keys.
+
+  - external_key: system_design.reliability_observability.wide_event_store
+    competency_key: distributed_systems
+    topic: Store for wide, high-cardinality events
+    difficulty: hard
+    text: >-
+      Your engineers want to emit one wide event per request with dozens of attributes, including user and build IDs,
+      and then slice by any combination of fields in seconds. How would you design the storage and query engine for
+      that?
+    expected_concepts:
+      - columnar storage with dynamic schema
+      - compression and encoding for repeated values
+      - time-based partitioning and pruning
+      - distributed scan and aggregation across workers
+      - sampling with weights to control cost
+      - comparing to pre-aggregated metrics trade-offs
+    rubric:
+      excellent: Designs a columnar, schema-flexible store with partition pruning and parallel scans, explains how high-cardinality fields are handled at query time rather than as series, and controls cost through weighted sampling.
+      good: Proposes columnar storage with parallel queries and time partitioning.
+      weak: Proposes turning every attribute into a metric label.
+    followups:
+      - Why does this model cope with user IDs when a metrics store doesn't?
+      - How would you answer a count query accurately if events are sampled?
+    common_errors:
+      - Assuming high cardinality is free just because the storage is columnar.

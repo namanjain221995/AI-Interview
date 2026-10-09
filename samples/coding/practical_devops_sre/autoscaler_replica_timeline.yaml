@@ -1,0 +1,167 @@
+version: 1
+slug: autoscaler_replica_timeline
+title: Autoscaler Replica Replay
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [platform, sre, cloud, devops]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Autoscaler Replica Replay
+
+  After an incident, the platform team wants to replay a day of CPU demand through the horizontal
+  autoscaler's rules to see how many replicas a service would have run each minute. You receive the
+  total CPU demand of the service for every minute, `demand_millicores[i]`, and the autoscaler settings.
+  `target_per_replica` is the demand (in millicores) one replica should serve at the target utilisation.
+
+  The service starts with `min_replicas` replicas. For minute `i`:
+
+  1. The **raw desired** count is `ceil(demand_millicores[i] / target_per_replica)` (exact integer
+     ceiling division).
+  2. The **desired** count `desired[i]` is the raw desired count clamped to `[min_replicas, max_replicas]`.
+  3. Let `current` be the replica count after the previous minute (`min_replicas` before minute 0).
+     - **Scale up:** if `desired[i] > current`, the new count is `min(desired[i], current + max_scale_up)`.
+     - **Scale down (stabilised):** otherwise, the new count is `min(current, recent_peak)`, where
+       `recent_peak` is the largest `desired` value over the last `stabilization_minutes` minutes,
+       **including minute `i`** (minutes `max(0, i - stabilization_minutes + 1)` to `i`).
+
+  Return an array with the replica count after every minute, in minute order.
+
+  ### Example 1
+  ```
+  Input:  demand_millicores = [600, 1800, 2600, 900, 400, 300, 300, 250], target_per_replica = 250,
+          min_replicas = 2, max_replicas = 10, max_scale_up = 3, stabilization_minutes = 3
+  Output: [3, 6, 9, 9, 9, 4, 2, 2]
+  Explanation: desired = [3, 8, 10, 4, 2, 2, 2, 2]
+  (minute 2 asks for 11, clamped to 10). Scale-ups are limited to +3 per minute: 2 -> 3 -> 6 -> 9.
+  At minutes 3 and 4 the peak of the last three desired values is still 10, so the count stays 9.
+  At minute 5 the window holds [4, 2, 2], so the count drops to 4, then to 2.
+  ```
+
+  ### Example 2
+  ```
+  Input:  demand_millicores = [1000, 200, 200, 3000, 3000, 200], target_per_replica = 400,
+          min_replicas = 1, max_replicas = 6, max_scale_up = 10, stabilization_minutes = 1
+  Output: [3, 1, 1, 6, 6, 1]
+  Explanation: with a one-minute window the service scales down immediately; 3000 millicores
+  would need 8 replicas but max_replicas caps the desired count at 6.
+  ```
+
+  ### Constraints
+  - `1 <= demand_millicores.length <= 10^5`
+  - `0 <= demand_millicores[i] <= 10^9`
+  - `1 <= target_per_replica <= 10^6`
+  - `1 <= min_replicas <= max_replicas <= 10^4`
+  - `1 <= max_scale_up <= 10^4`
+  - `1 <= stabilization_minutes <= 10^5` (it may be longer than the replay)
+
+  **Follow-up:** recomputing the window maximum from scratch each minute costs
+  `O(n * stabilization_minutes)`. Can you make the whole replay `O(n)`?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: autoscaler_replica_timeline
+  params:
+    - {name: demand_millicores, type: "int[]"}
+    - {name: target_per_replica, type: int}
+    - {name: min_replicas, type: int}
+    - {name: max_replicas, type: int}
+    - {name: max_scale_up, type: int}
+    - {name: stabilization_minutes, type: int}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    from collections import deque
+
+
+    def autoscaler_replica_timeline(demand_millicores: list[int], target_per_replica: int,
+                                    min_replicas: int, max_replicas: int, max_scale_up: int,
+                                    stabilization_minutes: int) -> list[int]:
+        current = min_replicas
+        window: deque[tuple[int, int]] = deque()  # (minute, desired), desired strictly decreasing
+        result: list[int] = []
+        for minute, demand in enumerate(demand_millicores):
+            desired = -(-demand // target_per_replica)
+            desired = max(min_replicas, min(max_replicas, desired))
+            while window and window[-1][1] <= desired:
+                window.pop()
+            window.append((minute, desired))
+            while window[0][0] <= minute - stabilization_minutes:
+                window.popleft()
+            if desired > current:
+                current = min(desired, current + max_scale_up)
+            else:
+                current = min(current, window[0][1])
+            result.append(current)
+        return result
+  javascript: |
+    function autoscalerReplicaTimeline(demandMillicores, targetPerReplica, minReplicas, maxReplicas,
+                                       maxScaleUp, stabilizationMinutes) {
+      const n = demandMillicores.length;
+      const idx = new Array(n);
+      const val = new Array(n);
+      let head = 0;
+      let tail = 0;
+      let current = minReplicas;
+      const result = [];
+      for (let minute = 0; minute < n; minute++) {
+        const demand = demandMillicores[minute];
+        let desired = Math.floor(demand / targetPerReplica);
+        if (desired * targetPerReplica < demand) desired++;
+        desired = Math.max(minReplicas, Math.min(maxReplicas, desired));
+        while (tail > head && val[tail - 1] <= desired) tail--;
+        idx[tail] = minute;
+        val[tail] = desired;
+        tail++;
+        while (idx[head] <= minute - stabilizationMinutes) head++;
+        if (desired > current) {
+          current = Math.min(desired, current + maxScaleUp);
+        } else {
+          current = Math.min(current, val[head]);
+        }
+        result.push(current);
+      }
+      return result;
+    }
+tests:
+  - {id: t1, args: [[600, 1800, 2600, 900, 400, 300, 300, 250], 250, 2, 10, 3, 3], expected: [3, 6, 9, 9, 9, 4, 2, 2], description: "Example 1 - scale-up limit, clamp at max, three-minute stabilisation"}
+  - {id: t2, args: [[1000, 200, 200, 3000, 3000, 200], 400, 1, 6, 10, 1], expected: [3, 1, 1, 6, 6, 1], description: "Example 2 - one-minute window scales down at once; clamp at max"}
+  - {id: t3, hidden: true, args: [[0], 80, 3, 7, 2, 4], expected: [3], description: "Single minute with zero demand - stays at min_replicas"}
+  - {id: t4, hidden: true, args: [[500, 501, 1000, 999, 1001], 50, 1, 100, 100, 1], expected: [10, 11, 20, 20, 21], description: "Exact multiples versus one millicore above (ceiling boundary)"}
+  - {id: t5, hidden: true, args: [[5000, 100, 100, 100, 100, 100, 100], 500, 1, 20, 2, 100], expected: [3, 3, 3, 3, 3, 3, 3], description: "Window longer than the replay - never scales down below the early peak"}
+  - {id: t6, hidden: true, args: [[900, 50, 50, 900, 50, 50, 50, 50, 50], 100, 1, 20, 9, 3], expected: [9, 9, 9, 9, 9, 9, 1, 1, 1], description: "Spike returns inside the window and keeps the count up"}
+  - {id: t7, hidden: true, args: [[0, 1000000000, 1000000000, 0, 0], 1, 4, 4, 1, 2], expected: [4, 4, 4, 4, 4], description: "min_replicas equals max_replicas - huge raw desired values are clamped"}
+  - {id: t8, hidden: true, args: [[1000000000, 900000000, 0, 0, 0, 0], 1000000, 1, 10000, 10000, 2], expected: [1000, 1000, 900, 1, 1, 1], description: "Largest demand and target; scale-up limit not binding"}
+  - {id: t9, hidden: true, args: [[300, 1200, 2400, 4800, 4800, 4800, 600, 600, 600, 600], 100, 2, 50, 4, 2], expected: [3, 7, 11, 15, 19, 23, 23, 6, 6, 6], description: "Scale-up limit binding for several minutes while desired keeps rising"}
+  - {id: t10, hidden: true, args: [[16332, 14730, 16325, 13579, 14771, 16071, 14652, 13194, 16469, 12994, 14445, 15501, 15485, 12884, 13081, 13602, 15279, 14723, 15243, 14949, 14027, 15536, 15505, 15080, 16264, 13863, 13763, 12944, 15961, 13264, 14406, 12892, 12825, 16620, 14748, 15726, 13122, 13636, 13928, 14097, 16771, 16602, 13832, 12867, 16087, 15616, 14655, 15820, 14540, 13300, 200000, 16363, 16113, 16447, 13590, 16322, 15186, 13422, 200000, 15322, 14036, 13127, 15209, 12886, 14345, 13344, 14804, 13378, 13571, 14096, 16172, 15794, 15851, 15091, 16714, 14799, 14549, 13269, 16766, 15853, 13875, 16529, 14024, 16629, 13104, 14786, 16314, 13126, 16580, 15890, 13925, 6351, 7671, 10146, 7644, 8005, 8851, 8298, 6735, 9944, 9889, 7438, 6248, 6467, 9153, 6720, 6469, 7667, 9848, 9180, 9410, 7560, 8967, 6479, 7869, 6284, 8507, 8873, 19586, 17464, 18146, 20075, 20919, 19472, 18987, 17436, 19200, 19555, 17184, 19953, 20287, 20863, 20764, 18326, 19598, 17787, 18495, 18903, 18082, 20633, 23112, 23564, 20697, 22208, 20679, 21853, 23488, 22733, 20953, 20282, 20947, 23223, 22383, 22573, 23257, 22379, 20125, 20959, 19989, 20971, 21085, 22130, 20376, 20597, 23218, 23011, 20012, 20292, 22400, 22441, 23745, 20631, 21766, 22745, 21754, 19968, 20935, 22030, 21951, 22917, 23296, 23531, 21501, 22778, 21665, 22382, 19847, 22149, 21878, 23687, 21157, 7670, 7982, 7652, 5705, 5072, 6912, 8531, 8440, 4777, 5052, 6114, 7859, 8480, 8027, 6469, 5421, 7525, 5288, 6828, 6835, 7536, 8317, 8600, 7817, 6870, 8117, 7329, 6819, 7006, 7462, 8175, 7209, 29844, 26996, 26701, 26346, 28357, 28082, 27991, 28106, 28183, 26259, 26147, 27757, 29797, 27533, 27816, 27269, 29219, 29646, 27177, 27596, 29667, 28753, 25971, 26515, 28692, 28841, 28416, 27924, 26380, 28431, 26687, 29477, 27417, 29257, 26532, 29416, 28493, 26763, 21553, 21791, 21363, 18785, 19334, 18841, 18840, 18592, 18586, 19106, 19824, 19770, 20931, 19693, 21316, 18867, 19508, 22010, 20930, 21149, 20852, 21332, 18478, 21165, 20152, 20015, 18799, 18750, 19203, 18434, 18594, 19936, 18440, 19956, 19496, 20505, 20640, 21502, 19714, 21072, 21819, 18720, 21289, 21702, 21492, 21569, 21892, 20499, 20438, 21340, 19188, 21093, 18699, 19705, 19395, 20889, 19812, 19705, 18801, 19443, 18457, 19500, 21741, 18994, 21981, 19427, 19707, 20227, 20152, 20674, 18533, 20398, 20564, 19014, 19688, 21162, 19582, 19103, 21753, 20257, 22005, 21510, 20657, 20684, 20491, 21957, 21853, 19624, 18736, 20263, 18283, 20069, 20201, 19323, 19214, 10646, 9774, 6949, 7842, 9431, 9930, 7055, 9904, 9221, 10707, 10105, 8598, 7866, 7837, 7242, 9799, 7430, 10184, 9732, 9395, 7322, 7052, 7472, 8652, 8546, 7912, 9632, 10025, 10177, 10740, 7366, 7305, 8103, 9398, 7964, 9644, 9702, 9432, 7819, 7858, 9513, 10438, 9412, 7948, 6949, 7258, 7978, 7193, 7497, 9424, 8821, 7701, 8864, 10273, 10125, 10153, 10271, 7712, 9900, 10156, 7467, 9282, 9086, 10222, 8590, 9217, 10423, 9065, 9150, 10178, 8063, 6877, 7712, 9311, 8083, 9968, 7997, 7735, 9812, 10551, 9744, 9275, 10688, 7982, 10128, 8716, 8475, 9828, 7856, 10232, 8327, 20423, 19472, 18761, 20588, 17889, 20271, 20663, 17254, 17399, 19487, 17254, 20457, 19546, 20390, 18533, 20181, 18448, 19760, 17562, 19821, 20080, 20297, 18548, 18778, 20469, 19917, 19162, 20115, 19694, 18844, 19893, 17178, 20578, 19066, 19785, 18645, 20449, 20945, 17761, 17827, 18701, 18477, 18903, 18285, 17405, 20156, 19817, 20930, 17418, 17233, 20887, 18443, 17918, 19572, 20100, 19246, 17920, 18811, 20265, 19730, 20509, 20658, 20797, 21077, 19404, 17541, 18068, 18053, 20445, 18458, 15524, 16260, 18867, 16808, 16296, 17769, 16990, 16605, 19006, 17401, 18324, 16378, 15503, 18442, 16123, 18752, 15812, 16392, 17449, 17253, 15626, 17689, 17359, 18520, 16077, 15659, 17090, 17512, 17311, 18694, 16581, 15598, 17200, 15561, 18101, 18021, 17178, 18499, 17965, 18824, 18195, 16489, 17163, 18793, 18561, 18979, 16476, 19126, 16508, 18379, 18017, 16059, 18282, 16555, 17592, 17909, 18673, 15704, 15673, 17869, 16023, 15436, 17714, 15698, 15930, 17063, 15584, 18659, 17382, 16128, 18650, 17264, 16975, 18264, 18153, 18517, 17991, 17457, 16642, 16543, 15722, 16126, 18516, 15707, 15935, 17901, 18162, 16236, 16467, 17769, 18551, 16463, 15765, 16466, 16214, 18017, 17022, 19461, 16746, 16164, 18645, 19359, 17893, 17951, 16346, 19329, 18119, 19481, 16838, 17145, 18005, 16335, 17900, 17517, 16393, 19464, 18352, 18753, 18677, 18175, 18948, 16305, 17573, 17818, 17988, 17033, 16735, 19472, 18284, 18611, 16248, 17693, 17580, 19328, 18479, 17322, 17645, 17554, 19158, 19035, 17974, 19501, 17806, 13087, 12986, 15460, 13316, 14853, 15389, 12059, 15232, 13832, 15757, 14620, 15501, 13028, 15625, 12054, 14767, 14500, 14011, 15072, 14434, 14095, 12067, 15019, 29265, 26909, 29889, 28237, 28712, 30247, 27485, 29305, 28161, 30587, 28235, 30732, 30087, 27752, 30425, 30580, 28200, 28357, 26972, 30510, 29200, 29497, 30795, 27111, 28160, 28188, 28028, 29828, 28278, 30748, 28607, 27821, 27401, 27711, 29856, 29629, 28026, 29618, 27381, 27844, 30574, 29639, 27449, 27275, 27219, 29070, 30623, 29363, 29107, 30196, 27580, 30002, 27641, 29152, 30144, 30584, 28797, 29302, 30713, 27153, 29184, 30633, 29603, 27037, 28978, 29506, 29039, 29084, 30100, 27366, 27870, 29150, 30128, 29862, 28910, 30399, 28950, 27736, 29834, 28743, 27644, 29398, 28939, 28970, 27984, 27033, 30623, 29527, 24913, 24160, 24112, 27296, 26091, 27073, 24301, 26030, 24982, 25974, 27342, 25800, 25620, 26800, 27914, 24464, 27057, 24490, 25803, 200000, 25617, 24518, 26216, 25677, 27918, 26875, 26945, 25150, 26199, 25652, 27758, 25203, 27720, 24101, 26336, 24178, 26263, 27479, 27723, 25833, 27770, 25500, 24140, 25361, 27188, 24610, 25578, 25854, 25874, 26505, 27472, 26152, 24237, 25071, 25063, 26064, 25013, 26262, 26868, 24362, 24567, 27121, 27075, 27376, 24022, 27374, 24279, 25501, 27095, 26680, 25552, 25939, 24556, 24461, 25218, 25899, 24496, 26184, 26910, 25483, 24777, 26130, 25599, 26055, 24864, 25456, 24822, 27413, 26521, 23985, 27935, 26644, 27703, 26225, 26669, 27112, 24899, 25002, 25690, 25957, 25509, 25104, 25085, 27729, 25885, 25375, 24921, 26981, 25668, 25898, 26811, 25202, 0, 0, 0, 784, 0, 88, 0, 176, 283, 0, 2388, 677, 153, 240, 1652, 1914, 0, 438, 0, 2153, 596, 2480, 2047, 831, 782, 0, 0, 0, 0, 2549, 200000, 995, 1418, 0, 1051, 1585, 121, 0, 38, 0, 1567, 0, 0, 1578, 1064, 454, 1822, 796, 0, 1647, 859, 2349, 0, 2382, 0, 853, 723, 1300, 2317, 166, 833, 1596, 1687, 261, 93, 2261, 2206, 0, 477, 0, 28511, 26052, 27971, 27900, 25286, 28071, 29204, 26327, 26947, 27957, 29053, 25798, 28151, 28796, 26401, 27435, 25722, 28935, 27452, 25931, 26496, 28792, 26392, 28186, 28364, 27590, 28072, 26387, 25831, 28645, 29053, 28836, 25723, 28852, 27548, 26351, 26352, 25561, 26728, 27519, 200000, 28345, 200000, 26607, 28461, 28782, 25361], 225, 2, 150, 6, 45], expected: [8, 14, 20, 26, 32, 38, 44, 50, 56, 58, 64, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 70, 70, 70, 73, 73, 73, 73, 73, 73, 73, 73, 73, 74, 74, 74, 74, 74, 74, 74, 75, 75, 75, 75, 75, 75, 75, 75, 75, 75, 81, 81, 81, 81, 81, 81, 81, 81, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 75, 75, 75, 75, 75, 75, 75, 75, 75, 75, 75, 75, 75, 75, 75, 81, 81, 81, 87, 93, 93, 93, 93, 93, 93, 93, 93, 93, 93, 93, 93, 93, 93, 93, 93, 93, 93, 99, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 106, 112, 118, 119, 119, 125, 125, 125, 125, 126, 126, 126, 126, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 132, 131, 131, 131, 131, 127, 119, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 98, 91, 91, 91, 90, 90, 90, 86, 86, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 47, 47, 47, 47, 47, 47, 47, 47, 48, 48, 48, 48, 48, 48, 48, 48, 48, 54, 60, 66, 72, 78, 84, 90, 90, 90, 90, 90, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 92, 92, 92, 92, 92, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 94, 91, 91, 91, 91, 91, 85, 85, 85, 85, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 86, 83, 83, 83, 83, 83, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 87, 93, 99, 105, 111, 117, 123, 123, 129, 129, 135, 135, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 143, 125, 125, 125, 125, 125, 124, 124, 124, 124, 124, 124, 124, 124, 124, 124, 124, 124, 124, 124, 124, 124, 123, 123, 123, 123, 123, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 124, 124, 124, 124, 124, 124, 124, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 127, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 130, 136, 136, 142, 142, 142, 142, 142], description: "1000-minute stress replay with long stabilisation window"}
+expected_concepts:
+  - sliding window maximum with a monotonic deque
+  - simulation with asymmetric scale-up and scale-down rules
+  - integer ceiling division without floating point
+  - clamping to configured bounds before windowing
+  - O(n) amortised time
+optimal_complexity: {time: O(n), space: "O(min(n, stabilization_minutes))"}
+rubric:
+  excellent: Separates the desired-count computation from the scaling decision, uses a monotonic deque for the stabilisation peak in O(n) total, uses exact integer ceiling division, and explains why the stored values must be the clamped desired counts.
+  good: Correct simulation with a straightforward window maximum (O(n * stabilization_minutes)) or a heap, and can describe the deque improvement when prompted.
+  weak: Uses floating-point ceiling that is off at exact multiples, takes the window maximum over replica counts instead of desired counts, ignores the scale-up step limit or excludes the current minute from the window.
+  criteria:
+    correctness: All tests pass, including exact multiples, clamping at both bounds, a window longer than the replay and a one-minute window.
+    efficiency: Linear time with a monotonic deque; extra memory bounded by the window length.
+    code_quality: Clear names for desired, current and the window, with the two scaling branches easy to read.
+    edge_cases: Zero demand, min equal to max, huge scale-up limits and spikes that return inside the stabilisation window.
+    communication: Explains the deque invariant (indices increasing, values strictly decreasing) and why each minute is pushed and popped at most once.
+hints:
+  - Compute each minute's clamped desired count first; the scaling decision then only needs that value, the current count and the largest desired value in a trailing window.
+  - The trailing-window maximum is the expensive part. Keep a structure of candidate minutes where an older minute is useless as soon as a newer minute has a desired value at least as large.
+  - Use a deque of (minute, desired) whose desired values strictly decrease from front to back. Before pushing the new minute, pop smaller-or-equal values from the back; then drop the front while it is older than the window. The front is the recent peak, and you take the minimum of it and the current count when not scaling up.
+followups:
+  - How would you add a scale-down rate limit (at most k replicas removed per minute) on top of the stabilisation window?
+  - Real autoscalers evaluate every 15 seconds but receive metrics every minute. How would you replay that?
+  - How would you replay many services with different settings in parallel over the same demand data?
+  - What changes if the window is defined in seconds and samples arrive at irregular times?
+common_errors:
+  - Using floating-point division and ceil, which can overshoot by one at exact multiples or with large values.
+  - Keeping the maximum of replica counts in the window instead of the maximum of desired counts.
+  - Forgetting that the current minute belongs to the stabilisation window.
+  - Applying the scale-up limit when scaling down, or clamping after the scale-up step instead of before.
+  - Recomputing max(desired[i - w + 1 .. i]) from scratch each minute on long replays.

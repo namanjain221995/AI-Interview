@@ -1,0 +1,622 @@
+# System design: reliability and observability (1 of 4) — metrics, alerting and SLO platforms.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [sre, platform, devops]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.reliability_observability.uptime_checks_small_product
+    competency_key: observability
+    topic: Basic uptime checks for public endpoints
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Picture a small product with a public website, a login page and a public API, and right now nobody knows it's
+      down until a customer emails. How would you design simple outside-in checks that tell the team quickly and
+      reliably when one of those is broken?
+    expected_concepts:
+      - probes running from outside the production network
+      - checking real behaviour (status code, content, response time), not just a TCP connect
+      - more than one probe location to avoid false alarms
+      - requiring consecutive failures before alerting
+      - routing the alert to someone who can act on it
+    rubric:
+      excellent: Runs checks from several external locations against meaningful responses, requires agreement or consecutive failures before alerting, and explains where the alert goes and why the checker must not share fate with the product.
+      good: Proposes external HTTP checks with a timeout and an alert channel, with some thought about false positives.
+      weak: Suggests pinging the server from inside the same network or checking only that a port is open.
+    followups:
+      - What would you check on the login page beyond a 200 status code?
+      - One probe location reports failure and two report success. What should happen?
+    common_errors:
+      - Hosting the checker on the same infrastructure it is supposed to watch.
+
+  - external_key: system_design.reliability_observability.missed_scheduled_jobs
+    competency_key: observability
+    topic: Detecting scheduled jobs that silently stop running
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      You have about forty nightly and hourly jobs, things like backups, invoice runs and data exports, and last month
+      a backup job quietly stopped running for two weeks. How would you design monitoring that catches a job that
+      never ran, not just one that failed?
+    expected_concepts:
+      - heartbeat or check-in from each job on success
+      - alert when an expected check-in is missing (dead man's switch)
+      - expected schedule and grace period per job
+      - recording duration and outcome, not only start
+      - ownership per job for alert routing
+    rubric:
+      excellent: Designs an absence-based check with per-job schedules and grace periods, records success, duration and output size, and explains why failure alerts alone miss jobs that never start.
+      good: Proposes a heartbeat with an alert on missing check-ins but leaves grace periods or ownership vague.
+      weak: Only alerts on non-zero exit codes, which cannot detect a job that was never scheduled.
+    followups:
+      - How would you catch a backup job that runs and succeeds but writes an empty file?
+      - How do you avoid false alarms when a job is legitimately disabled?
+    common_errors:
+      - Relying on job failure alerts, which stay silent when the scheduler itself is broken.
+
+  - external_key: system_design.reliability_observability.first_monitoring_stack
+    competency_key: observability
+    topic: A first monitoring stack for a growing team
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Imagine you join a company with about fifteen services on a few virtual machines and a managed database, and the
+      only monitoring is the cloud console. What would the first monitoring setup you build look like, and what would
+      you deliberately leave out for now?
+    expected_concepts:
+      - host and service metrics with a collector and time-series store
+      - request rate, errors and latency for each service
+      - centralised logs
+      - a small set of actionable alerts tied to user impact
+      - dashboards per service
+      - explicit deferral of heavier tooling such as tracing
+    rubric:
+      excellent: Proposes a lean stack covering metrics, logs and a handful of user-facing alerts, prioritises by what has caused real pain, and justifies what is deferred and when it would be added.
+      good: Describes a reasonable metrics, logs and alerting setup with sensible first alerts.
+      weak: Lists many tools without priorities or proposes alerting on every host metric.
+    followups:
+      - Which three alerts would you turn on first, and why those?
+      - What would make you decide it's time to add tracing?
+    common_errors:
+      - Starting with CPU and disk alerts on every host instead of signals tied to user impact.
+
+  - external_key: system_design.reliability_observability.service_ownership_catalog
+    competency_key: incident_response
+    topic: Ownership metadata for routing alerts
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Alerts at your company often land in a shared channel where nobody is sure who owns the failing service. How would
+      you design a simple service ownership catalog that alerts and on-call tooling can use to reach the right team?
+    expected_concepts:
+      - one record per service with owning team, on-call rotation and escalation contact
+      - ownership stored as code next to the service or in a central registry
+      - labels on telemetry that map to the catalog
+      - validation so services without an owner are flagged
+      - keeping the catalog current when teams reorganise
+    rubric:
+      excellent: Defines the catalog fields, explains how alerts look up ownership through labels, adds checks that block or flag unowned services, and plans how the data stays accurate over time.
+      good: Proposes a catalog with team and rotation fields and uses it for routing.
+      weak: Suggests a wiki page or spreadsheet with no link to the alerting system.
+    followups:
+      - What happens to an alert from a service that has no owner recorded?
+      - How do you keep the catalog right after a team split?
+    common_errors:
+      - Building a catalog that nothing reads automatically, so it goes stale within months.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.reliability_observability.metrics_collection_mixed_fleet
+    competency_key: observability
+    topic: Collecting metrics from a mixed fleet
+    difficulty: medium
+    text: >-
+      Your estate has Kubernetes clusters, a few hundred long-lived virtual machines and lots of short batch jobs that run
+      for under a minute. How would you design metrics collection that works for all three, and where would you use
+      pull versus push?
+    expected_concepts:
+      - pull-based scraping with service discovery for long-lived targets
+      - push or a gateway for short-lived jobs, with its drawbacks
+      - agents per node versus central scrapers
+      - target health (up) as a signal in itself
+      - consistent labels across environments
+      - scaling scrapers by sharding targets
+    rubric:
+      excellent: Matches the collection model to each workload, explains the staleness and lifecycle problems of pushing from short jobs, uses discovery and consistent labelling, and describes how the collection tier scales and fails.
+      good: Picks scraping for long-lived targets and push for batch jobs with a sensible reason.
+      weak: Applies one model everywhere without noticing that short jobs vanish before a scrape.
+    followups:
+      - What goes wrong if a batch job pushes a metric once and then exits?
+      - How would you know that a target has stopped being scraped?
+    common_errors:
+      - Treating a push gateway as a general-purpose ingest path for long-lived services.
+
+  - external_key: system_design.reliability_observability.ha_alert_evaluation
+    competency_key: distributed_systems
+    topic: Highly available alert evaluation without duplicate pages
+    difficulty: medium
+    text: >-
+      The single server that evaluates your alert rules went down during an outage, so nobody was paged. How would you
+      redesign alert evaluation so it keeps working when a node or zone fails, without sending everyone two pages for
+      every problem?
+    expected_concepts:
+      - running redundant evaluators in separate failure domains
+      - deduplication downstream by alert identity
+      - clustered notifier with gossip or a shared state store
+      - trade-off between missed and duplicate notifications
+      - alerting on the evaluators themselves from an independent system
+    rubric:
+      excellent: Runs identical evaluators in separate zones and deduplicates by alert fingerprint in a clustered notifier, explains why erring toward a duplicate beats a missed page, and adds independent watchdog monitoring.
+      good: Proposes redundancy plus deduplication but is vague on where state lives or how failures are detected.
+      weak: Proposes leader election alone with no answer for what happens during failover, or ignores duplicates.
+    followups:
+      - During a network partition both notifier nodes think they're alone. What happens?
+      - How would you test that failover actually works?
+    common_errors:
+      - Designing for zero duplicates at the cost of possibly missing pages.
+
+  - external_key: system_design.reliability_observability.alert_grouping_notifications
+    competency_key: observability
+    topic: Grouping and deduplicating alert notifications
+    difficulty: medium
+    text: >-
+      When a database fails, two hundred alerts fire across dependent services and on-call gets two hundred messages in a
+      minute. How would you design the notification layer to group, deduplicate and suppress so a responder gets
+      something useful instead?
+    expected_concepts:
+      - grouping by labels such as cluster, service or cause
+      - group wait and repeat intervals
+      - inhibition of symptom alerts when a cause alert fires
+      - deduplication by alert fingerprint
+      - a notification that summarises the group with links
+    rubric:
+      excellent: Designs grouping keys, timing windows and inhibition rules, explains how they interact and the risk of hiding a separate real problem, and shows what the single summary notification would contain.
+      good: Describes grouping and deduplication with sensible keys and timing.
+      weak: Proposes muting alerts during incidents or raising thresholds until fewer fire.
+    followups:
+      - How do you stop inhibition from hiding an unrelated failure?
+      - How should grouping keys be chosen so groups are neither too big nor too small?
+    common_errors:
+      - Grouping so broadly that a second, unrelated incident is folded into the first.
+
+  - external_key: system_design.reliability_observability.silences_maintenance_windows
+    competency_key: incident_response
+    topic: Silences and maintenance windows
+    difficulty: medium
+    text: >-
+      Teams want to mute alerts during planned maintenance, but last quarter a silence was left on for a week and hid a
+      real outage. How would you design silences and maintenance windows so they are easy to use and hard to misuse?
+    expected_concepts:
+      - mandatory expiry and maximum duration
+      - matching by precise labels, previewing affected alerts
+      - author, reason and ticket recorded with each silence
+      - scheduled windows tied to change records
+      - visibility of active silences on dashboards and in chat
+      - alerts that still fire for severe or unrelated conditions
+    rubric:
+      excellent: Enforces expiry and scoping, shows a preview of what will be muted, records who and why, surfaces active silences prominently, and keeps critical signals or audit trails flowing during the window.
+      good: Adds expiry and an audit trail with reasonably scoped matchers.
+      weak: Offers a global mute switch with no expiry or scoping.
+    followups:
+      - How would you handle maintenance that overruns its window?
+      - Should a silence ever suppress an SLO burn-rate page?
+    common_errors:
+      - Letting silences match on broad labels such as an entire environment.
+
+  - external_key: system_design.reliability_observability.slo_as_code_platform
+    competency_key: observability
+    topic: SLOs defined as code across many teams
+    difficulty: medium
+    text: >-
+      Leadership wants every customer-facing service to have SLOs, and today each team does it differently in a
+      spreadsheet. How would you design a platform where teams declare SLOs as code and get dashboards, alerts and
+      reports generated for them?
+    expected_concepts:
+      - a declarative SLO spec (SLI query, target, window, owner)
+      - generated recording rules, burn-rate alerts and dashboards
+      - review and validation in CI
+      - error budget reporting over time
+      - support for request-based and window-based SLIs
+      - versioning when a target or SLI changes
+    rubric:
+      excellent: Defines a spec, generates rules, alerts and dashboards from it, validates in CI, and handles target changes and history so reports stay comparable.
+      good: Describes a spec plus generated alerts and dashboards with reasonable fields.
+      weak: Describes a dashboard of availability numbers with no definition format or alerting.
+    followups:
+      - A team changes their target from 99.9 to 99.5 mid-quarter. What happens to the report?
+      - How would you stop a team defining an SLI that can never fail?
+    common_errors:
+      - Generating alerts on raw SLI dips rather than on budget burn rate.
+
+  - external_key: system_design.reliability_observability.metrics_downsampling_retention
+    competency_key: observability
+    topic: Long-term metrics retention with downsampling
+    difficulty: medium
+    text: >-
+      Your metrics store keeps fifteen days of data, but capacity planning needs two years and queries over long ranges
+      are painfully slow. How would you design long-term retention, and what would you keep at full resolution versus
+      downsample?
+    expected_concepts:
+      - tiered storage, local disk for recent data and object storage for history
+      - downsampled resolutions (for example 5 minute and 1 hour)
+      - keeping min, max, sum and count so aggregates stay correct
+      - compaction of blocks
+      - query routing to the right resolution
+      - dropping high-cardinality series from long-term tiers
+    rubric:
+      excellent: Designs tiers with object storage and compaction, keeps the right aggregates so downsampled data still answers rate and percentile questions, and routes queries by range.
+      good: Proposes object storage with downsampling and different retention per resolution.
+      weak: Suggests keeping everything at full resolution on bigger disks.
+    followups:
+      - Why does averaging alone break when you downsample a latency metric?
+      - Which series would you drop before moving data to the long-term tier?
+    common_errors:
+      - Storing only averages, which hides spikes and makes percentiles impossible later.
+
+  - external_key: system_design.reliability_observability.dashboards_as_code
+    competency_key: observability
+    topic: Dashboards provisioned as code
+    difficulty: medium
+    text: >-
+      Your company has three thousand dashboards, most of them broken or duplicated, and nobody trusts the one they find
+      first. How would you design a system for managing dashboards as code so the important ones stay correct?
+    expected_concepts:
+      - dashboards defined in version control and provisioned automatically
+      - shared libraries or templates for standard service views
+      - ownership and review for curated dashboards
+      - separating curated from ad hoc exploration
+      - detecting panels whose queries return nothing
+      - cleanup of unused dashboards using view data
+    rubric:
+      excellent: Combines templated, versioned dashboards with ownership, a clear curated tier, automated checks for broken queries and a cleanup process driven by usage.
+      good: Proposes dashboards in Git with templates and review.
+      weak: Proposes a naming convention or a one-off cleanup without any mechanism to keep it clean.
+    followups:
+      - How would you still let people experiment without polluting the curated set?
+      - How would you detect a panel that silently stopped showing data after a metric rename?
+    common_errors:
+      - Locking all dashboards behind code review, which pushes people to build untracked copies.
+
+  - external_key: system_design.reliability_observability.cardinality_guardrails
+    competency_key: observability
+    topic: Per-team cardinality limits on a shared metrics platform
+    difficulty: medium
+    text: >-
+      On your shared metrics platform, one team added a user ID label and the active series count tripled overnight,
+      slowing queries for everyone. How would you design guardrails so a single team can't do that again?
+    expected_concepts:
+      - per-tenant series limits enforced at ingest
+      - visibility of each team's series count and top labels
+      - relabelling or dropping offending labels
+      - warnings before hard limits
+      - review of new metrics in CI or at admission
+      - guidance on using logs or traces for high-cardinality data
+    rubric:
+      excellent: Enforces tenant limits at ingest with clear feedback, gives teams usage visibility and early warnings, explains what happens to data over the limit, and redirects high-cardinality needs to suitable tools.
+      good: Proposes per-team limits and a way to find which labels are exploding.
+      weak: Only proposes adding more capacity or a policy document.
+    followups:
+      - When a team hits its limit, do you drop new series or reject the whole write?
+      - How would you find the label responsible for the jump?
+    common_errors:
+      - Rejecting entire batches at the limit and blinding the team's existing alerts.
+
+  - external_key: system_design.reliability_observability.kubernetes_fleet_metrics
+    competency_key: kubernetes
+    topic: Central metrics view across many clusters
+    difficulty: medium
+    text: >-
+      You run about fifty Kubernetes clusters across several regions, each with its own local monitoring. How would you
+      design a central view that lets on-call answer fleet-wide questions without shipping every metric from every
+      cluster?
+    expected_concepts:
+      - local collection and alerting per cluster
+      - forwarding selected or aggregated series centrally
+      - global query layer that fans out versus central storage
+      - consistent cluster and region labels
+      - alerting that keeps working if the central layer is down
+      - control-plane and node metrics as first-class signals
+    rubric:
+      excellent: Keeps alerting local, forwards aggregates or selected series, explains the trade-off between federated queries and central storage, and keeps labels consistent so fleet queries make sense.
+      good: Proposes a central store or query layer with per-cluster labels and some filtering.
+      weak: Ships every series from every cluster to one central database with no thought about volume or dependency.
+    followups:
+      - Which signals would you forward centrally, and which stay local?
+      - What does on-call see if one cluster's forwarding breaks?
+    common_errors:
+      - Making per-cluster alerting depend on the central system being reachable.
+
+  - external_key: system_design.reliability_observability.business_metric_alerting
+    competency_key: observability
+    topic: Alerting on business metrics with daily patterns
+    difficulty: medium
+    text: >-
+      Your checkout service can look perfectly normal technically while orders drop because a payment provider is
+      rejecting cards. How would you design alerting on business signals like orders per minute, given strong daily and
+      weekly patterns?
+    expected_concepts:
+      - emitting business events as metrics
+      - comparing against same time last week or a seasonal baseline
+      - ratios such as payment success rate rather than raw counts
+      - minimum volume thresholds for quiet hours
+      - routing to both engineering and business owners
+    rubric:
+      excellent: Prefers ratios and seasonal baselines over fixed thresholds, handles low-traffic hours and holidays, and explains who receives the alert and what they can do.
+      good: Uses week-over-week comparison or ratios and recognises the quiet-hour problem.
+      weak: Proposes a fixed threshold on orders per minute.
+    followups:
+      - How would a big sale or a public holiday affect your baseline?
+      - What would you alert on at three in the morning when there are only a few orders?
+    common_errors:
+      - Using a static threshold that either pages every night or misses daytime drops.
+
+  - external_key: system_design.reliability_observability.oncall_schedule_service
+    competency_key: incident_response
+    topic: On-call scheduling with overrides and follow-the-sun
+    difficulty: medium
+    text: >-
+      Teams across three time zones manage on-call in spreadsheets and pages sometimes go to someone who swapped shifts
+      days ago. How would you design an on-call scheduling service that handles rotations, overrides and follow-the-sun
+      handoffs correctly?
+    expected_concepts:
+      - rotation model with layers and handoff times in explicit time zones
+      - overrides that take precedence and are auditable
+      - a single who-is-on-call API used by the paging system
+      - daylight saving and holiday edge cases
+      - notifications before a shift starts
+      - gaps detection when nobody is scheduled
+    rubric:
+      excellent: Models rotations, layers and overrides with precise time-zone handling, exposes one source of truth for paging, detects coverage gaps ahead of time and handles daylight-saving transitions.
+      good: Covers rotations and overrides with a lookup the paging system can use.
+      weak: Stores names per week in a table with no override, time-zone or gap handling.
+    followups:
+      - What happens at a daylight-saving change when a shift boundary is at two in the morning?
+      - How would you alert the team if next weekend has nobody on call?
+    common_errors:
+      - Storing shift times without time zones so handoffs drift twice a year.
+
+  - external_key: system_design.reliability_observability.observability_cost_showback
+    competency_key: cloud_cost_optimization
+    topic: Attributing observability cost to teams
+    difficulty: medium
+    text: >-
+      Your observability bill has doubled in a year and nobody knows which teams are driving it. How would you design a
+      way to measure and show each team what their metrics, logs and traces actually cost?
+    expected_concepts:
+      - tagging telemetry with team or service at the source
+      - measuring volume per tenant at ingest (bytes, series, spans)
+      - unit costs per signal type and storage tier
+      - regular reports and trends per team
+      - pairing visibility with levers such as sampling and retention
+    rubric:
+      excellent: Measures usage per team at ingest across all signals, converts it to cost with defensible unit rates, publishes trends, and pairs the report with concrete levers teams can pull.
+      good: Proposes per-team tagging and volume reports.
+      weak: Proposes splitting the bill evenly or cutting retention globally.
+    followups:
+      - How would you handle shared infrastructure telemetry that no single team owns?
+      - What would you do with a team whose usage is high but justified?
+    common_errors:
+      - Attributing cost only by storage size and ignoring query and cardinality costs.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.reliability_observability.tsdb_ingest_scale_out
+    competency_key: distributed_systems
+    topic: Horizontally scalable metrics ingest
+    difficulty: hard
+    text: >-
+      Design the ingest and storage path for an internal metrics platform that needs to handle around fifty million
+      active series and several million samples per second, with no data loss when a storage node dies. Walk me through
+      how writes flow and how you'd shard and replicate.
+    expected_concepts:
+      - stateless distributors in front of stateful ingesters
+      - consistent hashing of series to ingesters with a replication factor
+      - write-ahead log and in-memory head block flushed to object storage
+      - quorum writes and handling of ingester failure or rollout
+      - per-tenant limits at the distributor
+      - query path merging recent data from ingesters with stored blocks
+    rubric:
+      excellent: Describes distributors, a hash ring with replication and quorum writes, WAL plus flushing to object storage, and how rolling restarts and node loss avoid data gaps, with sizing backed by numbers.
+      good: Proposes sharding by series hash with replication and durable storage but is vague on failure or rollout behaviour.
+      weak: Proposes one large database or sharding by metric name without addressing hot spots or durability.
+    followups:
+      - How would you roll out a new ingester version without losing in-memory samples?
+      - What happens to a tenant whose single metric has millions of series?
+    common_errors:
+      - Sharding by metric name so one popular metric overwhelms a single node.
+
+  - external_key: system_design.reliability_observability.global_metrics_query
+    competency_key: distributed_systems
+    topic: Querying metrics across regions
+    difficulty: hard
+    text: >-
+      Your metrics live in separate stores in six regions, and incident responders need queries like global error rate
+      by service to return in a few seconds, even while one region is unreachable. How would you design the query layer?
+    expected_concepts:
+      - fan-out query frontend with partial-response handling
+      - pushing aggregation down to regions before merging
+      - pre-aggregated global recording rules for common queries
+      - query splitting, caching and result limits
+      - clearly flagging partial results to the user
+    rubric:
+      excellent: Designs fan-out with pushdown aggregation, pre-computes hot global queries, defines how partial results are shown and why, and protects regional stores with limits and caching.
+      good: Proposes fan-out with caching and pre-aggregation.
+      weak: Proposes replicating every series into one global store without discussing cost, latency or availability.
+    followups:
+      - Is it acceptable to show a global error rate with one region missing? How would you present it?
+      - Which queries break when you push aggregation down to each region?
+    common_errors:
+      - Silently returning partial data that looks like a real drop in traffic.
+
+  - external_key: system_design.reliability_observability.slo_burn_rate_at_scale
+    competency_key: observability
+    topic: Computing burn rates for thousands of SLOs
+    difficulty: hard
+    text: >-
+      Your SLO platform has grown to two thousand services, each with availability and latency SLOs, and evaluating
+      burn rates over windows up to thirty days is overloading the metrics store. How would you redesign the computation
+      so alerts stay accurate and cheap?
+    expected_concepts:
+      - recording rules that pre-aggregate good and total events at short intervals
+      - building long windows from pre-aggregated short windows
+      - latency SLIs from histogram buckets aligned to the threshold
+      - multiwindow multi-burn-rate alerting
+      - staggering evaluation and isolating the SLO workload
+      - handling missing data and counter resets
+    rubric:
+      excellent: Pre-aggregates good and total counts so long windows are cheap, derives latency SLIs from bucket boundaries, keeps multiwindow alert semantics, and addresses gaps, resets and evaluation load.
+      good: Uses recording rules and longer-window rollups with a sound burn-rate approach.
+      weak: Proposes evaluating raw thirty-day queries less often, which delays alerts.
+    followups:
+      - The latency threshold is 300 milliseconds but your nearest bucket is 250. What do you do?
+      - How should a gap in metrics count against the error budget?
+    common_errors:
+      - Computing latency SLIs from percentiles, which cannot be combined across instances or windows.
+
+  - external_key: system_design.reliability_observability.anomaly_detection_service
+    competency_key: observability
+    topic: Automated baselining and anomaly alerts
+    difficulty: hard
+    text: >-
+      Product teams want alerts that learn what normal looks like instead of hand-tuned thresholds, but a previous
+      attempt flooded on-call with false alarms. How would you design an anomaly detection service that people would
+      actually trust?
+    expected_concepts:
+      - seasonality-aware baselines per series
+      - restricting it to a curated set of meaningful signals
+      - requiring sustained deviation and minimum volume
+      - delivering anomalies as context or tickets before paging
+      - feedback loop for labelling false positives
+      - measuring precision and recall against past incidents
+    rubric:
+      excellent: Limits scope to signals that matter, handles seasonality and sparse data, starts as non-paging context, measures accuracy against historical incidents and builds a feedback loop before promoting anything to a page.
+      good: Proposes seasonal baselines with sustained-deviation rules and some feedback mechanism.
+      weak: Proposes running a generic anomaly model over every metric and paging on its output.
+    followups:
+      - How would you evaluate the detector before it ever pages anyone?
+      - What happens to the baseline after a deploy permanently changes traffic shape?
+    common_errors:
+      - Applying detection to thousands of low-value metrics so true anomalies drown in noise.
+
+  - external_key: system_design.reliability_observability.monitoring_independent_of_region
+    competency_key: system_design
+    topic: Monitoring that survives the failure it reports on
+    difficulty: hard
+    text: >-
+      During a regional cloud outage your dashboards, alerting and paging all went dark because they ran in the same
+      region as production. How would you redesign the monitoring and alerting stack so it still works when the thing
+      it watches is failing?
+    expected_concepts:
+      - running alerting in a different region or provider from what it monitors
+      - cross-monitoring between independent stacks
+      - external dead man's switch for the alerting pipeline
+      - minimal critical path for paging (no dependence on SSO or chat)
+      - accepting some data loss for dashboards while keeping paging alive
+      - regular tests that simulate the failure
+    rubric:
+      excellent: Separates failure domains for alerting and paging, adds watchdogs outside the stack, removes hidden dependencies like SSO and DNS from the critical path, and proves it with regular failure tests.
+      good: Moves alerting to another region and adds a watchdog.
+      weak: Proposes more replicas in the same region or relies on the cloud provider's own status page.
+    followups:
+      - What hidden dependencies might still take your paging down?
+      - How would you test this without causing a real outage?
+    common_errors:
+      - Leaving the paging integration behind the same identity provider or DNS as production.
+
+  - external_key: system_design.reliability_observability.multi_tenant_metrics_saas
+    competency_key: distributed_systems
+    topic: Customer-facing multi-tenant metrics service
+    difficulty: hard
+    text: >-
+      Your company wants to offer hosted metrics to external customers, from tiny startups to a few very large accounts.
+      How would you design the platform so tenants are isolated from each other in performance, data and cost?
+    expected_concepts:
+      - tenant ID enforced on every write and query path
+      - per-tenant ingest, series and query limits
+      - shuffle sharding to limit noisy-neighbour blast radius
+      - dedicated capacity or cells for the largest tenants
+      - per-tenant usage metering for billing
+      - authentication and authorisation at the gateway
+    rubric:
+      excellent: Enforces tenancy at every layer, combines limits with shuffle sharding or cells to contain noisy tenants, plans for very large tenants separately, and meters usage accurately for billing.
+      good: Covers tenant IDs, limits and some isolation of heavy tenants.
+      weak: Relies on separate databases per tenant without addressing cost at scale or query-time isolation.
+    followups:
+      - A large tenant runs a query that scans a year of data. How do you protect everyone else?
+      - How would you migrate a tenant that outgrows its shard without downtime?
+    common_errors:
+      - Enforcing tenant separation only in the UI layer rather than in storage and query paths.
+
+  - external_key: system_design.reliability_observability.fleet_latency_percentiles
+    competency_key: distributed_systems
+    topic: Correct latency percentiles across thousands of instances
+    difficulty: hard
+    text: >-
+      Your dashboard shows p99 latency by averaging each pod's p99, and engineers keep drawing wrong conclusions from it.
+      How would you design latency collection and aggregation so fleet-wide percentiles are actually correct?
+    expected_concepts:
+      - percentiles cannot be averaged
+      - histograms with fixed or exponential buckets that can be summed
+      - mergeable sketches such as t-digest or DDSketch
+      - choosing bucket layout around SLO thresholds
+      - accuracy versus cardinality and storage trade-offs
+    rubric:
+      excellent: Explains why averaged percentiles are wrong, proposes mergeable histograms or sketches, discusses bucket choice and error bounds, and weighs storage and cardinality costs.
+      good: Recognises the averaging problem and proposes histograms that can be aggregated.
+      weak: Proposes taking the maximum or median of per-pod percentiles.
+    followups:
+      - How would you choose histogram buckets for a service with a 200 millisecond target?
+      - What does a sketch give you that fixed buckets don't, and what does it cost?
+    common_errors:
+      - Averaging per-instance percentiles and treating the result as a fleet percentile.
+
+  - external_key: system_design.reliability_observability.alert_correlation_engine
+    competency_key: incident_response
+    topic: Correlating alert storms to a likely cause
+    difficulty: hard
+    text: >-
+      In a large outage, on-call sees dozens of alerts from many teams and spends the first twenty minutes working out
+      which one is the cause. How would you design a system that correlates related alerts and suggests a probable
+      origin?
+    expected_concepts:
+      - service dependency graph from traces or a catalog
+      - time-window clustering of alerts
+      - topology-aware ranking of upstream candidates
+      - linking recent change events
+      - presenting suggestions with evidence rather than auto-acting
+      - measuring suggestion accuracy against postmortems
+    rubric:
+      excellent: Combines dependency topology, timing and change events into ranked suggestions with visible evidence, keeps humans in the decision, and measures accuracy using past incidents.
+      good: Uses a dependency graph and time windows to group alerts and point upstream.
+      weak: Proposes a single machine learning model to find root causes without data sources or evaluation.
+    followups:
+      - Where does the dependency graph come from, and how do you keep it fresh?
+      - What happens when the real cause has no alert at all?
+    common_errors:
+      - Assuming the earliest alert is always the cause.
+
+  - external_key: system_design.reliability_observability.journey_composite_slo
+    competency_key: system_design
+    topic: SLOs for a user journey spanning many services
+    difficulty: hard
+    text: >-
+      The checkout journey touches fifteen services and each team hits its own SLO, yet customers still have a bad
+      experience. How would you design measurement and SLOs for the journey as a whole, and how would that connect to
+      the individual team SLOs?
+    expected_concepts:
+      - measuring the journey at the edge or client as the primary SLI
+      - why per-service SLOs compound to a lower journey availability
+      - allocating budgets to dependencies
+      - synthetic or real-user journey success signals
+      - attributing journey failures to services via traces
+      - ownership of the journey SLO
+    rubric:
+      excellent: Measures journey success where the user experiences it, shows how dependency availabilities compound, allocates budgets downward, attributes failures through tracing and names who owns the journey objective.
+      good: Proposes an end-to-end journey SLI and recognises compounding failure across services.
+      weak: Proposes averaging the fifteen service SLOs.
+    followups:
+      - If the journey SLO is 99.9, what does that imply for each dependency in the critical path?
+      - Who gets paged when the journey SLO burns but every service looks fine?
+    common_errors:
+      - Assuming that every component meeting 99.9 means the journey meets 99.9.

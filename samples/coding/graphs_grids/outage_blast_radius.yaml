@@ -1,0 +1,151 @@
+version: 1
+slug: outage_blast_radius
+title: "Outage Spread by Hop"
+difficulty: easy
+competency_keys: [algorithms, problem_solving]
+role_tags: [sre, backend, platform, devops]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Outage Spread by Hop
+
+  Your platform runs `n` services with ids `0` to `n - 1`. The service catalogue exports its
+  dependency map as a list of pairs: `[a, b]` in `depends_on` means **service `a` depends on
+  service `b`**.
+
+  When service `failed` goes down, the outage spreads to the services that depend on it, then to the
+  services that depend on those, and so on. A service that `failed` itself depends on is **not**
+  affected. For the incident timeline, the on-call engineer wants to know how fast the outage fans
+  out. The **hop** of an impacted service is the length of the **shortest** chain of dependencies
+  from it to `failed`: services that depend on `failed` directly are at hop 1, services that depend
+  on a hop-1 service (and not directly on `failed`) are at hop 2, and so on.
+
+  Return an array whose element `i` is the **number of services at hop `i + 1`**. The array ends at
+  the last hop that has at least one service; return an empty array if nothing depends on `failed`.
+  `failed` itself is never counted, even when a dependency loop leads back to it.
+
+  The map may contain repeated pairs and dependency loops.
+
+  ### Example 1
+  ```
+  Input:  n = 6, depends_on = [[1, 0], [2, 1], [3, 1], [4, 5]], failed = 0
+  Output: [1, 2]
+  Explanation: Service 1 depends on 0 (hop 1); services 2 and 3 depend on 1 (hop 2).
+               Services 4 and 5 are unrelated.
+  ```
+
+  ### Example 2
+  ```
+  Input:  n = 4, depends_on = [[0, 1], [1, 2], [2, 0], [3, 2]], failed = 1
+  Output: [1, 1, 1]
+  Explanation: 0 is at hop 1, 2 at hop 2 and 3 at hop 3. The loop returns to service 1,
+               which is never counted.
+  ```
+
+  ### Example 3
+  ```
+  Input:  n = 3, depends_on = [[0, 1], [1, 2]], failed = 0
+  Output: []
+  Explanation: Service 0 depends on others, but nothing depends on 0.
+  ```
+
+  ### Constraints
+  - `1 <= n <= 10^4`
+  - `0 <= depends_on.length <= 2 * 10^4`
+  - `depends_on[i].length == 2`, `0 <= a, b < n` and `a != b`
+  - `0 <= failed < n`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: impact_by_hop
+  params:
+    - {name: n, type: "int"}
+    - {name: depends_on, type: "int[][]"}
+    - {name: failed, type: "int"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def impact_by_hop(n: int, depends_on: list[list[int]], failed: int) -> list[int]:
+        # dependents[b] lists every service that depends on b directly
+        dependents: list[list[int]] = [[] for _ in range(n)]
+        for a, b in depends_on:
+            dependents[b].append(a)
+        seen = [False] * n
+        seen[failed] = True
+        frontier = [failed]
+        counts: list[int] = []
+        while frontier:
+            next_frontier: list[int] = []
+            for current in frontier:
+                for caller in dependents[current]:
+                    if not seen[caller]:
+                        seen[caller] = True
+                        next_frontier.append(caller)
+            if next_frontier:
+                counts.append(len(next_frontier))
+            frontier = next_frontier
+        return counts
+  javascript: |
+    function impactByHop(n, dependsOn, failed) {
+      const dependents = Array.from({ length: n }, () => []);
+      for (const [a, b] of dependsOn) dependents[b].push(a);
+      const seen = new Array(n).fill(false);
+      seen[failed] = true;
+      let frontier = [failed];
+      const counts = [];
+      while (frontier.length > 0) {
+        const next = [];
+        for (const current of frontier) {
+          for (const caller of dependents[current]) {
+            if (!seen[caller]) {
+              seen[caller] = true;
+              next.push(caller);
+            }
+          }
+        }
+        if (next.length > 0) counts.push(next.length);
+        frontier = next;
+      }
+      return counts;
+    }
+tests:
+  - {id: t1, args: [6, [[1, 0], [2, 1], [3, 1], [4, 5]], 0], expected: [1, 2], description: "Example 1 - two hops down a small tree"}
+  - {id: t2, args: [4, [[0, 1], [1, 2], [2, 0], [3, 2]], 1], expected: [1, 1, 1], description: "Example 2 - dependency loop leads back to the failed service"}
+  - {id: t3, args: [3, [[0, 1], [1, 2]], 0], expected: [], description: "Example 3 - failed service has no dependents"}
+  - {id: t4, hidden: true, args: [1, [], 0], expected: [], description: "Single service and no dependencies"}
+  - {id: t5, hidden: true, args: [4, [[1, 0], [2, 1], [3, 2], [3, 0]], 0], expected: [2, 1], description: "Shortest hop matters: 3 depends on 0 directly and via a longer chain; depth-first depth gives the wrong layer"}
+  - {id: t6, hidden: true, args: [5, [[0, 4], [0, 4], [1, 0], [1, 0], [2, 1]], 4], expected: [1, 1, 1], description: "Repeated pairs must not count a service twice"}
+  - {id: t7, hidden: true, args: [5, [[4, 3], [3, 2], [2, 1], [1, 0]], 2], expected: [1, 1], description: "Direction trap: only upstream callers 3 and 4 are impacted, not 0 and 1"}
+  - {id: t8, hidden: true, args: [6, [[0, 5], [1, 5], [2, 5], [3, 5], [4, 5]], 5], expected: [5], description: "Star: every other service depends on the failed one at hop 1"}
+  - {id: t9, hidden: true, args: [7, [[0, 1], [1, 0], [2, 3], [3, 2], [4, 3], [5, 4], [6, 5]], 3], expected: [2, 1, 1], description: "Two separate loops; only the loop containing failed spreads, plus a short tail"}
+  - {id: t10, hidden: true, args: [60, [[1, 0], [2, 1], [3, 2], [4, 3], [5, 4], [6, 5], [7, 6], [8, 7], [9, 8], [10, 9], [11, 10], [12, 11], [13, 12], [14, 13], [15, 14], [16, 15], [17, 16], [18, 17], [19, 18], [20, 19], [21, 20], [22, 21], [23, 22], [24, 23], [25, 24], [26, 25], [27, 26], [28, 27], [29, 28], [30, 29], [31, 30], [32, 31], [33, 32], [34, 33], [35, 34], [36, 35], [37, 36], [38, 37], [39, 38], [40, 39], [41, 40], [42, 41], [43, 42], [44, 43], [45, 44], [46, 45], [47, 46], [48, 47], [49, 48], [50, 49], [51, 50], [52, 51], [53, 52], [54, 53], [55, 54], [56, 55], [57, 56], [58, 57], [59, 58]], 0], expected: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], description: "Chain of 60 services; 59 hops of one service each"}
+  - {id: t11, hidden: true, args: [400, [[1, 0], [2, 1], [2, 0], [3, 2], [3, 0], [4, 1], [4, 2], [5, 3], [5, 1], [6, 0], [6, 3], [7, 2], [7, 1], [8, 1], [8, 4], [9, 0], [9, 6], [10, 7], [10, 2], [11, 9], [11, 0], [12, 8], [12, 1], [13, 0], [13, 12], [14, 3], [14, 13], [15, 9], [15, 0], [16, 14], [16, 5], [17, 14], [17, 6], [18, 16], [18, 7], [19, 9], [19, 15], [20, 0], [20, 2], [21, 14], [21, 8], [22, 13], [22, 17], [23, 2], [23, 22], [24, 8], [24, 10], [25, 24], [25, 7], [26, 16], [26, 9], [27, 0], [27, 2], [28, 18], [28, 24], [29, 3], [29, 12], [30, 3], [30, 27], [31, 10], [31, 13], [32, 4], [32, 2], [33, 30], [33, 24], [34, 4], [34, 10], [35, 11], [35, 34], [36, 35], [36, 7], [37, 22], [37, 19], [38, 30], [38, 20], [39, 22], [39, 11], [40, 28], [40, 30], [41, 17], [41, 35], [42, 33], [42, 20], [43, 23], [43, 15], [44, 23], [44, 24], [45, 15], [45, 28], [46, 40], [46, 45], [47, 20], [47, 21], [48, 25], [48, 40], [49, 22], [49, 19], [50, 21], [50, 34], [51, 46], [51, 36], [52, 27], [52, 43], [53, 40], [53, 29], [54, 38], [54, 40], [55, 31], [55, 48], [56, 50], [56, 30], [57, 40], [57, 47], [58, 40], [58, 31], [59, 41], [59, 42], [60, 36], [60, 30], [61, 39], [61, 58], [62, 57], [62, 50], [63, 42], [63, 61], [64, 34], [64, 40], [65, 40], [65, 47], [66, 63], [66, 55], [67, 57], [67, 55], [68, 41], [68, 39], [69, 43], [69, 45], [70, 54], [70, 48], [71, 41], [71, 65], [72, 61], [72, 52], [73, 69], [73, 52], [74, 56], [74, 46], [75, 47], [75, 51], [76, 64], [76, 66], [77, 54], [77, 47], [78, 67], [78, 59], [79, 60], [79, 68], [80, 64], [80, 54], [81, 69], [81, 66], [82, 78], [82, 70], [83, 57], [83, 80], [84, 66], [84, 59], [85, 75], [85, 59], [86, 65], [86, 85], [87, 64], [87, 83], [88, 77], [88, 65], [89, 82], [89, 65], [90, 65], [90, 83], [91, 81], [91, 78], [92, 68], [92, 83], [93, 75], [93, 91], [94, 79], [94, 83], [95, 67], [95, 78], [96, 67], [96, 69], [97, 70], [97, 68], [98, 84], [98, 76], [99, 76], [99, 92], [100, 92], [100, 82], [101, 79], [101, 84], [102, 98], [102, 100], [103, 92], [103, 88], [104, 83], [104, 90], [105, 80], [105, 104], [106, 99], [106, 78], [107, 81], [107, 84], [108, 93], [108, 95], [109, 99], [109, 106], [110, 99], [110, 82], [111, 89], [111, 87], [112, 111], [112, 88], [113, 106], [113, 83], [114, 86], [114, 92], [115, 98], [115, 99], [116, 93], [116, 87], [117, 88], [117, 92], [118, 97], [118, 99], [119, 105], [119, 107], [120, 94], [120, 92], [121, 102], [121, 95], [122, 120], [122, 106], [123, 103], [123, 114], [124, 117], [124, 116], [125, 111], [125, 113], [126, 100], [126, 114], [127, 98], [127, 126], [128, 98], [128, 113], [129, 128], [129, 110], [130, 122], [130, 109], [131, 102], [131, 101], [132, 121], [132, 122], [133, 105], [133, 118], [134, 106], [134, 127], [135, 114], [135, 115], [136, 110], [136, 108], [137, 109], [137, 121], [138, 125], [138, 119], [139, 132], [139, 110], [140, 138], [140, 139], [141, 134], [141, 133], [142, 116], [142, 137], [143, 142], [143, 123], [144, 125], [144, 116], [145, 136], [145, 130], [146, 144], [146, 118], [147, 144], [147, 130], [148, 143], [148, 118], [149, 146], [149, 134], [150, 138], [150, 120], [151, 140], [151, 142], [152, 134], [152, 140], [153, 123], [153, 142], [154, 126], [154, 144], [155, 128], [155, 133], [156, 154], [156, 139], [157, 150], [157, 137], [158, 140], [158, 157], [159, 152], [159, 151], [160, 148], [160, 144], [161, 145], [161, 157], [162, 149], [162, 134], [163, 149], [163, 157], [164, 150], [164, 134], [165, 144], [165, 154], [166, 138], [166, 151], [167, 137], [167, 144], [168, 160], [168, 141], [169, 154], [169, 163], [170, 159], [170, 161], [171, 170], [171, 156], [172, 150], [172, 170], [173, 143], [173, 154], [174, 153], [174, 148], [175, 166], [175, 164], [176, 152], [176, 162], [177, 152], [177, 171], [178, 176], [178, 158], [179, 170], [179, 178], [180, 164], [180, 165], [181, 179], [181, 158], [182, 162], [182, 164], [183, 174], [183, 161], [184, 160], [184, 174], [185, 168], [185, 180], [186, 181], [186, 180], [187, 186], [187, 163], [188, 186], [188, 164], [189, 171], [189, 166], [190, 178], [190, 189], [191, 171], [191, 167], [192, 166], [192, 177], [193, 174], [193, 189], [194, 192], [194, 191], [195, 166], [195, 187], [196, 168], [196, 174], [197, 193], [197, 172], [198, 171], [198, 182], [199, 184], [199, 177], [200, 199], [200, 176], [201, 197], [201, 184], [202, 184], [202, 192], [203, 189], [203, 188], [204, 195], [204, 184], [205, 197], [205, 201], [206, 202], [206, 195], [207, 191], [207, 187], [208, 180], [208, 204], [209, 180], [209, 187], [210, 207], [210, 199], [211, 182], [211, 202], [212, 204], [212, 190], [213, 201], [213, 194], [214, 193], [214, 204], [215, 210], [215, 203], [216, 186], [216, 206], [217, 191], [217, 199], [218, 202], [218, 194], [219, 189], [219, 213], [220, 216], [220, 198], [221, 198], [221, 215], [222, 196], [222, 217], [223, 194], [223, 213], [224, 197], [224, 208], [225, 198], [225, 215], [226, 213], [226, 216], [227, 217], [227, 222], [228, 209], [228, 200], [229, 220], [229, 205], [230, 206], [230, 226], [231, 216], [231, 209], [232, 207], [232, 224], [233, 203], [233, 227], [234, 219], [234, 221], [235, 227], [235, 206], [236, 211], [236, 213], [237, 215], [237, 231], [238, 219], [238, 225], [239, 231], [239, 225], [240, 226], [240, 229], [241, 235], [241, 216], [242, 224], [242, 239], [243, 238], [243, 235], [244, 242], [244, 221], [245, 217], [245, 228], [246, 245], [246, 244], [247, 240], [247, 229], [248, 222], [248, 232], [249, 233], [249, 225], [250, 240], [250, 248], [251, 250], [251, 221], [252, 234], [252, 239], [253, 241], [253, 243], [254, 252], [254, 240], [255, 250], [255, 251], [256, 236], [256, 240], [257, 237], [257, 247], [258, 234], [258, 231], [259, 252], [259, 256], [260, 256], [260, 255], [261, 251], [261, 260], [262, 254], [262, 235], [263, 239], [263, 240], [264, 262], [264, 246], [265, 237], [265, 244], [266, 253], [266, 261], [267, 266], [267, 247], [268, 246], [268, 267], [269, 261], [269, 266], [270, 240], [270, 251], [271, 257], [271, 243], [272, 243], [272, 256], [273, 253], [273, 260], [274, 257], [274, 268], [275, 253], [275, 260], [276, 275], [276, 246], [277, 253], [277, 272], [278, 275], [278, 250], [279, 262], [279, 274], [280, 251], [280, 255], [281, 268], [281, 261], [282, 273], [282, 277], [283, 282], [283, 257], [284, 269], [284, 258], [285, 271], [285, 283], [286, 279], [286, 272], [287, 283], [287, 278], [288, 280], [288, 272], [289, 287], [289, 274], [290, 278], [290, 282], [291, 263], [291, 285], [292, 269], [292, 276], [293, 279], [293, 280], [294, 273], [294, 290], [295, 288], [295, 282], [296, 286], [296, 271], [297, 283], [297, 293], [298, 297], [298, 285], [299, 277], [299, 278], [300, 291], [300, 282], [301, 298], [301, 299], [302, 291], [302, 278], [303, 282], [303, 300], [304, 278], [304, 291], [305, 291], [305, 283], [306, 294], [306, 291], [307, 283], [307, 290], [308, 295], [308, 281], [309, 295], [309, 279], [310, 299], [310, 292], [311, 281], [311, 298], [312, 283], [312, 298], [313, 312], [313, 295], [314, 301], [314, 309], [315, 303], [315, 288], [316, 301], [316, 288], [317, 309], [317, 292], [318, 290], [318, 317], [319, 306], [319, 303], [320, 303], [320, 319], [321, 316], [321, 320], [322, 304], [322, 300], [323, 300], [323, 308], [324, 309], [324, 298], [325, 305], [325, 308], [326, 324], [326, 322], [327, 326], [327, 325], [328, 327], [328, 313], [329, 315], [329, 309], [330, 303], [330, 306], [331, 314], [331, 320], [332, 302], [332, 331], [333, 311], [333, 307], [334, 326], [334, 328], [335, 305], [335, 306], [336, 312], [336, 310], [337, 314], [337, 307], [338, 329], [338, 317], [339, 319], [339, 332], [340, 321], [340, 317], [341, 330], [341, 326], [342, 315], [342, 327], [343, 336], [343, 331], [344, 317], [344, 341], [345, 331], [345, 334], [346, 324], [346, 338], [347, 323], [347, 339], [348, 334], [348, 346], [349, 332], [349, 319], [350, 332], [350, 340], [351, 334], [351, 347], [352, 338], [352, 341], [353, 328], [353, 340], [354, 330], [354, 351], [355, 345], [355, 342], [356, 346], [356, 332], [357, 343], [357, 333], [358, 355], [358, 345], [359, 348], [359, 347], [360, 357], [360, 334], [361, 338], [361, 360], [362, 355], [362, 352], [363, 358], [363, 344], [364, 362], [364, 339], [365, 345], [365, 354], [366, 346], [366, 364], [367, 366], [367, 343], [368, 344], [368, 362], [369, 345], [369, 367], [370, 343], [370, 344], [371, 369], [371, 348], [372, 346], [372, 365], [373, 345], [373, 351], [374, 356], [374, 347], [375, 358], [375, 371], [376, 359], [376, 363], [377, 372], [377, 369], [378, 352], [378, 354], [379, 361], [379, 369], [380, 371], [380, 375], [381, 351], [381, 354], [382, 358], [382, 370], [383, 374], [383, 364], [384, 383], [384, 380], [385, 366], [385, 358], [386, 378], [386, 372], [387, 377], [387, 381], [388, 368], [388, 374], [389, 380], [389, 385], [390, 366], [390, 385], [391, 363], [391, 376], [392, 365], [392, 362], [393, 364], [393, 387], [394, 381], [394, 383], [395, 381], [395, 393], [396, 384], [396, 381], [397, 371], [397, 373], [398, 373], [398, 371], [399, 375], [399, 374]], 200], expected: [1, 1, 1, 3, 3, 6, 11, 17, 22, 20, 17, 1], description: "Stress: 400 services with about 800 layered dependencies"}
+expected_concepts:
+  - "reversing edge direction to follow dependents instead of dependencies"
+  - "level-by-level breadth-first search for shortest hop counts"
+  - "visited marking so each service is counted once and loops terminate"
+  - "why depth-first search depth is not the shortest distance"
+optimal_complexity: {time: "O(n + e)", space: "O(n + e)"}
+rubric:
+  excellent: "Builds a reverse adjacency list (service to its dependents), runs a level-by-level BFS from the failed service marking services when they are first discovered, records each non-empty level size, and explains why BFS gives the shortest hop while DFS does not; states O(n + e)."
+  good: "Correct BFS layering after a small fix, for example reversing the edge direction, marking on enqueue rather than on dequeue, or dropping a trailing empty level."
+  weak: "Uses DFS depth as the hop number, follows the dependency direction instead of the dependents, double-counts services reached twice, or never terminates on loops."
+  criteria:
+    correctness: "All tests pass, including the shortest-hop trap, loops back to the failed service and repeated pairs."
+    efficiency: "Linear in services plus pairs; each service is discovered once."
+    code_quality: "Clear names for the reverse map and the current and next frontier; no trailing zero in the result."
+    edge_cases: "Handles a single service, no dependents, duplicates and cycles."
+    communication: "Explains why the edges are reversed and why breadth-first order yields shortest hops."
+hints:
+  - "First decide which direction the outage travels: towards the services a service calls, or towards the services that call it?"
+  - "Build a lookup from each service to the services that depend on it, then explore outward from the failed service one ring at a time, never visiting a service twice."
+  - "Run a breadth-first search over the reverse lookup that processes a whole frontier per round: mark each newly discovered service as seen when you add it to the next frontier, append the size of every non-empty frontier to the answer, and stop when a frontier is empty."
+followups:
+  - "How would you return the actual service ids at each hop rather than just the counts?"
+  - "If only some dependencies are critical and others degrade gracefully, how would the model and the traversal change?"
+  - "The dependency map has millions of edges and incident queries arrive every minute; what would you precompute or cache?"
+  - "How would you find the service whose failure impacts the most other services?"
+common_errors:
+  - "Traversing along depends_on edges from failed, which lists what failed needs rather than who needs it."
+  - "Using depth-first search depth as the hop, which can place a service further away than its shortest chain."
+  - "Marking services as visited only when dequeued, so a service reachable from two services in the same ring is counted twice."
+  - "Counting the failed service when a dependency loop leads back to it, or appending a final zero."

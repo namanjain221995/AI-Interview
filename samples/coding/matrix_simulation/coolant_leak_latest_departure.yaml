@@ -1,0 +1,243 @@
+version: 1
+slug: coolant_leak_latest_departure
+title: Coolant Leak Evacuation Delay
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [sre, platform, backend, general]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Coolant Leak Evacuation Delay
+
+  A coolant pipe has burst in a data-centre plant room. A technician on the floor wants to finish a safe
+  shutdown of the rack they are standing at before walking out, and asks you how long they can afford
+  to stay.
+
+  The room is given as `floor`, one string per row, all of the same length:
+
+  - `'#'` is a wall or a rack: neither coolant nor people can enter it;
+  - `'.'` is open floor;
+  - `'L'` is a leak source;
+  - `'T'` is the technician's starting cell (open floor);
+  - `'E'` is the exit door (open floor).
+
+  **Coolant.** At minute `0` exactly the `'L'` cells are flooded. At every following minute, every cell
+  that is up, down, left or right of a flooded cell and is not a wall becomes flooded too (this includes
+  the `'T'` and `'E'` cells). Cells the coolant can never reach never flood.
+
+  **Technician.** The technician stays on `'T'` for `w` whole minutes, so they occupy `'T'` at minutes
+  `0, 1, ..., w`. After that they move exactly one cell up, down, left or right every minute, never into a
+  wall: the `k`-th cell of their route is occupied at minute `w + k`. They are out as soon as they step
+  onto `'E'`.
+
+  **Safety rule.** The technician may only occupy a cell at minute `t` if that cell floods strictly
+  **after** minute `t`. The one exception is the exit: stepping onto `'E'` at minute `t` still counts as
+  escaping when `'E'` floods at minute `t` or later.
+
+  Return the **largest** `w` for which the technician can still escape. Return `-1` if they cannot
+  escape even with `w = 0`, and `1000000000` if they can escape no matter how large `w` is.
+
+  ### Example 1
+  ```
+  Input:  floor = ["L.....", "......", ".#####", "...T.E"]
+  Output: 5
+  Explanation: The bottom row is only reachable down the left column, so 'T' floods at minute 6,
+               the cell to its right at minute 7 and 'E' at minute 8. With w = 5 the technician is on
+               'T' until minute 5, next to the exit at minute 6 and on 'E' at minute 7. With w = 6 they
+               would still be on 'T' when it floods.
+  ```
+
+  ### Example 2
+  ```
+  Input:  floor = ["T...L", ".###.", "....E"]
+  Output: -1
+  Explanation: 'E' floods at minute 2, but the technician needs at least 6 moves to reach it.
+  ```
+
+  ### Example 3
+  ```
+  Input:  floor = ["T..#L", ".#.#.", "..E#."]
+  Output: 1000000000
+  Explanation: The column of walls keeps the coolant away from the technician and the exit forever.
+  ```
+
+  ### Constraints
+  - `1 <= floor.length <= 300`
+  - `1 <= floor[i].length <= 300`, and all rows have the same length
+  - `floor[i][j]` is one of `'#'`, `'.'`, `'L'`, `'T'`, `'E'`
+  - There is exactly one `'T'` and exactly one `'E'`; there may be any number of `'L'` cells, including none.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: latest_safe_departure
+  params:
+    - {name: floor, type: "string[]"}
+  return_type: int
+  comparison: exact
+reference_solutions:
+  python: |
+    from collections import deque
+
+
+    def latest_safe_departure(floor: list[str]) -> int:
+        rows, cols = len(floor), len(floor[0])
+        steps = ((1, 0), (-1, 0), (0, 1), (0, -1))
+        inf = float("inf")
+
+        def bfs(sources: list[tuple[int, int]]) -> list[list[float]]:
+            dist = [[inf] * cols for _ in range(rows)]
+            queue = deque()
+            for r, c in sources:
+                dist[r][c] = 0
+                queue.append((r, c))
+            while queue:
+                r, c = queue.popleft()
+                for dr, dc in steps:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < rows and 0 <= nc < cols and floor[nr][nc] != "#" and dist[nr][nc] == inf:
+                        dist[nr][nc] = dist[r][c] + 1
+                        queue.append((nr, nc))
+            return dist
+
+        cells = [(r, c) for r in range(rows) for c in range(cols)]
+        leaks = [cell for cell in cells if floor[cell[0]][cell[1]] == "L"]
+        start = next(cell for cell in cells if floor[cell[0]][cell[1]] == "T")
+        er, ec = next(cell for cell in cells if floor[cell[0]][cell[1]] == "E")
+
+        flood = bfs(leaks)        # minute each cell floods
+        walk = bfs([start])       # shortest walking distance, ignoring the coolant
+        if walk[er][ec] == inf:
+            return -1
+        if flood[er][ec] == inf:
+            return 1_000_000_000
+
+        # Flood minutes change by at most 1 between neighbours, so along a shortest
+        # route the margin flood - walk never grows. The best possible wait arrives
+        # at the exit exactly as it floods; it works only if the last cell before
+        # the exit still has a strictly larger margin, otherwise wait one minute less.
+        best = flood[er][ec] - walk[er][ec]
+        if best < 0:
+            return -1
+        for dr, dc in steps:
+            pr, pc = er + dr, ec + dc
+            if (
+                0 <= pr < rows
+                and 0 <= pc < cols
+                and floor[pr][pc] != "#"
+                and walk[pr][pc] == walk[er][ec] - 1
+                and flood[pr][pc] - walk[pr][pc] > best
+            ):
+                return int(best)
+        return int(best) - 1
+  javascript: |
+    function latestSafeDeparture(floor) {
+      const rows = floor.length;
+      const cols = floor[0].length;
+      const INF = Number.POSITIVE_INFINITY;
+      const flood = Array.from({ length: rows }, () => new Array(cols).fill(INF));
+      const steps = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      let queue = [];
+      let start = null;
+      let exit = null;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const ch = floor[r][c];
+          if (ch === "L") {
+            flood[r][c] = 0;
+            queue.push([r, c]);
+          } else if (ch === "T") {
+            start = [r, c];
+          } else if (ch === "E") {
+            exit = [r, c];
+          }
+        }
+      }
+      for (let head = 0; head < queue.length; head++) {
+        const [r, c] = queue[head];
+        for (const [dr, dc] of steps) {
+          const nr = r + dr;
+          const nc = c + dc;
+          if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && floor[nr][nc] !== "#" && flood[nr][nc] === INF) {
+            flood[nr][nc] = flood[r][c] + 1;
+            queue.push([nr, nc]);
+          }
+        }
+      }
+      const canEscape = (wait) => {
+        if (flood[start[0]][start[1]] <= wait) return false;
+        const seen = Array.from({ length: rows }, () => new Array(cols).fill(false));
+        seen[start[0]][start[1]] = true;
+        const frontier = [[start[0], start[1], wait]];
+        for (let head = 0; head < frontier.length; head++) {
+          const [r, c, t] = frontier[head];
+          for (const [dr, dc] of steps) {
+            const nr = r + dr;
+            const nc = c + dc;
+            if (nr < 0 || nr >= rows || nc < 0 || nc >= cols || floor[nr][nc] === "#" || seen[nr][nc]) continue;
+            if (nr === exit[0] && nc === exit[1]) {
+              if (t + 1 <= flood[nr][nc]) return true;
+              continue;
+            }
+            if (t + 1 < flood[nr][nc]) {
+              seen[nr][nc] = true;
+              frontier.push([nr, nc, t + 1]);
+            }
+          }
+        }
+        return false;
+      };
+      if (!canEscape(0)) return -1;
+      const exitFlood = flood[exit[0]][exit[1]];
+      if (exitFlood === INF) return 1000000000;
+      let low = 0;
+      let high = exitFlood;
+      while (low < high) {
+        const mid = Math.floor((low + high + 1) / 2);
+        if (canEscape(mid)) low = mid;
+        else high = mid - 1;
+      }
+      return low;
+    }
+tests:
+  - {id: t1, args: [["L.....", "......", ".#####", "...T.E"]], expected: 5, description: "Example 1 - coolant chases the technician from behind"}
+  - {id: t2, args: [["T...L", ".###.", "....E"]], expected: -1, description: "Example 2 - exit floods before the technician can reach it"}
+  - {id: t3, args: [["T..#L", ".#.#.", "..E#."]], expected: 1000000000, description: "Example 3 - leak walled off from the technician and exit"}
+  - {id: t4, hidden: true, args: [["TE"]], expected: 1000000000, description: "Minimum floor with no leak at all - must return 1000000000"}
+  - {id: t5, hidden: true, args: [["T.E.L"]], expected: 0, description: "Arrives at the exit the same minute the coolant does - the exit exception makes w = 0 valid"}
+  - {id: t6, hidden: true, args: [["LT.E"]], expected: 0, description: "Leak next to the start - the start floods at minute 1 so only w = 0 works"}
+  - {id: t7, hidden: true, args: [["TLE"]], expected: -1, description: "Leak sits in the only corridor - no escape even without waiting"}
+  - {id: t8, hidden: true, args: [["T.#E", "..#.", "L.#."]], expected: -1, description: "Exit unreachable because of walls - must return -1 not 1000000000"}
+  - {id: t9, hidden: true, args: [["T", ".", ".", "E", ".", ".", "L"]], expected: 0, description: "Single column with the leak beyond the exit - tie at the exit gives 0"}
+  - {id: t10, hidden: true, args: [["...##T.", "......E", ".......", ".##....", "#.....#", "..LL..."]], expected: 5, description: "Two leaks and two shortest last steps into the exit - only one stays ahead of the coolant so the bound flood(E) - dist(E) is reached"}
+  - {id: t11, hidden: true, args: [["L.#.....", "..#.###.", "....#T#.", "###.#.#.", "E.....#."]], expected: 2, description: "Winding route through a maze with several branches"}
+  - {id: t12, hidden: true, args: [["L.............................", "#############################.", "..............................", ".#############################", "..............................", "#############################.", "..............................", ".#############################", "..............................", "#############################.", "..............................", ".#############################", "..............................", "#############################.", "...............T..............", ".#############################", "..............................", "#############################.", "..............................", ".#############################", "..............................", "#############################.", "..............................", ".#############################", "..............................", "#############################.", "..............................", ".#############################", ".............................E"]], expected: 230, description: "Stress - 29 x 30 serpentine corridor with the leak far behind the technician (large answer)"}
+expected_concepts:
+  - "multi-source BFS from every leak to get the minute each cell floods"
+  - "time-aware BFS for the technician that only enters cells flooding strictly later"
+  - "monotonicity: if a wait works, every shorter wait works, so binary search applies"
+  - "special handling of the exit tie and of the never-floods (1000000000) case"
+  - "O(rows * cols) refinement: flood minutes differ by at most one between neighbours, so only the last step into the exit decides between two candidates"
+optimal_complexity: {time: "O(rows * cols)", space: "O(rows * cols)"}
+rubric:
+  excellent: "Separates the coolant (independent of the technician) from the escape check, computes flood minutes with one multi-source BFS, argues monotonicity and either binary searches the wait with a time-aware BFS in O(rows * cols * log(rows * cols)) or derives the O(rows * cols) answer of flood(E) - dist(E) or one less from the last step; handles the exit tie, the start cell flooding during the wait, unreachable exits and the 1000000000 case."
+  good: "Correct multi-source BFS plus a feasibility BFS and a binary search (or a linear scan over waits on small inputs) that passes the main tests, with one edge case such as the exit tie or the unreachable exit fixed after prompting."
+  weak: "Simulates minute by minute without a clear model, treats the exit like any other cell, ignores that the start cell can flood while waiting, or returns 1000000000 when the exit is simply unreachable."
+  criteria:
+    correctness: "All tests pass, including the exit tie, a leak blocking the only corridor, walls isolating the exit and two leaks reaching the exit from different sides."
+    efficiency: "Flood minutes computed once; the binary search with an O(rows * cols) check is strong, the single-pass O(rows * cols) margin argument is the best."
+    code_quality: "Separate helpers for the flood BFS and the feasibility check, named constants for the 1000000000 sentinel and a single direction table."
+    edge_cases: "No leaks, leak sealed off by walls, exit unreachable, start cell flooding during the wait, single row or column floors, arriving at the exit together with the coolant."
+    communication: "States the safety rule as arrival minute < flood minute (<= at the exit), explains why longer waits never help and why the binary search bounds are correct."
+hints:
+  - "The coolant's spread does not depend on anything the technician does. Work out when every cell floods first, then ask whether a longer wait can ever make escaping easier."
+  - "One breadth-first search started from all leaks at once gives the flood minute of every cell. For a fixed wait, a second breadth-first search from the start can check escape by only entering a cell when the arrival minute is earlier than its flood minute (or equal, for the exit). Because a working wait means every shorter wait also works, you can binary search the wait."
+  - "First check the wait of zero and return -1 if it fails; if the exit never floods return 1000000000; otherwise binary search the largest working wait between 0 and the exit's flood minute, remembering that the start cell itself must not flood during the wait. For an O(rows * cols) answer, note that the result is either the exit's flood minute minus the technician's shortest distance to it, or one less, depending on whether some neighbour on a shortest route into the exit floods later than the technician would reach it."
+followups:
+  - "Can you avoid the binary search? Why can the answer only be flood(E) - dist(E) or one less?"
+  - "What changes if the technician may also stand still in the middle of the route?"
+  - "How would you handle several exits, or a second technician who must also get out?"
+  - "What if coolant spreads only every other minute, or walls slow it down instead of stopping it?"
+common_errors:
+  - "Forbidding the exit when the technician and the coolant arrive at the same minute, contrary to the exit exception."
+  - "Forgetting that the starting cell can flood while the technician is still waiting on it."
+  - "Returning 1000000000 whenever the exit never floods, even when walls make the exit unreachable."
+  - "Re-running the coolant spread for every candidate wait or simulating every wait one by one up to a huge bound."
+  - "Treating cells that flood at the arrival minute as safe for ordinary floor cells (off-by-one in the comparison)."

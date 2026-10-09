@@ -1,0 +1,654 @@
+# Curated questions: backend language depth, part 4 (Node.js and TypeScript runtime, packaging, plus
+# cross-language testing, code review and runtime-choice judgement).
+# `defaults` are merged into every question (question keys win).
+# Round types follow difficulty: easy -> technical_screening + combined; medium -> + deep_technical;
+# hard -> deep_technical + combined.
+version: 1
+defaults:
+  role_tags: [backend]
+questions:
+  # ------------------------------------------------------------- Node.js runtime
+  - external_key: technical.backend_languages.node_event_loop_model
+    competency_key: javascript
+    topic: How the Node.js event loop serves concurrent requests
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Explain how the Node.js event loop lets a single process serve many concurrent requests, and what kind of
+      code breaks that model.
+    expected_concepts:
+      - single JavaScript thread with non-blocking I/O
+      - callbacks and promises resumed when I/O completes
+      - CPU-heavy work or synchronous APIs block every request
+      - microtasks versus macrotasks at a high level
+      - scaling across cores with multiple processes
+    rubric:
+      excellent: Explains non-blocking I/O and the single thread clearly, gives concrete examples of blocking code such as synchronous crypto, large JSON parsing or sync file calls, and knows how to use multiple cores.
+      good: Explains the single-threaded event loop and that CPU work blocks it.
+      weak: Thinks Node runs each request on its own thread or cannot name what blocks the loop.
+    followups:
+      - How would you measure whether the event loop is being blocked?
+      - How do you use all the cores on a machine with Node?
+    common_errors:
+      - Assuming wrapping CPU work in a promise makes it non-blocking.
+
+  - external_key: technical.backend_languages.node_cpu_work_offload
+    competency_key: javascript
+    topic: CPU-heavy work in a Node.js API
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A Node.js API generates PDF reports on request, and while one report is being built, every other request
+      on that instance stalls. How would you fix it?
+    expected_concepts:
+      - the report generation blocks the event loop
+      - worker threads or a child process pool for CPU work
+      - moving generation to a background job queue
+      - returning a job id and notifying or polling for completion
+      - limiting concurrent jobs per instance
+      - event-loop lag metrics to confirm
+    rubric:
+      excellent: Confirms the blocking with event-loop lag, moves the work off the main thread with worker threads or a separate job system, designs the asynchronous API for clients, and bounds concurrency.
+      good: Identifies the blocking and moves the work to worker threads or a queue.
+      weak: Adds more instances or wraps the code in async functions without moving the work.
+    followups:
+      - How would the client find out the report is ready?
+      - When is a separate service better than worker threads?
+    common_errors:
+      - Believing async and await alone move CPU work off the event loop.
+
+  - external_key: technical.backend_languages.node_threadpool_saturation
+    competency_key: javascript
+    topic: The libuv thread pool as a hidden bottleneck
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A Node.js service that hashes passwords and reads lots of files sees latency climb under load, but
+      event-loop lag stays low. What could the bottleneck be, and how would you confirm it?
+    expected_concepts:
+      - asynchronous crypto, zlib, DNS lookups and file system calls use the libuv thread pool
+      - the default pool size of four threads
+      - UV_THREADPOOL_SIZE tuning and its limits
+      - measuring queueing time around those calls
+      - moving heavy hashing to dedicated workers or services
+    rubric:
+      excellent: Identifies the libuv thread pool as a shared queue for these operations, knows the small default, confirms with timing or tracing of the calls, and weighs pool sizing against moving the work elsewhere.
+      good: Knows some async operations run on a thread pool and suggests increasing its size.
+      weak: Keeps looking for event-loop blocking or blames the network without evidence.
+    followups:
+      - Why might DNS lookups also slow down under the same load?
+      - What are the risks of setting the pool size very high?
+    common_errors:
+      - Assuming every asynchronous Node API is handled purely by the event loop.
+
+  - external_key: technical.backend_languages.node_heap_leak_hunt
+    competency_key: javascript
+    topic: Finding a memory leak in Node.js
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A Node.js service's heap grows over the course of a day until the process crashes with a JavaScript heap
+      out of memory error. How would you find the leak?
+    expected_concepts:
+      - comparing heap snapshots taken over time
+      - retainer paths to find what holds objects
+      - common causes such as unbounded caches, event listeners and closures
+      - module-level maps keyed by request or user
+      - reproducing with a load test locally
+      - bounded caches with eviction
+    rubric:
+      excellent: Uses multiple heap snapshots and retainer paths to find the growing objects, names typical leak sources, reproduces under load, and fixes the cause with a bounded structure or proper cleanup.
+      good: Takes heap snapshots and suspects caches or listeners.
+      weak: Raises the heap size or restarts on a schedule without investigating.
+    followups:
+      - How would you take a heap snapshot safely in production?
+      - What does a MaxListenersExceededWarning tell you?
+    common_errors:
+      - Taking one snapshot and guessing instead of comparing growth between snapshots.
+
+  - external_key: technical.backend_languages.node_container_memory_limits
+    competency_key: javascript
+    topic: Node.js memory settings in containers
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A Node.js service in a container with a five-hundred-megabyte limit gets killed by the kernel instead of
+      throwing a JavaScript heap error. Why does that happen, and how would you configure and monitor it?
+    expected_concepts:
+      - V8 heap limit versus total process memory
+      - Buffers and native allocations live outside the V8 heap
+      - max-old-space-size set below the container limit with headroom
+      - newer Node versions sizing the heap from container limits
+      - monitoring RSS, heap used and external memory separately
+      - reducing buffered payloads with streaming
+    rubric:
+      excellent: Explains the gap between the V8 heap limit and process memory, accounts for buffers and native memory, sets the old-space limit with headroom, monitors the separate memory figures, and reduces large in-memory payloads.
+      good: Knows the heap limit flag and that it should be lower than the container limit.
+      weak: Raises the container limit or the heap flag above it without understanding the kill.
+    followups:
+      - Which kinds of code allocate a lot of memory outside the V8 heap?
+      - How would you tell from metrics that buffers rather than objects are the problem?
+    common_errors:
+      - Setting the old-space size equal to the container limit.
+
+  - external_key: technical.backend_languages.node_stream_backpressure
+    competency_key: javascript
+    topic: Backpressure in Node.js streams
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do Node.js streams handle backpressure, and tell me about a time ignoring it caused you trouble.
+    expected_concepts:
+      - write returns false when the internal buffer is full
+      - waiting for the drain event
+      - highWaterMark and buffering
+      - pipeline for correct error handling and cleanup
+      - async iteration over readable streams
+      - memory blow-up when writing faster than the consumer reads
+    rubric:
+      excellent: Explains the write and drain contract, uses pipeline for errors and cleanup, gives a real incident such as an export or proxy that buffered huge amounts in memory, and shows how it was fixed.
+      good: Knows streams have backpressure and uses pipe or pipeline.
+      weak: Reads entire files or responses into memory or has never considered backpressure.
+    followups:
+      - Why is pipeline preferable to chaining pipe calls?
+      - How would you stream a large database export to an HTTP client?
+    common_errors:
+      - Ignoring the return value of write in a loop.
+
+  - external_key: technical.backend_languages.node_async_context_tracking
+    competency_key: javascript
+    topic: Request context in asynchronous Node.js code
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How do you carry request context, such as a trace id or tenant id, through asynchronous Node.js code, and
+      what are the correctness and performance pitfalls of AsyncLocalStorage?
+    expected_concepts:
+      - AsyncLocalStorage propagating context across awaits and callbacks
+      - context lost through some callback-based libraries or connection pools
+      - avoiding storing large objects in the store
+      - explicit parameter passing as an alternative for important values
+      - integration with tracing libraries and log enrichment
+    rubric:
+      excellent: Explains how the store follows asynchronous execution, where it breaks with pooled resources or custom callback queues, how to detect and fix lost context, and when explicit passing is safer, with a real example.
+      good: Uses AsyncLocalStorage or a tracing library for request context and knows context can be lost.
+      weak: Uses module-level variables for request context, mixing data between concurrent requests.
+    followups:
+      - How would you test that context never leaks between concurrent requests?
+      - Where would you still pass a value explicitly rather than read it from context?
+    common_errors:
+      - Storing per-request data in a global variable that concurrent requests overwrite.
+
+  # ------------------------------------------------------------- Node.js errors
+  - external_key: technical.backend_languages.node_async_error_handling
+    competency_key: javascript
+    topic: Error handling in async Node.js code
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you handle errors in asynchronous Node.js code, across promises, async and await, and your web
+      framework's middleware, so that nothing fails silently?
+    expected_concepts:
+      - try and catch around awaited calls
+      - returning or awaiting promises so rejections propagate
+      - framework error middleware and how async errors reach it
+      - Error objects rather than strings for stack traces
+      - distinguishing operational errors from programmer errors
+    rubric:
+      excellent: Explains how rejections propagate only when promises are awaited or returned, routes errors to one handler, distinguishes operational from programmer errors, and gives a real example of a silent failure fixed.
+      good: Uses try and catch with await and a central error middleware.
+      weak: Forgets to await promises or throws strings, and cannot explain where unhandled errors go.
+    followups:
+      - What happens to an error thrown inside a promise nobody awaits?
+      - How do older Express versions treat errors thrown in async handlers?
+    common_errors:
+      - Fire-and-forget promises without a catch handler.
+
+  - external_key: technical.backend_languages.node_unhandled_rejection_policy
+    competency_key: javascript
+    topic: Unhandled rejections and process exit policy
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your Node.js service occasionally crashes on an unhandled promise rejection whose stack trace doesn't point
+      at your code. How do you track it down, and what's your policy on whether the process should exit?
+    expected_concepts:
+      - current Node versions exit on unhandled rejections by default
+      - async stack traces and rejecting with real Error objects
+      - logging the rejection reason with context before exiting
+      - finding fire-and-forget promises with linting rules
+      - exiting and restarting cleanly for unknown state
+    rubric:
+      excellent: Explains the default behaviour, improves traces with Error objects and async stack traces, uses linting to find floating promises, and argues for logging then exiting with a supervisor restart because state may be corrupt.
+      good: Adds a global handler that logs and knows to look for missing catch handlers.
+      weak: Adds a global handler that swallows rejections and keeps the process running indefinitely.
+    followups:
+      - Which lint rules help find floating promises?
+      - Why is continuing after an unknown error risky?
+    common_errors:
+      - Silencing the crash with a global handler and losing the signal.
+
+  # ------------------------------------------------------------- Node.js packaging
+  - external_key: technical.backend_languages.node_lockfile_installs
+    competency_key: javascript
+    topic: Lockfiles and reproducible Node.js installs
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What role does the lockfile play in a Node.js project, and how do you make sure CI and production install
+      exactly the same dependency tree?
+    expected_concepts:
+      - lockfile pins the full resolved tree with integrity hashes
+      - committing the lockfile for applications
+      - npm ci or frozen-lockfile installs in CI and images
+      - semver ranges in package.json
+      - separating dev dependencies from production installs
+    rubric:
+      excellent: Explains ranges versus the resolved lockfile, uses frozen installs everywhere, reviews lockfile changes, and installs only production dependencies in the final image.
+      good: Commits the lockfile and uses npm ci or an equivalent in CI.
+      weak: Ignores or deletes the lockfile when it conflicts, or runs a plain install in production builds.
+    followups:
+      - What would you do with a large merge conflict in the lockfile?
+      - Why might a library not want to rely on its own lockfile?
+    common_errors:
+      - Deleting and regenerating the lockfile to fix conflicts, which silently upgrades many packages.
+
+  - external_key: technical.backend_languages.node_esm_only_dependency
+    competency_key: javascript
+    topic: ESM-only dependencies in a CommonJS service
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You need to upgrade a dependency that has become ESM-only, but your Node.js service is still CommonJS. How
+      would you approach it?
+    expected_concepts:
+      - require cannot load ESM in older Node versions
+      - dynamic import as a bridge
+      - newer Node versions supporting require of ESM in many cases
+      - migrating the service to ESM with type module
+      - TypeScript module settings and test runner compatibility
+      - staying on the previous major version as a short-term option
+    rubric:
+      excellent: Lays out the options with their costs, a dynamic import bridge, upgrading Node, full migration, or staying on the old version, and checks tooling such as TypeScript and the test runner before choosing.
+      good: Knows dynamic import works and considers migrating the project to ESM.
+      weak: Copies the library code into the project or does not understand the difference between the module systems.
+    followups:
+      - What breaks in your tests when you switch to ESM?
+      - How would you migrate a large codebase incrementally?
+    common_errors:
+      - Assuming changing file extensions alone completes the migration.
+
+  - external_key: technical.backend_languages.npm_install_script_compromise
+    competency_key: security
+    topic: Responding to a compromised npm package
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A security advisory says a popular package somewhere in your Node.js dependency tree was compromised through
+      a malicious install script. What do you do right away, and what would you change afterwards?
+    expected_concepts:
+      - finding every repository and image that resolved the bad version
+      - checking whether CI or developer machines ran the install script
+      - rotating secrets that were reachable from those environments
+      - pinning or overriding to a safe version and rebuilding
+      - disabling install scripts by default and allowlisting
+      - a private registry proxy, provenance checks and update cool-down
+    rubric:
+      excellent: Scopes exposure across services, CI and laptops, treats reachable secrets as compromised and rotates them, removes the bad version, and puts lasting controls such as script restrictions, a proxy registry and delayed adoption of new releases.
+      good: Finds affected services, upgrades or pins away from the bad version and rotates some credentials.
+      weak: Only bumps the version and redeploys without checking what the script could have accessed.
+    followups:
+      - Why are CI runners a particularly valuable target here?
+      - How would you know which builds actually executed the script?
+    common_errors:
+      - Assuming the risk is limited to production because the code never shipped.
+
+  - external_key: technical.backend_languages.node_monorepo_dependencies
+    competency_key: javascript
+    topic: Dependency and build management in a Node.js monorepo
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A Node.js monorepo has thirty packages, builds take twenty minutes, and services keep picking up incompatible
+      versions of shared internal packages. How would you restructure dependency management and builds?
+    expected_concepts:
+      - workspaces with a single lockfile
+      - explicit internal dependency versions or workspace protocol
+      - building only affected packages based on the dependency graph
+      - build caching locally and in CI
+      - TypeScript project references for incremental builds
+      - ownership and rules for changing shared packages
+    rubric:
+      excellent: Uses workspaces with a single lockfile and explicit internal versioning, introduces graph-aware affected builds with caching, speeds TypeScript builds incrementally, and adds ownership and checks for shared packages, measuring the improvement.
+      good: Proposes workspaces and a build tool with caching or affected-only builds.
+      weak: Suggests splitting everything into separate repositories without addressing the versioning problem.
+    followups:
+      - How would you stop a change in a shared package from silently breaking a service?
+      - How do you measure whether the build changes worked?
+    common_errors:
+      - Allowing each package its own lockfile so internal versions drift.
+
+  # ------------------------------------------------------------- TypeScript on the backend
+  - external_key: technical.backend_languages.ts_strict_mode_rollout
+    competency_key: typescript
+    topic: Enabling strict TypeScript on a backend
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What do you gain from strict mode in a TypeScript backend, and how would you deal with the wave of errors
+      when you switch it on in an existing codebase?
+    expected_concepts:
+      - strict null checks catching undefined access
+      - noImplicitAny surfacing untyped code
+      - enabling flags one at a time or per project
+      - fixing touched files first and tracking the remaining count
+      - avoiding blanket any or non-null assertions
+    rubric:
+      excellent: Explains the concrete bugs strict flags catch, plans an incremental rollout with a measurable baseline, and avoids hiding errors with any or assertions.
+      good: Knows strict mode and suggests fixing errors gradually.
+      weak: Turns strict mode off when errors appear or silences them with any.
+    followups:
+      - Which strict flag usually catches the most real bugs?
+      - How do you stop new code from adding to the backlog?
+    common_errors:
+      - Using the non-null assertion operator everywhere to satisfy the compiler.
+
+  - external_key: technical.backend_languages.ts_runtime_boundary_validation
+    competency_key: typescript
+    topic: Runtime validation at TypeScript boundaries
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      TypeScript types disappear at runtime. How do you make sure data coming from HTTP requests, message queues or
+      the database actually matches the types your code assumes?
+    expected_concepts:
+      - schema validation libraries such as zod at every trust boundary
+      - deriving static types from the schema to avoid drift
+      - generated types from OpenAPI or database schemas
+      - handling validation failures with clear errors
+      - avoiding unchecked casts of parsed JSON
+    rubric:
+      excellent: Validates at every external boundary with schemas that also produce the static types, uses generation where contracts exist, handles failures clearly, and treats casts of untrusted data as bugs.
+      good: Uses a validation library for request bodies and knows types are not checked at runtime.
+      weak: Casts parsed JSON to an interface and trusts it.
+    followups:
+      - Where would you skip runtime validation for performance, and why?
+      - How do you keep the API documentation and the validation schema in sync?
+    common_errors:
+      - Validating request bodies but trusting messages from queues or other services.
+
+  # ------------------------------------------------------------- testing (cross-language)
+  - external_key: technical.backend_languages.coverage_targets_meaning
+    competency_key: testing
+    topic: What code coverage does and doesn't tell you
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you think about code coverage targets for a backend service? Tell me what coverage tells you and what
+      it doesn't.
+    expected_concepts:
+      - coverage shows code that was executed, not verified
+      - useful for spotting untested areas and risky changes
+      - fixed percentage targets can be gamed with weak tests
+      - branch coverage versus line coverage
+      - mutation testing as a stronger signal
+    rubric:
+      excellent: Uses coverage as a guide to gaps rather than a goal, explains how assertion-free tests inflate it, distinguishes line from branch coverage, and mentions mutation testing or review of critical paths.
+      good: Knows high coverage doesn't guarantee good tests and uses it to find gaps.
+      weak: Treats a coverage percentage as proof of quality or chases one hundred percent without reason.
+    followups:
+      - How would you decide where higher coverage actually matters?
+      - What does mutation testing reveal that coverage doesn't?
+    common_errors:
+      - Setting a team-wide percentage and accepting tests that only execute code without asserting.
+
+  - external_key: technical.backend_languages.test_double_selection
+    competency_key: testing
+    topic: Choosing fakes, stubs, mocks or real dependencies
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you decide between a fake, a stub, a mock or the real dependency when testing backend code? Give me
+      an example of where each one worked well for you.
+    expected_concepts:
+      - stubs return canned answers for queries
+      - mocks verify interactions where the interaction is the behaviour
+      - fakes are lightweight working implementations such as in-memory repositories
+      - real dependencies for persistence and integration behaviour
+      - keeping fakes faithful with shared contract tests
+    rubric:
+      excellent: Distinguishes the doubles precisely, matches each to a fitting situation from real work, prefers real or fake implementations for state, and keeps fakes faithful with contract tests.
+      good: Knows the differences and gives reasonable examples for most.
+      weak: Uses mocks for everything or cannot explain the difference between the types.
+    followups:
+      - How do you stop an in-memory fake from drifting away from the real database's behaviour?
+      - When has a mock let a real bug through for you?
+    common_errors:
+      - Mocking the database layer so heavily that query bugs are never exercised.
+
+  - external_key: technical.backend_languages.parallel_suite_interference
+    competency_key: testing
+    topic: Tests that fail only when run in parallel
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      An async service's test suite passes when tests run one at a time, but fails randomly in parallel, with
+      errors pointing at code unrelated to the failing test. How would you get to the bottom of it?
+    expected_concepts:
+      - shared state such as global singletons, environment variables or module caches
+      - leaked background tasks, timers or open handles from earlier tests
+      - shared databases, ports or temporary directories
+      - reproducing with a fixed seed and ordering
+      - bisecting the set of tests that run together
+      - enforcing isolation with per-test resources and leak detection
+    rubric:
+      excellent: Treats it as an isolation problem, lists concrete sources of shared state and leaked async work, reproduces with fixed ordering and bisection, and adds isolation and leak checks so it can't recur.
+      good: Suspects shared state between tests and isolates resources per test.
+      weak: Disables parallelism or adds retries without understanding the interference.
+    followups:
+      - How would you detect a timer or task that outlives its test?
+      - How would you isolate database state for parallel tests?
+    common_errors:
+      - Marking the tests as flaky and retrying them, which hides a real concurrency bug.
+
+  # ------------------------------------------------------------- code review and quality
+  - external_key: technical.backend_languages.review_blocking_vs_suggestion
+    competency_key: code_quality
+    topic: What to look for first in code review
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you review a teammate's backend pull request, what do you look at first, and how do you decide what's
+      worth blocking on versus leaving as a suggestion?
+    expected_concepts:
+      - correctness, data safety and security first
+      - error handling, concurrency and failure paths
+      - tests that cover the behaviour change
+      - API and schema changes that are hard to reverse
+      - style handled by formatters and linters, not humans
+      - labelling comments as blocking or optional
+    rubric:
+      excellent: Prioritises correctness, security and hard-to-reverse decisions, checks failure paths and tests, leaves style to tools, and labels comments clearly so the author knows what must change.
+      good: Has a sensible order of priorities and distinguishes major from minor issues.
+      weak: Focuses mainly on naming and formatting or approves without reading.
+    followups:
+      - How do you review a change in an area of the code you don't know well?
+      - How fast do you aim to respond to review requests, and why?
+    common_errors:
+      - Blocking on personal style preferences that aren't in the team's guidelines.
+
+  - external_key: technical.backend_languages.review_oversized_pull_request
+    competency_key: code_quality
+    topic: Reviewing a very large mixed pull request
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A colleague opens a two-thousand-line pull request that mixes a refactor with a new feature, and it's needed
+      by Friday. How do you handle the review?
+    expected_concepts:
+      - asking to split refactor and behaviour change where feasible
+      - a walkthrough with the author to understand intent
+      - focusing review effort on risky areas
+      - checking test coverage of the new behaviour
+      - feature flags or staged rollout to reduce risk
+      - agreeing follow-up items rather than blocking on everything
+    rubric:
+      excellent: Balances the deadline against risk, proposes splitting or reviewing in commits, focuses on risky areas with the author's help, relies on tests and a flagged rollout, and agrees how to avoid such large changes next time.
+      good: Asks for a split or a walkthrough and focuses on the riskiest parts.
+      weak: Approves without a real review because of the deadline, or refuses to review it at all.
+    followups:
+      - What would you do if splitting is genuinely impossible before Friday?
+      - How would you raise the pattern with the team without blaming the author?
+    common_errors:
+      - Skimming the whole diff evenly and missing the risky part.
+
+  - external_key: technical.backend_languages.review_disagreement_resolution
+    competency_key: code_quality
+    topic: Resolving a disagreement in code review
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You leave a blocking review comment about how a change handles errors, and the author, who is more senior
+      than you, strongly disagrees. Tell me about a time something like that happened, or how you would handle it.
+    expected_concepts:
+      - restating the concern with concrete failure scenarios
+      - moving to a conversation instead of a long comment thread
+      - separating preference from correctness risk
+      - evidence such as a failing test or production incident
+      - involving a third reviewer or team guidelines when stuck
+      - recording the decision for future reference
+    rubric:
+      excellent: Grounds the objection in a concrete failure scenario or test, moves to a direct discussion, distinguishes preference from risk, is willing to change their own mind, and escalates or records the decision constructively when needed.
+      good: Explains the concern clearly and discusses it directly with the author to reach a decision.
+      weak: Gives in because of seniority without discussing the risk, or keeps blocking without explaining.
+    followups:
+      - What would make you drop your objection?
+      - How would you handle it if the same disagreement keeps coming up?
+    common_errors:
+      - Arguing from preference rather than from a concrete risk.
+
+  - external_key: technical.backend_languages.dependency_upgrade_cadence
+    competency_key: code_quality
+    topic: Keeping dependencies current across services
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How does your team keep dependencies current across services without upgrades turning into big, risky
+      projects every year or two?
+    expected_concepts:
+      - automated update pull requests in small batches
+      - test suites strong enough to trust routine upgrades
+      - reading changelogs for major versions
+      - prioritising security fixes with vulnerability scanning
+      - shared base images or version catalogs across services
+      - ownership and time budgeted for maintenance
+    rubric:
+      excellent: Describes a routine with automation, small batches, trustworthy tests, deliberate handling of major versions and security fixes, and explicit ownership, with a real example of the result.
+      good: Uses automated update tooling and tests and upgrades regularly.
+      weak: Upgrades only when something breaks or a vulnerability forces it.
+    followups:
+      - How do you handle a major framework upgrade that touches every service?
+      - What do you do when automated update pull requests pile up unmerged?
+    common_errors:
+      - Merging automated updates without running the tests that would catch breakage.
+
+  - external_key: technical.backend_languages.error_log_contents
+    competency_key: debugging
+    topic: What a useful error log contains
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When a backend request fails, what should the error log contain so someone can debug it weeks later, and
+      what should never go into it?
+    expected_concepts:
+      - structured fields rather than free text
+      - correlation or trace id and request identifiers
+      - the error chain with cause and stack trace
+      - relevant inputs and state at the failure point
+      - no secrets, tokens, passwords or unnecessary personal data
+      - logging once at the boundary rather than at every layer
+    rubric:
+      excellent: Describes structured logs with correlation ids, the full cause chain and relevant context, explains logging once at the right layer, and is specific about redacting secrets and personal data.
+      good: Includes stack traces, request ids and context and avoids logging passwords.
+      weak: Logs a bare message with no context, or logs full request bodies including credentials.
+    followups:
+      - How do you keep the same failure from being logged five times?
+      - How would you make sure secrets never reach logs by accident?
+    common_errors:
+      - Logging whole request or response bodies that contain tokens or personal data.
+
+  # ------------------------------------------------------------- runtime choice across languages
+  - external_key: technical.backend_languages.concurrency_models_compared
+    competency_key: system_design
+    topic: Comparing runtime concurrency models
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Compare how Python's asyncio, Go's goroutines, Java's virtual threads and the Node.js event loop each cope with
+      ten thousand concurrent slow connections, and how those differences affect your design choices.
+    expected_concepts:
+      - cooperative scheduling on one thread for asyncio and Node
+      - runtime-scheduled lightweight threads in Go and Java
+      - how blocking calls affect each model
+      - multi-core use with processes versus threads
+      - memory cost per connection
+      - library ecosystem and debugging trade-offs
+    rubric:
+      excellent: Compares scheduling, blocking behaviour, multi-core use and memory per connection accurately for all four, and turns that into concrete design implications such as avoiding blocking libraries or bounding downstream concurrency.
+      good: Correctly characterises most of the models and draws at least one practical implication.
+      weak: Treats them as equivalent or makes significant factual errors about how they schedule work.
+    followups:
+      - Which of these is most forgiving if a developer accidentally calls a blocking library, and why?
+      - How would CPU-heavy work per request change your answer?
+    common_errors:
+      - Assuming async code is inherently faster rather than better at waiting.
+
+  - external_key: technical.backend_languages.language_choice_for_service
+    competency_key: system_design
+    topic: Choosing a language for a new service
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your team is starting a new high-throughput ingestion service, and people are split between Go, Java and
+      Python. How would you run that decision, and which factors would actually decide it?
+    expected_concepts:
+      - workload profile and latency or throughput requirements
+      - existing team skills and hiring for maintenance
+      - operational tooling, libraries and platform support already in place
+      - prototype or benchmark of the critical path
+      - cost of running and supporting another language
+      - documenting the decision and its review criteria
+    rubric:
+      excellent: Frames the decision around measurable requirements and long-term ownership, tests the critical path with a small benchmark, weighs team skills and operational support, and records the decision with clear criteria.
+      good: Considers performance and team skills and suggests a prototype or comparison.
+      weak: Picks a language by personal preference or popularity without criteria.
+    followups:
+      - What result from the prototype would change your mind?
+      - How would you handle the people whose preferred option wasn't chosen?
+    common_errors:
+      - Benchmarking a toy workload that doesn't reflect the real bottleneck.

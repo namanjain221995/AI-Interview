@@ -1,0 +1,248 @@
+version: 1
+slug: css_selector_specificity
+title: "CSS Selector Specificity Calculator"
+difficulty: medium
+competency_keys: [algorithms, problem_solving, code_quality]
+role_tags: [frontend, fullstack, ux_designer]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## CSS Selector Specificity Calculator
+
+  The design-system team is adding a lint rule that flags overly specific selectors in component
+  stylesheets. The first building block computes the **specificity** of a selector as a triple
+  `[a, b, c]`. Each input is one selector (never a comma-separated list at the top level).
+
+  Scan the selector and add up its parts:
+
+  | Part | Example | Adds to |
+  |------|---------|---------|
+  | ID selector | `#main` | `a` |
+  | Class selector | `.card` | `b` |
+  | Attribute selector (anything in `[...]`) | `[type=text]`, `[data-open]` | `b` |
+  | Pseudo-class (single colon), including functional ones like `:nth-child(2n+1)` | `:hover` | `b` |
+  | Type selector | `div`, `svg` | `c` |
+  | Pseudo-element (double colon) | `::placeholder` | `c` |
+  | Legacy pseudo-elements written with one colon: `:before`, `:after`, `:first-line`, `:first-letter` | `:after` | `c` |
+  | Universal selector `*` and combinators (space, `>`, `+`, `~`) | `ul > li` | nothing |
+
+  Three functional pseudo-classes are special and do **not** count as a pseudo-class themselves:
+
+  - `:not(...)`, `:is(...)` and `:has(...)` add the specificity of the **most specific** selector in
+    their comma-separated argument list (compare triples by `a`, then `b`, then `c`). Arguments may be
+    full selectors with combinators and may themselves contain these functions; an argument of `:has`
+    may start with a combinator, as in `:has(> img)`.
+  - `:where(...)` adds nothing at all, whatever its arguments.
+
+  Return one `[a, b, c]` per selector, in order.
+
+  ### Example 1
+  ```
+  Input:  selectors = ["#nav .item > a:hover", "ul li::marker", "input[type=checkbox]:checked + label", "*"]
+  Output: [[1, 2, 1], [0, 0, 3], [0, 2, 2], [0, 0, 0]]
+  Explanation: #nav .item > a:hover is one id, a class and a pseudo-class, and a type: [1, 2, 1].
+  input[type=checkbox]:checked + label has two types, an attribute and a pseudo-class.
+  ```
+
+  ### Example 2
+  ```
+  Input:  selectors = [".btn:not(.primary, #cta)", ":is(header, .banner) h1", ":where(#app .shell) p", "a:after"]
+  Output: [[1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 0, 2]]
+  Explanation: .btn:not(.primary, #cta): the most specific argument is #cta, so [1, 1, 0].
+  :is(header, .banner) h1: the max of [0, 0, 1] and [0, 1, 0] is [0, 1, 0], plus h1.
+  :where(...) adds nothing, so only p counts. :after is a legacy pseudo-element.
+  ```
+
+  ### Example 3
+  ```
+  Input:  selectors = ["li:nth-child(2n+1)", "section:has(> img, figure figcaption)"]
+  Output: [[0, 1, 1], [0, 0, 3]]
+  Explanation: :nth-child(2n+1) is one pseudo-class. In :has(...) the second argument figure figcaption
+  [0, 0, 2] beats img [0, 0, 1]; with section that gives [0, 0, 3].
+  ```
+
+  ### Constraints
+  - `1 <= selectors.length <= 100`, each selector is 1-300 characters and syntactically valid
+  - Names (tags, ids, classes, pseudo-classes) use letters, digits, `-` and `_`; pseudo-class and
+    pseudo-element names are lowercase; pseudo-elements take no arguments
+  - Attribute selectors contain no `[`, `]`, `(`, `)` or `,` inside the brackets; `:not`, `:is`,
+    `:has` and `:where` always have a non-empty argument list
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: selector_specificity
+  params:
+    - {name: selectors, type: "string[]"}
+  return_type: "int[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def selector_specificity(selectors: list[str]) -> list[list[int]]:
+        legacy = {"before", "after", "first-line", "first-letter"}
+
+        def name_end(s: str, i: int) -> int:
+            while i < len(s) and (s[i].isalnum() or s[i] in "-_"):
+                i += 1
+            return i
+
+        def split_args(s: str) -> list[str]:
+            parts, depth, start = [], 0, 0
+            for k, ch in enumerate(s):
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                elif ch == "," and depth == 0:
+                    parts.append(s[start:k])
+                    start = k + 1
+            parts.append(s[start:])
+            return parts
+
+        def spec(s: str) -> tuple[int, int, int]:
+            a = b = c = 0
+            i, n = 0, len(s)
+            while i < n:
+                ch = s[i]
+                if ch in " >+~*":
+                    i += 1
+                elif ch == "#":
+                    a += 1
+                    i = name_end(s, i + 1)
+                elif ch == ".":
+                    b += 1
+                    i = name_end(s, i + 1)
+                elif ch == "[":
+                    b += 1
+                    i = s.index("]", i) + 1
+                elif s.startswith("::", i):
+                    c += 1
+                    i = name_end(s, i + 2)
+                elif ch == ":":
+                    j = name_end(s, i + 1)
+                    name, i = s[i + 1:j], j
+                    args = None
+                    if i < n and s[i] == "(":
+                        depth, k = 1, i + 1
+                        while depth:
+                            depth += {"(": 1, ")": -1}.get(s[k], 0)
+                            k += 1
+                        args, i = s[i + 1:k - 1], k
+                    if name in ("not", "is", "has"):
+                        best = max(spec(arg) for arg in split_args(args))
+                        a, b, c = a + best[0], b + best[1], c + best[2]
+                    elif name == "where":
+                        pass
+                    elif name in legacy:
+                        c += 1
+                    else:
+                        b += 1
+                else:
+                    c += 1
+                    i = name_end(s, i)
+            return (a, b, c)
+
+        return [list(spec(selector)) for selector in selectors]
+  javascript: |
+    function selectorSpecificity(selectors) {
+      const legacy = new Set(['before', 'after', 'first-line', 'first-letter']);
+      const isNameChar = (ch) => /[A-Za-z0-9_-]/.test(ch);
+      const nameEnd = (s, i) => { while (i < s.length && isNameChar(s[i])) i++; return i; };
+      const splitArgs = (s) => {
+        const parts = [];
+        let depth = 0;
+        let start = 0;
+        for (let k = 0; k < s.length; k++) {
+          if (s[k] === '(') depth++;
+          else if (s[k] === ')') depth--;
+          else if (s[k] === ',' && depth === 0) { parts.push(s.slice(start, k)); start = k + 1; }
+        }
+        parts.push(s.slice(start));
+        return parts;
+      };
+      const greater = (x, y) => (x[0] !== y[0] ? x[0] > y[0] : x[1] !== y[1] ? x[1] > y[1] : x[2] > y[2]);
+      const spec = (s) => {
+        let a = 0, b = 0, c = 0;
+        let i = 0;
+        const n = s.length;
+        while (i < n) {
+          const ch = s[i];
+          if (' >+~*'.includes(ch)) { i++; }
+          else if (ch === '#') { a++; i = nameEnd(s, i + 1); }
+          else if (ch === '.') { b++; i = nameEnd(s, i + 1); }
+          else if (ch === '[') { b++; i = s.indexOf(']', i) + 1; }
+          else if (s.startsWith('::', i)) { c++; i = nameEnd(s, i + 2); }
+          else if (ch === ':') {
+            const j = nameEnd(s, i + 1);
+            const name = s.slice(i + 1, j);
+            i = j;
+            let args = null;
+            if (i < n && s[i] === '(') {
+              let depth = 1;
+              let k = i + 1;
+              while (depth) {
+                if (s[k] === '(') depth++;
+                else if (s[k] === ')') depth--;
+                k++;
+              }
+              args = s.slice(i + 1, k - 1);
+              i = k;
+            }
+            if (name === 'not' || name === 'is' || name === 'has') {
+              let best = null;
+              for (const arg of splitArgs(args)) {
+                const t = spec(arg);
+                if (best === null || greater(t, best)) best = t;
+              }
+              a += best[0]; b += best[1]; c += best[2];
+            } else if (name === 'where') {
+              // contributes nothing
+            } else if (legacy.has(name)) c++;
+            else b++;
+          } else { c++; i = nameEnd(s, i); }
+        }
+        return [a, b, c];
+      };
+      return selectors.map(spec);
+    }
+tests:
+  - {id: t1, args: [["#nav .item > a:hover", "ul li::marker", "input[type=checkbox]:checked + label", "*"]], expected: [[1, 2, 1], [0, 0, 3], [0, 2, 2], [0, 0, 0]], description: "Example 1 - ids, classes, pseudo-classes, attributes, types, pseudo-elements, universal"}
+  - {id: t2, args: [[".btn:not(.primary, #cta)", ":is(header, .banner) h1", ":where(#app .shell) p", "a:after"]], expected: [[1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 0, 2]], description: "Example 2 - :not and :is take their most specific argument, :where adds nothing, legacy pseudo-element"}
+  - {id: t3, args: [["li:nth-child(2n+1)", "section:has(> img, figure figcaption)"]], expected: [[0, 1, 1], [0, 0, 3]], description: "Example 3 - functional pseudo-class counts once; :has argument with a leading combinator"}
+  - {id: t4, hidden: true, args: [["div"]], expected: [[0, 0, 1]], description: "Single type selector"}
+  - {id: t5, hidden: true, args: [["g#a#b.c.d[e][f] h"]], expected: [[2, 4, 2]], description: "Repeated parts written without combinators"}
+  - {id: t6, hidden: true, args: [[":not(:is(#x, .y .z), :where(#q #r))", ":is(:not(p), :has(.k > #m))"]], expected: [[1, 0, 0], [1, 1, 0]], description: "Nested functions - inner max and :where inside :not"}
+  - {id: t7, hidden: true, args: [[".x:first-line", "p::first-letter", "a:first-child", "::selection"]], expected: [[0, 1, 1], [0, 0, 2], [0, 1, 1], [0, 0, 1]], description: "Legacy single-colon pseudo-element versus look-alike pseudo-class; pseudo-element alone"}
+  - {id: t8, hidden: true, args: [["main>article~aside+footer", "* > * + *", "html body div span em strong"]], expected: [[0, 0, 4], [0, 0, 0], [0, 0, 6]], description: "Combinators without spaces; universal-only selectors; long type chain"}
+  - {id: t9, hidden: true, args: [[":is(.a .b, #c)", ":is(.a .b .c .d, p #x)", ":not(div, span, em)"]], expected: [[1, 0, 0], [1, 0, 1], [0, 0, 1]], description: "Max compares a before b - one id beats many classes; equal arguments"}
+  - {id: t10, hidden: true, args: [["[data-state=open][aria-expanded=true].menu-item_active:focus-visible::backdrop"]], expected: [[0, 4, 1]], description: "Attributes with hyphens and underscores in names chained with pseudo-class and pseudo-element"}
+  - {id: t11, hidden: true, args: [[".c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c #i#i#i#i#i#i#i#i#i#i#i#i#i#i#i#i#i#i#i#i ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul ul", ":where(.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w.w) p", ":is(.k0, .k1.k1, .k2.k2.k2, .k3.k3.k3.k3, .k4, .k5.k5, .k6.k6.k6, .k7.k7.k7.k7, .k8, .k9.k9, .k10.k10.k10, .k11.k11.k11.k11, .k12, .k13.k13, .k14.k14.k14, .k15.k15.k15.k15, .k16, .k17.k17, .k18.k18.k18, .k19.k19.k19.k19, .k20, .k21.k21, .k22.k22.k22, .k23.k23.k23.k23)"]], expected: [[20, 50, 30], [0, 0, 1], [0, 4, 0]], description: "Stress - long selectors with many parts and a 24-argument :is"}
+expected_concepts:
+  - "hand-written scanner over a small grammar"
+  - "recursion for nested functional pseudo-classes"
+  - "splitting arguments on top-level commas only"
+  - "lexicographic comparison of triples"
+  - "distinguishing pseudo-classes from pseudo-elements"
+optimal_complexity: {time: "O(n * d) where d is the nesting depth of :is/:not/:has (O(n) without nesting)", space: "O(n)"}
+rubric:
+  excellent: "Writes a clean character scanner with one branch per part, recurses into :not/:is/:has with a depth-aware comma split, takes the lexicographic maximum, ignores :where, handles legacy pseudo-elements and explains how specificity decides which rule wins."
+  good: "Correct for flat selectors and simple :not/:is, with nesting or the legacy pseudo-elements fixed after testing."
+  weak: "Counts with regular expressions that break on nested parentheses, sums all arguments instead of taking the max, or counts :where and :not themselves as pseudo-classes."
+  criteria:
+    correctness: "All tests pass, including nested functions, :where, legacy pseudo-elements and combinators without spaces."
+    efficiency: "Linear scan of each selector; recursion only re-reads argument text once per nesting level."
+    code_quality: "A small scanner with helpers for names, balanced parentheses and argument splitting; the triple handled as a unit."
+    edge_cases: "Universal-only selectors, attributes with hyphens, :nth-child arguments containing '+', and look-alikes such as :first-child."
+    communication: "Relates specificity to real debugging: why :where is useful for low-specificity design-system defaults."
+hints:
+  - "Walk the selector character by character; the first character of each part (#, ., [, :, a letter) tells you what kind of part it is and where its count goes."
+  - "Pseudo-classes may have a parenthesised argument; find the matching closing parenthesis by counting depth. For :not, :is and :has, the argument is itself a list of selectors, so the same function can compute each one."
+  - "Split the argument on commas that are not inside nested parentheses, compute each argument's triple recursively and add the largest one (compare a, then b, then c). Skip :where entirely, count :before/:after/:first-line/:first-letter and '::' names as c, and every other ':' name as b."
+followups:
+  - "How would you extend this to :nth-child(2n+1 of .item), which adds the specificity of its selector list?"
+  - "Given two rules matching the same element, how do specificity, source order, !important and cascade layers interact?"
+  - "How would you report the location of the most specific part to help a developer simplify the selector?"
+  - "Why do design systems often wrap their default styles in :where()?"
+common_errors:
+  - "Summing every argument of :is or :not instead of taking the most specific one."
+  - "Counting :not, :is or :has itself as an extra pseudo-class."
+  - "Splitting arguments on every comma, including commas inside nested parentheses."
+  - "Counting the '+' in :nth-child(2n+1) as a combinator or a part."
+  - "Treating :first-child like the legacy :first-line pseudo-element."

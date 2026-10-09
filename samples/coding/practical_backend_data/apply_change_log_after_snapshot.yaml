@@ -1,0 +1,132 @@
+version: 1
+slug: apply_change_log_after_snapshot
+title: Replay a Change Log onto a Snapshot
+difficulty: easy
+competency_keys: [data_structures, problem_solving, code_quality]
+role_tags: [backend, data, dba, platform]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Replay a Change Log onto a Snapshot
+
+  A new read replica of a key-value settings store is being brought up. It restores a **snapshot** and
+  then catches up by replaying entries from the change log.
+
+  - `snapshot` holds rows `[id, value]` with distinct ids. It already contains the effect of **every
+    change with sequence number `<= snapshot_seq`**.
+  - `changes` holds entries `[seq, op, id, value]`, all as strings. `seq` is a positive decimal number
+    without leading zeros, `op` is `"PUT"` (create or overwrite the row with `value`) or `"DEL"` (delete
+    the row; `value` is `""`). A `PUT` with an empty value stores an empty string; the row still exists.
+  - The log transport is unreliable: entries can arrive **out of order**, and an entry can be
+    **redelivered**, which repeats the same `seq` with identical content.
+
+  Apply every distinct `seq` greater than `snapshot_seq` **exactly once**, in ascending **numeric**
+  order of `seq`. Deleting an id that does not exist does nothing. Return the final rows `[id, value]`
+  sorted by `id` in plain character-code (ASCII) order.
+
+  ### Example 1
+  ```
+  Input:  snapshot = [["cfg:timeout", "30"], ["cfg:retries", "3"]], snapshot_seq = 7,
+          changes = [["9", "PUT", "cfg:retries", "5"], ["6", "PUT", "cfg:timeout", "10"],
+                     ["8", "DEL", "cfg:timeout", ""], ["10", "PUT", "cfg:region", "eu-west"],
+                     ["9", "PUT", "cfg:retries", "5"]]
+  Output: [["cfg:region", "eu-west"], ["cfg:retries", "5"]]
+  Explanation: seq 6 is already in the snapshot and is skipped. Then seq 8 deletes cfg:timeout,
+  seq 9 (delivered twice, applied once) sets cfg:retries and seq 10 creates cfg:region.
+  ```
+
+  ### Example 2
+  ```
+  Input:  snapshot = [], snapshot_seq = 0,
+          changes = [["2", "PUT", "b", "x"], ["1", "PUT", "a", "y"], ["3", "DEL", "zz", ""]]
+  Output: [["a", "y"], ["b", "x"]]
+  ```
+
+  ### Constraints
+  - `0 <= snapshot.length <= 10^4`, `0 <= changes.length <= 10^4`
+  - `0 <= snapshot_seq <= 2 * 10^9` and every `seq` is between `1` and `2 * 10^9`
+  - Entries that share a `seq` are identical
+  - Ids are 1-40 printable ASCII characters; values are 0-100 printable ASCII characters
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: apply_change_log
+  params:
+    - {name: snapshot, type: "string[][]"}
+    - {name: snapshot_seq, type: int}
+    - {name: changes, type: "string[][]"}
+  return_type: "string[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def apply_change_log(snapshot: list[list[str]], snapshot_seq: int,
+                         changes: list[list[str]]) -> list[list[str]]:
+        rows = {row_id: value for row_id, value in snapshot}
+        pending: dict[int, list[str]] = {}  # seq -> entry; redeliveries collapse onto one key
+        for entry in changes:
+            seq = int(entry[0])
+            if seq > snapshot_seq:
+                pending[seq] = entry
+        for seq in sorted(pending):
+            _, op, row_id, value = pending[seq]
+            if op == "PUT":
+                rows[row_id] = value
+            else:
+                rows.pop(row_id, None)
+        return [[row_id, rows[row_id]] for row_id in sorted(rows)]
+  javascript: |
+    function applyChangeLog(snapshot, snapshotSeq, changes) {
+      const rows = new Map(snapshot.map(([id, value]) => [id, value]));
+      const pending = new Map(); // seq -> entry; redeliveries collapse onto one key
+      for (const entry of changes) {
+        const seq = Number(entry[0]);
+        if (seq > snapshotSeq) pending.set(seq, entry);
+      }
+      const seqs = [...pending.keys()].sort((a, b) => a - b);
+      for (const seq of seqs) {
+        const [, op, id, value] = pending.get(seq);
+        if (op === 'PUT') rows.set(id, value);
+        else rows.delete(id);
+      }
+      const ids = [...rows.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      return ids.map((id) => [id, rows.get(id)]);
+    }
+tests:
+  - {id: t1, args: [[["cfg:timeout", "30"], ["cfg:retries", "3"]], 7, [["9", "PUT", "cfg:retries", "5"], ["6", "PUT", "cfg:timeout", "10"], ["8", "DEL", "cfg:timeout", ""], ["10", "PUT", "cfg:region", "eu-west"], ["9", "PUT", "cfg:retries", "5"]]], expected: [["cfg:region", "eu-west"], ["cfg:retries", "5"]], description: "Example 1"}
+  - {id: t2, args: [[], 0, [["2", "PUT", "b", "x"], ["1", "PUT", "a", "y"], ["3", "DEL", "zz", ""]]], expected: [["a", "y"], ["b", "x"]], description: "Example 2 - empty snapshot, out-of-order puts, delete of a missing id"}
+  - {id: t3, hidden: true, args: [[["z", "1"], ["b", "2"], ["m", "3"]], 50, []], expected: [["b", "2"], ["m", "3"], ["z", "1"]], description: "No changes - snapshot rows are returned sorted by id"}
+  - {id: t4, hidden: true, args: [[["k", "new"]], 12, [["12", "PUT", "k", "old"], ["3", "DEL", "k", ""], ["11", "PUT", "j", "stale"]]], expected: [["k", "new"]], description: "Every change is at or below snapshot_seq; replaying them would revert or resurrect data"}
+  - {id: t5, hidden: true, args: [[], 0, [["10", "PUT", "a", "ten"], ["9", "PUT", "a", "nine"], ["100", "PUT", "a", "hundred"], ["99", "DEL", "a", ""]]], expected: [["a", "hundred"]], description: "Numeric versus string ordering of seq - 9 < 10 < 99 < 100"}
+  - {id: t6, hidden: true, args: [[["a", "1"]], 5, [["7", "PUT", "a", "2"], ["6", "DEL", "a", ""], ["8", "DEL", "a", ""], ["7", "PUT", "a", "2"], ["9", "PUT", "a", "3"]]], expected: [["a", "3"]], description: "Delete then recreate then delete then recreate the same id with redeliveries"}
+  - {id: t7, hidden: true, args: [[["x", "1"], ["y", "2"]], 1, [["2", "DEL", "x", ""], ["3", "DEL", "y", ""], ["3", "DEL", "y", ""]]], expected: [], description: "Everything deleted - empty result"}
+  - {id: t8, hidden: true, args: [[["B", "upper"]], 0, [["1", "PUT", "b", ""], ["2", "PUT", "a", "z"], ["3", "PUT", "_", "u"]]], expected: [["B", "upper"], ["_", "u"], ["a", "z"], ["b", ""]], description: "PUT with an empty value keeps the row; ASCII order puts uppercase and underscore before lowercase"}
+  - {id: t9, hidden: true, args: [[["r", "s"]], 2000000000, [["1999999999", "DEL", "r", ""], ["2000000000", "PUT", "r", "t"]]], expected: [["r", "s"]], description: "Large sequence numbers at the snapshot boundary - nothing applies"}
+  - {id: t10, hidden: true, args: [[["svc.Search", "v792"], ["flag_6", "v689"], ["flag_0", "v150"], ["flag_10", "v441"], ["flag_15", "v653"], ["flag_23", "v396"], ["svc.cart", "v713"], ["flag_16", "v813"], ["flag_7", "v775"], ["flag_1", "v947"], ["flag_20", "v25"], ["flag_12", "v446"], ["svc.billing", "v605"], ["flag_3", "v40"], ["flag_8", "v298"], ["flag_22", "v284"], ["svc.edge", "v405"], ["flag_17", "v907"], ["flag_14", "v41"], ["flag_2", "v452"], ["flag_4", "v940"], ["svc.search", "v137"], ["flag_11", "v920"]], 120, [["164", "PUT", "svc.billing", "v278"], ["198", "PUT", "flag_4", "v101"], ["173", "PUT", "svc.auth", "v395"], ["133", "PUT", "flag_20", "v940"], ["131", "PUT", "flag_9", "v549"], ["142", "PUT", "svc.Search", "v65"], ["195", "DEL", "flag_18", ""], ["101", "PUT", "flag_14", "v41"], ["156", "PUT", "flag_22", "v64"], ["127", "PUT", "flag_23", "v251"], ["184", "PUT", "flag_19", "v117"], ["160", "PUT", "svc.search", "v596"], ["200", "PUT", "flag_5", "v435"], ["118", "PUT", "flag_15", "v653"], ["126", "DEL", "flag_20", ""], ["193", "PUT", "svc.search", "v735"], ["159", "PUT", "flag_23", "v256"], ["140", "PUT", "flag_17", "v684"], ["178", "PUT", "flag_14", "v524"], ["169", "PUT", "svc.cart", "v134"], ["187", "PUT", "svc.search", "v438"], ["137", "PUT", "flag_14", "v58"], ["148", "PUT", "svc.auth", "v620"], ["160", "PUT", "svc.search", "v596"], ["146", "PUT", "flag_9", "v656"], ["150", "PUT", "flag_21", "v319"], ["129", "PUT", "flag_3", "v177"], ["176", "PUT", "svc.billing", "v142"], ["197", "PUT", "flag_0", "v387"], ["161", "PUT", "svc.cart", "v985"], ["191", "PUT", "flag_22", "v859"], ["103", "DEL", "svc.auth", ""], ["108", "PUT", "svc.billing", "v605"], ["149", "PUT", "flag_0", "v202"], ["125", "PUT", "flag_4", "v483"], ["123", "DEL", "svc.edge", ""], ["128", "DEL", "flag_4", ""], ["138", "DEL", "flag_17", ""], ["183", "DEL", "svc.edge", ""], ["165", "PUT", "flag_11", "v650"], ["124", "PUT", "flag_7", "v41"], ["122", "PUT", "flag_0", "v547"], ["127", "PUT", "flag_23", "v251"], ["121", "PUT", "flag_9", "v741"], ["132", "PUT", "flag_22", "v437"], ["110", "DEL", "flag_5", ""], ["185", "DEL", "svc.Search", ""], ["112", "PUT", "flag_7", "v775"], ["192", "PUT", "svc.cart", "v614"], ["152", "PUT", "flag_9", "v960"], ["113", "DEL", "flag_13", ""], ["175", "PUT", "flag_18", "v817"], ["134", "PUT", "flag_8", "v676"], ["174", "DEL", "flag_18", ""], ["134", "PUT", "flag_8", "v676"], ["141", "PUT", "flag_21", "v172"], ["172", "PUT", "svc.Search", "v948"], ["106", "PUT", "flag_16", "v813"], ["179", "PUT", "flag_11", "v424"], ["116", "PUT", "flag_1", "v947"], ["154", "DEL", "flag_17", ""], ["157", "PUT", "flag_16", "v143"], ["158", "PUT", "flag_15", "v713"], ["155", "PUT", "flag_19", "v806"], ["147", "PUT", "flag_19", "v635"], ["130", "PUT", "flag_6", "v589"], ["103", "DEL", "svc.auth", ""], ["115", "PUT", "flag_15", "v666"], ["188", "PUT", "flag_18", "v828"], ["112", "PUT", "flag_7", "v775"], ["155", "PUT", "flag_19", "v806"], ["195", "DEL", "flag_18", ""], ["107", "DEL", "flag_18", ""], ["145", "DEL", "flag_23", ""], ["162", "DEL", "flag_19", ""], ["163", "PUT", "flag_9", "v647"], ["111", "DEL", "flag_21", ""], ["171", "PUT", "svc.billing", "v919"], ["145", "DEL", "flag_23", ""], ["183", "DEL", "svc.edge", ""], ["102", "PUT", "svc.search", "v186"], ["120", "PUT", "flag_3", "v40"], ["144", "PUT", "flag_8", "v124"], ["186", "PUT", "flag_20", "v999"], ["135", "PUT", "flag_18", "v64"], ["196", "PUT", "flag_10", "v65"], ["123", "DEL", "svc.edge", ""], ["187", "PUT", "svc.search", "v438"], ["152", "PUT", "flag_9", "v960"], ["166", "DEL", "flag_14", ""], ["114", "PUT", "flag_12", "v446"], ["162", "DEL", "flag_19", ""], ["173", "PUT", "svc.auth", "v395"], ["180", "PUT", "svc.auth", "v83"], ["191", "PUT", "flag_22", "v859"], ["177", "PUT", "svc.Search", "v362"], ["170", "PUT", "svc.edge", "v500"], ["167", "DEL", "flag_23", ""], ["136", "PUT", "flag_8", "v400"], ["168", "PUT", "flag_17", "v693"], ["117", "PUT", "flag_17", "v907"], ["139", "PUT", "flag_6", "v965"], ["153", "PUT", "flag_19", "v346"], ["169", "PUT", "svc.cart", "v134"], ["190", "PUT", "flag_14", "v954"], ["182", "PUT", "flag_16", "v852"], ["151", "PUT", "flag_2", "v440"], ["149", "PUT", "flag_0", "v202"], ["181", "PUT", "flag_8", "v686"], ["184", "PUT", "flag_19", "v117"], ["199", "DEL", "flag_16", ""], ["186", "PUT", "flag_20", "v999"], ["194", "PUT", "flag_19", "v937"], ["144", "PUT", "flag_8", "v124"], ["114", "PUT", "flag_12", "v446"], ["119", "PUT", "svc.Search", "v792"], ["189", "PUT", "svc.edge", "v549"], ["143", "PUT", "flag_18", "v526"], ["200", "PUT", "flag_5", "v435"], ["149", "PUT", "flag_0", "v202"], ["139", "PUT", "flag_6", "v965"], ["105", "PUT", "flag_17", "v918"], ["104", "DEL", "flag_15", ""], ["109", "PUT", "svc.search", "v137"], ["194", "PUT", "flag_19", "v937"]]], expected: [["flag_0", "v387"], ["flag_1", "v947"], ["flag_10", "v65"], ["flag_11", "v424"], ["flag_12", "v446"], ["flag_14", "v954"], ["flag_15", "v713"], ["flag_17", "v693"], ["flag_19", "v937"], ["flag_2", "v440"], ["flag_20", "v999"], ["flag_21", "v319"], ["flag_22", "v859"], ["flag_3", "v177"], ["flag_4", "v101"], ["flag_5", "v435"], ["flag_6", "v965"], ["flag_7", "v41"], ["flag_8", "v686"], ["flag_9", "v647"], ["svc.auth", "v83"], ["svc.billing", "v142"], ["svc.cart", "v614"], ["svc.edge", "v549"], ["svc.search", "v735"]], description: "Stress - 30 keys, shuffled log from seq 101 to 200 with 25 redeliveries and overlap below snapshot_seq"}
+expected_concepts:
+  - hash map keyed by row id
+  - filtering by snapshot sequence number
+  - de-duplicating redelivered entries by seq
+  - sorting by numeric sequence rather than string
+  - idempotent replay
+optimal_complexity: {time: O(s log s + c log c), space: O(s + c)}
+rubric:
+  excellent: Loads the snapshot into a map, filters entries by seq > snapshot_seq, collapses redeliveries by seq, applies them in numeric order, sorts the result by id and explains why skipping old entries and ordering by seq make the replay idempotent.
+  good: Correct replay after a hint about numeric ordering of seq or about entries already contained in the snapshot.
+  weak: Applies entries in arrival order, sorts seq as strings, reapplies changes below snapshot_seq, or crashes when deleting a missing id.
+  criteria:
+    correctness: All tests pass, including string-versus-numeric seq ordering, stale entries and recreate-after-delete.
+    efficiency: One pass to collect pending entries, one sort by seq and one sort of the final ids.
+    code_quality: Parses each entry once with named fields and keeps snapshot loading, replay and output separate.
+    edge_cases: No changes, everything deleted, empty values, missing ids on delete and redeliveries.
+    communication: Explains how the replica would behave if the replay were interrupted and restarted.
+hints:
+  - The snapshot already reflects some of the log, and the rest of the log is jumbled; decide which entries still matter before applying anything.
+  - Keep the rows in a map by id, discard entries whose seq is not greater than snapshot_seq, and make sure each remaining seq is applied once and in the right order.
+  - Collect the remaining entries in a map keyed by the integer value of seq (redeliveries overwrite themselves), apply them in ascending numeric key order with put or delete-if-present, then emit the rows sorted by id.
+followups:
+  - How would the replica record its progress so that a restart does not replay entries twice?
+  - What would you do if two different entries arrived with the same seq?
+  - How would you detect a gap in sequence numbers and decide whether it is safe to serve reads?
+common_errors:
+  - Sorting seq values as strings so that "10" is applied before "9".
+  - Re-applying entries at or below snapshot_seq, which reverts newer snapshot values.
+  - Applying entries in arrival order instead of sequence order.
+  - Treating a PUT with an empty value as a delete.

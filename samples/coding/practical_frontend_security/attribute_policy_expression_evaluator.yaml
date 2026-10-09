@@ -1,0 +1,357 @@
+version: 1
+slug: attribute_policy_expression_evaluator
+title: Attribute-Based Policy Expression Evaluator
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [security, backend, platform, fullstack]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Attribute-Based Policy Expression Evaluator
+
+  An internal access gateway decides who may open a production console with **attribute-based access
+  control**. A policy is a boolean expression over the attributes of the person or service making the
+  request, for example:
+
+  ```
+  dept == "eng" and (level >= 3 or role in ["admin", "sre"]) and not suspended == "yes"
+  ```
+
+  Each subject is a list of `"key=value"` strings. The key is everything before the **first** `=`, the
+  value everything after it (it may be empty or contain more `=`). A value is an **integer** if it matches
+  `-?[0-9]+` (so `"042"` is the integer 42), otherwise it is a **string**. Keys within one subject are
+  unique and case-sensitive.
+
+  Return, for every subject in order, whether the policy grants access (`true`) or not (`false`).
+
+  **Grammar** (tokens may be separated by any number of spaces, including none where unambiguous):
+
+  ```
+  expr       := and_expr ( "or" and_expr )*
+  and_expr   := not_expr ( "and" not_expr )*
+  not_expr   := "not" not_expr | primary
+  primary    := "(" expr ")" | comparison
+  comparison := IDENT OP literal | IDENT "in" "[" literal ( "," literal )* "]"
+  OP         := "==" | "!=" | "<" | "<=" | ">" | ">="
+  literal    := a double-quoted string (no escapes, no " inside) | an integer -?[0-9]+
+  IDENT      := a letter or _ followed by letters, digits or _ (not one of: and, or, not, in)
+  ```
+
+  So `not` binds tighter than `and`, which binds tighter than `or`, and `not suspended == "yes"` means
+  `not (suspended == "yes")`. Keywords are lowercase.
+
+  **Semantics of a comparison:**
+
+  - If the subject does not have the attribute, the comparison is **false** (for every operator,
+    including `!=`).
+  - If the attribute value and the literal have different types (integer versus string), the comparison is
+    **false** (again including `!=`).
+  - Integers compare numerically; strings compare by character codes (lexicographically, so `"v10" < "v2"`).
+  - `attr in [...]` is true when the attribute exists and equals (same type and value) at least one literal
+    in the list.
+
+  The expression is always well-formed.
+
+  ### Example 1
+  ```
+  Input:  expression = "dept == \"eng\" and (level >= 3 or role in [\"admin\", \"sre\"]) and not suspended == \"yes\"", subjects = [["dept=eng", "level=4"], ["dept=eng", "level=2", "role=sre"], ["dept=eng", "level=5", "suspended=yes"], ["dept=sales", "level=9"], ["dept=eng", "level=2"]]
+  Output: [true, true, false, false, false]
+  Explanation: the third subject is suspended; the fourth is not in eng; the fifth has level 2 and no role.
+  ```
+
+  ### Example 2
+  ```
+  Input:  expression = "region != \"eu\" or tier < 2", subjects = [["region=us", "tier=5"], ["region=eu", "tier=1"], ["region=eu", "tier=gold"], ["tier=7"], ["region=eu"]]
+  Output: [true, true, false, false, false]
+  Explanation: "gold" is a string, so tier < 2 is false for the third subject; the fourth has no region
+  (so region != "eu" is false) and the fifth has no tier.
+  ```
+
+  ### Example 3
+  ```
+  Input:  expression = "not (team == \"payments\")", subjects = [["team=payments"], ["team=search"], []]
+  Output: [false, true, true]
+  Explanation: a missing attribute makes the comparison false, so its negation is true.
+  ```
+
+  ### Constraints
+  - `1 <= expression.length <= 1000`, printable ASCII, always well-formed
+  - `0 <= subjects.length <= 200`, each with `0` to `20` entries
+  - Keys follow the IDENT rule; values are printable ASCII without spaces at either end
+  - Integers in the expression and in values satisfy `|x| <= 10^9`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: evaluate_policy
+  params:
+    - {name: expression, type: string}
+    - {name: subjects, type: "string[][]"}
+  return_type: "bool[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import re
+
+    TOKEN = re.compile(r' *(?:(==|!=|<=|>=|<|>|\(|\)|\[|\]|,)|"([^"]*)"|(-?[0-9]+)|([A-Za-z_][A-Za-z0-9_]*))')
+    KEYWORDS = {"and", "or", "not", "in"}
+    INTEGER = re.compile(r"-?[0-9]+")
+
+
+    def tokenize(expression: str) -> list[tuple[str, object]]:
+        tokens: list[tuple[str, object]] = []
+        pos = 0
+        while expression[pos:].strip(" "):
+            m = TOKEN.match(expression, pos)
+            symbol, text, number, word = m.groups()
+            if symbol is not None:
+                tokens.append(("sym", symbol))
+            elif text is not None:
+                tokens.append(("lit", text))
+            elif number is not None:
+                tokens.append(("lit", int(number)))
+            elif word in KEYWORDS:
+                tokens.append(("kw", word))
+            else:
+                tokens.append(("id", word))
+            pos = m.end()
+        return tokens
+
+
+    class Parser:
+        def __init__(self, tokens: list[tuple[str, object]]) -> None:
+            self.tokens = tokens
+            self.pos = 0
+
+        def peek(self, kind: str, value: object = None) -> bool:
+            if self.pos >= len(self.tokens):
+                return False
+            k, v = self.tokens[self.pos]
+            return k == kind and (value is None or v == value)
+
+        def take(self) -> object:
+            self.pos += 1
+            return self.tokens[self.pos - 1][1]
+
+        def parse_or(self):
+            node = self.parse_and()
+            while self.peek("kw", "or"):
+                self.take()
+                node = ("or", node, self.parse_and())
+            return node
+
+        def parse_and(self):
+            node = self.parse_not()
+            while self.peek("kw", "and"):
+                self.take()
+                node = ("and", node, self.parse_not())
+            return node
+
+        def parse_not(self):
+            if self.peek("kw", "not"):
+                self.take()
+                return ("not", self.parse_not())
+            return self.parse_primary()
+
+        def parse_primary(self):
+            if self.peek("sym", "("):
+                self.take()
+                node = self.parse_or()
+                self.take()  # ")"
+                return node
+            attr = self.take()
+            if self.peek("kw", "in"):
+                self.take()
+                self.take()  # "["
+                values = [self.take()]
+                while self.peek("sym", ","):
+                    self.take()
+                    values.append(self.take())
+                self.take()  # "]"
+                return ("in", attr, values)
+            op = self.take()
+            return ("cmp", attr, op, self.take())
+
+
+    def same_type(a: object, b: object) -> bool:
+        return isinstance(a, int) == isinstance(b, int)
+
+
+    def evaluate(node, attrs: dict[str, object]) -> bool:
+        kind = node[0]
+        if kind == "or":
+            return evaluate(node[1], attrs) or evaluate(node[2], attrs)
+        if kind == "and":
+            return evaluate(node[1], attrs) and evaluate(node[2], attrs)
+        if kind == "not":
+            return not evaluate(node[1], attrs)
+        if node[1] not in attrs:
+            return False
+        value = attrs[node[1]]
+        if kind == "in":
+            return any(same_type(value, lit) and value == lit for lit in node[2])
+        op, lit = node[2], node[3]
+        if not same_type(value, lit):
+            return False
+        return {
+            "==": value == lit,
+            "!=": value != lit,
+            "<": value < lit,
+            "<=": value <= lit,
+            ">": value > lit,
+            ">=": value >= lit,
+        }[op]
+
+
+    def evaluate_policy(expression: str, subjects: list[list[str]]) -> list[bool]:
+        tree = Parser(tokenize(expression)).parse_or()
+        results: list[bool] = []
+        for subject in subjects:
+            attrs: dict[str, object] = {}
+            for entry in subject:
+                key, value = entry.split("=", 1)
+                attrs[key] = int(value) if INTEGER.fullmatch(value) else value
+            results.append(evaluate(tree, attrs))
+        return results
+  javascript: |
+    function tokenizePolicy(expression) {
+      const re = / *(?:(==|!=|<=|>=|<|>|\(|\)|\[|\]|,)|"([^"]*)"|(-?[0-9]+)|([A-Za-z_][A-Za-z0-9_]*))/y;
+      const keywords = new Set(["and", "or", "not", "in"]);
+      const tokens = [];
+      let pos = 0;
+      while (expression.slice(pos).trim() !== "") {
+        re.lastIndex = pos;
+        const m = re.exec(expression);
+        if (m[1] !== undefined) tokens.push(["sym", m[1]]);
+        else if (m[2] !== undefined) tokens.push(["lit", m[2]]);
+        else if (m[3] !== undefined) tokens.push(["lit", Number(m[3])]);
+        else if (keywords.has(m[4])) tokens.push(["kw", m[4]]);
+        else tokens.push(["id", m[4]]);
+        pos = re.lastIndex;
+      }
+      return tokens;
+    }
+
+    function evaluatePolicy(expression, subjects) {
+      const tokens = tokenizePolicy(expression);
+      let pos = 0;
+      const peek = (kind, value) =>
+        pos < tokens.length && tokens[pos][0] === kind && (value === undefined || tokens[pos][1] === value);
+      const take = () => tokens[pos++][1];
+
+      function parseOr() {
+        let node = parseAnd();
+        while (peek("kw", "or")) {
+          take();
+          node = { kind: "or", left: node, right: parseAnd() };
+        }
+        return node;
+      }
+      function parseAnd() {
+        let node = parseNot();
+        while (peek("kw", "and")) {
+          take();
+          node = { kind: "and", left: node, right: parseNot() };
+        }
+        return node;
+      }
+      function parseNot() {
+        if (peek("kw", "not")) {
+          take();
+          return { kind: "not", inner: parseNot() };
+        }
+        return parsePrimary();
+      }
+      function parsePrimary() {
+        if (peek("sym", "(")) {
+          take();
+          const node = parseOr();
+          take();
+          return node;
+        }
+        const attr = take();
+        if (peek("kw", "in")) {
+          take();
+          take();
+          const values = [take()];
+          while (peek("sym", ",")) {
+            take();
+            values.push(take());
+          }
+          take();
+          return { kind: "in", attr, values };
+        }
+        const op = take();
+        return { kind: "cmp", attr, op, lit: take() };
+      }
+
+      const tree = parseOr();
+      const evaluate = (node, attrs) => {
+        if (node.kind === "or") return evaluate(node.left, attrs) || evaluate(node.right, attrs);
+        if (node.kind === "and") return evaluate(node.left, attrs) && evaluate(node.right, attrs);
+        if (node.kind === "not") return !evaluate(node.inner, attrs);
+        if (!attrs.has(node.attr)) return false;
+        const value = attrs.get(node.attr);
+        if (node.kind === "in") return node.values.some((lit) => typeof lit === typeof value && lit === value);
+        const lit = node.lit;
+        if (typeof lit !== typeof value) return false;
+        switch (node.op) {
+          case "==": return value === lit;
+          case "!=": return value !== lit;
+          case "<": return value < lit;
+          case "<=": return value <= lit;
+          case ">": return value > lit;
+          default: return value >= lit;
+        }
+      };
+
+      return subjects.map((subject) => {
+        const attrs = new Map();
+        for (const entry of subject) {
+          const eq = entry.indexOf("=");
+          const value = entry.slice(eq + 1);
+          attrs.set(entry.slice(0, eq), /^-?[0-9]+$/.test(value) ? Number(value) : value);
+        }
+        return evaluate(tree, attrs);
+      });
+    }
+tests:
+  - {id: t1, args: ["dept == \"eng\" and (level >= 3 or role in [\"admin\", \"sre\"]) and not suspended == \"yes\"", [["dept=eng", "level=4"], ["dept=eng", "level=2", "role=sre"], ["dept=eng", "level=5", "suspended=yes"], ["dept=sales", "level=9"], ["dept=eng", "level=2"]]], expected: [true, true, false, false, false], description: "Example 1 - and/or/not with parentheses and an in-list"}
+  - {id: t2, args: ["region != \"eu\" or tier < 2", [["region=us", "tier=5"], ["region=eu", "tier=1"], ["region=eu", "tier=gold"], ["tier=7"], ["region=eu"]]], expected: [true, true, false, false, false], description: "Example 2 - missing attribute makes != false; string versus integer comparison is false"}
+  - {id: t3, args: ["not (team == \"payments\")", [["team=payments"], ["team=search"], []]], expected: [false, true, true], description: "Example 3 - not over a missing attribute is true"}
+  - {id: t4, hidden: true, args: ["a == 1 or b == 1 and c == 1", [["a=1"], ["b=1"], ["b=1", "c=1"], ["a=0", "b=0", "c=1"], ["a=1", "b=0", "c=0"]]], expected: [true, false, true, false, true], description: "Precedence - and binds tighter than or"}
+  - {id: t5, hidden: true, args: ["not not x == 1 and not y == 2", [["x=1"], ["x=1", "y=2"], ["x=2"], ["y=3"], []]], expected: [true, false, false, false, false], description: "Double not, and not binding tighter than and"}
+  - {id: t6, hidden: true, args: ["code == \"42\" or code == 7 or zip == -7 or tag == \"\"", [["code=42"], ["code=007"], ["zip=-7"], ["zip=-07"], ["tag="], ["code=x42"], ["code=-0"]]], expected: [false, true, true, true, true, false, false], description: "Typing - digit strings become integers (leading zeros, negatives), quoted literal never equals an integer, empty value is a string"}
+  - {id: t7, hidden: true, args: ["version >= \"v2\" and version < \"v9\" or name > \"m\"", [["version=v3"], ["version=v10"], ["version=v2"], ["name=zeta"], ["name=m"], ["name=M"]]], expected: [true, false, true, true, false, false], description: "String ordering is lexicographic by character code (v10 < v2, uppercase before lowercase)"}
+  - {id: t8, hidden: true, args: ["level in [1, -2, \"3\"] and not grp in [\"ops\"]", [["level=1"], ["level=-2", "grp=ops"], ["level=3"], ["level=-02"], ["grp=dev"], ["level=1", "grp=Ops"]]], expected: [true, false, false, true, false, true], description: "in-lists with mixed literal types and negatives; not in over missing attribute; case-sensitive values"}
+  - {id: t9, hidden: true, args: ["(index==1)and(order_by!=\"x y\")or(notes==\"a and (b) or [c]\")or((((innate>=1000000000))))", [["index=1", "order_by=z"], ["index=1", "order_by=x y"], ["notes=a and (b) or [c]"], ["innate=1000000000"], ["innate=999999999"], ["index=2", "order_by=x"]]], expected: [true, false, true, true, false, false], description: "No spaces between tokens, identifiers starting with keywords (index, order_by, notes, innate), strings containing keywords and brackets, deep parentheses, 10^9 bounds"}
+  - {id: t10, hidden: true, args: ["expr == \"a=b\" or empty != \"\" or quota <= -1000000000", [["expr=a=b"], ["empty="], ["empty=x"], ["quota=-1000000000"], ["quota=-999999999"], ["Expr=a=b"]]], expected: [true, false, true, true, false, false], description: "Values containing = split only at the first =, empty values, negative bound, case-sensitive keys"}
+  - {id: t11, hidden: true, args: ["x == 1", []], expected: [], description: "No subjects - empty result"}
+  - {id: t12, hidden: true, args: ["env == \"prod\" and (team in [\"payments\", \"search\", \"infra\"] or oncall == \"yes\") and not (risk > 70 or region == \"cn-test\") or break_glass == 1", [["risk=7", "region=eu-west", "oncall=yes", "env=staging", "team=payments"], ["break_glass=1", "env=prod", "risk=high", "region=us-east"], ["env=prod", "oncall=yes", "team=search", "risk=70", "region=cn-test"], ["env=dev", "team=search", "region=cn-test", "risk=31"], ["env=prod", "team=growth", "risk=high", "break_glass=true", "oncall=no", "region=cn-test"], ["env=dev", "risk=85", "team=payments", "region=cn-test"], ["oncall=yes", "risk=high", "team=growth", "region=us-east"], ["env=prod", "region=eu-west"], ["oncall=yes", "region=us-east", "team=search", "break_glass=true", "risk=75"], ["team=growth", "oncall=no", "risk=8", "region=us-east", "env=dev"], ["risk=high", "env=prod", "team=payments"], ["risk=18", "env=dev", "oncall=no"], ["risk=69", "env=staging"], ["oncall=yes", "risk=high", "env=prod", "team=search"], ["oncall=yes", "team=growth", "env=staging"], ["region=eu-west", "risk=60", "oncall=yes", "env=prod"], ["region=us-east", "oncall=no", "env=prod", "risk=96"], ["env=prod", "team=search", "risk=high", "break_glass=true"], ["team=payments", "region=us-east", "env=staging"], ["env=prod", "team=data", "oncall=no", "region=cn-test"], ["team=data", "env=staging"], ["team=payments", "risk=high", "break_glass=true", "env=dev"], ["team=data", "env=prod", "oncall=yes", "risk=78"], ["risk=57", "region=eu-west", "env=prod"], ["region=us-east", "env=staging", "risk=high", "team=payments"], ["region=eu-west", "team=search", "env=dev", "oncall=no"], ["oncall=no", "team=payments", "risk=8", "env=dev"], ["env=staging", "team=search"], ["team=payments", "risk=high", "env=dev", "oncall=yes"], ["risk=34", "team=infra", "region=cn-test", "env=prod"], ["region=cn-test", "env=staging", "risk=high"], ["team=payments", "risk=high", "region=eu-west", "break_glass=true"], ["region=cn-test", "oncall=yes", "env=dev"], ["risk=high", "region=us-east", "break_glass=0"], ["oncall=no", "risk=high", "env=prod", "team=search"], ["oncall=no", "region=us-east", "break_glass=1", "env=staging", "risk=25", "team=growth"], ["risk=high", "env=staging", "team=data"], ["team=data", "env=staging", "risk=64"], ["team=payments", "region=eu-west", "oncall=no", "env=staging"], ["risk=68", "env=prod", "team=payments", "break_glass=true"], ["risk=48", "oncall=no", "region=cn-test", "team=search", "env=staging"], ["env=prod", "team=search", "risk=86", "oncall=yes"], ["break_glass=true", "env=dev", "team=data", "oncall=yes", "region=eu-west"], ["oncall=yes", "risk=high", "break_glass=true"], ["team=search", "risk=20", "oncall=no"], ["break_glass=1", "risk=high", "team=infra", "oncall=no", "env=dev"], ["risk=high", "env=dev"], ["oncall=no", "team=search", "env=prod", "risk=40"], ["risk=high", "region=us-east"], ["team=growth", "oncall=no", "env=staging", "risk=high", "region=us-east"], ["risk=high", "team=growth", "region=cn-test", "env=prod"], ["env=prod", "risk=high", "team=infra", "region=cn-test"], ["team=infra", "region=eu-west", "risk=high", "env=dev", "oncall=yes"], ["oncall=yes", "risk=high", "env=dev"], ["break_glass=1", "env=prod", "region=us-east", "risk=high"], ["risk=55", "env=prod", "region=eu-west"], ["oncall=no", "env=staging", "region=eu-west", "team=payments"], ["region=cn-test", "risk=2", "env=prod"], ["oncall=yes", "env=dev", "region=eu-west", "risk=high"], ["oncall=yes", "risk=37", "env=staging", "team=search"]]], expected: [false, true, false, false, false, false, false, false, false, false, true, false, false, true, false, true, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, false, false, false, true, false, false, false, false, false, true, false, true, false, false, false, false, false, false, true, false, false, false, false, false], description: "60 random subjects against a realistic production-console policy with a break-glass override"}
+expected_concepts:
+  - tokenizer separating symbols, literals, identifiers and keywords
+  - recursive-descent parsing with one function per precedence level
+  - building an expression tree once and evaluating it per subject
+  - typed values and explicit rules for missing attributes and type mismatches
+optimal_complexity: {time: O(L + S * L) for expression length L and S subjects, space: O(L + K) for K attributes per subject}
+rubric:
+  excellent: Writes a clean tokenizer and a recursive-descent parser (or precedence climbing) with one level per operator, evaluates the tree once per subject, implements missing-attribute and type-mismatch semantics precisely (including != and not) and explains why parsing once matters for many subjects.
+  good: Correct parser and evaluation with a small slip, such as treating != on a missing attribute as true or parsing keyword prefixes like index as in, fixed after a hint.
+  weak: Evaluates with string replacement or eval, ignores precedence, or compares integers as strings.
+  criteria:
+    correctness: All tests pass, including precedence, double negation, typed comparisons and identifiers that start with keywords.
+    efficiency: Parses the expression once and evaluates the tree for each subject in time linear in its size.
+    code_quality: Separate tokenizer, parser and evaluator; no use of a host-language eval.
+    edge_cases: Missing attributes, empty values, values containing =, leading zeros, negative integers, no subjects.
+    communication: Explains the grammar and how precedence falls out of the call structure.
+hints:
+  - Split the problem into three parts - turn the text into tokens, turn the tokens into a tree, then evaluate the tree for each subject's attribute map.
+  - For precedence write one parsing function per level - or calls and, and calls not, not calls primary - and let primary handle parentheses and the two comparison forms. Read whole identifiers before checking whether they are keywords.
+  - Store each subject's values as integers or strings, then evaluate recursively; a comparison node returns false when the key is missing or the types differ, otherwise applies the operator, and an in node checks for an equal literal of the same type.
+followups:
+  - How would you report a helpful error for a malformed policy instead of assuming it is well-formed?
+  - Should not missing == "x" grant access? How would you design policies so that a missing attribute fails closed?
+  - How would you compile the tree into a closure or bytecode for very hot authorisation paths?
+common_errors:
+  - Treating a missing attribute as an empty string or zero instead of making the comparison false.
+  - Making != true when the types differ or the attribute is missing.
+  - Giving and and or equal precedence, or letting not apply to a whole and-chain.
+  - Matching the keyword in at the start of an identifier such as index.
+  - Comparing numeric values as strings, so 10 < 9.

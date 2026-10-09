@@ -1,0 +1,211 @@
+version: 1
+slug: duplicate_webhook_registrations
+title: "Duplicate Webhook Registrations"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [backend, data, qa]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Duplicate Webhook Registrations
+
+  Tenants of an integration platform register webhook endpoints through a self-service settings
+  page. The page stores each URL exactly as it was typed, so a tenant sometimes registers the same
+  endpoint twice, for example once as `https://hooks.acme.io/orders` and again with different
+  capitalisation or with stray spaces around it. Every registration receives every event, so the
+  tenant's receiver ends up processing each event more than once. Support wants a clean-up list.
+
+  Table `webhooks`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | tenant_id | INTEGER | the tenant that owns the registration |
+  | url | VARCHAR(300) | the URL as typed; may have leading or trailing spaces and any letter case |
+
+  The **normalized URL** of a registration is its `url` with leading and trailing spaces removed and
+  converted to lower case. Two registrations are duplicates when they belong to the **same tenant**
+  and have the same normalized URL. The same endpoint registered by different tenants is not a
+  duplicate.
+
+  Return one row per (tenant, normalized URL) that is registered **more than once**, with the columns
+  `tenant_id`, `normalized_url` and `registration_count` (how many registrations share it). Order the
+  result by `tenant_id` ascending, then `normalized_url` ascending. Return no rows when there are no
+  duplicates.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  webhooks
+  +----+-----------+----------------------------------+
+  | id | tenant_id | url                              |
+  +----+-----------+----------------------------------+
+  | 1  | 1         | 'https://hooks.acme.io/orders'   |
+  | 2  | 1         | 'HTTPS://hooks.acme.io/Orders'   |
+  | 3  | 2         | 'https://hooks.acme.io/orders'   |
+  | 4  | 1         | ' https://hooks.acme.io/orders ' |
+  | 5  | 1         | 'https://hooks.acme.io/refunds'  |
+  | 6  | 3         | 'https://ops.lumen.dev/alerts'   |
+  | 7  | 3         | 'https://ops.lumen.dev/alerts'   |
+  +----+-----------+----------------------------------+
+
+  Output
+  +-----------+--------------------------------+--------------------+
+  | tenant_id | normalized_url                 | registration_count |
+  +-----------+--------------------------------+--------------------+
+  | 1         | 'https://hooks.acme.io/orders' | 3                  |
+  | 3         | 'https://ops.lumen.dev/alerts' | 2                  |
+  +-----------+--------------------------------+--------------------+
+  Rows 1, 2 and 4 are the same endpoint for tenant 1. Row 3 belongs to another tenant,
+  so it is not a duplicate.
+  ```
+
+  ### Example 2
+  ```
+  webhooks
+  +----+-----------+---------------------------------+
+  | id | tenant_id | url                             |
+  +----+-----------+---------------------------------+
+  | 1  | 7         | 'https://api.kite.io/events'    |
+  | 2  | 7         | 'https://api.kite.io/events/v2' |
+  | 3  | 8         | 'https://api.kite.io/events'    |
+  +----+-----------+---------------------------------+
+
+  Output
+  +-----------+----------------+--------------------+
+  | tenant_id | normalized_url | registration_count |
+  +-----------+----------------+--------------------+
+  +-----------+----------------+--------------------+
+  No rows: rows 1 and 2 are different endpoints, and row 3 belongs to another tenant.
+  ```
+
+  ### Constraints
+  - At most `10^5` registrations; the table may be empty.
+  - URLs contain only ASCII characters; only spaces (no tabs or newlines) appear around them.
+  - In the examples, string values are shown in quotes so that surrounding spaces are visible.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return tenant_id, normalized_url and registration_count for every endpoint a tenant
+    -- registered more than once, ordered by tenant_id, then normalized_url.
+    SELECT tenant_id, url AS normalized_url, COUNT(*) AS registration_count
+    FROM webhooks
+    GROUP BY tenant_id, url
+    HAVING COUNT(*) > 1
+    ORDER BY tenant_id, normalized_url;
+reference_solutions:
+  sql: |
+    SELECT tenant_id,
+           LOWER(TRIM(url)) AS normalized_url,
+           COUNT(*) AS registration_count
+    FROM webhooks
+    GROUP BY tenant_id, LOWER(TRIM(url))
+    HAVING COUNT(*) > 1
+    ORDER BY tenant_id, normalized_url;
+sql_setup: |
+  CREATE TABLE webhooks (
+    id INTEGER PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    url VARCHAR(300) NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - three variants for tenant 1, exact repeat for tenant 3, tenant 2 copy ignored"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhooks (id, tenant_id, url) VALUES
+        (1, 1, 'https://hooks.acme.io/orders'), (2, 1, 'HTTPS://hooks.acme.io/Orders'), (3, 2, 'https://hooks.acme.io/orders'),
+        (4, 1, ' https://hooks.acme.io/orders '), (5, 1, 'https://hooks.acme.io/refunds'), (6, 3, 'https://ops.lumen.dev/alerts'),
+        (7, 3, 'https://ops.lumen.dev/alerts');
+    expected_rows: [[1, "https://hooks.acme.io/orders", 3], [3, "https://ops.lumen.dev/alerts", 2]]
+  - id: t2
+    description: "Example 2 - no duplicates (different paths, same URL across tenants)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhooks (id, tenant_id, url) VALUES
+        (1, 7, 'https://api.kite.io/events'), (2, 7, 'https://api.kite.io/events/v2'), (3, 8, 'https://api.kite.io/events');
+    expected_rows: []
+  - id: t3
+    hidden: true
+    description: "Empty table - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Same URL registered once by each of four tenants - not duplicates"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhooks (id, tenant_id, url) VALUES
+        (1, 1, 'https://relay.example.org/in'), (2, 2, 'https://relay.example.org/in'), (3, 3, 'https://relay.example.org/in'),
+        (4, 4, 'https://relay.example.org/in');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Case-only differences - grouping by the raw url finds nothing"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhooks (id, tenant_id, url) VALUES
+        (1, 5, 'https://Billing.Corp.io/Hook'), (2, 5, 'https://billing.corp.io/hook'), (3, 5, 'HTTPS://BILLING.CORP.IO/HOOK');
+    expected_rows: [[5, "https://billing.corp.io/hook", 3]]
+  - id: t6
+    hidden: true
+    description: "Leading and trailing spaces only - trimmed variants match"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhooks (id, tenant_id, url) VALUES
+        (1, 9, 'https://sync.tide.io/push '), (2, 9, '  https://sync.tide.io/push'), (3, 9, 'https://sync.tide.io/pull');
+    expected_rows: [[9, "https://sync.tide.io/push", 2]]
+  - id: t7
+    hidden: true
+    description: "Several groups per tenant ordered by URL; tenant 10 after tenant 2 (numeric order)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhooks (id, tenant_id, url) VALUES
+        (1, 10, 'https://billing.nova.io/hook'), (2, 10, 'https://alerts.nova.io/hook'), (3, 2, 'https://pay.orbit.io/hook'),
+        (4, 10, 'https://alerts.nova.io/hook'), (5, 10, 'https://billing.nova.io/hook '), (6, 2, 'https://PAY.orbit.io/hook'),
+        (7, 10, 'https://alerts.nova.io/HOOK'), (8, 2, 'https://docs.orbit.io/hook');
+    expected_rows: [[2, "https://pay.orbit.io/hook", 2], [10, "https://alerts.nova.io/hook", 3], [10, "https://billing.nova.io/hook", 2]]
+  - id: t8
+    hidden: true
+    description: "Exact and normalized repeats counted together; other tenant's copies excluded"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhooks (id, tenant_id, url) VALUES
+        (1, 4, 'https://cb.mesa.io/x'), (2, 4, 'https://cb.mesa.io/x'), (3, 4, ' HTTPS://CB.MESA.IO/X'),
+        (4, 6, 'https://cb.mesa.io/x'), (5, 4, 'https://cb.mesa.io/X  '), (6, 6, 'https://cb.mesa.io/y');
+    expected_rows: [[4, "https://cb.mesa.io/x", 4]]
+  - id: t9
+    hidden: true
+    description: "Single registration - no rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhooks (id, tenant_id, url) VALUES (1, 1, 'https://solo.example.com/hook');
+    expected_rows: []
+expected_concepts:
+  - "normalizing values with TRIM and LOWER before grouping"
+  - "GROUP BY on an expression"
+  - "HAVING to filter groups after aggregation"
+  - "composite grouping keys (tenant plus URL)"
+optimal_complexity: {time: "O(n log n) for the grouping sort, or O(n) with hash aggregation", space: "O(n) for the groups"}
+rubric:
+  excellent: "Groups by tenant and the trimmed, lower-cased URL, filters with HAVING COUNT(*) > 1, orders deterministically and suggests a unique index on the normalized value to stop new duplicates."
+  good: "Correct query after a hint about normalizing before grouping or about filtering groups with HAVING."
+  weak: "Groups by the raw url, ignores the tenant, filters the count in WHERE, or returns every registration instead of one row per duplicated endpoint."
+  criteria:
+    correctness: "All tests pass, including case-only and whitespace-only differences and cross-tenant copies."
+    efficiency: "One grouped scan; no self-join over every pair of registrations."
+    code_quality: "The normalization expression is written once in a clear form and the output columns are named as required."
+    edge_cases: "Empty table, no duplicates, the same URL across tenants and several duplicate groups per tenant."
+    communication: "Explains why normalization belongs at write time as well, for example with a unique index on the normalized URL."
+hints:
+  - "Two strings that look different can still be the same endpoint, so compare a cleaned-up version of the URL rather than the raw text."
+  - "Build the cleaned-up value by removing surrounding spaces and lower-casing, then group by tenant together with that value; filtering on a count must happen after grouping."
+  - "Select the tenant, the trimmed and lower-cased URL and the row count, group by the tenant and the same normalized expression, keep only groups with a count above one using HAVING, and order by tenant and normalized URL."
+followups:
+  - "How would you prevent these duplicates when a tenant saves the form?"
+  - "Which registration would you keep and which would you delete, and how would you write that safely?"
+  - "Should the scheme and host be compared case-insensitively but the path case-sensitively, and how would that change the query?"
+common_errors:
+  - "Grouping by the raw url, which misses case and whitespace variants."
+  - "Leaving tenant_id out of the grouping, which reports the same endpoint across tenants as duplicates."
+  - "Putting COUNT(*) > 1 in WHERE instead of HAVING."

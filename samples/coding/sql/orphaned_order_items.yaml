@@ -1,0 +1,297 @@
+version: 1
+slug: orphaned_order_items
+title: Orphaned Order Items
+difficulty: easy
+competency_keys: [sql, databases, debugging]
+role_tags: [data, dba, qa]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Orphaned Order Items
+
+  A legacy shop system was migrated with a bulk import that loaded `order_items` **without foreign-key
+  constraints**. Before the constraints can be switched on, the data team needs a list of every line item
+  that would violate them.
+
+  Table `orders`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | status | VARCHAR(20) | not relevant for this task |
+
+  Table `products`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | name | VARCHAR(100) | |
+
+  Table `order_items`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | order_id | INTEGER | never NULL, but may point to an order that does not exist |
+  | product_id | INTEGER | **may be NULL**, or may point to a product that does not exist |
+  | quantity | INTEGER | |
+
+  A line item has:
+
+  - a **missing order** when no row in `orders` has `id = order_id`;
+  - a **missing product** when `product_id` is NULL or no row in `products` has `id = product_id`.
+
+  Return `id`, `order_id`, `product_id` and `problem` for every line item with at least one of these
+  issues, where `problem` is `'missing_order'`, `'missing_product'` or `'both'` (when the order and the
+  product are both missing). Line items without issues are not returned. Order the rows by `id`
+  ascending; `product_id` is returned as stored (NULL stays NULL).
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  orders
+  +-----+---------+
+  | id  | status  |
+  +-----+---------+
+  | 501 | paid    |
+  | 502 | shipped |
+  +-----+---------+
+
+  products
+  +----+-----------+
+  | id | name      |
+  +----+-----------+
+  | 10 | Desk lamp |
+  | 11 | USB hub   |
+  +----+-----------+
+
+  order_items
+  +----+----------+------------+----------+
+  | id | order_id | product_id | quantity |
+  +----+----------+------------+----------+
+  | 1  | 501      | 10         | 1        |
+  | 2  | 501      | 12         | 2        |
+  | 3  | 503      | 11         | 1        |
+  | 4  | 502      | 11         | 3        |
+  | 5  | 599      | 77         | 1        |
+  +----+----------+------------+----------+
+
+  Output
+  +----+----------+------------+-----------------+
+  | id | order_id | product_id | problem         |
+  +----+----------+------------+-----------------+
+  | 2  | 501      | 12         | missing_product |
+  | 3  | 503      | 11         | missing_order   |
+  | 5  | 599      | 77         | both            |
+  +----+----------+------------+-----------------+
+  Item 2 references product 12, which does not exist. Item 3 references order 503, which does not exist.
+  Item 5 references neither an existing order nor an existing product. Items 1 and 4 are clean.
+  ```
+
+  ### Example 2
+  ```
+  orders
+  +----+--------+
+  | id | status |
+  +----+--------+
+  | 7  | paid   |
+  +----+--------+
+
+  products
+  +----+----------------+
+  | id | name           |
+  +----+----------------+
+  | 3  | Cable tie pack |
+  +----+----------------+
+
+  order_items
+  +----+----------+------------+----------+
+  | id | order_id | product_id | quantity |
+  +----+----------+------------+----------+
+  | 10 | 7        | NULL       | 1        |
+  | 11 | 7        | 3          | 4        |
+  | 12 | 8        | NULL       | 2        |
+  +----+----------+------------+----------+
+
+  Output
+  +----+----------+------------+-----------------+
+  | id | order_id | product_id | problem         |
+  +----+----------+------------+-----------------+
+  | 10 | 7        | NULL       | missing_product |
+  | 12 | 8        | NULL       | both            |
+  +----+----------+------------+-----------------+
+  Item 10 has no product at all (NULL), item 12 has neither a valid order nor a product.
+  ```
+
+  ### Constraints
+  - `0 <= rows in each table <= 10^5`
+  - Ids are integers; `order_items.order_id` is never NULL, `order_items.product_id` can be NULL.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return id, order_id, product_id and problem ('missing_order', 'missing_product' or 'both')
+    -- for every line item that breaks a reference, ordered by id.
+    SELECT oi.id, oi.order_id, oi.product_id, 'missing_order' AS problem
+    FROM order_items oi
+    ORDER BY oi.id;
+reference_solutions:
+  sql: |
+    SELECT oi.id, oi.order_id, oi.product_id,
+           CASE
+             WHEN o.id IS NULL AND p.id IS NULL THEN 'both'
+             WHEN o.id IS NULL THEN 'missing_order'
+             ELSE 'missing_product'
+           END AS problem
+    FROM order_items oi
+    LEFT JOIN orders o ON o.id = oi.order_id
+    LEFT JOIN products p ON p.id = oi.product_id
+    WHERE o.id IS NULL OR p.id IS NULL
+    ORDER BY oi.id;
+sql_setup: |
+  CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    status VARCHAR(20) NOT NULL
+  );
+  CREATE TABLE products (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL
+  );
+  CREATE TABLE order_items (
+    id INTEGER PRIMARY KEY,
+    order_id INTEGER NOT NULL,
+    product_id INTEGER,
+    quantity INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - one item of each kind plus clean rows"
+    setup_sql: |
+      INSERT INTO orders (id, status) VALUES (501, 'paid'), (502, 'shipped');
+      INSERT INTO products (id, name) VALUES (10, 'Desk lamp'), (11, 'USB hub');
+      INSERT INTO order_items (id, order_id, product_id, quantity) VALUES
+        (1, 501, 10, 1), (2, 501, 12, 2), (3, 503, 11, 1), (4, 502, 11, 3), (5, 599, 77, 1);
+    expected_rows: [[2, 501, 12, "missing_product"], [3, 503, 11, "missing_order"], [5, 599, 77, "both"]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - a NULL product_id counts as a missing product, also together with a missing order"
+    setup_sql: |
+      INSERT INTO orders (id, status) VALUES (7, 'paid');
+      INSERT INTO products (id, name) VALUES (3, 'Cable tie pack');
+      INSERT INTO order_items (id, order_id, product_id, quantity) VALUES
+        (10, 7, NULL, 1), (11, 7, 3, 4), (12, 8, NULL, 2);
+    expected_rows: [[10, 7, null, "missing_product"], [12, 8, null, "both"]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty tables - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "All line items are clean - no rows"
+    setup_sql: |
+      INSERT INTO orders (id, status) VALUES (1, 'paid'), (2, 'paid');
+      INSERT INTO products (id, name) VALUES (1, 'A'), (2, 'B');
+      INSERT INTO order_items (id, order_id, product_id, quantity) VALUES (1, 1, 1, 1), (2, 1, 2, 1), (3, 2, 2, 5);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Orders and products tables empty - every item is 'both' (inner joins return nothing)"
+    setup_sql: |
+      INSERT INTO order_items (id, order_id, product_id, quantity) VALUES
+        (3, 1, 1, 1), (1, 2, NULL, 1), (2, 2, 5, 2);
+    expected_rows: [[1, 2, null, "both"], [2, 2, 5, "both"], [3, 1, 1, "both"]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "NULL product ids next to orphaned ones - NOT IN against products loses NULL rows"
+    setup_sql: |
+      INSERT INTO orders (id, status) VALUES (1, 'paid');
+      INSERT INTO products (id, name) VALUES (1, 'A');
+      INSERT INTO order_items (id, order_id, product_id, quantity) VALUES
+        (1, 1, NULL, 1), (2, 1, NULL, 1), (3, 1, 9, 1), (4, 1, 1, 1);
+    expected_rows: [[1, 1, null, "missing_product"], [2, 1, null, "missing_product"], [3, 1, 9, "missing_product"]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Several items share one missing order; ids out of insertion order must be sorted"
+    setup_sql: |
+      INSERT INTO orders (id, status) VALUES (100, 'paid');
+      INSERT INTO products (id, name) VALUES (1, 'A'), (2, 'B');
+      INSERT INTO order_items (id, order_id, product_id, quantity) VALUES
+        (40, 200, 1, 1), (5, 200, 2, 1), (17, 100, 2, 1), (23, 200, 3, 1);
+    expected_rows: [[5, 200, 2, "missing_order"], [23, 200, 3, "both"], [40, 200, 1, "missing_order"]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Order id equal to an existing product id (and vice versa) must not be confused across tables"
+    setup_sql: |
+      INSERT INTO orders (id, status) VALUES (5, 'paid');
+      INSERT INTO products (id, name) VALUES (6, 'A');
+      INSERT INTO order_items (id, order_id, product_id, quantity) VALUES (1, 6, 5, 1), (2, 5, 6, 1), (3, 5, 5, 1);
+    expected_rows: [[1, 6, 5, "both"], [3, 5, 5, "missing_product"]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Stress - 60 shuffled line items against gappy orders and products"
+    setup_sql: |
+      INSERT INTO orders (id, status) VALUES
+        (1000, 'shipped'), (1001, 'paid'), (1002, 'paid'), (1003, 'cancelled'), (1005, 'shipped'),
+        (1006, 'shipped'), (1007, 'shipped'), (1008, 'cancelled'), (1009, 'shipped'), (1010, 'paid'),
+        (1012, 'cancelled'), (1013, 'paid'), (1014, 'shipped'), (1015, 'shipped'), (1016, 'paid'),
+        (1017, 'paid'), (1019, 'cancelled'), (1020, 'shipped'), (1021, 'paid'), (1022, 'paid'),
+        (1023, 'paid'), (1024, 'cancelled'), (1026, 'shipped'), (1027, 'shipped'), (1028, 'paid'),
+        (1029, 'cancelled'), (1030, 'cancelled'), (1031, 'cancelled'), (1033, 'shipped'), (1034, 'shipped'),
+        (1035, 'paid'), (1036, 'paid'), (1037, 'paid'), (1038, 'cancelled');
+      INSERT INTO products (id, name) VALUES
+        (1, 'Item 1'), (2, 'Item 2'), (3, 'Item 3'), (4, 'Item 4'), (5, 'Item 5'),
+        (6, 'Item 6'), (7, 'Item 7'), (8, 'Item 8'), (10, 'Item 10'), (11, 'Item 11'),
+        (12, 'Item 12'), (13, 'Item 13'), (14, 'Item 14'), (15, 'Item 15'), (16, 'Item 16'),
+        (17, 'Item 17'), (19, 'Item 19'), (20, 'Item 20'), (21, 'Item 21'), (22, 'Item 22'),
+        (23, 'Item 23'), (24, 'Item 24'), (25, 'Item 25'), (26, 'Item 26'), (28, 'Item 28'),
+        (29, 'Item 29'), (30, 'Item 30');
+      INSERT INTO order_items (id, order_id, product_id, quantity) VALUES
+        (57, 1024, 3, 1), (1, 1040, 2, 2), (45, 1014, 15, 1), (7, 1034, 29, 1), (33, 1022, NULL, 4),
+        (20, 1031, 5, 3), (16, 1029, 30, 3), (32, 1013, 11, 2), (22, 1016, 11, 1), (17, 1028, 27, 2),
+        (28, 1039, 27, 1), (42, 1040, 19, 4), (5, 1026, 4, 3), (36, 1006, NULL, 2), (51, 1021, 28, 2),
+        (15, 1010, 6, 3), (23, 1035, 8, 2), (18, 1035, 29, 3), (10, 1000, 2, 2), (46, 1025, 2, 2),
+        (30, 1041, 28, 1), (39, 1026, 31, 2), (25, 1033, 17, 1), (26, 1014, 32, 4), (27, 1001, 27, 3),
+        (9, 1020, 20, 3), (52, 1021, 3, 4), (2, 1030, 17, 3), (56, 1005, 17, 2), (4, 1032, 30, 1),
+        (3, 1017, 29, 1), (8, 1002, 8, 2), (13, 1036, 3, 4), (34, 1005, 24, 2), (47, 1039, 6, 2),
+        (35, 1032, 24, 3), (41, 1005, 11, 1), (55, 1007, 12, 1), (11, 1008, 9, 3), (29, 1030, 19, 1),
+        (38, 1002, 7, 3), (44, 1001, 6, 2), (58, 1013, 28, 3), (31, 1039, 28, 3), (6, 1034, 20, 4),
+        (50, 1040, 25, 3), (21, 1002, 23, 2), (59, 1041, 14, 3), (19, 1026, 3, 3), (53, 1027, 11, 4),
+        (54, 1023, 21, 1), (49, 1018, 12, 4), (37, 1023, 2, 4), (60, 1038, 29, 2), (48, 1027, 30, 1),
+        (14, 1025, 17, 1), (40, 1002, 23, 3), (12, 1010, 5, 4), (43, 1034, 5, 4), (24, 1030, 20, 1);
+    expected_rows: [[1, 1040, 2, "missing_order"], [4, 1032, 30, "missing_order"], [11, 1008, 9, "missing_product"], [14, 1025, 17, "missing_order"], [17, 1028, 27, "missing_product"], [26, 1014, 32, "missing_product"], [27, 1001, 27, "missing_product"], [28, 1039, 27, "both"], [30, 1041, 28, "missing_order"], [31, 1039, 28, "missing_order"], [33, 1022, null, "missing_product"], [35, 1032, 24, "missing_order"], [36, 1006, null, "missing_product"], [39, 1026, 31, "missing_product"], [42, 1040, 19, "missing_order"], [46, 1025, 2, "missing_order"], [47, 1039, 6, "missing_order"], [49, 1018, 12, "missing_order"], [50, 1040, 25, "missing_order"], [59, 1041, 14, "missing_order"]]
+expected_concepts:
+  - anti-join with LEFT JOIN ... IS NULL or NOT EXISTS
+  - NULL foreign keys and three-valued logic
+  - CASE expression with ordered branches
+  - referential-integrity auditing before adding constraints
+optimal_complexity: {time: "O(n log n) or O(n) with hash/index lookups on the primary keys", space: "O(k) for the k reported rows"}
+rubric:
+  excellent: Uses two LEFT JOINs (or NOT EXISTS) and a CASE that checks 'both' first, handles NULL product_id naturally, orders by id, and explains why NOT IN with NULLs or inner joins would hide broken rows.
+  good: Correct query after a hint about NULL product ids or about the order of the CASE branches.
+  weak: Uses inner joins, NOT IN against a nullable column, or reports clean rows or wrong problem labels.
+  criteria:
+    correctness: All tests pass, including NULL product ids, items broken in both ways and empty reference tables.
+    efficiency: Set-based joins against primary keys; no per-row procedural code.
+    code_quality: Clear aliases, a readable CASE and an explicit ORDER BY.
+    edge_cases: Empty tables, NULL product ids, all-clean data and ids reused across tables.
+    communication: Explains how this audit would be used before enabling foreign keys.
+hints:
+  - For each line item you need to know whether its order exists and whether its product exists; a join that keeps unmatched rows tells you both.
+  - With outer joins to both parent tables, a missing parent shows up as NULL on that side. A NULL product_id never matches anything, so it is reported without special handling, but NOT IN comparisons with NULL behave differently.
+  - Left-join order_items to orders and to products, keep rows where either joined key is NULL, label them with a CASE whose first branch tests that both are missing, and sort by the line item id.
+followups:
+  - How would you fix or quarantine these rows before adding the foreign keys?
+  - Which constraint would you add for product_id if a NULL product is legitimately allowed for gift cards?
+  - How would you run this audit on a table with hundreds of millions of rows without locking it?
+common_errors:
+  - Using inner joins, which remove exactly the broken rows the audit should report.
+  - Using product_id NOT IN (SELECT id FROM products), which never flags NULL product ids.
+  - Testing the single-missing cases before the 'both' case in CASE, so items missing both are mislabelled.
+  - Forgetting ORDER BY id.

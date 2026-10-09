@@ -1,0 +1,137 @@
+version: 1
+slug: unix_mode_string
+title: Unix Mode String
+difficulty: easy
+competency_keys: [algorithms, code_quality, problem_solving]
+role_tags: [devops, sre, security, platform]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Unix Mode String
+
+  A file-audit agent collects permission modes from servers as plain integers, but the security team
+  reads reports in the familiar `ls -l` style. Write the formatter that turns a mode into its
+  **9-character permission string**.
+
+  The mode is a 12-bit number, usually written in octal. The lowest 9 bits are three groups of three
+  (owner, group, other), each group holding read (`4`), write (`2`) and execute (`1`) in that order:
+
+  | Bit (octal) | Meaning |
+  |-------------|---------|
+  | `0400` `0200` `0100` | owner read, write, execute |
+  | `0040` `0020` `0010` | group read, write, execute |
+  | `0004` `0002` `0001` | other read, write, execute |
+  | `4000` | setuid |
+  | `2000` | setgid |
+  | `1000` | sticky |
+
+  Build the string as owner `rwx`, group `rwx`, other `rwx`: each position shows its letter
+  (`r`, `w` or `x`) when the bit is set and `-` when it is not. The three special bits change only the
+  **execute** position of one group:
+
+  - **setuid** changes the owner execute position to `s` if owner execute is set, otherwise to `S`;
+  - **setgid** changes the group execute position to `s` if group execute is set, otherwise to `S`;
+  - **sticky** changes the other execute position to `t` if other execute is set, otherwise to `T`.
+
+  The input is the mode as an ordinary (decimal) integer, so `0o755` arrives as `493`.
+
+  ### Example 1
+  ```
+  Input:  mode = 493
+  Output: "rwxr-xr-x"
+  Explanation: 493 is 0o755: owner rwx, group r-x, other r-x.
+  ```
+
+  ### Example 2
+  ```
+  Input:  mode = 2541
+  Output: "rwsr-xr-x"
+  Explanation: 2541 is 0o4755: setuid is on and owner execute is set, so the owner x becomes s.
+  ```
+
+  ### Example 3
+  ```
+  Input:  mode = 1023
+  Output: "rwxrwxrwt"
+  Explanation: 1023 is 0o1777: the sticky bit turns the other x into t.
+  ```
+
+  ### Constraints
+  - `0 <= mode <= 4095` (that is, `0o0000` to `0o7777`)
+  - The result always has exactly 9 characters.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: render_unix_mode
+  params:
+    - {name: mode, type: int}
+  return_type: string
+  comparison: exact
+reference_solutions:
+  python: |
+    def render_unix_mode(mode: int) -> str:
+        chars = []
+        for shift in (6, 3, 0):
+            group = (mode >> shift) & 7
+            chars.append("r" if group & 4 else "-")
+            chars.append("w" if group & 2 else "-")
+            chars.append("x" if group & 1 else "-")
+        # (special bit, index of the execute slot it changes, lowercase letter)
+        for bit, index, letter in ((0o4000, 2, "s"), (0o2000, 5, "s"), (0o1000, 8, "t")):
+            if mode & bit:
+                chars[index] = letter if chars[index] == "x" else letter.upper()
+        return "".join(chars)
+  javascript: |
+    function renderUnixMode(mode) {
+      const chars = [];
+      for (const shift of [6, 3, 0]) {
+        const group = (mode >> shift) & 7;
+        chars.push(group & 4 ? 'r' : '-');
+        chars.push(group & 2 ? 'w' : '-');
+        chars.push(group & 1 ? 'x' : '-');
+      }
+      const specials = [[0o4000, 2, 's'], [0o2000, 5, 's'], [0o1000, 8, 't']];
+      for (const [bit, index, letter] of specials) {
+        if (mode & bit) chars[index] = chars[index] === 'x' ? letter : letter.toUpperCase();
+      }
+      return chars.join('');
+    }
+tests:
+  - {id: t1, args: [493], expected: "rwxr-xr-x", description: "Example 1 - 0o755, no special bits"}
+  - {id: t2, args: [2541], expected: "rwsr-xr-x", description: "Example 2 - 0o4755, setuid with owner execute shows lowercase s"}
+  - {id: t3, args: [1023], expected: "rwxrwxrwt", description: "Example 3 - 0o1777, sticky bit with other execute shows lowercase t"}
+  - {id: t4, hidden: true, args: [0], expected: "---------", description: "Mode 0 - every slot is a dash"}
+  - {id: t5, hidden: true, args: [4095], expected: "rwsrwsrwt", description: "Mode 0o7777 - all bits including every special bit, all lowercase"}
+  - {id: t6, hidden: true, args: [3584], expected: "--S--S--T", description: "Mode 0o7000 - special bits without execute bits give uppercase S, S, T"}
+  - {id: t7, hidden: true, args: [416], expected: "rw-r-----", description: "Mode 0o640 - typical private config file, no execute anywhere"}
+  - {id: t8, hidden: true, args: [1512], expected: "rwxr-s---", description: "Mode 0o2750 - setgid with group execute, other has nothing"}
+  - {id: t9, hidden: true, args: [2468], expected: "rwSr--r--", description: "Mode 0o4644 - setuid without owner execute gives uppercase S"}
+  - {id: t10, hidden: true, args: [950], expected: "rw-rw-rwT", description: "Mode 0o1666 - sticky without other execute gives uppercase T"}
+  - {id: t11, hidden: true, args: [73], expected: "--x--x--x", description: "Mode 0o111 - execute-only bits, checks slot positions"}
+expected_concepts:
+  - "reading octal digits as 3-bit groups"
+  - "bit masks and shifts to test individual bits"
+  - "special bits overlay the execute slot rather than adding characters"
+  - "lowercase versus uppercase depends on whether execute is also set"
+optimal_complexity: {time: "O(1)", space: "O(1)"}
+rubric:
+  excellent: "Derives the three groups with shifts and masks, handles all three special bits with a small table or loop instead of copy-pasted branches, and explains the s/S and t/T rule clearly; tests the all-bits and special-without-execute cases unprompted."
+  good: "Produces correct output for normal modes and special bits, perhaps with repetitive branching, and fixes the uppercase case after a nudge."
+  weak: "Treats the decimal input as if it were octal digits, misorders the groups, or appends special-bit characters instead of replacing the execute slot."
+  criteria:
+    correctness: "All tests pass, including mode 0, mode 4095 and special bits without the matching execute bit."
+    efficiency: "Constant work: nine permission checks plus three special-bit checks."
+    code_quality: "Uses named masks or a data table; no magic decimal constants such as 2048 without explanation."
+    edge_cases: "Special bits with and without execute, no bits at all, every bit set."
+    communication: "Explains how octal maps to bits and why the input arrives as a decimal integer."
+hints:
+  - "Each octal digit of the mode is exactly three bits, so the nine permission letters come from three 3-bit groups."
+  - "Shift the mode right by six, three and zero places and keep only the lowest three bits to get the owner, group and other groups; then test the 4, 2 and 1 bits of each group."
+  - "Build the nine characters first from the normal bits, then look at the three special bits one by one; each special bit only rewrites one execute position, using the lowercase letter when that position already shows x and the uppercase letter when it shows a dash."
+followups:
+  - "How would you parse the string back into a mode integer?"
+  - "How would you add the leading file-type character (d, l, -) that ls also prints?"
+  - "Why is the setuid bit on a world-writable file a security concern worth flagging in an audit?"
+common_errors:
+  - "Interpreting the decimal input as octal text, for example treating 493 as digits 4, 9, 3."
+  - "Appending s or t as a tenth character instead of replacing the execute position."
+  - "Always printing lowercase s or t even when the execute bit is not set."
+  - "Applying setgid to the owner slot or sticky to the group slot."

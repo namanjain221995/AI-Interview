@@ -1,0 +1,126 @@
+version: 1
+slug: canary_promotion_verdict
+title: Canary Promotion Gate
+difficulty: easy
+competency_keys: [problem_solving, code_quality]
+role_tags: [devops, sre, platform, backend]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Canary Promotion Gate
+
+  A progressive-delivery controller sends a small slice of traffic to a new version (the **canary**)
+  while the current version (the **baseline**) serves the rest. Before promoting, it applies this gate:
+
+  1. If `canary_requests < min_requests`, there is not enough data yet: return `"INCONCLUSIVE"`.
+  2. Otherwise compare error rates. The baseline rate is `baseline_errors / baseline_requests`
+     (defined as `0` when `baseline_requests` is `0`), and the allowed canary rate is
+     `baseline_rate * max_ratio_percent / 100`.
+  3. Return `"FAIL"` if the canary rate `canary_errors / canary_requests` is **strictly greater** than
+     the allowed rate, otherwise `"PASS"`.
+
+  The gate must be exact: rates such as `1 / 3` or `7 / 10` are not exactly representable in binary floating
+  point, and a rounding error must never flip a verdict. Compare the fractions using integer
+  arithmetic only.
+
+  ### Example 1
+  ```
+  Input:  baseline_requests = 10000, baseline_errors = 50, canary_requests = 2000, canary_errors = 12, min_requests = 1000, max_ratio_percent = 150
+  Output: "PASS"
+  Explanation: Baseline 0.5%, allowed 0.75%, canary 0.6%.
+  ```
+
+  ### Example 2
+  ```
+  Input:  baseline_requests = 10000, baseline_errors = 50, canary_requests = 2000, canary_errors = 20, min_requests = 1000, max_ratio_percent = 150
+  Output: "FAIL"
+  Explanation: Canary 1.0% is above the allowed 0.75%.
+  ```
+
+  ### Example 3
+  ```
+  Input:  baseline_requests = 10000, baseline_errors = 50, canary_requests = 400, canary_errors = 0, min_requests = 1000, max_ratio_percent = 150
+  Output: "INCONCLUSIVE"
+  ```
+
+  ### Constraints
+  - `0 <= baseline_errors <= baseline_requests <= 10^6`
+  - `0 <= canary_errors <= canary_requests <= 10^6`
+  - `1 <= min_requests <= 10^6`
+  - `0 <= max_ratio_percent <= 1000`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: canary_promotion_verdict
+  params:
+    - {name: baseline_requests, type: "long"}
+    - {name: baseline_errors, type: "long"}
+    - {name: canary_requests, type: "long"}
+    - {name: canary_errors, type: "long"}
+    - {name: min_requests, type: "long"}
+    - {name: max_ratio_percent, type: "int"}
+  return_type: "string"
+  comparison: exact
+reference_solutions:
+  python: |
+    def canary_promotion_verdict(baseline_requests: int, baseline_errors: int, canary_requests: int,
+                                 canary_errors: int, min_requests: int, max_ratio_percent: int) -> str:
+        if canary_requests < min_requests:
+            return "INCONCLUSIVE"
+        if baseline_requests == 0:
+            # Baseline rate is defined as 0, so the allowed rate is 0.
+            return "FAIL" if canary_errors > 0 else "PASS"
+        # canary_errors / canary_requests > (baseline_errors / baseline_requests) * pct / 100
+        # Both denominators are positive, so cross-multiplying keeps the direction.
+        left = canary_errors * baseline_requests * 100
+        right = baseline_errors * max_ratio_percent * canary_requests
+        return "FAIL" if left > right else "PASS"
+  javascript: |
+    function canaryPromotionVerdict(baselineRequests, baselineErrors, canaryRequests, canaryErrors, minRequests, maxRatioPercent) {
+      if (canaryRequests < minRequests) return "INCONCLUSIVE";
+      if (baselineRequests === 0) return canaryErrors > 0 ? "FAIL" : "PASS";
+      // Products stay below 2^53 under the constraints; BigInt keeps it exact regardless.
+      const left = BigInt(canaryErrors) * BigInt(baselineRequests) * 100n;
+      const right = BigInt(baselineErrors) * BigInt(maxRatioPercent) * BigInt(canaryRequests);
+      return left > right ? "FAIL" : "PASS";
+    }
+tests:
+  - {id: t1, args: [10000, 50, 2000, 12, 1000, 150], expected: "PASS", description: "Example 1 - canary within the allowed ratio"}
+  - {id: t2, args: [10000, 50, 2000, 20, 1000, 150], expected: "FAIL", description: "Example 2 - canary above the allowed ratio"}
+  - {id: t3, args: [10000, 50, 400, 0, 1000, 150], expected: "INCONCLUSIVE", description: "Example 3 - not enough canary traffic yet"}
+  - {id: t4, hidden: true, args: [10000, 50, 2000, 15, 1000, 150], expected: "PASS", description: "Exactly at the allowed rate - not strictly greater, so PASS"}
+  - {id: t5, hidden: true, args: [10000, 50, 2000, 16, 1000, 150], expected: "FAIL", description: "One error over the boundary"}
+  - {id: t6, hidden: true, args: [0, 0, 500, 0, 500, 200], expected: "PASS", description: "Baseline has no traffic, canary clean, canary_requests equal to min_requests"}
+  - {id: t7, hidden: true, args: [0, 0, 500, 1, 100, 1000], expected: "FAIL", description: "Baseline has no traffic, a single canary error fails (naive cross-multiplication passes)"}
+  - {id: t8, hidden: true, args: [800000, 0, 3000, 1, 1000, 300], expected: "FAIL", description: "Baseline error-free - any canary error fails"}
+  - {id: t9, hidden: true, args: [10068, 867, 107392, 11560, 1000, 125], expected: "PASS", description: "Exact equality that naive floating-point division reports as FAIL"}
+  - {id: t10, hidden: true, args: [1000000, 1000000, 1000000, 1000000, 1000000, 1000], expected: "PASS", description: "Maximum values - products reach 10^15"}
+  - {id: t11, hidden: true, args: [5000, 10, 999, 999, 1000, 0], expected: "INCONCLUSIVE", description: "One request short of the minimum even with every request failing"}
+expected_concepts:
+  - "comparing ratios exactly by cross-multiplication"
+  - "guarding the zero-denominator baseline case"
+  - "ordering of gate checks (sample size before rate comparison)"
+  - "64-bit products and overflow awareness"
+optimal_complexity: {time: "O(1)", space: "O(1)"}
+rubric:
+  excellent: "Checks the sample size first, rewrites the rate comparison as an integer cross-multiplication with the direction justified by positive denominators, special-cases a zero-traffic baseline, and confirms the products fit in 64 bits."
+  good: "Correct integer comparison after a hint about floating point or the zero-baseline case."
+  weak: "Uses floating-point division, divides by zero for an idle baseline, treats equality as a failure, or checks rates before the sample size."
+  criteria:
+    correctness: "All tests pass, including the exact boundary, zero-traffic baseline and the floating-point trap."
+    efficiency: "Constant time with no loops or approximations."
+    code_quality: "Early returns in the order of the gate rules and named intermediate products."
+    edge_cases: "Boundary equality, zero baseline traffic, error-free baseline, zero ratio and maximum values."
+    communication: "Explains why cross-multiplication preserves the inequality and why floats are rejected."
+hints:
+  - "Handle the not-enough-data rule before anything else, then think about how to compare two fractions without dividing."
+  - "Multiplying both sides of an inequality by positive numbers keeps its direction, so the comparison of rates can become a comparison of two integer products. One input makes a denominator zero; decide what the rules say there."
+  - "Return the inconclusive verdict when the canary has fewer requests than the minimum. If the baseline saw no requests, the allowed rate is zero, so fail exactly when the canary has any error. Otherwise fail when canary errors times baseline requests times 100 is strictly greater than baseline errors times the percentage times canary requests, and pass otherwise; those products stay within 64 bits under the limits."
+followups:
+  - "How would you add a statistical test so that small error counts do not trigger a failure by chance?"
+  - "How would you extend the gate to latency percentiles as well as error rates?"
+  - "What would you change if request counts could reach 10^12?"
+  - "How should the controller behave if the canary keeps returning INCONCLUSIVE for hours?"
+common_errors:
+  - "Comparing floating-point rates, which flips the verdict on exact boundaries."
+  - "Dividing by zero when the baseline received no traffic, or cross-multiplying blindly so a zero baseline always passes."
+  - "Treating a canary rate equal to the allowed rate as a failure."
+  - "Evaluating rates before checking the minimum sample size."

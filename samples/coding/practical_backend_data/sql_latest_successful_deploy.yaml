@@ -1,0 +1,212 @@
+version: 1
+slug: sql_latest_successful_deploy
+title: "Latest Successful Deploy per Service (SQL)"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [devops, sre, backend, platform]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Latest Successful Deploy per Service
+
+  The release pipeline records every deployment attempt in table `deployments`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key; ids are assigned when a deployment is queued, so a larger id does **not** always mean a later finish |
+  | service | VARCHAR(60) | service name (lowercase letters only) |
+  | version | VARCHAR(40) | version string that was deployed |
+  | finished_at | INTEGER | finish time in seconds since the epoch |
+  | status | VARCHAR(20) | one of `'succeeded'`, `'failed'`, `'rolled_back'` |
+
+  The on-call dashboard needs to know what is actually running: for every service with **at least one
+  succeeded deployment**, return the `service` and the `version` of its **latest succeeded**
+  deployment. "Latest" means the largest `finished_at`; when two succeeded deployments of the same
+  service finished at the same second, the one with the **larger `id`** wins.
+
+  Failed and rolled-back deployments are ignored completely, even when they finished later. Services
+  without any succeeded deployment are not returned. Order the result by `service` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  deployments
+  +----+----------+---------+-------------+-------------+
+  | id | service  | version | finished_at | status      |
+  +----+----------+---------+-------------+-------------+
+  | 1  | checkout | 1.4.0   | 1000        | succeeded   |
+  | 2  | checkout | 1.5.0   | 2000        | failed      |
+  | 3  | search   | 7.1     | 1500        | succeeded   |
+  | 4  | search   | 7.2     | 2500        | succeeded   |
+  | 5  | auth     | 2.0     | 3000        | rolled_back |
+  +----+----------+---------+-------------+-------------+
+
+  Output
+  +----------+---------+
+  | service  | version |
+  +----------+---------+
+  | checkout | 1.4.0   |
+  | search   | 7.2     |
+  +----------+---------+
+  checkout's later attempt failed, so 1.4.0 is still live. auth never succeeded and is not returned.
+  ```
+
+  ### Example 2
+  ```
+  deployments
+  +----+---------+---------+-------------+-----------+
+  | id | service | version | finished_at | status    |
+  +----+---------+---------+-------------+-----------+
+  | 7  | billing | 3.1     | 500         | succeeded |
+  | 8  | billing | 3.2     | 900         | succeeded |
+  | 9  | billing | 3.0     | 900         | succeeded |
+  | 10 | billing | 3.3     | 800         | succeeded |
+  +----+---------+---------+-------------+-----------+
+
+  Output
+  +---------+---------+
+  | service | version |
+  +---------+---------+
+  | billing | 3.0     |
+  +---------+---------+
+  Rows 8 and 9 both finished at 900; id 9 is larger, so its version (a rollback to 3.0) wins.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `0 <= finished_at <= 2 * 10^9`
+  - `status` is always one of the three values above (lowercase).
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return service and the version of its latest succeeded deployment, ordered by service.
+    SELECT service, version
+    FROM deployments
+    WHERE status = 'succeeded'
+    ORDER BY service;
+reference_solutions:
+  sql: |
+    SELECT d.service, d.version
+    FROM deployments d
+    WHERE d.status = 'succeeded'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM deployments x
+        WHERE x.service = d.service
+          AND x.status = 'succeeded'
+          AND (x.finished_at > d.finished_at
+               OR (x.finished_at = d.finished_at AND x.id > d.id))
+      )
+    ORDER BY d.service;
+sql_setup: |
+  CREATE TABLE deployments (
+    id INTEGER PRIMARY KEY,
+    service VARCHAR(60) NOT NULL,
+    version VARCHAR(40) NOT NULL,
+    finished_at INTEGER NOT NULL,
+    status VARCHAR(20) NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - a later failure does not replace the live version; never-succeeded service omitted"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, version, finished_at, status) VALUES
+        (1, 'checkout', '1.4.0', 1000, 'succeeded'), (2, 'checkout', '1.5.0', 2000, 'failed'),
+        (3, 'search', '7.1', 1500, 'succeeded'), (4, 'search', '7.2', 2500, 'succeeded'),
+        (5, 'auth', '2.0', 3000, 'rolled_back');
+    expected_rows: [["checkout", "1.4.0"], ["search", "7.2"]]
+  - id: t2
+    description: "Example 2 - tie on finished_at broken by larger id; id order differs from time order"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, version, finished_at, status) VALUES
+        (7, 'billing', '3.1', 500, 'succeeded'), (8, 'billing', '3.2', 900, 'succeeded'),
+        (9, 'billing', '3.0', 900, 'succeeded'), (10, 'billing', '3.3', 800, 'succeeded');
+    expected_rows: [["billing", "3.0"]]
+  - id: t3
+    hidden: true
+    description: "Empty table returns no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Only failed and rolled_back deployments - nothing returned"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, version, finished_at, status) VALUES
+        (1, 'search', '1.0', 10, 'failed'), (2, 'search', '1.1', 20, 'rolled_back'), (3, 'auth', '9', 30, 'failed');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Larger id finished earlier - must order by finished_at not id (MAX(id) trap)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, version, finished_at, status) VALUES
+        (1, 'ledger', 'b', 5000, 'succeeded'), (2, 'ledger', 'a', 4000, 'succeeded'), (3, 'ledger', 'c', 3000, 'succeeded');
+    expected_rows: [["ledger", "b"]]
+  - id: t6
+    hidden: true
+    description: "MAX(version) trap - lexically largest version is not the latest"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, version, finished_at, status) VALUES
+        (1, 'gateway', '9.9', 100, 'succeeded'), (2, 'gateway', '10.0', 200, 'succeeded'),
+        (3, 'gateway', '10.1', 300, 'failed');
+    expected_rows: [["gateway", "10.0"]]
+  - id: t7
+    hidden: true
+    description: "Several services, mixed statuses, output ordered by service name"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, version, finished_at, status) VALUES
+        (1, 'search', 's1', 10, 'succeeded'), (2, 'auth', 'a1', 10, 'succeeded'), (3, 'billing', 'b1', 10, 'failed'),
+        (4, 'search', 's2', 20, 'rolled_back'), (5, 'auth', 'a2', 30, 'succeeded'), (6, 'billing', 'b2', 40, 'succeeded'),
+        (7, 'mailer', 'm1', 50, 'rolled_back'), (8, 'auth', 'a3', 25, 'succeeded');
+    expected_rows: [["auth", "a2"], ["billing", "b2"], ["search", "s1"]]
+  - id: t8
+    hidden: true
+    description: "Same finished_at across different services must not interfere; tie inside one service with three rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, version, finished_at, status) VALUES
+        (20, 'queue', 'q20', 700, 'succeeded'), (31, 'queue', 'q31', 700, 'succeeded'), (25, 'queue', 'q25', 700, 'succeeded'),
+        (40, 'cache', 'c40', 700, 'succeeded'), (12, 'cache', 'c12', 800, 'failed');
+    expected_rows: [["cache", "c40"], ["queue", "q31"]]
+  - id: t9
+    hidden: true
+    description: "Single succeeded deployment per service with the same version string reused"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, version, finished_at, status) VALUES
+        (1, 'api', '1.0', 0, 'succeeded'), (2, 'web', '1.0', 2000000000, 'succeeded');
+    expected_rows: [["api", "1.0"], ["web", "1.0"]]
+expected_concepts:
+  - "latest row per group (greatest-n-per-group)"
+  - "deterministic tie-breaking with a secondary key"
+  - "filtering before ranking (WHERE status = 'succeeded')"
+  - "NOT EXISTS or ROW_NUMBER() OVER (PARTITION BY ...)"
+optimal_complexity: {time: "O(n log n) with a window function or an index on (service, status, finished_at, id)", space: "O(n)"}
+rubric:
+  excellent: "Writes a correct greatest-n-per-group query with ROW_NUMBER or NOT EXISTS, filters to succeeded rows before ranking, breaks ties on id and explains why MAX(version) or MAX(id) is wrong."
+  good: "Reaches a correct query after a hint about ties or about failed deployments being ranked."
+  weak: "Uses MAX(version) or MAX(id) per service, ranks failed deployments too, or returns several rows per service."
+  criteria:
+    correctness: "All tests pass, including ties on finished_at and services with only failed deployments."
+    efficiency: "Set-based query; mentions a composite index such as (service, status, finished_at, id)."
+    code_quality: "Clear aliases, one row per service and an explicit ORDER BY service."
+    edge_cases: "Empty table, ties, ids that do not follow time order and later failures."
+    communication: "Explains why the status filter must apply inside the ranking, not after it."
+hints:
+  - "You need one row per service: the row that wins a ranking among that service's succeeded deployments."
+  - "Rank only succeeded rows, by finished_at descending and then id descending; a failed deployment must never take first place."
+  - "Either keep rows where ROW_NUMBER() OVER (PARTITION BY service ORDER BY finished_at DESC, id DESC) equals 1 within succeeded rows, or keep a succeeded row when no other succeeded row of the same service finished later or at the same time with a larger id."
+followups:
+  - "Why does MAX(version) give the wrong answer for versions such as 9.9 and 10.0?"
+  - "Which index would make this query fast on millions of deployment rows?"
+  - "How would you also return how many failed attempts happened after the live version was deployed?"
+  - "How would you return the previous succeeded version for a quick rollback target?"
+common_errors:
+  - "Grouping by service and taking MAX(version) or MAX(id), which does not follow finish time."
+  - "Ranking all deployments and filtering status afterwards, which drops services whose newest attempt failed."
+  - "Joining on MAX(finished_at) without a tie-breaker, which returns two rows when finishes tie."

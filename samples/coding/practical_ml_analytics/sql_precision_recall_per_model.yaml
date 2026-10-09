@@ -1,0 +1,237 @@
+version: 1
+slug: sql_precision_recall_per_model
+title: "Precision and Recall per Model Version (SQL)"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, ml, data, data_scientist]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Precision and Recall per Model Version
+
+  Several versions of a binary classifier (for example a spam filter) were run on a labelled evaluation
+  set, and every scored example was logged to `predictions`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | model_name | VARCHAR(50) | model version that made the prediction |
+  | predicted | INTEGER | `1` = the model flagged the example as positive, `0` = negative |
+  | actual | INTEGER | `1` = the example really is positive, `0` = negative |
+
+  For every `model_name` in the table, return one row with:
+
+  - `tp` - rows with `predicted = 1` and `actual = 1`;
+  - `fp` - rows with `predicted = 1` and `actual = 0`;
+  - `fn` - rows with `predicted = 0` and `actual = 1`;
+  - `precision_bp` - precision in basis points, `10000 * tp / (tp + fp)` using **integer division**
+    (rounded down), or `NULL` when `tp + fp = 0`;
+  - `recall_bp` - recall in basis points, `10000 * tp / (tp + fn)` using integer division, or `NULL`
+    when `tp + fn = 0`.
+
+  Rows with `predicted = 0` and `actual = 0` (true negatives) only matter in that they make the model
+  appear in the output. Order the result by `model_name` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  predictions
+  +----+------------+-----------+--------+
+  | id | model_name | predicted | actual |
+  +----+------------+-----------+--------+
+  | 1  | baseline   | 1         | 1      |
+  | 2  | baseline   | 1         | 0      |
+  | 3  | baseline   | 0         | 1      |
+  | 4  | baseline   | 1         | 1      |
+  | 5  | baseline   | 0         | 0      |
+  | 6  | candidate  | 1         | 1      |
+  | 7  | candidate  | 1         | 1      |
+  | 8  | candidate  | 0         | 1      |
+  | 9  | candidate  | 0         | 0      |
+  +----+------------+-----------+--------+
+
+  Output
+  +------------+----+----+----+--------------+-----------+
+  | model_name | tp | fp | fn | precision_bp | recall_bp |
+  +------------+----+----+----+--------------+-----------+
+  | baseline   | 2  | 1  | 1  | 6666         | 6666      |
+  | candidate  | 2  | 0  | 1  | 10000        | 6666      |
+  +------------+----+----+----+--------------+-----------+
+  2/3 is 6666.67 basis points and is rounded down to 6666.
+  ```
+
+  ### Example 2
+  ```
+  predictions
+  +----+------------+-----------+--------+
+  | id | model_name | predicted | actual |
+  +----+------------+-----------+--------+
+  | 1  | spam_v1    | 0         | 0      |
+  | 2  | spam_v1    | 0         | 0      |
+  | 3  | spam_v2    | 1         | 0      |
+  | 4  | spam_v2    | 1         | 0      |
+  +----+------------+-----------+--------+
+
+  Output
+  +------------+----+----+----+--------------+-----------+
+  | model_name | tp | fp | fn | precision_bp | recall_bp |
+  +------------+----+----+----+--------------+-----------+
+  | spam_v1    | 0  | 0  | 0  | NULL         | NULL      |
+  | spam_v2    | 0  | 2  | 0  | 0            | NULL      |
+  +------------+----+----+----+--------------+-----------+
+  spam_v1 never predicted positive and saw no positives, so both ratios are undefined.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `predicted` and `actual` are always `0` or `1`
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return model_name, tp, fp, fn, precision_bp and recall_bp per model, ordered by model_name.
+    SELECT model_name, 0 AS tp, 0 AS fp, 0 AS fn, NULL AS precision_bp, NULL AS recall_bp
+    FROM predictions
+    GROUP BY model_name
+    ORDER BY model_name;
+reference_solutions:
+  sql: |
+    SELECT model_name,
+           tp,
+           fp,
+           fn,
+           CASE WHEN tp + fp = 0 THEN NULL ELSE 10000 * tp / (tp + fp) END AS precision_bp,
+           CASE WHEN tp + fn = 0 THEN NULL ELSE 10000 * tp / (tp + fn) END AS recall_bp
+    FROM (
+      SELECT model_name,
+             SUM(CASE WHEN predicted = 1 AND actual = 1 THEN 1 ELSE 0 END) AS tp,
+             SUM(CASE WHEN predicted = 1 AND actual = 0 THEN 1 ELSE 0 END) AS fp,
+             SUM(CASE WHEN predicted = 0 AND actual = 1 THEN 1 ELSE 0 END) AS fn
+      FROM predictions
+      GROUP BY model_name
+    ) counts
+    ORDER BY model_name;
+sql_setup: |
+  CREATE TABLE predictions (
+    id INTEGER PRIMARY KEY,
+    model_name VARCHAR(50) NOT NULL,
+    predicted INTEGER NOT NULL,
+    actual INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - true negatives are ignored; integer division truncates"
+    ordered: true
+    setup_sql: |
+      INSERT INTO predictions (id, model_name, predicted, actual) VALUES
+        (1, 'baseline', 1, 1), (2, 'baseline', 1, 0), (3, 'baseline', 0, 1), (4, 'baseline', 1, 1),
+        (5, 'baseline', 0, 0), (6, 'candidate', 1, 1), (7, 'candidate', 1, 1), (8, 'candidate', 0, 1),
+        (9, 'candidate', 0, 0);
+    expected_rows: [["baseline", 2, 1, 1, 6666, 6666], ["candidate", 2, 0, 1, 10000, 6666]]
+  - id: t2
+    description: "Example 2 - zero denominators give NULL, a model with only false positives has precision 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO predictions (id, model_name, predicted, actual) VALUES
+        (1, 'spam_v1', 0, 0), (2, 'spam_v1', 0, 0), (3, 'spam_v2', 1, 0), (4, 'spam_v2', 1, 0);
+    expected_rows: [["spam_v1", 0, 0, 0, null, null], ["spam_v2", 0, 2, 0, 0, null]]
+  - id: t3
+    hidden: true
+    description: "Empty table returns no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single perfect prediction - both 10000"
+    ordered: true
+    setup_sql: |
+      INSERT INTO predictions (id, model_name, predicted, actual) VALUES
+        (1, 'm', 1, 1);
+    expected_rows: [["m", 1, 0, 0, 10000, 10000]]
+  - id: t5
+    hidden: true
+    description: "Model never predicts positive - precision NULL, recall 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO predictions (id, model_name, predicted, actual) VALUES
+        (1, 'fraud', 0, 1), (2, 'fraud', 0, 1), (3, 'fraud', 0, 0);
+    expected_rows: [["fraud", 0, 0, 2, null, 0]]
+  - id: t6
+    hidden: true
+    description: "Truncation not rounding - 6666 and 3333 (2/3 and 1/3)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO predictions (id, model_name, predicted, actual) VALUES
+        (1, 'x', 1, 1), (2, 'x', 1, 1), (3, 'x', 1, 0), (4, 'x', 0, 1),
+        (5, 'x', 0, 1), (6, 'x', 0, 1), (7, 'x', 0, 1);
+    expected_rows: [["x", 2, 1, 4, 6666, 3333]]
+  - id: t7
+    hidden: true
+    description: "Rows interleaved across models; output ordered by model_name"
+    ordered: true
+    setup_sql: |
+      INSERT INTO predictions (id, model_name, predicted, actual) VALUES
+        (1, 'zeta', 1, 1), (2, 'alpha', 1, 0), (3, 'mid', 0, 1), (4, 'alpha', 1, 1),
+        (5, 'zeta', 0, 0);
+    expected_rows: [["alpha", 1, 1, 0, 5000, 10000], ["mid", 0, 0, 1, null, 0], ["zeta", 1, 0, 0, 10000, 10000]]
+  - id: t8
+    hidden: true
+    description: "Recall far below precision on an imbalanced model"
+    ordered: true
+    setup_sql: |
+      INSERT INTO predictions (id, model_name, predicted, actual) VALUES
+        (1, 'churn_v3', 1, 1), (2, 'churn_v3', 1, 1), (3, 'churn_v3', 1, 1), (4, 'churn_v3', 1, 0),
+        (5, 'churn_v3', 0, 1), (6, 'churn_v3', 0, 1), (7, 'churn_v3', 0, 1), (8, 'churn_v3', 0, 1),
+        (9, 'churn_v3', 0, 1), (10, 'churn_v3', 0, 1), (11, 'churn_v3', 0, 1), (12, 'churn_v3', 0, 1),
+        (13, 'churn_v3', 0, 1), (14, 'churn_v3', 0, 0), (15, 'churn_v3', 0, 0), (16, 'churn_v3', 0, 0),
+        (17, 'churn_v3', 0, 0), (18, 'churn_v3', 0, 0);
+    expected_rows: [["churn_v3", 3, 1, 9, 7500, 2500]]
+  - id: t9
+    hidden: true
+    description: "Three models over 48 predictions"
+    ordered: true
+    setup_sql: |
+      INSERT INTO predictions (id, model_name, predicted, actual) VALUES
+        (1, 'ranker_a', 0, 1), (2, 'ranker_b', 0, 0), (3, 'ranker_c', 1, 0), (4, 'ranker_a', 1, 1),
+        (5, 'ranker_b', 0, 0), (6, 'ranker_c', 0, 1), (7, 'ranker_a', 0, 0), (8, 'ranker_b', 1, 0),
+        (9, 'ranker_c', 1, 1), (10, 'ranker_a', 0, 0), (11, 'ranker_b', 0, 1), (12, 'ranker_c', 0, 0),
+        (13, 'ranker_a', 1, 0), (14, 'ranker_b', 1, 1), (15, 'ranker_c', 0, 0), (16, 'ranker_a', 0, 1),
+        (17, 'ranker_b', 0, 0), (18, 'ranker_c', 1, 0), (19, 'ranker_a', 1, 1), (20, 'ranker_b', 0, 0),
+        (21, 'ranker_c', 0, 1), (22, 'ranker_a', 0, 0), (23, 'ranker_b', 1, 0), (24, 'ranker_c', 1, 1),
+        (25, 'ranker_a', 0, 0), (26, 'ranker_b', 0, 1), (27, 'ranker_c', 0, 0), (28, 'ranker_a', 1, 0),
+        (29, 'ranker_b', 1, 1), (30, 'ranker_c', 0, 0), (31, 'ranker_a', 0, 1), (32, 'ranker_b', 0, 0),
+        (33, 'ranker_c', 1, 0), (34, 'ranker_a', 1, 1), (35, 'ranker_b', 0, 0), (36, 'ranker_c', 0, 1),
+        (37, 'ranker_a', 0, 0), (38, 'ranker_b', 1, 0), (39, 'ranker_c', 1, 1), (40, 'ranker_a', 0, 0),
+        (41, 'ranker_b', 0, 1), (42, 'ranker_c', 0, 0), (43, 'ranker_a', 1, 0), (44, 'ranker_b', 1, 1),
+        (45, 'ranker_c', 0, 0), (46, 'ranker_a', 0, 1), (47, 'ranker_b', 0, 0), (48, 'ranker_c', 1, 0);
+    expected_rows: [["ranker_a", 3, 3, 4, 5000, 4285], ["ranker_b", 3, 3, 3, 5000, 5000], ["ranker_c", 3, 4, 3, 4285, 5000]]
+expected_concepts:
+  - "conditional aggregation with SUM(CASE ...)"
+  - "confusion-matrix counts per group"
+  - "NULL for undefined ratios via CASE or NULLIF"
+  - "integer division semantics and multiplying before dividing"
+  - "subquery or CTE to reuse aggregated columns"
+optimal_complexity: {time: "O(n) with one grouped scan", space: "O(number of models)"}
+rubric:
+  excellent: "Computes tp, fp and fn with conditional aggregation in one GROUP BY, reuses them from a subquery or CTE, returns NULL for zero denominators with CASE or NULLIF, multiplies by 10000 before the integer division and explains how integer division differs from rounding."
+  good: "Correct counts and ratios after a hint about zero denominators or truncation."
+  weak: "Divides before multiplying (always 0 or 10000), divides by zero, filters out true-negative rows so models disappear, or rounds instead of truncating."
+  criteria:
+    correctness: "All tests pass, including models with only negatives, only false positives and truncated ratios."
+    efficiency: "A single grouped scan of the table."
+    code_quality: "Readable conditional aggregates and named intermediate columns."
+    edge_cases: "Empty table, zero denominators, perfect models and models that never predict positive."
+    communication: "Explains why the order of multiplication and integer division matters."
+hints:
+  - "Each model needs three counts, and each count is a condition on (predicted, actual); one GROUP BY can produce all three."
+  - "SUM(CASE WHEN ... THEN 1 ELSE 0 END) counts matching rows; compute the counts in a subquery so the ratios can reuse them, and decide what happens when a denominator is zero."
+  - "In the outer query use CASE WHEN tp + fp = 0 THEN NULL ELSE 10000 * tp / (tp + fp) END (and the same with fn for recall), multiplying before dividing so integer division keeps the basis points; order by model_name."
+followups:
+  - "How would you add F1 in basis points, and what should it be when precision or recall is NULL?"
+  - "How would you compute precision at several score thresholds if the table stored a probability instead of a 0/1 prediction?"
+  - "Why might basis points stored as integers be preferred over floating-point ratios in a reporting table?"
+  - "How would you compare the two latest model versions side by side in one row?"
+common_errors:
+  - "Writing tp / (tp + fp) * 10000, which integer division turns into 0 or 10000."
+  - "Dividing by zero for models that never predict positive."
+  - "Filtering WHERE predicted = 1 OR actual = 1, which drops models that only have true negatives."
+  - "Using ROUND or a float cast that turns 6666.67 into 6667."

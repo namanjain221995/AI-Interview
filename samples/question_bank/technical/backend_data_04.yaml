@@ -1,0 +1,632 @@
+# Technical bank: backend data layer, part 4 (asynchronous services, concurrency limits and performance profiling).
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend]
+questions:
+  # --------------------------------------------------------- profiling
+  - external_key: technical.backend_data.endpoint_time_breakdown
+    competency_key: debugging
+    topic: Finding where time goes in a slow endpoint
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      An endpoint takes about two seconds to respond. How do you find out where that time actually goes before
+      you change any code?
+    expected_concepts:
+      - distributed tracing spans for database, cache and outbound calls
+      - query counts and durations per request
+      - application profiling for CPU-heavy code
+      - reproducing with production-like data
+      - forming a hypothesis and measuring again after the change
+    rubric:
+      excellent: Breaks the latency down with tracing and query logs, profiles CPU-bound sections, reproduces with realistic data and verifies the improvement with the same measurement.
+      good: Uses logs, timing or an APM tool to locate the slow part.
+      weak: Starts optimizing code based on guesses.
+    followups:
+      - The trace shows a gap with no spans in it. What might be happening there?
+      - How do you make sure your local reproduction matches production?
+    common_errors:
+      - Optimizing the code path that is easiest to change rather than the one that is slow.
+
+  - external_key: technical.backend_data.latency_percentiles
+    competency_key: debugging
+    topic: Averages versus latency percentiles
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you're judging whether a service is fast enough, why do people look at p95 or p99 latency instead of
+      the average, and how do you use those numbers in practice?
+    expected_concepts:
+      - averages hide the slow tail
+      - users with many requests hit the tail often
+      - percentiles cannot be averaged across instances
+      - histograms for aggregation
+      - setting targets and alerts on percentiles
+    rubric:
+      excellent: Explains how the tail affects real users, especially in pages that make many calls, knows percentiles must be computed from histograms rather than averaged, and uses them for targets and alerts.
+      good: Understands that percentiles show the slow requests averages hide.
+      weak: Uses averages only, or quotes percentile names without knowing why they matter.
+    followups:
+      - A page makes twenty backend calls. How often will a user see the p99 latency?
+      - Why can't you average the p99 values from ten instances?
+    common_errors:
+      - Averaging percentiles reported by different hosts.
+
+  - external_key: technical.backend_data.slow_for_some_customers
+    competency_key: debugging
+    topic: Slow only for certain customers
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Most customers say your app is fast, but a handful of large accounts say one page is painfully slow. How
+      would you investigate?
+    expected_concepts:
+      - data-volume-dependent queries and unbounded result sets
+      - reproducing with the large account's data shape
+      - N+1 patterns that scale with record count
+      - missing pagination or limits
+      - per-tenant latency metrics
+    rubric:
+      excellent: Suspects volume-dependent behaviour, reproduces with similar data, finds unbounded queries or loops that grow with record count, and adds per-tenant metrics to catch it next time.
+      good: Looks at what is different about the large accounts and checks their queries.
+      weak: Blames the customers' network or asks them to clear their browser cache.
+    followups:
+      - How would you reproduce it without copying the customer's private data?
+      - What change would stop the next feature from repeating this?
+    common_errors:
+      - Testing only with small seed data.
+
+  - external_key: technical.backend_data.missing_outbound_timeouts
+    competency_key: distributed_systems
+    topic: Setting timeouts on outbound calls
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A downstream service started hanging, and your own service ground to a halt. You discover none of your
+      outbound HTTP or database calls have explicit timeouts. How would you choose the values to set?
+    expected_concepts:
+      - connect timeouts separate from read timeouts
+      - deriving values from the dependency's normal latency
+      - an overall deadline for the request
+      - leaving room for a retry within the caller's own budget
+      - library defaults that wait forever
+    rubric:
+      excellent: Separates connect and read timeouts, bases them on observed dependency latency, fits them inside an end-to-end deadline with room for a retry, and checks every client library's default.
+      good: Adds timeouts based on normal latency and understands why they are needed.
+      weak: Picks large round numbers such as sixty seconds everywhere.
+    followups:
+      - How would you pass a deadline from your caller down to your dependencies?
+      - What should the service return when a dependency times out?
+    common_errors:
+      - Inner timeouts longer than the outer request timeout.
+
+  - external_key: technical.backend_data.cpu_spike_after_deploy
+    competency_key: debugging
+    topic: CPU saturation after a deploy
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Right after a deploy, CPU on every instance jumps from forty percent to ninety-five percent and latency
+      climbs. Walk me through what you'd do.
+    expected_concepts:
+      - rolling back first to restore service
+      - comparing the deploy's changes and traffic patterns
+      - CPU profiling on an affected instance or canary
+      - common causes such as tight loops, regexes, serialization or logging
+      - adding a performance check or canary gate
+    rubric:
+      excellent: Restores service by rolling back, then profiles to find the hot code path, links it to the change and adds a canary or performance check so it is caught earlier.
+      good: Rolls back and investigates the diff and a profile.
+      weak: Scales out and keeps the bad version running without investigating.
+    followups:
+      - The rollback did not help. What does that tell you?
+      - How would you profile a production process safely?
+    common_errors:
+      - Debugging in production for an hour before rolling back.
+
+  - external_key: technical.backend_data.async_io_benefits
+    competency_key: system_design
+    topic: When asynchronous I/O actually helps
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When does making a backend service asynchronous, with an event loop or non-blocking I/O, actually
+      improve throughput, and when doesn't it help at all?
+    expected_concepts:
+      - I/O-bound workloads with many waits benefit
+      - CPU-bound work does not get faster
+      - a single blocking call stalls everything on the loop
+      - the bottleneck may be the database or pool, not the threads
+      - added complexity in debugging and libraries
+    rubric:
+      excellent: Ties the benefit to concurrency of waiting on I/O, explains why CPU-bound work and downstream bottlenecks are not helped, and covers blocking-call risks and the cost in complexity.
+      good: Knows async helps I/O-bound services and not CPU-bound ones.
+      weak: Believes async makes all code faster.
+    followups:
+      - Your async service is waiting on a pool of ten database connections. What does async buy you there?
+      - How would you spot a blocking call hidden in async code?
+    common_errors:
+      - Rewriting a CPU-bound service in async and expecting speed-ups.
+
+  - external_key: technical.backend_data.pre_launch_load_test
+    competency_key: testing
+    topic: Load testing before a launch
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      A new endpoint is expected to get heavy traffic at launch. How would you load test it beforehand so the
+      results actually mean something?
+    expected_concepts:
+      - realistic traffic mix and request data
+      - production-like data volume and environment
+      - ramping load to find the breaking point
+      - watching latency percentiles, errors and resource saturation
+      - identifying which component fails first
+    rubric:
+      excellent: Builds a realistic workload against production-sized data, ramps to find the limit, watches percentiles, errors and saturation across components and turns the bottleneck into an action.
+      good: Runs a load test with realistic requests and watches latency and errors.
+      weak: Hits the same URL with the same parameters from a laptop and reports the average.
+    followups:
+      - Why could hitting the same id repeatedly give misleading results?
+      - What would you do once you know the endpoint's limit?
+    common_errors:
+      - Load testing against an empty database.
+
+  # ------------------------------------------------------ concurrency limits
+  - external_key: technical.backend_data.worker_pool_starvation
+    competency_key: debugging
+    topic: Worker pool starvation from a slow dependency
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      One slow downstream API started taking ten seconds per call, and soon even your health checks and
+      unrelated endpoints stopped responding. Explain what happened and how you'd protect the service.
+    expected_concepts:
+      - all worker threads or connections blocked waiting
+      - shared pools between unrelated work
+      - timeouts on the slow dependency
+      - bulkheads with separate pools or concurrency limits per dependency
+      - circuit breakers and fast failure
+    rubric:
+      excellent: Explains how blocked workers starve every endpoint, adds timeouts, isolates the dependency with a bulkhead or concurrency limit, adds a circuit breaker and keeps health checks independent.
+      good: Identifies exhausted workers and adds timeouts and some isolation.
+      weak: Adds more threads or instances without limiting the slow calls.
+    followups:
+      - How would you size the concurrency limit for that dependency?
+      - Should the health check have failed in this situation?
+    common_errors:
+      - Health checks that share the same exhausted worker pool.
+
+  - external_key: technical.backend_data.flame_graph_reading
+    competency_key: debugging
+    topic: Reading CPU flame graphs
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Walk me through how you read a CPU flame graph from a backend service, and what patterns in it tell you
+      where to focus.
+    expected_concepts:
+      - width means share of samples, not call order
+      - wide plateaus at the top show where CPU is spent
+      - tracing up the stack to the caller you control
+      - spotting serialization, regex, logging or allocation hot spots
+      - CPU profiles do not show time spent waiting
+    rubric:
+      excellent: Reads width as sampled time, follows wide frames to the responsible application code, recognizes common hot spots and knows that off-CPU waiting needs a different profile.
+      good: Can find the widest frames and relate them to code.
+      weak: Reads it as a timeline or has never used a profiler.
+    followups:
+      - The service is slow, but the CPU profile looks idle. What next?
+      - How would you capture a profile from production with low overhead?
+    common_errors:
+      - Treating the left-to-right order as time.
+
+  - external_key: technical.backend_data.gc_pause_spikes
+    competency_key: debugging
+    topic: Latency spikes from garbage collection
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your p99 latency spikes every few minutes, and the spikes line up with garbage collection pauses in the
+      runtime. How would you approach reducing them?
+    expected_concepts:
+      - confirming with GC logs or runtime metrics
+      - reducing allocation rate in hot paths
+      - large or long-lived objects and caches in the heap
+      - tuning heap size or collector settings after measuring
+      - spreading load so pauses do not affect all requests at once
+    rubric:
+      excellent: Confirms the correlation with GC metrics, reduces allocation and retained heap with a memory profile, tunes collector settings with measured before-and-after results and avoids guesswork.
+      good: Uses GC metrics and reduces allocations or adjusts heap settings.
+      weak: Randomly changes collector flags or adds memory without measurement.
+    followups:
+      - How would you find which code allocates the most?
+      - Would a bigger heap make the pauses better or worse?
+    common_errors:
+      - Large in-process caches that make every collection slower.
+
+  - external_key: technical.backend_data.downstream_concurrency_limits
+    competency_key: distributed_systems
+    topic: Limiting concurrency to downstream systems
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you limit how much concurrent work your service sends to a database or a partner API, and how do
+      you choose those limits?
+    expected_concepts:
+      - semaphores or bounded pools per dependency
+      - limits derived from the dependency's capacity and other callers
+      - queueing with a timeout versus rejecting immediately
+      - adaptive concurrency limits based on latency
+      - the effect of autoscaling on total concurrency
+    rubric:
+      excellent: Uses per-dependency limits derived from downstream capacity divided across instances, decides between waiting and rejecting, considers adaptive limits and accounts for autoscaling multiplying the total.
+      good: Applies a fixed concurrency limit per dependency with a reasonable value.
+      weak: Lets every request call downstream freely and relies on the partner to cope.
+    followups:
+      - The partner gives you a limit of fifty requests per second. How do you enforce it across twenty instances?
+      - What should happen to a request that cannot get a slot?
+    common_errors:
+      - Limits per instance that add up to far more than the downstream can take.
+
+  - external_key: technical.backend_data.parallel_downstream_calls
+    competency_key: system_design
+    topic: Parallelizing sequential downstream calls
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      An endpoint calls five other services one after another, and each takes about a hundred milliseconds. How
+      would you make it faster, and what new problems would that introduce?
+    expected_concepts:
+      - running independent calls concurrently
+      - identifying real dependencies between calls
+      - an overall deadline and cancelling the rest on failure
+      - partial results versus failing the whole response
+      - increased peak load on downstream services
+    rubric:
+      excellent: Parallelizes independent calls with a shared deadline and cancellation, decides when partial responses are acceptable, and considers the extra concurrency on downstream services and on the connection pool.
+      good: Runs independent calls concurrently and handles errors.
+      weak: Caches everything or parallelizes calls that depend on each other.
+    followups:
+      - One of the five services is optional for the page. How would you treat it?
+      - How do you cancel the remaining calls when one fails?
+    common_errors:
+      - Forgetting that one slow call now sets the latency for the whole response.
+
+  - external_key: technical.backend_data.retry_storms
+    competency_key: distributed_systems
+    topic: Retry storms and circuit breakers
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How can well-meant retries make an outage worse, and how do you design retry behaviour across a chain of
+      services so they don't?
+    expected_concepts:
+      - retries multiplying across layers
+      - exponential backoff with jitter
+      - retry budgets or caps on the retry ratio
+      - circuit breakers that stop calling a failing dependency
+      - retrying only idempotent operations and retryable errors
+    rubric:
+      excellent: Explains multiplicative retries through layers, retries at one layer only with backoff, jitter and a budget, adds circuit breakers and restricts retries to idempotent operations and transient errors.
+      good: Uses backoff with jitter and knows retries add load.
+      weak: Retries immediately and indefinitely on every error.
+    followups:
+      - Three layers each retry three times. How many calls can one user request produce?
+      - When should a circuit breaker close again?
+    common_errors:
+      - Retrying non-idempotent writes such as payments.
+
+  - external_key: technical.backend_data.performance_regression_bisect
+    competency_key: debugging
+    topic: Tracking down a performance regression
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Over the last month an important endpoint has slowly got forty percent slower, across many small
+      releases. How would you find the cause and stop this from happening again?
+    expected_concepts:
+      - correlating latency history with deploys and dependency upgrades
+      - bisecting releases with a repeatable benchmark
+      - comparing profiles or query plans between versions
+      - data growth as an alternative cause
+      - automated performance checks in CI or canaries
+    rubric:
+      excellent: Uses deploy and metric history to narrow the window, bisects with a stable benchmark, compares profiles and query counts, rules out data growth and adds automated performance guards.
+      good: Compares versions and profiles to find the change responsible.
+      weak: Looks only at the most recent release or blames the infrastructure.
+    followups:
+      - How would you make a benchmark stable enough to trust a ten percent difference?
+      - What if nothing in the code changed and the data just grew?
+    common_errors:
+      - Benchmarks that are too noisy to detect the regression.
+
+  - external_key: technical.backend_data.benchmarking_pitfalls
+    competency_key: debugging
+    topic: Writing benchmarks you can trust
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When you benchmark two implementations of something in a backend, what can make the numbers misleading,
+      and how do you avoid that?
+    expected_concepts:
+      - warm-up, JIT compilation and caches
+      - unrealistic input sizes or data distributions
+      - compilers or runtimes removing unused work
+      - noise from other processes and the need for repeated runs
+      - checking that the micro result matters end to end
+    rubric:
+      excellent: Covers warm-up, realistic inputs, dead-code elimination, variance with repeated runs and a proper benchmarking tool, and confirms that a micro gain matters in the real request path.
+      good: Knows to warm up, repeat runs and use realistic inputs.
+      weak: Times a single run with a stopwatch and trusts the result.
+    followups:
+      - The micro-benchmark shows a three times speed-up but the endpoint does not change. Why?
+      - How many runs would you want before believing a difference?
+    common_errors:
+      - Optimizing code that accounts for a tiny fraction of request time.
+
+  - external_key: technical.backend_data.serialization_hot_path
+    competency_key: debugging
+    topic: Serialization dominating CPU
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A profile shows that about forty percent of your API's CPU time is spent turning objects into JSON. What
+      would you look at, and what options would you consider?
+    expected_concepts:
+      - response size and fields that are not needed
+      - pagination and field selection
+      - faster serializer libraries
+      - avoiding repeated conversion or validation layers
+      - caching serialized output and compressing responses wisely
+    rubric:
+      excellent: First reduces what is serialized through pagination and field selection, removes duplicate conversion steps, then considers faster libraries or caching serialized output, measuring each change.
+      good: Suggests smaller responses or a faster serializer.
+      weak: Adds more instances without changing the response.
+    followups:
+      - How would you introduce field selection without breaking existing clients?
+      - When does compressing responses cost more than it saves?
+    common_errors:
+      - Validating and converting the same data several times between layers.
+
+  - external_key: technical.backend_data.abandoned_request_work
+    competency_key: system_design
+    topic: Work continuing after the client has gone
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Users often give up on a slow report page and close the tab, but the server keeps computing the report
+      for minutes anyway. How would you deal with that?
+    expected_concepts:
+      - detecting client disconnects and propagating cancellation
+      - cancelling database queries and downstream calls
+      - cleaning up resources when tasks are cancelled
+      - moving long reports to a background job with a stored result
+      - statement timeouts as a backstop
+    rubric:
+      excellent: Propagates cancellation from the disconnect to queries and downstream calls with proper cleanup, sets statement timeouts, and moves genuinely long reports to background jobs with saved results.
+      good: Cancels work on disconnect or moves the report to a background job.
+      weak: Accepts the wasted work as unavoidable.
+    followups:
+      - How do you cancel a query that is already running in the database?
+      - What could go wrong if cancellation interrupts work halfway through a write?
+    common_errors:
+      - Cancelling the handler but leaving the database query running.
+
+  - external_key: technical.backend_data.capacity_from_littles_law
+    competency_key: system_design
+    topic: Estimating workers and connections needed
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you estimate how many workers, threads or database connections a service needs to handle a
+      given request rate at a given latency?
+    expected_concepts:
+      - Little's Law, concurrency equals throughput times latency
+      - using peak rather than average traffic
+      - headroom for latency increases under load
+      - the downstream limit as the real ceiling
+      - validating the estimate with a load test
+    rubric:
+      excellent: Applies throughput times latency with peak figures and headroom, checks the result against downstream limits such as database connections, and validates it with a load test.
+      good: Reasons from request rate and duration to a concurrency number.
+      weak: Picks a number by trial and error only.
+    followups:
+      - Latency doubles during an incident. What happens to the concurrency you need?
+      - How does this change for an async service compared with a thread-per-request one?
+    common_errors:
+      - Sizing from average traffic and failing at the daily peak.
+
+  - external_key: technical.backend_data.tail_latency_fan_out
+    competency_key: distributed_systems
+    topic: Tail latency in fan-out requests
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      A search request fans out to forty shards and waits for all of them. Each shard is usually fast, yet the
+      overall p99 is poor. Why is that, and what techniques would you use to improve it?
+    expected_concepts:
+      - the slowest of many calls sets the response time
+      - the probability of hitting at least one slow shard grows with fan-out
+      - hedged or backup requests after a delay
+      - returning partial results with a deadline
+      - reducing variance at each shard, such as GC or noisy neighbours
+    rubric:
+      excellent: Explains why fan-out amplifies tail latency with a rough probability argument, and proposes hedged requests, deadlines with partial results and per-shard variance reduction, with their costs.
+      good: Understands the slowest shard dominates and suggests timeouts or partial results.
+      weak: Tries to make the average shard faster and expects the p99 to follow.
+    followups:
+      - What is the extra load cost of hedged requests, and how would you cap it?
+      - When are partial search results acceptable to the user?
+    common_errors:
+      - Hedging every request immediately and doubling backend load.
+
+  - external_key: technical.backend_data.lock_contention_scaling
+    competency_key: debugging
+    topic: Throughput that stops scaling with cores
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You moved a service to machines with twice as many cores, but throughput barely changed and CPU usage is
+      oddly low. How would you find out what's limiting it?
+    expected_concepts:
+      - contention on locks or shared data structures
+      - off-CPU and lock profiling rather than only CPU profiles
+      - a global interpreter lock or single-threaded event loop
+      - connection pools or other fixed-size resources
+      - sharding state, reducing critical sections or lock-free structures
+    rubric:
+      excellent: Uses off-CPU and contention profiling to find serialized sections, considers runtime limits such as a global lock or single loop and fixed pools, and removes the bottleneck by sharding or shrinking critical sections.
+      good: Suspects lock contention or a fixed-size resource and profiles for it.
+      weak: Assumes the new machines are faulty or adds more threads.
+    followups:
+      - Which profile would show threads waiting on a lock?
+      - How would you redesign a global in-memory cache that every request locks?
+    common_errors:
+      - Looking only at CPU profiles when the problem is waiting.
+
+  - external_key: technical.backend_data.database_cpu_attribution
+    competency_key: databases
+    topic: Finding which queries are loading the database
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      The shared production database is running at ninety percent CPU, and several services use it. How would
+      you work out which queries and which services are responsible, and what would you do about it?
+    expected_concepts:
+      - aggregated query statistics by normalized statement
+      - ranking by total time, not just slowest single query
+      - tagging queries with the calling service or endpoint
+      - fixing plans, adding indexes or caching the top offenders
+      - per-service connection or resource limits
+    rubric:
+      excellent: Uses aggregated statement statistics ranked by total time and calls, attributes queries to services with tagging, fixes the top contributors and sets per-service limits to prevent a repeat.
+      good: Finds the heaviest queries with database statistics and optimizes them.
+      weak: Looks only at the slow query log for the single slowest statement.
+    followups:
+      - Why might a two-millisecond query be the biggest problem?
+      - How would you attribute queries to services that share the same database user?
+    common_errors:
+      - Ignoring cheap queries that run millions of times.
+
+  - external_key: technical.backend_data.graceful_shutdown
+    competency_key: distributed_systems
+    topic: Graceful shutdown of servers and workers
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      During every deploy, a few requests fail and some background jobs end up half done. How would you design
+      graceful shutdown for both the API servers and the workers?
+    expected_concepts:
+      - handling the termination signal
+      - failing readiness so traffic drains first
+      - finishing in-flight requests within a grace period
+      - workers stop claiming new jobs and finish or release current ones
+      - idempotent or resumable jobs for anything cut off
+    rubric:
+      excellent: Sequences readiness failure, draining, in-flight completion within a grace period and forced exit, stops workers claiming new jobs, releases or finishes current ones and makes interrupted jobs safe to rerun.
+      good: Handles the signal and lets in-flight work finish.
+      weak: Relies on the orchestrator killing processes and retries cleaning up after.
+    followups:
+      - A job takes twenty minutes but the grace period is thirty seconds. What do you do?
+      - Why might requests still arrive after the process starts shutting down?
+    common_errors:
+      - Exiting immediately on the termination signal.
+
+  - external_key: technical.backend_data.scale_out_slowdown
+    competency_key: debugging
+    topic: Adding instances makes things slower
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      To cope with a traffic peak you doubled the number of service instances, and overall throughput went
+      down instead of up. What could explain that, and how would you confirm it?
+    expected_concepts:
+      - a shared downstream bottleneck such as the database
+      - more connections causing contention and context switching on the database
+      - lock contention on shared rows growing with concurrency
+      - cache warm-up and lower hit ratios on new instances
+      - confirming with saturation metrics on shared resources
+    rubric:
+      excellent: Identifies the shared resource that saturates, explains why more concurrency there reduces throughput, confirms it with database and lock metrics, and limits concurrency rather than adding instances.
+      good: Points to the database or another shared dependency as the bottleneck.
+      weak: Assumes the new instances are misconfigured and keeps adding more.
+    followups:
+      - Which database metrics would confirm the theory?
+      - How would a connection pooler in front of the database change the picture?
+    common_errors:
+      - Treating stateless services as infinitely scalable while their dependencies are not.
+
+  - external_key: technical.backend_data.load_test_measurement
+    competency_key: testing
+    topic: Load test results that lie
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      A load test reported an excellent p99, but production under the same traffic was much worse. What can make
+      load test measurements misleading, and how would you design one you trust?
+    expected_concepts:
+      - coordinated omission in closed-loop load generators
+      - open-loop arrival rates that match real traffic
+      - unrealistic caching from repeated identical requests
+      - the load generator itself becoming the bottleneck
+      - differences in data size, network and dependencies
+    rubric:
+      excellent: Explains coordinated omission and why open-loop generators matter, removes artificial cache hits, checks the generator is not saturated and aligns data and dependencies with production.
+      good: Names unrealistic data or repeated requests as reasons and makes the test more realistic.
+      weak: Assumes the production environment is simply different and gives up on load testing.
+    followups:
+      - How does a load generator that waits for each response hide latency problems?
+      - How would you check that the generator is not the bottleneck?
+    common_errors:
+      - Measuring latency only from the moment a request is sent rather than when it should have been sent.
+
+  - external_key: technical.backend_data.optimize_cache_or_scale
+    competency_key: system_design
+    topic: Choosing between optimizing, caching and scaling
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      When a service is too slow or too expensive under load, you can optimize the code, add caching or add
+      hardware. How do you decide which to do, and can you give me an example where you chose one?
+    expected_concepts:
+      - measuring where the cost actually is first
+      - engineering time versus infrastructure cost
+      - complexity and consistency cost of caching
+      - scaling limits of shared dependencies
+      - reversibility and urgency of the fix
+    rubric:
+      excellent: Starts from measurement, compares engineering effort, ongoing cost, complexity and risk for each option, considers urgency and reversibility, and backs this with a real decision and its outcome.
+      good: Weighs at least two options with a sensible example.
+      weak: Always reaches for the same answer, such as bigger machines or a cache.
+    followups:
+      - When is buying more hardware the right engineering decision?
+      - How did you know afterwards that your choice paid off?
+    common_errors:
+      - Adding a cache to hide an inefficient query that could have been fixed.

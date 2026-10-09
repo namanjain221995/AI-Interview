@@ -1,0 +1,658 @@
+# Cloud engineering (technical.cloud), part 2: identity and access, least privilege, encryption,
+# audit and detection, organisation guardrails and landing zones on AWS, Azure and GCP.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [cloud]
+questions:
+  # ------------------------------------------------------------- fundamentals
+  - external_key: technical.cloud.shared_responsibility
+    competency_key: security
+    topic: Shared responsibility across service models
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How would you explain the shared responsibility model to a team that's new to the cloud, and how does
+      their share change between running VMs, using a managed database and writing serverless functions?
+    expected_concepts:
+      - provider secures the physical and virtualisation layers
+      - customer always owns identity, access, data and configuration
+      - VMs leave the operating system and patching to the customer
+      - managed services shift patching and availability to the provider
+      - serverless leaves mainly code, permissions and data to the customer
+    rubric:
+      excellent: Walks through each service model with concrete examples of who patches, who configures access and who protects data, and stresses that misconfiguration stays the customer's problem everywhere.
+      good: Explains the general split and that managed services reduce the customer's share.
+      weak: Believes the provider is responsible for securing whatever runs in the cloud.
+    followups:
+      - Which customer-side responsibilities cause most real cloud breaches?
+      - What stays your job even on a fully managed database?
+    common_errors:
+      - Assuming a managed service is secure by default regardless of its configuration.
+
+  - external_key: technical.cloud.azure_managed_identity_keyvault
+    competency_key: azure
+    topic: Managed identities and Key Vault access
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      On Azure, how would you let an application running on App Service or a VM read secrets from Key Vault
+      without storing any credentials in the app?
+    expected_concepts:
+      - system-assigned versus user-assigned managed identity
+      - granting a narrow role such as Key Vault Secrets User
+      - RBAC permission model versus legacy access policies
+      - tokens obtained from the platform identity endpoint
+      - DefaultAzureCredential or equivalent SDK support
+      - scoping the role to a single vault
+    rubric:
+      excellent: Chooses the right identity type with a reason, grants a narrowly scoped data-plane role on one vault, and explains how the SDK obtains tokens without stored secrets.
+      good: Uses a managed identity and gives it access to the vault.
+      weak: Stores a client secret in app settings to authenticate to Key Vault.
+    followups:
+      - When would you choose a user-assigned identity over a system-assigned one?
+      - How would the same code authenticate when a developer runs it locally?
+    common_errors:
+      - Granting Contributor on the vault, which does not give data access and is far too broad for management.
+
+  - external_key: technical.cloud.gcp_service_account_keys
+    competency_key: gcp
+    topic: Avoiding service account keys on GCP
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      In GCP, why do security teams push back on downloadable service account keys, and what would you use
+      instead for workloads running inside Google Cloud?
+    expected_concepts:
+      - long-lived keys that leak and are hard to track
+      - attached service accounts using the metadata server
+      - Workload Identity for GKE pods
+      - service account impersonation for humans and tools
+      - organisation policy disabling key creation
+      - one service account per workload with minimal roles
+    rubric:
+      excellent: Explains the leak and rotation risk, describes attached identities, GKE Workload Identity and impersonation, and would enforce the no-keys rule with an organisation policy.
+      good: Knows keys are risky and that attached service accounts avoid them.
+      weak: Sees nothing wrong with committing or distributing key files.
+    followups:
+      - How would an engineer test something locally as a service account without a key?
+      - What's wrong with using the default compute service account?
+    common_errors:
+      - Sharing one powerful service account across many workloads.
+
+  - external_key: technical.cloud.leaver_access_removal
+    competency_key: security
+    topic: Removing cloud access when an engineer leaves
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      An engineer with broad cloud access leaves the company today. What needs to happen so that their
+      access is fully removed, including anything that doesn't go through single sign-on?
+    expected_concepts:
+      - disabling the account in the identity provider
+      - revoking active sessions and tokens
+      - finding and removing access keys or local users they created
+      - rotating shared secrets they could have seen
+      - transferring ownership of resources and on-call duties
+      - reviewing their recent activity in audit logs
+    rubric:
+      excellent: Disables the central identity and active sessions immediately, hunts for access outside SSO such as keys and local users, rotates shared secrets and hands over resource ownership.
+      good: Disables the SSO account and removes known access keys.
+      weak: Disables the SSO account and assumes that covers everything.
+    followups:
+      - How would you find credentials they created that aren't tied to their identity?
+      - How would you make this process automatic for every leaver?
+    common_errors:
+      - Forgetting long-lived access keys or personal access tokens created outside SSO.
+
+  - external_key: technical.cloud.kms_envelope_encryption
+    competency_key: security
+    topic: Encryption at rest with a key management service
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Talk me through how encryption at rest works with a cloud key management service, and when you'd use
+      customer-managed keys instead of provider-managed ones.
+    expected_concepts:
+      - envelope encryption with data keys wrapped by a master key
+      - master keys never leave the key service
+      - customer-managed keys give control over rotation, access and revocation
+      - key policies and audit logs of key use
+      - compliance requirements as a driver
+      - risk of losing data if a key is disabled or deleted
+    rubric:
+      excellent: Explains envelope encryption clearly, gives concrete reasons for customer-managed keys such as separate access control and audit, and recognises the operational risk they add.
+      good: Understands that a key service encrypts data keys and that customer keys give more control.
+      weak: Thinks the key service encrypts every object directly or cannot say why customer keys matter.
+    followups:
+      - What happens to your data if someone schedules the key for deletion?
+      - How does key rotation work without re-encrypting all the data?
+    common_errors:
+      - Assuming rotation re-encrypts existing data immediately.
+
+  - external_key: technical.cloud.day_one_audit_logging
+    competency_key: security
+    topic: Audit logging from day one
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Which logs would you make sure are switched on in a new cloud environment from day one, and why does
+      each one matter?
+    expected_concepts:
+      - control-plane audit logs such as CloudTrail, Activity Log or Cloud Audit Logs
+      - organisation-wide collection into a central account
+      - tamper-resistant storage and retention
+      - selective data access logs for sensitive stores
+      - network flow, DNS and load balancer logs
+      - identity provider sign-in logs
+    rubric:
+      excellent: Prioritises control-plane audit logs collected centrally and protected from deletion, adds data-access and network logs selectively, and links each to a question it answers during an incident.
+      good: Names the audit log service and a few other useful logs.
+      weak: Relies on default retention in each account or cannot name the audit log.
+    followups:
+      - How do you stop an attacker with admin rights from turning logging off?
+      - Data access logs can be very expensive; how do you decide where to enable them?
+    common_errors:
+      - Keeping audit logs only in the account that produced them.
+
+  - external_key: technical.cloud.contractor_time_bound_access
+    competency_key: security
+    topic: Temporary access for a contractor
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A contractor needs to read application logs in one production account for the next two weeks. How
+      would you grant that access?
+    expected_concepts:
+      - identity through the central identity provider, not a local cloud user
+      - a read-only role scoped to the specific logs
+      - automatic expiry of the assignment
+      - MFA enforcement
+      - audit of what they accessed
+      - no shared credentials
+    rubric:
+      excellent: Provisions a federated identity with a narrowly scoped read-only role that expires automatically, enforces MFA and keeps an audit trail.
+      good: Creates a read-only role through SSO and remembers to remove it.
+      weak: Shares an existing engineer's login or creates a long-lived user with broad read access.
+    followups:
+      - What if the logs might contain personal data?
+      - How would you make sure access is actually removed on time?
+    common_errors:
+      - Granting a broad managed read-only policy that also exposes data stores.
+
+  # ------------------------------------------------------------- identity and guardrails
+  - external_key: technical.cloud.workforce_sso_federation
+    competency_key: security
+    topic: Federated human access to cloud consoles
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you set up human access to the cloud for a few hundred engineers so that nobody has a
+      long-lived cloud user account?
+    expected_concepts:
+      - federation from a central identity provider with SAML or OIDC
+      - IAM Identity Center, Entra ID or Cloud Identity
+      - groups mapped to roles or permission sets per account
+      - MFA and short session durations
+      - joiners, movers and leavers handled in the identity provider
+      - short-lived command line credentials
+    rubric:
+      excellent: Designs federation with group-to-role mapping across many accounts, short-lived credentials for console and command line, and lifecycle handled centrally so leavers lose access immediately.
+      good: Uses single sign-on with groups mapped to roles.
+      weak: Creates individual IAM users with access keys for each engineer.
+    followups:
+      - How do engineers get command line credentials in this setup?
+      - How would you review who has access to production each quarter?
+    common_errors:
+      - Leaving old IAM users with access keys in place after rolling out SSO.
+
+  - external_key: technical.cloud.org_guardrail_policies
+    competency_key: aws
+    topic: Service control policies and permission boundaries
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do organisation-level guardrails like AWS service control policies differ from the IAM policies
+      attached to roles, and how do you use the two together?
+    expected_concepts:
+      - SCPs cap the maximum permissions and never grant anything
+      - effective permissions are the intersection of all applicable policies
+      - typical guardrails such as denying unused regions or disabling logging
+      - permission boundaries for delegated role creation
+      - equivalents in Azure Policy and GCP organisation policies
+      - testing guardrails on a test OU first
+    rubric:
+      excellent: Explains the intersection model precisely, gives realistic guardrail examples, uses permission boundaries for safe delegation, and tests changes before applying them widely.
+      good: Knows SCPs restrict rather than grant and gives an example.
+      weak: Thinks an SCP can grant access or confuses it with an IAM policy.
+    followups:
+      - Why does the management account behave differently with SCPs?
+      - How would you let teams create their own roles without letting them escalate privileges?
+    common_errors:
+      - Expecting an allow in an SCP to give a role permissions.
+
+  - external_key: technical.cloud.access_denied_debugging
+    competency_key: aws
+    topic: Debugging an unexpected access denial
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A developer gets an access denied error calling an AWS API even though their role's policy clearly
+      allows the action. How would you work out why?
+    expected_concepts:
+      - an explicit deny anywhere wins
+      - service control policies and permission boundaries
+      - resource policies such as bucket or KMS key policies
+      - session policies and condition keys like source VPC, MFA or tags
+      - CloudTrail error details and the policy simulator
+      - cross-account access needs both sides to allow it
+    rubric:
+      excellent: Walks the policy evaluation chain methodically, uses CloudTrail and the simulator to find which policy denied, and remembers KMS key policies and cross-account rules.
+      good: Checks for explicit denies, SCPs and resource policies.
+      weak: Adds administrator access to make the error go away.
+    followups:
+      - The object is encrypted with a customer-managed key; what else must allow access?
+      - How would you make denials easier for developers to diagnose themselves?
+    common_errors:
+      - Overlooking the KMS key policy when reading encrypted data.
+
+  - external_key: technical.cloud.vendor_cross_account_role
+    competency_key: aws
+    topic: Third-party access to your accounts
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A SaaS monitoring vendor needs read access to resources in all of your AWS accounts. How would you set
+      that up safely?
+    expected_concepts:
+      - cross-account role trusted only by the vendor's account
+      - external ID to prevent the confused deputy problem
+      - a narrowly scoped read-only policy
+      - no long-lived access keys handed to the vendor
+      - deploying the role consistently through stack sets or similar
+      - monitoring and the ability to revoke quickly
+    rubric:
+      excellent: Uses a role with a vendor-specific trust and external ID, explains the confused deputy risk, scopes permissions to what the vendor needs, and deploys and audits it centrally.
+      good: Creates a cross-account read-only role for the vendor.
+      weak: Creates an IAM user with access keys and emails them to the vendor.
+    followups:
+      - What does the external ID protect against exactly?
+      - The vendor's documentation asks for broad read-only access; how do you push back?
+    common_errors:
+      - Using broad read-only policies that also allow reading data contents.
+
+  - external_key: technical.cloud.resource_based_policies
+    competency_key: aws
+    topic: Resource-based policies
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When would you control access with a resource-based policy, like an S3 bucket policy or a KMS key
+      policy, rather than relying only on the caller's IAM role, and what pitfalls have you run into?
+    expected_concepts:
+      - cross-account access without assuming a role
+      - protecting a resource regardless of who is granted access elsewhere
+      - deny statements with conditions such as organisation ID or VPC endpoint
+      - KMS key policies must explicitly trust the account
+      - accidental public or cross-account grants
+      - auditing grants with access analysis tools
+    rubric:
+      excellent: Explains when resource policies are the right control, uses them defensively with conditions, and describes real pitfalls such as locking yourself out of a key or unintended external access.
+      good: Knows resource policies enable cross-account access and protect specific resources.
+      weak: Cannot explain how a resource policy interacts with an identity policy.
+    followups:
+      - How could a bucket policy lock out even administrators, and how do you recover?
+      - How would you find every resource shared outside your organisation?
+    common_errors:
+      - Writing a key policy that removes the account's own administrative access.
+
+  - external_key: technical.cloud.overprivileged_estate_cleanup
+    competency_key: security
+    topic: Reducing excessive permissions safely
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You inherit a cloud estate where most roles and service accounts have administrator rights. How would
+      you move it towards least privilege without breaking production?
+    expected_concepts:
+      - inventory of identities and their permissions
+      - last-used and activity data such as access advisor or IAM recommender
+      - generating policies from observed activity
+      - prioritising high-risk identities first
+      - staged rollout with monitoring for denials
+      - a fast path to restore access if something breaks
+    rubric:
+      excellent: Uses real usage data to right-size permissions, prioritises by risk, rolls out gradually while watching for denials, and has a quick rollback path.
+      good: Plans to review usage and tighten roles gradually.
+      weak: Removes admin rights everywhere at once or decides it's too risky to touch.
+    followups:
+      - How long an observation window is long enough for usage data?
+      - What about permissions that are only used during rare events like disaster recovery?
+    common_errors:
+      - Tightening permissions based on a short window that misses monthly or yearly jobs.
+
+  - external_key: technical.cloud.azure_rbac_assignments
+    competency_key: azure
+    topic: Azure role assignments and scopes
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do role assignments and scopes work in Azure RBAC, and how would you keep assignments manageable
+      when you have hundreds of subscriptions and teams?
+    expected_concepts:
+      - scopes from management group to subscription, resource group and resource
+      - inheritance of assignments down the hierarchy
+      - built-in versus custom roles
+      - assigning to groups rather than individuals
+      - control-plane versus data-plane roles
+      - avoiding Owner and User Access Administrator sprawl
+    rubric:
+      excellent: Explains scope inheritance and the control versus data plane split, assigns to groups at the right scope, and keeps privileged roles tightly controlled and reviewed.
+      good: Knows assignments inherit down the hierarchy and should go to groups.
+      weak: Assigns Owner to individuals at subscription level as standard practice.
+    followups:
+      - Why can a Contributor not read blobs in some storage accounts?
+      - How would you find who effectively has Owner on a subscription?
+    common_errors:
+      - Assuming Contributor includes data access for every service.
+
+  - external_key: technical.cloud.gcp_resource_hierarchy
+    competency_key: gcp
+    topic: GCP organisation, folders and projects
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you use GCP's organisation, folders and projects to structure access and policy for several
+      business units, each with production and non-production environments?
+    expected_concepts:
+      - folders per business unit and environment
+      - IAM inheritance from organisation to folder to project
+      - organisation policy constraints at folder level
+      - one project per workload and environment
+      - groups rather than individual users
+      - avoiding basic roles such as Owner and Editor
+    rubric:
+      excellent: Designs a folder structure that matches how policy and access really differ, places constraints at the right level, and keeps projects small with group-based, predefined roles.
+      good: Uses folders for business units and environments with inherited IAM.
+      weak: Puts everything in a few large projects and grants Editor broadly.
+    followups:
+      - When would you split by environment first rather than by business unit?
+      - How would you handle a shared service used by every business unit?
+    common_errors:
+      - Granting roles at the organisation level that should live on one folder.
+
+  - external_key: technical.cloud.azure_landing_zone_layout
+    competency_key: azure
+    topic: Azure landing zone structure
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      If you were setting up an Azure landing zone for a company moving its first workloads, how would you
+      lay out management groups, subscriptions and the shared platform services every application needs?
+    expected_concepts:
+      - platform management groups for identity, management and connectivity
+      - landing zone management groups such as corp and online
+      - a subscription per application and environment
+      - central log analytics and Defender for Cloud
+      - hub networking and DNS in a connectivity subscription
+      - Azure Policy assignments at management group level
+    rubric:
+      excellent: Separates platform and application landing zones, places policy and logging centrally, and explains why each application gets its own subscription with networking provided by the platform.
+      good: Proposes management groups with central networking and logging.
+      weak: Puts every workload in one subscription separated only by resource groups.
+    followups:
+      - How would a new team request and receive a subscription?
+      - Which policies would you assign on day one?
+    common_errors:
+      - Designing the hierarchy around the org chart instead of policy differences.
+
+  - external_key: technical.cloud.unmanaged_accounts_governance
+    competency_key: security
+    topic: Bringing unmanaged accounts under governance
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You discover around forty cloud accounts and subscriptions that teams created on corporate cards,
+      outside your organisation. How would you bring them under central governance?
+    expected_concepts:
+      - discovery through finance, billing and identity logs
+      - identifying an owner for each account
+      - inviting accounts into the organisation and consolidating billing
+      - applying the security baseline in stages
+      - checking for risky configuration and exposed resources first
+      - closing unused accounts
+    rubric:
+      excellent: Finds accounts systematically, assesses risk before anything else, brings them in with a staged baseline agreed with owners, and closes the gap that allowed it.
+      good: Plans to bring accounts into the organisation and apply guardrails.
+      weak: Applies strict guardrails immediately without talking to owners, or leaves them alone.
+    followups:
+      - What would you check first in each account?
+      - How do you stop new shadow accounts appearing?
+    common_errors:
+      - Applying restrictive guardrails that break running workloads without warning.
+
+  - external_key: technical.cloud.attribute_based_access
+    competency_key: security
+    topic: Tag-based access control
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you use tags or labels in access policies, in other words attribute-based access control,
+      and what are the risks of relying on them?
+    expected_concepts:
+      - matching principal tags to resource tags in conditions
+      - scaling access without per-resource policies
+      - controlling who can create or change tags
+      - requiring tags on creation
+      - provider support varies by service
+      - IAM conditions on GCP and Azure ABAC conditions
+    rubric:
+      excellent: Gives a concrete ABAC policy example, explains why tag modification must itself be locked down, and knows coverage differs by service.
+      good: Explains matching tags between principals and resources.
+      weak: Does not realise that anyone able to edit tags can grant themselves access.
+    followups:
+      - How would you stop a developer re-tagging a production resource as their team's?
+      - When would you prefer separate accounts over tag-based isolation?
+    common_errors:
+      - Letting the same principals that are controlled by tags also edit those tags.
+
+  - external_key: technical.cloud.multi_account_detection
+    competency_key: security
+    topic: Detecting misconfiguration and threats at scale
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you set up continuous detection of misconfigurations and suspicious activity across many
+      cloud accounts, and make sure findings actually get fixed?
+    expected_concepts:
+      - posture tools such as Security Hub, Defender for Cloud or Security Command Center
+      - threat detection such as GuardDuty
+      - aggregation into a central security account
+      - routing findings to the owning team
+      - benchmarks such as CIS and severity-based priorities
+      - carefully scoped automatic remediation
+    rubric:
+      excellent: Aggregates findings centrally, routes them to owners with clear priority, tunes out noise, and automates remediation only where it is safe.
+      good: Enables the native posture and threat tools across accounts.
+      weak: Turns on tools without any plan for triage or ownership.
+    followups:
+      - How do you stop the team drowning in thousands of low-priority findings?
+      - Which findings would you remediate automatically?
+    common_errors:
+      - Measuring success by number of tools enabled rather than findings closed.
+
+  - external_key: technical.cloud.just_in_time_privilege
+    competency_key: security
+    topic: Just-in-time privileged access
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you set up just-in-time elevated access so engineers don't hold standing administrator rights
+      in production cloud environments?
+    expected_concepts:
+      - eligible rather than permanent assignments
+      - time-limited elevation with justification
+      - approval for the most sensitive roles
+      - tools such as Entra PIM or temporary permission sets
+      - logging and review of elevated sessions
+      - separate break-glass path
+    rubric:
+      excellent: Designs eligible, time-bound elevation with justification and approval scaled to risk, logs everything and keeps a separate emergency path.
+      good: Uses a tool for temporary elevation with time limits.
+      weak: Keeps permanent admin rights for the on-call engineers for convenience.
+    followups:
+      - How would this work during a 3 a.m. incident without slowing response?
+      - What would you look for when reviewing elevated sessions?
+    common_errors:
+      - Requiring approvals so slow that engineers ask for permanent access instead.
+
+  # ------------------------------------------------------------- advanced
+  - external_key: technical.cloud.key_hierarchy_multi_team
+    competency_key: security
+    topic: Key management across teams and accounts
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How would you design key management for a multi-account environment where different teams own data of
+      different sensitivity?
+    expected_concepts:
+      - keys per data domain and environment
+      - separating key administrators from key users
+      - key policies and grants for cross-account use
+      - rotation and protection against deletion
+      - audit of key usage
+      - multi-region keys or external key stores and their trade-offs
+    rubric:
+      excellent: Proposes a key layout aligned to data ownership and blast radius, separates administration from use, handles cross-account access and deletion risk, and discusses advanced options with trade-offs.
+      good: Uses separate customer-managed keys per team with rotation.
+      weak: Uses one shared key for everything or provider-managed keys without considering control.
+    followups:
+      - How would you share encrypted snapshots with another account?
+      - When would you consider bringing your own key material, and what does it cost you?
+    common_errors:
+      - Granting key administration and key usage to the same role.
+
+  - external_key: technical.cloud.instance_role_compromise
+    competency_key: security
+    topic: Compromised workload role
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Threat detection flags that the role attached to a web server is listing every bucket and creating new
+      IAM users. Walk me through your response and what it suggests about how the attacker got in.
+    expected_concepts:
+      - credentials likely taken through SSRF against the metadata service
+      - revoking active sessions issued before a point in time
+      - isolating the instance and snapshotting for forensics
+      - finding persistence such as new users, keys or roles in audit logs
+      - enforcing IMDSv2 or the equivalent
+      - reducing the role to least privilege
+    rubric:
+      excellent: Contains quickly by revoking sessions and isolating the host, hunts for persistence through audit logs, explains the likely metadata-service path, and fixes both the root cause and the excessive permissions.
+      good: Disables the credentials, investigates audit logs and patches the server.
+      weak: Terminates the instance immediately and considers the incident closed.
+    followups:
+      - Why doesn't removing the role from the instance stop credentials already stolen?
+      - How would you know whether data was taken?
+    common_errors:
+      - Destroying the instance before collecting evidence.
+
+  - external_key: technical.cloud.data_perimeter
+    competency_key: security
+    topic: Building a data perimeter
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How would you build a data perimeter so that your company's data can only be accessed by your own
+      identities, from your own networks, in your own resources?
+    expected_concepts:
+      - organisation-scoped conditions such as principal and resource organisation IDs
+      - VPC endpoint policies and source endpoint conditions
+      - organisation guardrails preventing changes to the perimeter
+      - VPC Service Controls on GCP
+      - Azure private endpoints with public access disabled
+      - exceptions for provider services acting on your behalf
+    rubric:
+      excellent: Combines identity, resource and network controls into a coherent perimeter, protects it with guardrails, and handles service-to-service exceptions without breaking things.
+      good: Uses organisation conditions on resource policies and private endpoints.
+      weak: Relies only on network restrictions or only on IAM roles.
+    followups:
+      - How would you roll this out without breaking a provider service that writes to your buckets?
+      - How does this help if an employee's credentials are stolen?
+    common_errors:
+      - Forgetting provider services that access resources on your behalf.
+
+  - external_key: technical.cloud.break_glass_design
+    competency_key: security
+    topic: Break-glass access when the identity provider fails
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your identity provider goes down during an incident and nobody can sign in to the cloud. How should
+      break-glass access be designed so this is survivable without becoming a back door?
+    expected_concepts:
+      - a small number of emergency accounts independent of the identity provider
+      - hardware MFA with controlled custody
+      - alerting on any use of those accounts
+      - regular tests of the procedure
+      - credential rotation after use
+      - documented triggers for when it may be used
+    rubric:
+      excellent: Designs independent emergency accounts with strong MFA and custody, alerts on every use, tests the process regularly and rotates afterwards.
+      good: Keeps an emergency admin account with MFA outside SSO.
+      weak: Keeps a shared admin password in a document, or has no plan.
+    followups:
+      - Where would you physically store the MFA devices and who can reach them?
+      - How would you know the procedure still works six months from now?
+    common_errors:
+      - Never testing break-glass access until the day it's needed.
+
+  - external_key: technical.cloud.landing_zone_retrofit
+    competency_key: system_design
+    topic: Moving an organic estate to a landing zone
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your company's cloud estate grew organically into a few huge shared accounts with production and test
+      mixed together. How would you move to a proper landing zone without stopping delivery?
+    expected_concepts:
+      - designing the target structure first
+      - new workloads go to the new structure immediately
+      - migrating existing workloads in waves by risk and value
+      - handling shared dependencies such as networking, DNS and identity
+      - tightening guardrails progressively
+      - measuring progress and retiring the old accounts
+    rubric:
+      excellent: Stops the problem growing by landing new work in the target structure, plans migration waves around dependencies with each team, and tightens guardrails as accounts move.
+      good: Builds the new structure and migrates workloads gradually.
+      weak: Proposes a big-bang migration or only cleans up within the existing accounts.
+    followups:
+      - Which workloads would you move first, and why?
+      - How do you handle resources that can't move between accounts?
+    common_errors:
+      - Ignoring resources that cannot be moved and must be recreated.

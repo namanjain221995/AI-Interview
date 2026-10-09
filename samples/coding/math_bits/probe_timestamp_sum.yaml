@@ -1,0 +1,115 @@
+version: 1
+slug: probe_timestamp_sum
+title: "Probe Timestamp Sum"
+difficulty: easy
+competency_keys: [algorithms, problem_solving]
+role_tags: [qa, sre, backend, general]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Probe Timestamp Sum
+
+  A load test runs two synthetic probes against a service. Probe A fires at every positive multiple of
+  `a` milliseconds (`a`, `2a`, `3a`, ...) and probe B at every positive multiple of `b` milliseconds.
+  The test log records each millisecond in which **at least one** probe fired; when both fire in the
+  same millisecond, that timestamp is logged only **once**.
+
+  As a quick checksum of the log, return the **sum of all distinct logged timestamps** `t` with
+  `1 <= t < limit` (the limit itself is excluded). Return `0` if nothing is logged.
+
+  `limit` can be as large as `10^8`, so walking every millisecond is too slow: compute the answer
+  directly. The answer always fits in a 64-bit integer (and below `2^53`).
+
+  ### Example 1
+  ```
+  Input:  limit = 20, a = 3, b = 5
+  Output: 78
+  Explanation: Probe A logs 3, 6, 9, 12, 15, 18 and probe B logs 5, 10, 15.
+  15 is logged once, so the sum is 63 + 30 - 15 = 78.
+  ```
+
+  ### Example 2
+  ```
+  Input:  limit = 13, a = 4, b = 6
+  Output: 30
+  Explanation: Logged timestamps are 4, 6, 8 and 12 (both probes fire at 12, the first common
+  multiple of 4 and 6). 4 + 6 + 8 + 12 = 30.
+  ```
+
+  ### Constraints
+  - `1 <= limit <= 10^8`
+  - `1 <= a, b <= 10^6`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: probe_timestamp_sum
+  params:
+    - {name: limit, type: "long"}
+    - {name: a, type: "int"}
+    - {name: b, type: "int"}
+  return_type: "long"
+  comparison: exact
+reference_solutions:
+  python: |
+    from math import gcd
+
+
+    def probe_timestamp_sum(limit: int, a: int, b: int) -> int:
+        def multiples_sum(step: int) -> int:
+            # step + 2*step + ... + m*step for the largest m with m*step < limit.
+            m = (limit - 1) // step
+            return step * m * (m + 1) // 2
+
+        common = a // gcd(a, b) * b  # least common multiple: both probes fire together
+        return multiples_sum(a) + multiples_sum(b) - multiples_sum(common)
+  javascript: |
+    function probeTimestampSum(limit, a, b) {
+      const gcd = (p, q) => (q === 0 ? p : gcd(q, p % q));
+      const multiplesSum = (step) => {
+        const m = Math.floor((limit - 1) / step);
+        // Halve the even factor first so every intermediate value stays below 2^53.
+        const triangle = m % 2 === 0 ? (m / 2) * (m + 1) : m * ((m + 1) / 2);
+        return step * triangle;
+      };
+      const common = (a / gcd(a, b)) * b;
+      // Subtract the overlap before adding the second series to keep the running value small.
+      return multiplesSum(a) - multiplesSum(common) + multiplesSum(b);
+    }
+tests:
+  - {id: t1, args: [20, 3, 5], expected: 78, description: "Example 1"}
+  - {id: t2, args: [13, 4, 6], expected: 30, description: "Example 2 - overlap is the lcm, not the product"}
+  - {id: t3, hidden: true, args: [1, 1, 1], expected: 0, description: "limit = 1 - no timestamps in range"}
+  - {id: t4, hidden: true, args: [10, 2, 2], expected: 20, description: "Identical periods - every timestamp is shared"}
+  - {id: t5, hidden: true, args: [30, 3, 10], expected: 165, description: "Exclusive limit: 30 is a multiple of both and must not be counted"}
+  - {id: t6, hidden: true, args: [100000000, 1, 1], expected: 4999999950000000, description: "Largest answer: every millisecond below 10^8 (naive m*(m+1) exceeds 2^53)"}
+  - {id: t7, hidden: true, args: [100000000, 999983, 999979], expected: 10099808100, description: "Large coprime periods - lcm far above the limit, no overlap"}
+  - {id: t8, hidden: true, args: [100000000, 7, 21], expected: 714285735714285, description: "One period divides the other - B adds nothing new"}
+  - {id: t9, hidden: true, args: [500, 1000000, 999999], expected: 0, description: "Both periods above the limit - answer 0"}
+  - {id: t10, hidden: true, args: [99999999, 1, 1000000], expected: 4999999850000001, description: "a = 1 covers everything; tests overlap subtraction at scale"}
+expected_concepts:
+  - "inclusion-exclusion over two sets of multiples"
+  - "arithmetic series sum of multiples below a bound"
+  - "least common multiple via gcd for the overlap"
+  - "64-bit arithmetic and intermediate overflow"
+optimal_complexity: {time: "O(log min(a, b)) for the gcd", space: "O(1)"}
+rubric:
+  excellent: "Derives the sum of multiples of k below limit as k times a triangular number, applies inclusion-exclusion with the lcm (computed via gcd without overflow), respects the exclusive limit and reasons about intermediate magnitudes."
+  good: "Correct closed-form solution that needs a nudge on using the lcm instead of the product, or on the exclusive upper bound."
+  weak: "Loops over every millisecond up to limit, subtracts multiples of a*b instead of the lcm, or double-counts shared timestamps."
+  criteria:
+    correctness: "All tests pass, including the exclusive limit, identical periods and periods above the limit."
+    efficiency: "Constant work apart from the gcd; no loop proportional to limit."
+    code_quality: "A small helper for the sum of multiples, reused three times."
+    edge_cases: "limit = 1, a = b, one period dividing the other, coprime periods and the largest answer."
+    communication: "Explains inclusion-exclusion and why the overlap is the lcm."
+hints:
+  - "Shared timestamps are the problem: they appear in both probes' lists. If you could sum each probe's timestamps separately, what would you need to remove?"
+  - "The sum of all multiples of k below the limit is k times the sum 1 + 2 + ... + m, where m is how many multiples fit. Timestamps where both probes fire are exactly the multiples of the least common multiple of a and b."
+  - "Write a helper that takes a step k, computes m as (limit minus 1) divided by k rounded down, and returns k times m times (m plus 1) over 2. The answer is the helper for a plus the helper for b minus the helper for the least common multiple, which is a divided by their gcd times b. Use 64-bit integers throughout."
+followups:
+  - "How would you generalise to three or more probes?"
+  - "How would you handle a limit up to 10^18, where the sum no longer fits in 64 bits?"
+  - "What if each probe started at an offset instead of at its first multiple?"
+common_errors:
+  - "Subtracting multiples of a*b instead of the lcm, which is wrong when a and b share a factor."
+  - "Counting the limit itself when it is a multiple of a or b."
+  - "Computing a*b in 32-bit arithmetic or k*m*(m+1) in a type that overflows."
+  - "Looping over every millisecond, which is far too slow for limit = 10^8."

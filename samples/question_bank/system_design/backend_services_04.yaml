@@ -1,0 +1,607 @@
+# Curated questions: system design for backend services (part 4 of 4).
+# Rate limiting and admission control, gateways, caching, sharding, multi-tenancy and other services.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend, fullstack]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------- rate limiting and admission
+  - external_key: system_design.backend_services.rate_limit_placement
+    competency_key: system_design
+    topic: Where rate limiting belongs in the architecture
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your company exposes a public API through a gateway in front of a dozen services. Where in that architecture
+      would you enforce rate limits, and what would you limit on at each layer?
+    expected_concepts:
+      - edge or gateway limits per API key or client
+      - service-level limits protecting expensive operations
+      - limits on outbound calls to fragile dependencies
+      - keys such as account, API key, IP and endpoint
+      - clear responses with retry hints
+    rubric:
+      excellent: Places coarse per-client limits at the edge and finer limits near expensive resources, chooses keys deliberately for each layer and returns clear retry information.
+      good: Suggests gateway limits per client and explains why.
+      weak: Limits only by IP address or puts limits in one random service.
+    followups:
+      - Why might limiting by IP address alone be unfair or ineffective?
+      - What should the client receive when it is limited?
+    common_errors:
+      - Relying only on per-IP limits behind proxies and shared networks.
+
+  - external_key: system_design.backend_services.plan_based_quotas
+    competency_key: system_design
+    topic: Burst limits and monthly quotas per plan
+    difficulty: medium
+    text: >-
+      Your API is sold in plans, each with a per-second burst limit and a monthly request quota that drives
+      billing. How would you design enforcement so bursts are blocked instantly and the monthly count is accurate
+      enough to bill on?
+    expected_concepts:
+      - fast approximate burst limiter in memory or a shared cache
+      - durable usage metering for billing from request logs or events
+      - different accuracy needs for the two limits
+      - plan changes mid-month
+      - soft limits and overage handling
+      - customer-visible usage reporting
+    rubric:
+      excellent: Separates a fast, slightly lossy burst limiter from a durable metering pipeline used for billing, handles plan changes and overage policy, and gives customers usage visibility.
+      good: Uses a shared counter for bursts and a separate store for monthly usage.
+      weak: Uses one counter for both, either too slow for bursts or too lossy for billing.
+    followups:
+      - The cache holding burst counters restarts. What happens to customers?
+      - A customer disputes their bill. What data do you show them?
+    common_errors:
+      - Billing from an in-memory counter that can be lost.
+
+  - external_key: system_design.backend_services.global_rate_limiter
+    competency_key: distributed_systems
+    topic: Rate limiting across regions
+    difficulty: hard
+    text: >-
+      A customer's limit is a thousand requests a second in total, but their traffic is spread across four regions
+      and a round trip between regions is over a hundred milliseconds. How would you enforce that limit without
+      adding cross-region latency to every request?
+    expected_concepts:
+      - per-region allowances that sum to the global limit
+      - periodic asynchronous synchronisation of usage
+      - rebalancing allowances by observed traffic
+      - accepting a bounded overshoot
+      - behaviour when regions cannot communicate
+    rubric:
+      excellent: Splits the global limit into regional allowances rebalanced from asynchronously shared usage, states the overshoot bound plainly and defines behaviour during partitions.
+      good: Uses local limits with periodic synchronisation.
+      weak: Calls a single central counter on every request.
+    followups:
+      - All of a customer's traffic suddenly moves to one region. What happens in your design?
+      - How much overshoot would you accept, and how would you explain it to the customer?
+    common_errors:
+      - Assuming a global exact limit is achievable without cross-region coordination.
+
+  - external_key: system_design.backend_services.limiter_store_outage
+    competency_key: system_design
+    topic: When the rate limiter's store fails
+    difficulty: medium
+    text: >-
+      Your rate limiter keeps its counters in a shared in-memory store, and one morning that store becomes
+      unreachable. What should the API do, and how would you design the limiter to behave well in that situation?
+    expected_concepts:
+      - fail-open versus fail-closed by endpoint risk
+      - local in-process fallback limits
+      - short timeouts on limiter calls
+      - alerting on limiter degradation
+      - replicated or clustered store
+    rubric:
+      excellent: Chooses fail-open or fail-closed per endpoint based on risk, adds a local fallback limiter with tight timeouts, and makes the store itself resilient with alerting.
+      good: Makes a deliberate fail-open or fail-closed choice with a reason.
+      weak: Lets every request block or error until the store recovers.
+    followups:
+      - Would your answer differ for the login endpoint and a read-only catalogue endpoint?
+      - How would you size local fallback limits per instance?
+    common_errors:
+      - No timeout on the limiter call, so its outage becomes a full API outage.
+
+  - external_key: system_design.backend_services.concurrency_limits
+    competency_key: system_design
+    topic: Concurrency limits for expensive endpoints
+    difficulty: medium
+    text: >-
+      A report endpoint takes up to thirty seconds and a few customers fire dozens at once, starving the database.
+      A requests-per-minute limit hasn't helped. How would you redesign protection for this endpoint?
+    expected_concepts:
+      - limiting in-flight requests per customer and globally
+      - moving long reports to asynchronous jobs
+      - queueing with bounded size and fair scheduling
+      - dedicated resources such as a read replica
+      - returning a job handle and status endpoint
+    rubric:
+      excellent: Explains why request rate is the wrong measure, limits concurrency per customer and in total, moves heavy reports to an asynchronous job model on isolated resources with fair scheduling.
+      good: Adds per-customer concurrency limits or moves reports to background jobs.
+      weak: Lowers the request rate limit further.
+    followups:
+      - How would you schedule jobs fairly when one customer submits a hundred?
+      - What does the client experience change to?
+    common_errors:
+      - Measuring load by request count when the cost is in request duration.
+
+  - external_key: system_design.backend_services.priority_admission_control
+    competency_key: distributed_systems
+    topic: Admission control that protects critical traffic
+    difficulty: hard
+    text: >-
+      During peak load your shared API platform falls over, and checkout fails along with bulk exports and
+      background syncs. How would you design admission control so critical traffic survives overload while less
+      important work gets shed?
+    expected_concepts:
+      - classifying requests by priority at the edge
+      - detecting overload from latency or queue depth, not just CPU
+      - shedding lowest priority first with fast rejections
+      - adaptive concurrency limits
+      - clients backing off with jitter
+      - testing shedding under load
+    rubric:
+      excellent: Classifies traffic by importance, sheds based on real overload signals using adaptive limits and fast rejections, coordinates client backoff and verifies the behaviour with load tests.
+      good: Prioritises traffic classes and rejects low-priority requests when busy.
+      weak: Only proposes autoscaling or bigger machines.
+    followups:
+      - Which signal would you use to decide the system is overloaded, and why?
+      - A background sync client retries immediately on rejection. What happens?
+    common_errors:
+      - Rejecting requests only after they have already consumed most of their cost.
+
+  - external_key: system_design.backend_services.api_gateway_design
+    competency_key: api_design
+    topic: API gateway for many services
+    difficulty: medium
+    text: >-
+      You're putting an API gateway in front of thirty internal services for web, mobile and partner clients. What
+      would the gateway be responsible for, what would you keep out of it, and how do you stop it from becoming a
+      bottleneck?
+    expected_concepts:
+      - routing, authentication and rate limiting at the gateway
+      - keeping business logic in services
+      - horizontal scaling and statelessness
+      - per-route timeouts and circuit breaking
+      - configuration ownership by service teams
+      - observability such as request IDs and access logs
+    rubric:
+      excellent: Gives the gateway cross-cutting concerns only, keeps it stateless and scalable, sets per-route timeouts and lets service teams own their routes without the gateway team becoming a bottleneck.
+      good: Lists sensible gateway responsibilities and scaling.
+      weak: Puts aggregation and business rules in the gateway or ignores its failure modes.
+    followups:
+      - A slow downstream service ties up gateway connections. What protects other routes?
+      - How do teams ship route changes without a central approval queue?
+    common_errors:
+      - Turning the gateway into a place for business logic.
+
+  # ----------------------------------------------------------------- caching and data
+  - external_key: system_design.backend_services.product_page_backend
+    competency_key: system_design
+    topic: Read-heavy product page backend
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      An online store's product pages are read about fifty times for every change to a product. How would you
+      design the backend storage and caching for those pages?
+    expected_concepts:
+      - primary database as the source of truth
+      - cache-aside or CDN caching of rendered data
+      - invalidation on product updates
+      - separate handling for fast-changing fields such as stock
+      - TTL as a safety net
+    rubric:
+      excellent: Caches the slow-changing product data close to users with invalidation on updates, keeps fast-changing stock and price data on a separate fresher path and uses TTLs as a safety net.
+      good: Puts a cache in front of the database with invalidation.
+      weak: Caches everything for a fixed long period, including stock and price.
+    followups:
+      - Stock levels change every few seconds during a sale. How do you show them?
+      - What happens to the page if the cache is empty after a deploy?
+    common_errors:
+      - Caching stock levels alongside descriptive data with the same long TTL.
+
+  - external_key: system_design.backend_services.hot_key_mitigation
+    competency_key: distributed_systems
+    topic: Hot keys in a distributed cache
+    difficulty: hard
+    text: >-
+      During a sale one product is so popular that the single cache node holding its key is saturated while the
+      rest of the cluster is idle. How would you detect and fix hot keys like this?
+    expected_concepts:
+      - detecting hot keys from per-key metrics or sampling
+      - small in-process cache in front of the shared cache
+      - replicating hot keys with suffixed copies
+      - request coalescing for misses
+      - invalidating many copies consistently
+    rubric:
+      excellent: Detects hot keys, adds a short-lived local cache and replicated key copies with random selection, coalesces misses and explains how updates reach every copy.
+      good: Suggests a local cache or key replication for hot items.
+      weak: Proposes adding more cache nodes, which does not spread a single key.
+    followups:
+      - How do you invalidate a key that now exists as ten copies plus local caches?
+      - How would you know which keys are hot before a node saturates?
+    common_errors:
+      - Assuming more nodes helps when one key maps to one node.
+
+  - external_key: system_design.backend_services.shard_key_selection
+    competency_key: databases
+    topic: Choosing a shard key for a SaaS database
+    difficulty: medium
+    text: >-
+      Your multi-tenant SaaS database is too big for one server. Most tenants are small but a few are huge. How
+      would you choose a shard key and handle the large tenants?
+    expected_concepts:
+      - tenant ID as shard key for locality
+      - directory or lookup service mapping tenants to shards
+      - dedicated shards for very large tenants
+      - cross-tenant queries and reporting
+      - rebalancing tenants between shards
+    rubric:
+      excellent: Shards by tenant for query locality, uses a directory so tenants can move, isolates very large tenants and explains how cross-tenant reporting will work.
+      good: Picks tenant ID with a reason and notes the skew problem.
+      weak: Shards by a random row ID and loses tenant locality, or ignores skew.
+    followups:
+      - One tenant outgrows a whole shard. What now?
+      - How do you run a report across all tenants?
+    common_errors:
+      - Hash-based placement with no way to move a specific tenant.
+
+  - external_key: system_design.backend_services.live_resharding
+    competency_key: distributed_systems
+    topic: Resharding without downtime
+    difficulty: hard
+    text: >-
+      You need to move from eight database shards to thirty-two while the system keeps taking writes. How would you
+      plan and execute that migration?
+    expected_concepts:
+      - logical partitions mapped onto physical shards
+      - copy existing data then stream ongoing changes
+      - verification by checksums or comparison
+      - cutover with a short write pause or dual writes
+      - routing layer update and rollback plan
+      - throttling to protect live traffic
+    rubric:
+      excellent: Uses many logical partitions so data moves in units, backfills then tails changes, verifies before cutting over per partition with a brief controlled pause, and keeps rollback possible.
+      good: Describes copy, catch-up and cutover with some verification.
+      weak: Proposes a maintenance window to rehash everything at once.
+    followups:
+      - How do you know the new shard has exactly the same data as the old one?
+      - What happens to writes during the cutover moment?
+    common_errors:
+      - Rehashing with modulo so almost every key moves.
+
+  - external_key: system_design.backend_services.tenancy_model_choice
+    competency_key: system_design
+    topic: Shared versus dedicated tenant databases
+    difficulty: medium
+    text: >-
+      You're designing a new B2B SaaS backend. Would you put all customers in shared tables, a schema per customer,
+      or a database per customer? Talk me through how you'd decide.
+    expected_concepts:
+      - isolation and security requirements
+      - operational cost of many databases
+      - migrations across many schemas
+      - noisy-neighbour risk
+      - enterprise demands such as data residency
+      - hybrid with dedicated deployments for large customers
+    rubric:
+      excellent: Weighs isolation, cost, migration effort and noisy neighbours, considers residency and enterprise requirements and often proposes a hybrid with a path to move customers.
+      good: Compares the options and picks one with a reason.
+      weak: Picks one without considering operations or isolation.
+    followups:
+      - How would you run a schema migration across five thousand tenant databases?
+      - What stops a bug from leaking one tenant's data in shared tables?
+    common_errors:
+      - Ignoring the operational cost of thousands of separate databases.
+
+  - external_key: system_design.backend_services.nearby_search
+    competency_key: system_design
+    topic: Finding nearby places
+    difficulty: medium
+    text: >-
+      Design the backend for "restaurants near me" in a food app with a million restaurants, filtered by cuisine and
+      open now, returning results in under a hundred milliseconds.
+    expected_concepts:
+      - geospatial indexing such as geohash, quadtree or a spatial index
+      - searching neighbouring cells around a boundary
+      - combining location with attribute filters
+      - ranking by distance and other signals
+      - caching popular areas
+      - updating opening hours and status
+    rubric:
+      excellent: Chooses a geospatial index and explains cell boundaries, combines location with filters efficiently, and covers ranking, caching and freshness of opening status.
+      good: Uses a spatial index or geohash and filters results.
+      weak: Computes distance to every restaurant per request.
+    followups:
+      - A user is right at the edge of a geohash cell. What do you have to do?
+      - How would you handle a dense city centre and a sparse rural area differently?
+    common_errors:
+      - Searching only the user's own cell and missing close results next door.
+
+  - external_key: system_design.backend_services.driver_location_matching
+    competency_key: distributed_systems
+    topic: Live driver locations and matching
+    difficulty: hard
+    text: >-
+      In a ride-hailing app, half a million drivers send their location every four seconds, and riders need to be
+      matched with a nearby available driver within a couple of seconds. How would you design the location and
+      matching services?
+    expected_concepts:
+      - in-memory geospatial index partitioned by region
+      - high write rate absorbed without durable writes per update
+      - driver state such as available, on trip and offered
+      - atomic offer to avoid assigning one driver twice
+      - handling stale locations and disconnects
+      - historical location storage done asynchronously
+    rubric:
+      excellent: Keeps a region-partitioned in-memory index fed by the update stream, separates history to an async path, assigns drivers atomically with offer timeouts and handles stale or missing updates.
+      good: Uses an in-memory geo index and a matching service.
+      weak: Writes every location update to a relational table and queries it for matching.
+    followups:
+      - Two riders' requests pick the same driver at the same moment. What happens?
+      - A driver's phone stops sending updates. When do you stop offering them rides?
+    common_errors:
+      - Persisting every location update synchronously in the main database.
+
+  - external_key: system_design.backend_services.account_erasure
+    competency_key: system_design
+    topic: Deleting a user's data across services
+    difficulty: medium
+    text: >-
+      A user asks for their account and data to be deleted, and their data lives in twenty-five services, a data
+      warehouse, caches and backups. How would you design account deletion so it's complete and provable?
+    expected_concepts:
+      - central deletion request with tracked status
+      - each service subscribing and confirming deletion
+      - data inventory of where personal data lives
+      - backups handled by expiry or crypto-shredding
+      - records that must legally be kept, minimised or anonymised
+      - audit evidence of completion
+    rubric:
+      excellent: Orchestrates deletion through a tracked request that each service confirms, relies on a data inventory, deals with backups and legally retained records, and produces audit evidence.
+      good: Broadcasts a deletion event that services act on.
+      weak: Deletes the user row and assumes everything else follows.
+    followups:
+      - One service fails to confirm for a week. What happens?
+      - How do you deal with personal data inside last month's backups?
+    common_errors:
+      - No tracking, so nobody knows whether every system actually deleted the data.
+
+  - external_key: system_design.backend_services.customer_dashboards
+    competency_key: system_design
+    topic: Customer dashboards without hurting the primary
+    difficulty: medium
+    text: >-
+      Customers of your SaaS want dashboards with charts over a year of their data, and those queries are already
+      slowing the main transactional database. How would you redesign this?
+    expected_concepts:
+      - read replicas as a short-term step and their limits
+      - pipeline into an analytical store
+      - pre-aggregated rollups by time
+      - freshness expectations for dashboards
+      - tenant filtering and isolation in the analytical store
+    rubric:
+      excellent: Moves analytical queries off the primary into an analytical store fed by CDC or batch, uses rollups sized to the charts, agrees freshness targets and keeps tenant isolation.
+      good: Moves dashboards to a replica or separate store with aggregation.
+      weak: Adds indexes to the primary and hopes it holds.
+    followups:
+      - Customers expect a change to appear within a minute. Does that change your design?
+      - Why might a read replica not be enough in the long run?
+    common_errors:
+      - Pointing heavy analytics at a replica that the primary also depends on for failover.
+
+  - external_key: system_design.backend_services.cross_shard_listing
+    competency_key: distributed_systems
+    topic: Sorted listing across shards
+    difficulty: hard
+    text: >-
+      Orders are sharded by customer, but an internal operations screen needs all orders across all shards sorted by
+      creation time, with filters and deep pagination. How would you serve that efficiently?
+    expected_concepts:
+      - scatter-gather with per-shard limits and merge
+      - cost growing with page depth and shard count
+      - cursor based on sort key across shards
+      - secondary index or separate read store for global views
+      - consistency lag of the secondary store
+    rubric:
+      excellent: Explains the cost of scatter-gather and deep paging, uses a global cursor if scattering, and argues for a separate read-optimised store for this view with an understood lag.
+      good: Uses scatter-gather with merging and cursors.
+      weak: Fetches everything from every shard and sorts in memory.
+    followups:
+      - Page five hundred is requested. What does each shard have to do?
+      - What lag is acceptable for an internal operations screen?
+    common_errors:
+      - Using offset pagination across shards.
+
+  - external_key: system_design.backend_services.listing_image_pipeline
+    competency_key: system_design
+    topic: Image processing for marketplace listings
+    difficulty: medium
+    text: >-
+      Sellers upload photos for their listings, and the site needs several resized versions served quickly around
+      the world. How would you design the upload, processing and serving pipeline?
+    expected_concepts:
+      - direct upload to object storage with pre-signed URLs
+      - asynchronous processing triggered by upload events
+      - variants generated eagerly or on demand
+      - CDN in front with cache-friendly URLs
+      - validating and scanning uploaded files
+      - listing state showing processing progress
+    rubric:
+      excellent: Uploads directly to object storage, processes asynchronously with validation, chooses eager or on-demand variants with reasons, serves through a CDN with versioned URLs and exposes processing state.
+      good: Stores originals and generates thumbnails asynchronously behind a CDN.
+      weak: Routes uploads through app servers and resizes inside the request.
+    followups:
+      - A seller replaces a photo. How do you avoid the CDN serving the old one?
+      - Would you generate every size up front or on first request?
+    common_errors:
+      - Overwriting images at the same URL so caches keep serving the old file.
+
+  - external_key: system_design.backend_services.kv_store_design
+    competency_key: distributed_systems
+    topic: Distributed key-value store
+    difficulty: hard
+    text: >-
+      Design a distributed key-value store your company would use for sessions and user settings, with low latency
+      reads and writes, and no data loss when a single node fails.
+    expected_concepts:
+      - partitioning with consistent hashing
+      - replication factor and placement across zones
+      - quorum reads and writes or leader-based replication
+      - conflict handling and versioning
+      - node failure detection and re-replication
+      - adding nodes and rebalancing
+    rubric:
+      excellent: Partitions with consistent hashing, replicates across zones, chooses a consistency model with clear read and write paths, and handles failure detection, conflicts and rebalancing.
+      good: Covers partitioning, replication and node failure.
+      weak: Describes a single node with a backup.
+    followups:
+      - With three replicas, what read and write settings give you read-your-writes?
+      - A node comes back after being down for an hour. How does it catch up?
+    common_errors:
+      - Confusing replication for availability with backups for recovery.
+
+  - external_key: system_design.backend_services.paste_service
+    competency_key: system_design
+    topic: Text snippet sharing service
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Let's design a simple service where people paste text, get a short link to share it, and can set it to
+      expire. What would the data model and storage look like?
+    expected_concepts:
+      - metadata in a database, content in object storage or the same store
+      - short unique identifiers
+      - expiry checked on read and cleaned up later
+      - size limits on pastes
+      - caching popular pastes
+    rubric:
+      excellent: Separates metadata from content sensibly, picks an identifier scheme, enforces expiry on read with background cleanup, limits size and caches popular items.
+      good: Proposes a workable model with expiry and a link scheme.
+      weak: Has no expiry handling or no limit on content size.
+    followups:
+      - Someone pastes a fifty megabyte file. What should happen?
+      - Where would you store the text itself, and why?
+    common_errors:
+      - Serving expired pastes until a cleanup job happens to run.
+
+  - external_key: system_design.backend_services.link_preview_service
+    competency_key: security
+    topic: Link preview service
+    difficulty: medium
+    text: >-
+      When a user pastes a URL into a chat message, the app shows a preview with title and image. Design the backend
+      service that fetches those previews.
+    expected_concepts:
+      - server-side fetching with strict timeouts and size limits
+      - blocking internal addresses to prevent server-side request forgery
+      - caching previews by normalised URL
+      - proxying or caching preview images
+      - asynchronous fetch so sending the message is not delayed
+    rubric:
+      excellent: Fetches asynchronously with timeouts and size caps, blocks internal and private addresses including via redirects, caches by normalised URL and serves images through a proxy.
+      good: Fetches and caches previews with timeouts.
+      weak: Fetches arbitrary URLs from inside the network with no restrictions.
+    followups:
+      - A user pastes a link that redirects to an internal admin address. What stops you fetching it?
+      - Why might you proxy the preview image instead of linking to it directly?
+    common_errors:
+      - Validating the hostname once but following redirects to internal addresses.
+
+  - external_key: system_design.backend_services.distributed_cache_cluster
+    competency_key: distributed_systems
+    topic: Designing the cache cluster itself
+    difficulty: hard
+    text: >-
+      Instead of using a managed product, your team is asked to design the distributed cache cluster that backs all
+      services. How would you handle key placement, adding and removing nodes, and node failures?
+    expected_concepts:
+      - consistent hashing with virtual nodes
+      - client-side or proxy-based routing
+      - replication versus accepting misses on failure
+      - minimising key movement when scaling
+      - warming new nodes and avoiding a miss storm
+      - eviction policy and memory limits
+    rubric:
+      excellent: Uses consistent hashing with virtual nodes, chooses routing and replication deliberately, explains limited key movement on scaling and protects backends from miss storms during changes.
+      good: Uses consistent hashing and handles node failure.
+      weak: Uses modulo hashing and does not see the effect of adding a node.
+    followups:
+      - You add one node to a cluster of ten. Roughly what fraction of keys move?
+      - A node dies during peak traffic. What hits the databases?
+    common_errors:
+      - Modulo hashing that remaps nearly every key on scaling.
+
+  - external_key: system_design.backend_services.cell_architecture
+    competency_key: distributed_systems
+    topic: Cell-based architecture to limit blast radius
+    difficulty: hard
+    text: >-
+      A bad configuration push took down your whole backend for every customer at once. Leadership wants future
+      failures to affect only a slice of customers. How would you redesign the service into isolated cells?
+    expected_concepts:
+      - independent cells with their own compute and data
+      - routing layer mapping customers to cells
+      - staged rollouts cell by cell
+      - sizing cells and adding new ones
+      - moving customers between cells
+      - shared global services as remaining risks
+    rubric:
+      excellent: Designs self-contained cells behind a thin routing layer, rolls changes out cell by cell, explains sizing and customer migration, and names the global dependencies that still need care.
+      good: Splits customers into isolated stacks with staged rollouts.
+      weak: Only suggests more replicas within the same shared system.
+    followups:
+      - What must stay global, and how do you protect it?
+      - How would you move a large customer from one cell to another?
+    common_errors:
+      - Sharing a database or config system across cells, which keeps the blast radius global.
+
+  - external_key: system_design.backend_services.live_voting_spike
+    competency_key: system_design
+    topic: Live voting during a broadcast
+    difficulty: medium
+    text: >-
+      A TV show lets viewers vote for five minutes, and you expect a million votes a minute with results shown live
+      on screen. Each viewer gets one vote per round. How would you design the backend?
+    expected_concepts:
+      - accepting votes into a durable buffer quickly
+      - one vote per viewer per round enforced with a unique key
+      - aggregated counters sharded to avoid hotspots
+      - live results from periodic aggregation
+      - final official count from durable records
+      - pre-scaling and load testing for the known spike
+    rubric:
+      excellent: Ingests votes quickly into a durable path, enforces one vote per viewer with a unique key, shows live totals from sharded aggregates and produces the official result from durable records after the window.
+      good: Queues votes, de-duplicates them and aggregates for display.
+      weak: Increments a single counter per option in the database.
+    followups:
+      - How do you make sure the final announced result is correct even if live counts were slightly off?
+      - Votes after the window closes are still arriving. What do you do?
+    common_errors:
+      - Using one counter row per option during a massive spike.
+
+  - external_key: system_design.backend_services.strangler_extraction
+    competency_key: system_design
+    topic: Extracting a service from a monolith
+    difficulty: medium
+    text: >-
+      You need to pull the orders module out of a large monolith into its own service while the business keeps
+      running. How would you plan the extraction, especially around who owns the data?
+    expected_concepts:
+      - routing a slice of traffic through a facade or strangler layer
+      - defining the service's API before moving code
+      - data ownership moved to the new service
+      - syncing data during the transition
+      - removing direct database access from the monolith
+      - incremental rollout with rollback
+    rubric:
+      excellent: Plans an incremental strangler migration with a clear API boundary, moves data ownership deliberately with a sync period, cuts off direct table access and rolls out gradually with rollback.
+      good: Describes extracting behind an API with gradual traffic migration.
+      weak: Copies the code out but leaves both sharing the same tables indefinitely.
+    followups:
+      - Other monolith modules join directly against the orders tables. What do you do about them?
+      - How do you know the new service behaves the same as the old code?
+    common_errors:
+      - Leaving a shared database in place, so the service is not really independent.

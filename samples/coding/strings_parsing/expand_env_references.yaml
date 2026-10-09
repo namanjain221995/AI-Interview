@@ -1,0 +1,207 @@
+version: 1
+slug: expand_env_references
+title: Expand Environment References
+difficulty: medium
+competency_keys: [algorithms, code_quality, problem_solving]
+role_tags: [devops, platform, backend]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Expand Environment References
+
+  Before rendering a deployment manifest, a release tool substitutes environment variables into a template
+  `text`. The environment is given as two parallel lists: variable `names[i]` has the value
+  `values[i]`.
+
+  A **variable name** is a letter or `_` followed by any number of letters, digits or `_`
+  (letters are ASCII `A-Z` and `a-z`). Scan `text` from left to right and apply these rules at
+  every `$`:
+
+  1. `$$` produces a single literal `$` (both characters are consumed).
+  2. `${NAME}` - a `$`, an opening brace, a valid variable name and the **next** closing brace - is
+     replaced by the value of `NAME`.
+  3. `$NAME` without braces is replaced by the value of `NAME`, where `NAME` is the **longest** run of
+     name characters that follows the `$`.
+  4. Any other `$` is kept literally and scanning continues with the next character. This includes a `$`
+     at the very end, a `$` followed by a digit or punctuation, a `${` with no closing brace, and a
+     `${...}` whose content is not a valid name (for example empty).
+
+  A reference to a name that is not in `names` is replaced by the empty string. Substituted values are
+  inserted as-is: a `$` inside a value is **not** expanded again. Characters that are not part of a
+  reference are copied unchanged.
+
+  Return the expanded string.
+
+  ### Example 1
+  ```
+  Input:  text = "postgres://${DB_USER}@$DB_HOST:5432/app"
+          names = ["DB_USER", "DB_HOST"]
+          values = ["svc_orders", "db.internal"]
+  Output: "postgres://svc_orders@db.internal:5432/app"
+  ```
+
+  ### Example 2
+  ```
+  Input:  text = "price: $$5, region=$REGION_ID, ${TAG}x"
+          names = ["REGION", "TAG"]
+          values = ["eu-west", "v2"]
+  Output: "price: $5, region=, v2x"
+  Explanation: $$ becomes $. The brace-less name is the longest run REGION_ID, which is not defined, so it
+               becomes empty. ${TAG} ends at the brace, so the x that follows is kept.
+  ```
+
+  ### Example 3
+  ```
+  Input:  text = "cost $9 and ${ broken and $"
+          names = []
+          values = []
+  Output: "cost $9 and ${ broken and $"
+  Explanation: $9 starts with a digit, "${ broken" contains no closing brace, and the final $ has nothing after
+               it.
+  ```
+
+  ### Constraints
+  - `0 <= text.length <= 2000`
+  - `0 <= names.length == values.length <= 50`
+  - Names in `names` are distinct valid variable names; values are at most 100 characters.
+  - All strings contain printable ASCII characters only.
+
+  **Follow-up:** how would you add a default value syntax such as `${NAME:-fallback}`?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: expand_env_references
+  params:
+    - {name: text, type: "string"}
+    - {name: names, type: "string[]"}
+    - {name: values, type: "string[]"}
+  return_type: "string"
+  comparison: exact
+reference_solutions:
+  python: |
+    def expand_env_references(text: str, names: list[str], values: list[str]) -> str:
+        env = dict(zip(names, values))
+
+        def is_start(ch: str) -> bool:
+            return ch == "_" or ("a" <= ch <= "z") or ("A" <= ch <= "Z")
+
+        def is_part(ch: str) -> bool:
+            return is_start(ch) or ("0" <= ch <= "9")
+
+        out: list[str] = []
+        i, n = 0, len(text)
+        while i < n:
+            ch = text[i]
+            if ch != "$" or i + 1 == n:
+                out.append(ch)
+                i += 1
+                continue
+            nxt = text[i + 1]
+            if nxt == "$":
+                out.append("$")
+                i += 2
+            elif nxt == "{":
+                close = text.find("}", i + 2)
+                name = text[i + 2:close] if close != -1 else ""
+                if name and is_start(name[0]) and all(is_part(c) for c in name):
+                    out.append(env.get(name, ""))
+                    i = close + 1
+                else:
+                    out.append("$")
+                    i += 1
+            elif is_start(nxt):
+                j = i + 1
+                while j < n and is_part(text[j]):
+                    j += 1
+                out.append(env.get(text[i + 1:j], ""))
+                i = j
+            else:
+                out.append("$")
+                i += 1
+        return "".join(out)
+  javascript: |
+    function expandEnvReferences(text, names, values) {
+      const env = new Map();
+      for (let k = 0; k < names.length; k++) env.set(names[k], values[k]);
+      const isStart = (c) => c === "_" || (c >= "a" && c <= "z") || (c >= "A" && c <= "Z");
+      const isPart = (c) => isStart(c) || (c >= "0" && c <= "9");
+      const lookup = (name) => (env.has(name) ? env.get(name) : "");
+      let out = "";
+      let i = 0;
+      const n = text.length;
+      while (i < n) {
+        const ch = text[i];
+        if (ch !== "$" || i + 1 === n) {
+          out += ch;
+          i++;
+          continue;
+        }
+        const nxt = text[i + 1];
+        if (nxt === "$") {
+          out += "$";
+          i += 2;
+        } else if (nxt === "{") {
+          const close = text.indexOf("}", i + 2);
+          const name = close === -1 ? "" : text.slice(i + 2, close);
+          if (name.length > 0 && isStart(name[0]) && [...name].every(isPart)) {
+            out += lookup(name);
+            i = close + 1;
+          } else {
+            out += "$";
+            i++;
+          }
+        } else if (isStart(nxt)) {
+          let j = i + 1;
+          while (j < n && isPart(text[j])) j++;
+          out += lookup(text.slice(i + 1, j));
+          i = j;
+        } else {
+          out += "$";
+          i++;
+        }
+      }
+      return out;
+    }
+tests:
+  - {id: t1, args: ["postgres://${DB_USER}@$DB_HOST:5432/app", ["DB_USER", "DB_HOST"], ["svc_orders", "db.internal"]], expected: "postgres://svc_orders@db.internal:5432/app", description: "Example 1 - braced and brace-less references"}
+  - {id: t2, args: ["price: $$5, region=$REGION_ID, ${TAG}x", ["REGION", "TAG"], ["eu-west", "v2"]], expected: "price: $5, region=, v2x", description: "Example 2 - $$ escape, longest-run name that is undefined, braces separating a name from text"}
+  - {id: t3, args: ["cost $9 and ${ broken and $", [], []], expected: "cost $9 and ${ broken and $", description: "Example 3 - dollars that do not start a valid reference stay literal"}
+  - {id: t4, hidden: true, args: ["", ["A"], ["1"]], expected: "", description: "Empty template"}
+  - {id: t5, hidden: true, args: ["no references here", [], []], expected: "no references here", description: "Template without any dollar sign"}
+  - {id: t6, hidden: true, args: ["$A$B${A}${B}", ["A", "B"], ["x", "$B"]], expected: "x$Bx$B", description: "Adjacent references; a value containing a dollar reference is not expanded again"}
+  - {id: t7, hidden: true, args: ["$$HOME and $$$HOME and $$$$", ["HOME"], ["/srv"]], expected: "$HOME and $/srv and $$", description: "Escape sequences next to names: $$HOME is literal, $$$HOME expands, $$$$ gives two dollars"}
+  - {id: t8, hidden: true, args: ["${}${1X}${A-B}${_ok} ${A", ["_ok", "A"], ["fine", "nope"]], expected: "${}${1X}${A-B}fine ${A", description: "Invalid brace contents stay literal; a later valid ${_ok} still expands; unclosed ${A at the end is literal"}
+  - {id: t9, hidden: true, args: ["${X}}{$X{", ["X"], ["v"]], expected: "v}{v{", description: "Stray braces around references are copied unchanged"}
+  - {id: t10, hidden: true, args: ["${constructor}/$toString/$_9", ["toString"], ["ts"]], expected: "/ts/", description: "Names that collide with JavaScript object properties; undefined constructor must become empty; underscore-digit name"}
+  - {id: t11, hidden: true, args: ["$a_b-$a-b ${a_b}c", ["a", "a_b"], ["1", "2"]], expected: "2-1-b 2c", description: "Longest-run rule: $a_b is one name, $a stops at the hyphen; lowercase names are case-sensitive"}
+  - {id: t12, hidden: true, args: ["svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-svc-${N0}-$", ["N0"], ["node"]], expected: "svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-svc-node-$", description: "Longer template with forty references and a trailing dollar"}
+expected_concepts:
+  - "single left-to-right scan with an index"
+  - "small state machine for $, $$, ${...} and $NAME"
+  - "longest-match tokenisation of names"
+  - "no recursive expansion of substituted values"
+  - "hash map lookup with a default of empty string"
+optimal_complexity: {time: "O(n + m)", space: "O(n + m)"}
+rubric:
+  excellent: "Writes a clear single-pass scanner that handles each $ case explicitly, uses a proper map for the environment, never re-expands values, and walks through the tricky inputs ($$$NAME, unclosed braces, trailing $) unprompted."
+  good: "Correct scanner that needs one or two test failures to fix cases such as the trailing $, an unclosed brace or the longest-run rule."
+  weak: "Uses repeated global string replacement (which re-expands values and breaks $$), or a regex that mishandles escapes and invalid braces, without being able to reason about the cases."
+  criteria:
+    correctness: "All tests pass, including escapes adjacent to names, invalid brace contents and values containing dollars."
+    efficiency: "Linear in the template length plus the size of the output."
+    code_quality: "Each rule is a separate, readable branch; output built with a list or string builder; character-class helpers are named."
+    edge_cases: "Empty template, trailing $, ${ without }, ${} and ${1X}, undefined names, names such as constructor."
+    communication: "Explains why the scan must be left to right and why replace-all approaches are wrong here."
+hints:
+  - "Process the template one character at a time; ordinary characters are copied, and all the interesting decisions happen when you meet a dollar sign."
+  - "At a dollar sign, look at the next character: another dollar, an opening brace, a name-start character, or anything else each lead to a different rule. Searching and replacing over the whole string tends to re-expand values."
+  - "Keep an index into the template. For two dollars emit one and skip both. For a brace, find the next closing brace and check that the text between is a valid name before substituting and jumping past the brace; otherwise emit the dollar alone. For a name-start character, extend over name characters as far as possible and substitute. In every other case emit the dollar and move one step."
+followups:
+  - "How would you support defaults such as ${NAME:-fallback}?"
+  - "How would you report undefined variables instead of silently using an empty string?"
+  - "What security issues arise if values could be expanded recursively?"
+  - "How would you implement this with a regular expression, and what would you lose in clarity?"
+common_errors:
+  - "Using repeated replace calls, which expands references that appear inside substituted values."
+  - "Treating $$NAME as an escaped dollar followed by a reference instead of literal text."
+  - "Consuming the brace after an invalid or unclosed ${ instead of keeping the dollar literal and moving one character."
+  - "Stopping a brace-less name at the first underscore or digit instead of taking the longest run."
+  - "Using a plain JavaScript object, so ${constructor} returns a function instead of an empty string."

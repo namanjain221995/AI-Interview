@@ -1,0 +1,149 @@
+version: 1
+slug: config_store_snapshot_reads
+title: Point-in-Time Reads from a Config Store
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [backend, platform, fullstack, devops]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Point-in-Time Reads from a Config Store
+
+  A configuration service keeps every version of every setting so that engineers can ask "what was this
+  setting at time `t`?" while debugging an incident.
+
+  The write log is given as three parallel arrays: write `j` set key `keys[j]` to value `values[j]` at
+  time `times[j]`. Writes are listed in the order they happened and `times` is **strictly increasing**
+  across the whole log (no two writes share a timestamp). A later write to the same key replaces the
+  earlier value from its own timestamp onwards.
+
+  Read `i` asks for key `query_keys[i]` as of time `query_times[i]`. Its answer is the value of the
+  **latest write to that key with time `<= query_times[i]`**, or the empty string `""` if the key had not
+  been written by then (or was never written). Reads are independent, may come in any order and may
+  repeat.
+
+  Return the answers in the same order as the reads.
+
+  ### Example 1
+  ```
+  Input:  keys = ["timeout", "retries", "timeout"], times = [5, 8, 12], values = ["30s", "3", "45s"],
+          query_keys = ["timeout", "timeout", "retries", "timeout"], query_times = [4, 5, 11, 20]
+  Output: ["", "30s", "3", "45s"]
+  Explanation: At time 4 nothing has been written yet. The write at time 5 counts for a read at time 5. Time 11 sees the retries write from time 8; time 20 sees the second timeout write.
+  ```
+
+  ### Example 2
+  ```
+  Input:  keys = ["region"], times = [100], values = ["eu-west"],
+          query_keys = ["zone", "region", "region"], query_times = [150, 99, 1000]
+  Output: ["", "", "eu-west"]
+  ```
+
+  ### Constraints
+  - `0 <= keys.length == times.length == values.length <= 10^5`
+  - `1 <= query_keys.length == query_times.length <= 10^5`
+  - `1 <= times[j], query_times[i] <= 10^9`, and `times` is strictly increasing
+  - Keys and values are non-empty strings of at most 20 letters, digits, `.`, `_` or `-`.
+  - Aim for `O((W + Q) log W)` time, where `W` is the number of writes and `Q` the number of reads.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: config_store_snapshot_reads
+  params:
+    - {name: keys, type: "string[]"}
+    - {name: times, type: "int[]"}
+    - {name: values, type: "string[]"}
+    - {name: query_keys, type: "string[]"}
+    - {name: query_times, type: "int[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    from bisect import bisect_right
+
+
+    def config_store_snapshot_reads(
+        keys: list[str],
+        times: list[int],
+        values: list[str],
+        query_keys: list[str],
+        query_times: list[int],
+    ) -> list[str]:
+        # Per key, the write times stay sorted because the log is in time order.
+        history: dict[str, tuple[list[int], list[str]]] = {}
+        for key, t, value in zip(keys, times, values):
+            ts, vs = history.setdefault(key, ([], []))
+            ts.append(t)
+            vs.append(value)
+
+        answers: list[str] = []
+        for key, t in zip(query_keys, query_times):
+            if key not in history:
+                answers.append("")
+                continue
+            ts, vs = history[key]
+            idx = bisect_right(ts, t) - 1  # last write at or before t
+            answers.append(vs[idx] if idx >= 0 else "")
+        return answers
+  javascript: |
+    function configStoreSnapshotReads(keys, times, values, queryKeys, queryTimes) {
+      const history = new Map();
+      for (let j = 0; j < keys.length; j++) {
+        if (!history.has(keys[j])) history.set(keys[j], { ts: [], vs: [] });
+        const h = history.get(keys[j]);
+        h.ts.push(times[j]);
+        h.vs.push(values[j]);
+      }
+      return queryKeys.map((key, i) => {
+        const h = history.get(key);
+        if (!h) return "";
+        const t = queryTimes[i];
+        // Find the number of writes with time <= t.
+        let lo = 0;
+        let hi = h.ts.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (h.ts[mid] <= t) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo > 0 ? h.vs[lo - 1] : "";
+      });
+    }
+tests:
+  - {id: t1, args: [["timeout", "retries", "timeout"], [5, 8, 12], ["30s", "3", "45s"], ["timeout", "timeout", "retries", "timeout"], [4, 5, 11, 20]], expected: ["", "30s", "3", "45s"], description: "Example 1"}
+  - {id: t2, args: [["region"], [100], ["eu-west"], ["zone", "region", "region"], [150, 99, 1000]], expected: ["", "", "eu-west"], description: "Example 2 - unknown key and a read before the first write"}
+  - {id: t3, hidden: true, args: [[], [], [], ["a", "b"], [1, 1000000000]], expected: ["", ""], description: "No writes at all: every read is empty"}
+  - {id: t4, hidden: true, args: [["k", "k", "k", "k"], [1, 2, 3, 4], ["a", "b", "c", "d"], ["k", "k", "k", "k", "k"], [4, 3, 2, 1, 1000000000]], expected: ["d", "c", "b", "a", "d"], description: "Reads in decreasing time order, each exactly at a write time"}
+  - {id: t5, hidden: true, args: [["mode", "mode"], [10, 20], ["blue", "green"], ["mode", "mode", "mode"], [19, 19, 9]], expected: ["blue", "blue", ""], description: "Repeated identical reads and one read just before the first write"}
+  - {id: t6, hidden: true, args: [["a", "b", "a", "b", "a"], [1, 2, 3, 4, 5], ["a1", "b1", "a2", "b2", "a3"], ["b", "a", "b", "a"], [3, 4, 5, 2]], expected: ["b1", "a2", "b2", "a1"], description: "Interleaved writes to two keys; a read for one key must ignore the other"}
+  - {id: t7, hidden: true, args: [["x", "x"], [1, 1000000000], ["old", "new"], ["x", "x"], [999999999, 1000000000]], expected: ["old", "new"], description: "Extreme timestamps at both ends"}
+  - {id: t8, hidden: true, args: [["svc.timeout", "svc.Timeout"], [3, 4], ["10", "20"], ["svc.timeout", "svc.Timeout", "SVC.TIMEOUT"], [5, 5, 5]], expected: ["10", "20", ""], description: "Keys are case-sensitive"}
+  - {id: t9, hidden: true, args: [["same", "same", "same"], [7, 8, 9], ["v", "v", "w"], ["same", "same"], [8, 9]], expected: ["v", "w"], description: "A key rewritten with the same value"}
+  - {id: t10, hidden: true, args: [["cache.ttl", "log.level", "db.pool", "log.level", "log.level", "feature.x", "api.rate", "feature.x", "api.rate", "db.pool", "log.level", "cache.ttl", "api.rate", "cache.ttl", "feature.x", "api.rate", "db.pool", "feature.x", "log.level", "db.pool", "api.rate", "feature.x", "log.level", "db.pool", "db.pool", "api.rate", "db.pool", "cache.ttl", "feature.x", "log.level", "db.pool", "log.level", "db.pool", "api.rate", "cache.ttl", "api.rate", "feature.x", "cache.ttl", "feature.x", "db.pool", "cache.ttl", "feature.x", "log.level", "feature.x", "api.rate", "api.rate", "db.pool", "feature.x", "feature.x", "cache.ttl", "db.pool", "db.pool", "cache.ttl", "db.pool", "cache.ttl", "feature.x", "cache.ttl", "api.rate", "log.level", "api.rate", "feature.x", "db.pool", "db.pool", "feature.x", "feature.x", "db.pool", "api.rate", "db.pool", "cache.ttl", "api.rate", "db.pool", "cache.ttl", "cache.ttl", "cache.ttl", "log.level", "api.rate", "feature.x", "cache.ttl", "feature.x", "feature.x", "log.level", "api.rate", "feature.x", "cache.ttl", "feature.x", "api.rate", "log.level", "cache.ttl", "api.rate", "log.level", "api.rate", "db.pool", "log.level", "log.level", "api.rate", "cache.ttl", "feature.x", "cache.ttl", "cache.ttl", "api.rate", "log.level", "log.level", "db.pool", "db.pool", "api.rate", "log.level", "log.level", "cache.ttl", "feature.x", "log.level", "api.rate", "cache.ttl", "api.rate", "db.pool", "api.rate", "log.level", "cache.ttl", "log.level", "api.rate", "feature.x", "log.level", "db.pool", "feature.x", "feature.x", "log.level", "feature.x", "cache.ttl", "log.level", "cache.ttl", "log.level", "db.pool", "log.level", "db.pool", "log.level", "log.level", "api.rate", "db.pool", "db.pool", "log.level", "log.level", "api.rate", "api.rate", "cache.ttl", "cache.ttl", "feature.x", "db.pool", "feature.x", "feature.x", "log.level", "feature.x", "db.pool", "db.pool", "log.level", "log.level", "cache.ttl", "api.rate", "db.pool", "feature.x", "db.pool", "feature.x", "feature.x", "cache.ttl", "feature.x", "cache.ttl", "api.rate", "api.rate", "api.rate", "api.rate", "log.level", "log.level", "feature.x", "feature.x", "api.rate", "api.rate", "db.pool", "cache.ttl", "feature.x", "feature.x", "cache.ttl", "db.pool", "cache.ttl", "db.pool", "api.rate", "api.rate", "db.pool", "feature.x", "db.pool", "db.pool", "db.pool", "log.level", "db.pool", "feature.x", "api.rate", "api.rate", "feature.x", "feature.x", "log.level", "db.pool", "cache.ttl", "db.pool", "cache.ttl", "cache.ttl", "cache.ttl", "log.level", "db.pool", "cache.ttl", "api.rate", "db.pool", "feature.x", "log.level", "db.pool", "feature.x", "feature.x", "log.level", "db.pool", "db.pool", "cache.ttl", "cache.ttl", "db.pool", "api.rate", "feature.x", "feature.x", "feature.x", "log.level", "db.pool", "log.level", "db.pool", "log.level", "api.rate", "api.rate", "feature.x", "db.pool", "cache.ttl", "cache.ttl", "api.rate", "db.pool", "cache.ttl", "cache.ttl", "cache.ttl", "feature.x", "db.pool", "feature.x", "log.level", "feature.x", "cache.ttl", "cache.ttl", "feature.x", "feature.x", "feature.x", "feature.x", "cache.ttl", "db.pool", "api.rate", "feature.x", "db.pool", "feature.x", "cache.ttl", "db.pool", "feature.x", "log.level", "api.rate", "db.pool", "cache.ttl", "feature.x", "log.level", "api.rate", "db.pool", "cache.ttl", "cache.ttl", "api.rate", "log.level", "log.level", "cache.ttl", "cache.ttl", "feature.x", "feature.x", "cache.ttl", "api.rate", "db.pool", "feature.x", "feature.x", "db.pool", "cache.ttl", "cache.ttl", "db.pool", "feature.x", "api.rate", "db.pool", "db.pool", "log.level", "db.pool", "cache.ttl", "api.rate", "api.rate", "cache.ttl", "log.level", "api.rate", "api.rate", "db.pool", "log.level"], [4134, 12352, 13355, 14760, 16745, 17907, 18720, 20531, 24498, 24796, 25971, 26537, 31647, 35421, 37025, 38791, 40825, 54019, 58637, 59637, 60351, 65231, 72955, 79563, 82393, 85774, 86327, 87610, 89901, 89941, 90588, 96107, 97324, 103394, 104870, 105223, 108532, 111044, 112332, 113715, 114343, 119159, 119854, 125194, 136633, 145975, 148755, 149370, 156797, 170467, 171532, 172943, 173106, 173357, 175385, 177923, 180283, 181578, 186261, 186277, 187213, 190872, 201324, 202705, 205110, 206198, 213481, 215616, 226442, 226540, 228900, 231777, 232997, 236594, 237500, 246500, 249589, 250006, 250231, 260417, 265356, 270972, 277157, 278320, 280371, 285337, 286984, 288951, 290732, 294211, 294938, 298695, 302498, 304000, 305793, 309596, 310005, 312261, 313373, 316851, 319593, 321645, 329663, 335177, 339123, 344208, 346875, 348654, 354293, 354597, 357855, 359427, 362957, 366352, 375474, 376435, 380416, 386593, 387036, 387611, 395313, 395499, 395675, 397605, 401642, 412491, 421272, 427151, 429514, 431871, 432666, 434592, 436442, 440370, 441711, 442239, 443077, 444332, 445759, 446843, 451366, 452245, 466170, 466294, 466699, 469187, 471140, 471151, 471435, 476818, 477137, 479025, 481282, 488593, 493594, 497095, 503500, 506551, 514429, 516963, 521988, 522444, 537536, 545331, 551684, 554666, 555838, 558298, 559507, 564759, 565323, 568135, 568493, 570057, 571977, 572312, 574908, 575662, 576652, 582873, 583365, 584152, 585095, 586527, 588092, 589323, 593001, 595602, 599835, 600648, 600819, 610584, 617741, 618622, 619300, 620786, 621487, 626355, 634466, 639421, 646978, 649753, 650286, 651157, 658156, 661496, 661902, 670578, 673583, 681054, 686416, 688488, 689872, 692619, 692711, 706077, 706079, 708549, 714214, 714335, 720588, 721153, 721990, 722479, 724157, 726688, 733591, 741494, 744498, 752788, 753277, 755442, 761219, 764142, 769875, 770925, 776519, 781519, 781971, 782068, 785399, 785571, 791622, 796695, 798936, 808216, 809151, 814690, 815355, 817242, 821143, 821884, 823763, 826517, 829939, 832131, 833703, 837819, 838374, 843835, 844066, 848889, 849849, 852328, 853285, 853830, 855506, 860528, 866691, 868814, 869944, 870129, 875928, 901927, 902245, 905408, 909526, 919199, 930009, 933291, 935675, 935785, 937993, 938667, 941220, 942412, 943850, 944631, 945457, 963373, 969792, 975360, 978928, 985760, 990527, 991394, 994686, 994919, 996623, 997739], ["v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45", "v46", "v47", "v48", "v49", "v50", "v51", "v52", "v53", "v54", "v55", "v56", "v57", "v58", "v59", "v60", "v61", "v62", "v63", "v64", "v65", "v66", "v67", "v68", "v69", "v70", "v71", "v72", "v73", "v74", "v75", "v76", "v77", "v78", "v79", "v80", "v81", "v82", "v83", "v84", "v85", "v86", "v87", "v88", "v89", "v90", "v91", "v92", "v93", "v94", "v95", "v96", "v97", "v98", "v99", "v100", "v101", "v102", "v103", "v104", "v105", "v106", "v107", "v108", "v109", "v110", "v111", "v112", "v113", "v114", "v115", "v116", "v117", "v118", "v119", "v120", "v121", "v122", "v123", "v124", "v125", "v126", "v127", "v128", "v129", "v130", "v131", "v132", "v133", "v134", "v135", "v136", "v137", "v138", "v139", "v140", "v141", "v142", "v143", "v144", "v145", "v146", "v147", "v148", "v149", "v150", "v151", "v152", "v153", "v154", "v155", "v156", "v157", "v158", "v159", "v160", "v161", "v162", "v163", "v164", "v165", "v166", "v167", "v168", "v169", "v170", "v171", "v172", "v173", "v174", "v175", "v176", "v177", "v178", "v179", "v180", "v181", "v182", "v183", "v184", "v185", "v186", "v187", "v188", "v189", "v190", "v191", "v192", "v193", "v194", "v195", "v196", "v197", "v198", "v199", "v200", "v201", "v202", "v203", "v204", "v205", "v206", "v207", "v208", "v209", "v210", "v211", "v212", "v213", "v214", "v215", "v216", "v217", "v218", "v219", "v220", "v221", "v222", "v223", "v224", "v225", "v226", "v227", "v228", "v229", "v230", "v231", "v232", "v233", "v234", "v235", "v236", "v237", "v238", "v239", "v240", "v241", "v242", "v243", "v244", "v245", "v246", "v247", "v248", "v249", "v250", "v251", "v252", "v253", "v254", "v255", "v256", "v257", "v258", "v259", "v260", "v261", "v262", "v263", "v264", "v265", "v266", "v267", "v268", "v269", "v270", "v271", "v272", "v273", "v274", "v275", "v276", "v277", "v278", "v279", "v280", "v281", "v282", "v283", "v284", "v285", "v286", "v287", "v288", "v289", "v290", "v291", "v292", "v293", "v294", "v295", "v296", "v297", "v298", "v299"], ["log.level", "db.pool", "log.level", "feature.x", "missing", "log.level", "log.level", "missing", "missing", "db.pool", "cache.ttl", "feature.x", "missing", "db.pool", "db.pool", "db.pool", "api.rate", "missing", "cache.ttl", "db.pool", "missing", "missing", "missing", "missing", "api.rate", "log.level", "missing", "missing", "cache.ttl", "log.level", "api.rate", "cache.ttl", "feature.x", "api.rate", "feature.x", "feature.x", "feature.x", "missing", "feature.x", "feature.x", "feature.x", "missing", "feature.x", "log.level", "missing", "missing", "cache.ttl", "feature.x", "api.rate", "log.level", "missing", "api.rate", "missing", "cache.ttl", "db.pool", "api.rate", "api.rate", "feature.x", "db.pool", "log.level", "log.level", "api.rate", "missing", "db.pool", "log.level", "missing", "db.pool", "api.rate", "cache.ttl", "db.pool", "db.pool", "feature.x", "feature.x", "cache.ttl", "api.rate", "log.level", "cache.ttl", "feature.x", "db.pool", "missing", "feature.x", "missing", "api.rate", "api.rate", "cache.ttl", "cache.ttl", "missing", "cache.ttl", "feature.x", "cache.ttl", "log.level", "missing", "api.rate", "missing", "missing", "log.level", "api.rate", "api.rate", "feature.x", "cache.ttl", "feature.x", "log.level", "missing", "db.pool", "missing", "log.level", "api.rate", "feature.x", "missing", "db.pool", "db.pool", "db.pool", "cache.ttl", "db.pool", "cache.ttl", "db.pool", "log.level", "api.rate", "cache.ttl", "api.rate", "cache.ttl", "db.pool", "missing", "api.rate", "api.rate", "api.rate", "feature.x", "missing", "log.level", "missing", "feature.x", "cache.ttl", "feature.x", "log.level", "feature.x", "missing", "feature.x", "api.rate", "feature.x", "db.pool", "missing", "cache.ttl", "missing", "missing", "db.pool", "log.level", "feature.x", "log.level", "missing", "missing", "db.pool", "cache.ttl", "log.level", "db.pool", "missing", "api.rate", "missing", "log.level", "cache.ttl", "feature.x", "cache.ttl", "missing", "missing", "cache.ttl", "missing", "db.pool", "api.rate", "feature.x", "cache.ttl", "db.pool", "api.rate", "log.level", "feature.x", "db.pool", "api.rate", "api.rate", "log.level", "feature.x", "log.level", "cache.ttl", "feature.x", "log.level", "log.level", "cache.ttl", "db.pool", "missing", "cache.ttl", "log.level", "db.pool", "log.level", "db.pool", "missing", "api.rate", "cache.ttl", "api.rate", "cache.ttl", "cache.ttl", "cache.ttl", "db.pool", "missing", "missing", "api.rate", "feature.x", "cache.ttl", "log.level", "db.pool", "cache.ttl", "log.level", "cache.ttl", "cache.ttl", "db.pool", "feature.x", "cache.ttl", "db.pool", "missing", "db.pool", "db.pool", "cache.ttl", "api.rate", "db.pool", "missing", "feature.x", "db.pool", "feature.x", "log.level", "missing", "api.rate", "feature.x", "log.level", "missing", "db.pool", "cache.ttl", "api.rate", "db.pool", "cache.ttl", "db.pool", "db.pool", "db.pool", "cache.ttl", "db.pool", "db.pool", "cache.ttl", "cache.ttl", "db.pool", "missing", "log.level", "feature.x", "api.rate", "log.level", "log.level", "feature.x", "missing", "db.pool", "db.pool", "feature.x", "missing", "cache.ttl", "db.pool", "api.rate", "feature.x", "feature.x", "log.level", "db.pool", "feature.x", "log.level", "cache.ttl", "api.rate", "feature.x", "feature.x", "missing", "db.pool", "api.rate", "feature.x", "feature.x", "missing", "feature.x", "cache.ttl", "log.level", "api.rate", "db.pool", "cache.ttl", "api.rate", "missing", "api.rate", "missing", "missing", "feature.x", "missing", "api.rate", "api.rate", "cache.ttl", "log.level", "cache.ttl", "missing", "db.pool", "db.pool", "db.pool", "api.rate", "log.level", "missing"], [599809, 393935, 724544, 426730, 946424, 978040, 230555, 608119, 97452, 941821, 537035, 167035, 234988, 211643, 444742, 727904, 115588, 568080, 94374, 470466, 595050, 696606, 54310, 503475, 279553, 79567, 407038, 862722, 99570, 550419, 844721, 908754, 945357, 237013, 33672, 357924, 846038, 184424, 559341, 764974, 402719, 63612, 740244, 781708, 977761, 543764, 271649, 991647, 173085, 214167, 357020, 162283, 901585, 146225, 818083, 567886, 164332, 857002, 945654, 390656, 775038, 751210, 988553, 501960, 166128, 818930, 762947, 409893, 25662, 47719, 201082, 935424, 562525, 449001, 244538, 598487, 228873, 955467, 375140, 154260, 481748, 972629, 962461, 31323, 609459, 909305, 583106, 628905, 754207, 505845, 197528, 237229, 842327, 866469, 799830, 572741, 853841, 971567, 472028, 800426, 568151, 472486, 78451, 105566, 480757, 365015, 674982, 834169, 996072, 584866, 939663, 438698, 355708, 90019, 793074, 239880, 897642, 335055, 168638, 713592, 312735, 345575, 916957, 916001, 203937, 17055, 370905, 595081, 703336, 480311, 306038, 925633, 913028, 651323, 254659, 210346, 95682, 173548, 629357, 37812, 788781, 52949, 821285, 391515, 82687, 234527, 75321, 584582, 97680, 204983, 401028, 552253, 115574, 360285, 242472, 334599, 634220, 724692, 122108, 260784, 383294, 347531, 135086, 591309, 259037, 987592, 484140, 157451, 734584, 321380, 789229, 285882, 111606, 330292, 744649, 511381, 953057, 860129, 248167, 190054, 620458, 753696, 755253, 452975, 561262, 599759, 280599, 527081, 203431, 632248, 911986, 188214, 708273, 645978, 749015, 421630, 653882, 822174, 413461, 624691, 787226, 427748, 322856, 909276, 187743, 411388, 14444, 497041, 129162, 620994, 723324, 842282, 96339, 627411, 771120, 850981, 92582, 2528, 311789, 901786, 652499, 193049, 21799, 913632, 453898, 133609, 506691, 763249, 358814, 408147, 327393, 952556, 701282, 596861, 788199, 850293, 669806, 360532, 808261, 400173, 268302, 734557, 368058, 797876, 220159, 726271, 412094, 157635, 676290, 441855, 333693, 403627, 242713, 138767, 121926, 738970, 784591, 429477, 148396, 722986, 370970, 962390, 19680, 403276, 738995, 430745, 655715, 544220, 81902, 996324, 743498, 843782, 786460, 960878, 844899, 168555, 737721, 23093, 479059, 286371, 85130, 248331, 592583, 22675, 155685, 669353, 621574, 619926, 317351, 379741, 119580, 784619, 598100, 245656, 498912, 294429, 896148, 120657, 520617, 246651]], expected: ["v169", "v113", "v223", "v125", "", "v289", "v58", "", "", "v284", "v161", "v48", "", "v65", "v137", "v224", "v35", "", "v27", "v145", "", "", "", "", "v81", "v22", "", "", "v27", "v153", "v260", "v273", "v285", "v69", "v7", "v108", "v258", "", "v162", "v230", "v123", "", "v222", "v227", "", "", "v77", "v285", "v45", "v58", "", "v45", "", "v40", "v240", "v167", "v45", "v263", "v288", "v117", "v227", "v228", "", "v151", "v42", "", "v231", "v118", "v0", "v16", "v61", "v279", "v162", "v128", "v69", "v169", "v68", "v285", "v113", "", "v149", "", "v286", "v8", "v180", "v273", "", "v180", "v230", "v154", "v58", "", "v252", "", "", "v169", "v265", "v286", "v147", "v244", "v171", "v148", "", "v32", "", "v109", "v206", "v255", "", "v181", "v281", "v132", "v107", "v26", "v238", "v70", "v271", "v99", "v40", "v206", "v97", "v103", "", "v269", "v59", "", "v108", "", "v213", "", "v84", "v276", "v275", "v203", "v78", "", "v28", "v45", "v195", "v9", "", "v13", "", "", "v24", "v58", "v21", "v169", "", "", "v121", "v163", "v31", "v103", "", "v99", "", "v223", "v40", "v79", "v116", "", "", "v180", "", "v290", "v141", "v48", "v217", "v91", "v234", "v80", "v36", "v102", "v228", "v155", "v271", "v263", "v74", "v56", "v194", "v227", "v227", "v128", "v158", "", "v83", "v153", "v62", "v196", "v266", "", "v206", "v198", "v228", "v126", "v202", "v250", "v121", "", "", "v118", "v96", "v273", "v58", "v121", "v0", "v153", "v40", "v180", "v218", "v258", "v27", "v197", "", "v261", "v30", "", "v94", "v266", "", "v60", "v2", "v275", "v139", "", "v155", "v230", "v109", "", "v91", "v283", "v206", "v187", "v238", "v261", "v204", "v103", "v245", "v121", "v70", "v217", "v111", "v240", "", "v223", "v123", "v45", "v203", "v134", "v96", "", "v70", "v39", "v41", "", "v238", "v121", "v45", "v222", "v108", "v271", "v2", "v123", "v225", "v128", "v193", "v162", "v21", "", "v226", "v252", "v241", "v285", "", "v48", "v217", "v4", "v141", "v70", "v13", "v75", "", "v6", "", "", "v195", "", "v99", "v114", "v40", "v227", "v180", "", "v151", "v70", "v266", "v35", "v153", ""], description: "Stress: 300 writes over five keys and 300 random reads including an unknown key"}
+expected_concepts:
+  - hash map from key to its write history
+  - per-key histories are already sorted by time
+  - "binary search for the last write with time <= query time (upper bound minus one)"
+  - empty-string result for unknown keys and reads before the first write
+optimal_complexity: {time: O((W + Q) log W), space: O(W)}
+rubric:
+  excellent: "Groups writes by key into time-sorted lists in one pass, answers each read with an upper-bound binary search, handles unknown keys and early reads, and explains why no sorting is needed."
+  good: "Correct grouping and binary search with a small boundary slip (for example strict versus inclusive time) fixed after testing, or an extra unnecessary sort."
+  weak: "Scans the whole log for every read in O(W * Q), returns the first write instead of the latest, or ignores the key when searching by time."
+  criteria:
+    correctness: "All tests pass, including reads exactly at a write time, before the first write and for unknown keys."
+    efficiency: "O(W) to build the index plus O(log W) per read."
+    code_quality: "The per-key index is a clear structure (map of time and value lists) and the search helper has an obvious contract."
+    edge_cases: "No writes at all, repeated reads, reads in decreasing time order and keys written many times."
+    communication: "Explains the choice of upper bound and why the global time order keeps each key's list sorted."
+hints:
+  - "Reads for one key never care about writes to other keys. How could you organise the log so each read only looks at the relevant writes?"
+  - "Build a map from key to the list of (time, value) writes for that key. Because the log is in time order, each list is already sorted by time."
+  - "For a read, look up the key's list (missing key means \"\"), then binary search for the first write time strictly greater than the query time; the write just before that position is the answer, and if that position is 0 the answer is \"\"."
+followups:
+  - "How would you support new writes arriving between reads (an online store)?"
+  - "What would you change if writes could arrive out of time order?"
+  - "How could you also answer 'how many times did this key change between t1 and t2'?"
+common_errors:
+  - "Using a strict comparison so a read exactly at a write time misses that write."
+  - "Returning the earliest write at or before the time instead of the latest."
+  - "Crashing on a key that was never written instead of returning an empty string."
+  - "Scanning the full write log for every read."

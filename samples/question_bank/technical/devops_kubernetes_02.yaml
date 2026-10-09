@@ -1,0 +1,640 @@
+# Kubernetes in depth (2/4): service networking, ingress, network policy, service mesh and storage.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [devops]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: technical.devops_kubernetes.service_types
+    competency_key: kubernetes
+    topic: Choosing a Service type
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Talk me through the Service types you've actually used, such as ClusterIP, NodePort, LoadBalancer and
+      headless, and the situations where you'd pick each one.
+    expected_concepts:
+      - ClusterIP for internal traffic with a stable virtual IP
+      - NodePort opens a port on every node, rarely used directly
+      - LoadBalancer provisions a cloud load balancer per Service
+      - headless Services return pod IPs directly, often for StatefulSets
+      - cost and sprawl of one load balancer per Service
+    rubric:
+      excellent: Explains each type with a real use case, how they build on each other, and why most HTTP traffic goes through an ingress rather than many LoadBalancer Services.
+      good: Correctly distinguishes the main types with at least one example.
+      weak: Cannot explain the difference between ClusterIP and LoadBalancer or what headless means.
+    followups:
+      - Why would a database client want a headless Service?
+      - What does ExternalName do, and when have you seen it used?
+    common_errors:
+      - Exposing every internal service through its own LoadBalancer.
+
+  - external_key: technical.devops_kubernetes.service_no_endpoints
+    competency_key: kubernetes
+    topic: Service with no endpoints
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      After a teammate refactored some manifests, calls to a Service start failing with connection refused,
+      but the pods themselves look healthy. How would you track down the problem?
+    expected_concepts:
+      - check the Service's endpoints or EndpointSlices
+      - selector labels not matching pod labels
+      - port versus targetPort mismatch
+      - pods not passing readiness so they're excluded
+      - testing directly against a pod IP to isolate the layer
+    rubric:
+      excellent: Checks endpoints first, then compares selectors, ports and readiness, and isolates whether the problem is the Service or the pod by testing each layer.
+      good: Suspects a selector or port mismatch and knows how to check endpoints.
+      weak: Restarts pods or recreates the Service without inspecting anything.
+    followups:
+      - How would a typo in a label show up in what you'd see?
+      - The endpoints list the pods but requests still fail. What next?
+    common_errors:
+      - Confusing the Service port with the container port.
+
+  - external_key: technical.devops_kubernetes.ingress_controllers
+    competency_key: kubernetes
+    topic: Ingress and ingress controllers
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How does an Ingress resource relate to the ingress controller that serves it, and why would you route
+      traffic through one rather than exposing services directly?
+    expected_concepts:
+      - Ingress is only configuration, a controller implements it
+      - controllers such as NGINX, Traefik or cloud load balancer controllers
+      - host and path based routing to Services
+      - TLS termination in one place
+      - fewer external load balancers and central policies
+    rubric:
+      excellent: Separates the resource from the controller, explains routing and TLS, and discusses the operational benefits and the controller as a shared critical component.
+      good: Explains host and path routing and that a controller must be installed.
+      weak: Thinks creating an Ingress is enough on its own or cannot say why it's useful.
+    followups:
+      - What happens if you run two ingress controllers in the same cluster?
+      - How do you make the ingress controller itself highly available?
+    common_errors:
+      - Forgetting to set the ingress class when several controllers exist.
+
+  - external_key: technical.devops_kubernetes.pv_pvc_storageclass
+    competency_key: kubernetes
+    topic: Persistent volumes, claims and storage classes
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Explain how a pod ends up with a persistent disk in Kubernetes, from the claim it makes to the actual
+      volume, using an example from a workload you've run.
+    expected_concepts:
+      - PersistentVolumeClaim requests size and access mode
+      - StorageClass drives dynamic provisioning through a CSI driver
+      - PersistentVolume is the provisioned volume bound to the claim
+      - reclaim policy Delete or Retain
+      - volume binding mode WaitForFirstConsumer for zonal disks
+    rubric:
+      excellent: Walks through claim, class, provisioning and binding with a concrete example, and covers reclaim policy and zonal binding.
+      good: Explains the PVC, PV and StorageClass relationship correctly.
+      weak: Confuses the claim with the volume or doesn't know how volumes get created.
+    followups:
+      - What happens to the data when you delete the claim?
+      - Why does binding mode matter in a multi-zone cluster?
+    common_errors:
+      - Not realising the default reclaim policy may delete data with the claim.
+
+  - external_key: technical.devops_kubernetes.cross_namespace_connectivity
+    competency_key: kubernetes
+    topic: Pod cannot reach a service in another namespace
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A pod in the payments namespace can't reach a service that lives in the orders namespace, while other
+      callers can. How would you work through it?
+    expected_concepts:
+      - using the correct DNS name including namespace
+      - testing name resolution and the port from inside the pod
+      - NetworkPolicies on either side
+      - service mesh or authorisation policies
+      - comparing with a caller that works
+    rubric:
+      excellent: Works layer by layer from DNS name to port to network policy and mesh policy, using a working caller as a baseline.
+      good: Checks the DNS name and suspects a network policy.
+      weak: Guesses randomly or suggests moving both apps into one namespace.
+    followups:
+      - How would you test connectivity if the container has no shell or curl?
+      - How would you tell a network policy drop from an application refusal?
+    common_errors:
+      - Using the short service name, which only resolves inside the same namespace.
+
+  - external_key: technical.devops_kubernetes.volume_access_modes
+    competency_key: kubernetes
+    topic: Volume access modes and shared storage
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      A team wants several replicas of their app to read and write the same uploaded files on a shared volume.
+      How do volume access modes affect that, and what would you recommend?
+    expected_concepts:
+      - ReadWriteOnce attaches to a single node
+      - ReadWriteMany needs a file system such as NFS or a managed file service
+      - ReadWriteOncePod for strict single-writer cases
+      - performance and locking concerns with shared file systems
+      - object storage as an often better design
+    rubric:
+      excellent: Explains the access modes and what backs them, the trade-offs of shared file systems, and suggests object storage where it fits the app.
+      good: Knows block volumes are single-node and that a shared file system is needed for many writers.
+      weak: Assumes any volume can be mounted by every replica.
+    followups:
+      - Why might ReadWriteOnce appear to work when all replicas land on one node?
+      - What would you check before putting a database on NFS?
+    common_errors:
+      - Thinking ReadWriteOnce means only one pod rather than one node.
+
+  - external_key: technical.devops_kubernetes.ingress_cert_expired
+    competency_key: kubernetes
+    topic: Expired certificate at the ingress
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Customers start seeing certificate errors on your main site, and you find the ingress is serving an
+      expired certificate even though cert-manager is installed. How would you restore service and find out
+      why renewal failed?
+    expected_concepts:
+      - inspect the Certificate, CertificateRequest and Order resources
+      - ACME challenge failures such as DNS or HTTP-01 routing problems
+      - the Secret referenced by the Ingress
+      - manual renewal or temporary certificate to restore quickly
+      - alerting on certificate expiry ahead of time
+    rubric:
+      excellent: Restores service quickly, then follows cert-manager's resources to the failed challenge and adds expiry monitoring so it doesn't recur.
+      good: Checks cert-manager status and the challenge, and knows how the Ingress references the Secret.
+      weak: Only replaces the certificate by hand without investigating renewal.
+    followups:
+      - What would cause HTTP-01 challenges to fail behind your ingress?
+      - How far ahead of expiry would you alert?
+    common_errors:
+      - Not noticing the Ingress points at a different Secret than the one being renewed.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: technical.devops_kubernetes.kube_proxy_modes
+    competency_key: kubernetes
+    topic: kube-proxy modes and eBPF data planes
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How does traffic to a Service's virtual IP actually reach a pod, and what changes when you move from
+      iptables mode to IPVS or an eBPF data plane such as Cilium?
+    expected_concepts:
+      - kube-proxy programs node rules from EndpointSlices
+      - iptables rules grow linearly and update slowly at scale
+      - IPVS uses hash tables and offers balancing algorithms
+      - eBPF can replace kube-proxy and adds visibility
+      - connection-level, not request-level, balancing
+    rubric:
+      excellent: Explains DNAT on each node, the scaling limits of iptables, what IPVS and eBPF change, and notes balancing happens per connection.
+      good: Knows kube-proxy writes rules and that iptables has scaling problems.
+      weak: Thinks the Service IP belongs to a real proxy process or interface.
+    followups:
+      - Why can't you ping a ClusterIP?
+      - What would push you to replace kube-proxy entirely?
+    common_errors:
+      - Believing the Service balances individual HTTP requests.
+
+  - external_key: technical.devops_kubernetes.cni_choice
+    competency_key: networking
+    topic: Choosing a CNI and pod addressing model
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      If you were setting up a new cluster, how would you choose between an overlay network and giving pods
+      routable addresses from the underlying network? Tell me what drove the choice on clusters you've
+      worked on.
+    expected_concepts:
+      - overlay encapsulation versus native VPC routing
+      - IP address consumption and subnet planning
+      - performance and MTU overhead
+      - visibility of pod IPs to firewalls and other networks
+      - network policy support of the chosen CNI
+    rubric:
+      excellent: Compares both models on addressing, performance, integration and policy, and grounds the choice in concrete constraints such as IP space or compliance.
+      good: Explains overlay versus native routing with one or two trade-offs.
+      weak: Picks a CNI by popularity without understanding what it changes.
+    followups:
+      - How would you plan subnet sizes for a cluster expected to grow tenfold?
+      - What symptoms suggest an MTU problem in the pod network?
+    common_errors:
+      - Underestimating how many IPs native routing consumes per node.
+
+  - external_key: technical.devops_kubernetes.pod_ip_exhaustion
+    competency_key: kubernetes
+    topic: Running out of pod IP addresses
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      New pods are stuck in ContainerCreating with events saying the network plugin failed to assign an IP
+      address, even though the nodes have plenty of CPU and memory. How would you handle this now and
+      longer term?
+    expected_concepts:
+      - subnet or IP pool exhaustion for pods
+      - per-node IP limits tied to network interfaces
+      - warm IP pools reserving addresses
+      - prefix delegation or secondary CIDR ranges
+      - planning address space and max pods per node
+    rubric:
+      excellent: Confirms exhaustion from CNI and subnet data, relieves it short term, and fixes the design through larger or extra ranges, prefix delegation or pool tuning.
+      good: Recognises IP exhaustion and suggests adding address space.
+      weak: Adds more nodes, which makes the problem worse.
+    followups:
+      - Why could adding nodes consume even more addresses?
+      - How would you monitor remaining IP capacity?
+    common_errors:
+      - Ignoring addresses held in warm pools on idle nodes.
+
+  - external_key: technical.devops_kubernetes.network_policy_rollout
+    competency_key: security
+    topic: Rolling out default-deny network policies
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your cluster currently allows any pod to talk to any other pod. How would you move to default-deny
+      network policies without breaking production traffic along the way?
+    expected_concepts:
+      - discover real traffic flows first using flow logs or observability tools
+      - start with namespace-level default deny plus explicit allows
+      - remember DNS egress and health check sources
+      - audit or dry-run modes where the CNI supports them
+      - roll out namespace by namespace with owners
+    rubric:
+      excellent: Maps actual flows before writing policy, rolls out incrementally with audit modes, and calls out easy-to-miss traffic such as DNS and monitoring.
+      good: Proposes default deny with allow rules and a gradual rollout.
+      weak: Applies default deny everywhere at once or forgets DNS.
+    followups:
+      - How do you write a policy that allows traffic from a specific namespace?
+      - What happens if the CNI doesn't enforce NetworkPolicy at all?
+    common_errors:
+      - Blocking egress to the cluster DNS and breaking every service.
+
+  - external_key: technical.devops_kubernetes.grpc_load_imbalance
+    competency_key: kubernetes
+    topic: Uneven load with long-lived connections
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A gRPC service has six replicas, but nearly all requests go to one or two pods and adding replicas
+      doesn't help. Why does that happen, and how would you fix it?
+    expected_concepts:
+      - HTTP/2 multiplexes requests over long-lived connections
+      - Service balancing happens per connection
+      - client-side balancing with a headless Service
+      - a layer 7 proxy or service mesh balancing per request
+      - connection max age to force rebalancing
+    rubric:
+      excellent: Explains connection-level balancing against HTTP/2 multiplexing and compares client-side, proxy and connection-age fixes with their trade-offs.
+      good: Identifies long-lived connections as the cause and suggests one valid fix.
+      weak: Blames the pods or keeps adding replicas.
+    followups:
+      - What does a headless Service change for the client?
+      - Why does the imbalance get worse right after a rollout?
+    common_errors:
+      - Assuming the Service distributes each RPC across pods.
+
+  - external_key: technical.devops_kubernetes.gateway_api
+    competency_key: kubernetes
+    topic: Gateway API versus Ingress
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Some teams are moving from Ingress to the Gateway API. What limitations of Ingress does it address,
+      and how would you decide whether to migrate?
+    expected_concepts:
+      - role split between infrastructure and application owners
+      - GatewayClass, Gateway and route resources
+      - richer routing such as header matching and traffic weights without annotations
+      - support for more protocols beyond HTTP
+      - controller support and migration effort
+    rubric:
+      excellent: Explains the role-oriented model and portability gains over annotation-heavy Ingress, and makes a pragmatic migration decision based on controller support and need.
+      good: Knows Gateway API is more expressive and separates gateways from routes.
+      weak: Thinks it is just a renamed Ingress.
+    followups:
+      - How would you let application teams attach routes without touching the shared gateway?
+      - How would you run both side by side during a migration?
+    common_errors:
+      - Assuming every controller supports the same Gateway API features.
+
+  - external_key: technical.devops_kubernetes.client_source_ip
+    competency_key: kubernetes
+    topic: Preserving client source IP
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your application logs show every request coming from a node IP instead of the real client address.
+      Explain why that happens and the options you have to preserve the client IP.
+    expected_concepts:
+      - SNAT when traffic hops between nodes
+      - externalTrafficPolicy Local keeps the source IP
+      - Local can cause uneven load and relies on load balancer health checks
+      - X-Forwarded-For or proxy protocol at layer 7
+      - trusting forwarded headers only from known proxies
+    rubric:
+      excellent: Explains the SNAT cause, the Local policy and its balancing trade-offs, and the header or proxy protocol approach with the security caveat of trusting headers.
+      good: Knows about externalTrafficPolicy or forwarded headers.
+      weak: Cannot explain where the address is lost.
+    followups:
+      - Why could the Local policy drop traffic during a rollout?
+      - How would you stop clients from spoofing the forwarded header?
+    common_errors:
+      - Trusting X-Forwarded-For from any source.
+
+  - external_key: technical.devops_kubernetes.volume_multi_attach
+    competency_key: kubernetes
+    topic: Volume stuck attached after node failure
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A node hosting a StatefulSet pod died. The replacement pod is stuck in ContainerCreating with a
+      multi-attach error for its volume. What's going on, and how would you recover safely?
+    expected_concepts:
+      - the volume is still attached to the failed node
+      - the attach-detach controller waits to avoid data corruption
+      - VolumeAttachment objects
+      - confirming the old node is really down before forcing detach
+      - non-graceful node shutdown handling
+    rubric:
+      excellent: Explains why Kubernetes refuses to double-attach, confirms the old node is truly gone before forcing a detach, and knows the tools for doing so safely.
+      good: Identifies the stale attachment and suggests detaching it.
+      weak: Force-deletes things without considering two writers on the same disk.
+    followups:
+      - What could happen if the old node was only partitioned, not dead?
+      - How would you make this recovery faster in future?
+    common_errors:
+      - Force deleting the pod and assuming the volume detaches instantly.
+
+  - external_key: technical.devops_kubernetes.statefulset_storage_ops
+    competency_key: kubernetes
+    topic: StatefulSet storage operations
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do volumeClaimTemplates behave over a StatefulSet's life, for example when you scale it down,
+      delete it, or need to grow every replica's disk?
+    expected_concepts:
+      - one claim per ordinal created from the template
+      - claims kept on scale-down and delete by default
+      - retention policy for claims
+      - templates are mostly immutable so resizing is done on each claim
+      - storage class must allow volume expansion
+    rubric:
+      excellent: Describes the per-ordinal lifecycle, retention defaults and policy, and a correct resize procedure including the template immutability workaround.
+      good: Knows claims persist after scale-down and that resizing needs expansion support.
+      weak: Assumes editing the template resizes existing disks.
+    followups:
+      - How would you change the template after resizing the claims?
+      - Why might leftover claims cause surprises when you scale back up?
+    common_errors:
+      - Expecting disks to be cleaned up automatically when the StatefulSet is deleted.
+
+  - external_key: technical.devops_kubernetes.storage_migration
+    competency_key: kubernetes
+    topic: Moving data to a new storage class
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You need to move a stateful service's volumes from an old storage class to a faster one with as little
+      downtime as possible. How would you plan and carry out that migration?
+    expected_concepts:
+      - claims cannot change class in place
+      - snapshot and restore, or application-level replication
+      - copying data with a job while the app is stopped
+      - verifying data integrity before cutover
+      - rollback path to the old volumes
+    rubric:
+      excellent: Chooses a method that fits the application, preferring replication where it exists, with integrity checks, a cutover plan and a rollback path.
+      good: Proposes snapshots or copying data to new claims and switching over.
+      weak: Expects to edit the storage class on the existing claim.
+    followups:
+      - How would you do it for a database with built-in replication?
+      - What would you keep around in case you need to roll back?
+    common_errors:
+      - Deleting the old volumes before confirming the new ones work.
+
+  - external_key: technical.devops_kubernetes.service_mesh_value
+    competency_key: kubernetes
+    topic: When a service mesh is worth it
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What does a service mesh actually give you on Kubernetes, and when have you decided, or would you
+      decide, that it isn't worth the extra complexity?
+    expected_concepts:
+      - mutual TLS between services
+      - traffic management such as retries, timeouts and splitting
+      - uniform telemetry for service-to-service calls
+      - sidecar or ambient data plane overhead
+      - operational complexity and upgrade burden
+    rubric:
+      excellent: Lists concrete mesh capabilities, weighs them against latency, resource and operational costs, and gives clear criteria for adopting or avoiding one.
+      good: Explains mTLS and traffic control and acknowledges complexity.
+      weak: Treats a mesh as something every cluster should have.
+    followups:
+      - How would you get mTLS without a full mesh?
+      - What breaks first when the mesh control plane is unhealthy?
+    common_errors:
+      - Ignoring the per-pod resource cost of sidecars.
+
+  - external_key: technical.devops_kubernetes.fixed_egress_ip
+    competency_key: networking
+    topic: Fixed egress IP for a partner allowlist
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A partner will only accept connections from a short list of fixed IP addresses, but your pods run on
+      autoscaled nodes with changing addresses. How would you make outbound traffic come from stable IPs?
+    expected_concepts:
+      - NAT gateway with static addresses for the subnet
+      - egress gateway in a CNI or service mesh
+      - dedicated node pool with fixed addresses
+      - limiting which workloads use that path
+      - monitoring and redundancy of the egress path
+    rubric:
+      excellent: Compares NAT, egress gateway and dedicated node options, scopes the path to the workloads that need it, and makes it resilient.
+      good: Proposes a NAT gateway or egress gateway with static IPs.
+      weak: Suggests giving the partner the current node IPs.
+    followups:
+      - What happens to that traffic if the egress gateway pod restarts?
+      - How would you restrict other workloads from using those addresses?
+    common_errors:
+      - Creating a single point of failure on the egress path.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: technical.devops_kubernetes.packet_path
+    competency_key: networking
+    topic: Following a request from client to pod
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Take a request from an external client all the way to a container in your cluster, through the cloud
+      load balancer, the ingress controller, the Service and the pod network. Where do addresses get
+      translated, and where can it break?
+    expected_concepts:
+      - load balancer targeting nodes or pod IPs directly
+      - ingress controller proxying to Service or endpoints
+      - DNAT to the pod and conntrack state
+      - SNAT and the return path
+      - CNI routing between nodes and encapsulation
+      - failure points such as health checks, MTU and conntrack limits
+    rubric:
+      excellent: Gives an accurate hop-by-hop path with every translation and return path, and maps realistic failure modes to each hop.
+      good: Covers the main hops and at least one translation step correctly.
+      weak: Hand-waves the path from the load balancer to the pod.
+    followups:
+      - How does targeting pod IPs directly from the load balancer change the path?
+      - Where would you capture packets to find a dropped connection?
+    common_errors:
+      - Forgetting the return path must pass back through the same translation.
+
+  - external_key: technical.devops_kubernetes.conntrack_exhaustion
+    competency_key: networking
+    topic: Connection tracking exhaustion on nodes
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      During peak traffic, some nodes start dropping new connections and the kernel log mentions the
+      connection tracking table is full. How would you deal with it now and prevent it later?
+    expected_concepts:
+      - nf_conntrack table size and count metrics
+      - short-lived connections and UDP traffic such as DNS filling the table
+      - raising limits and tuning timeouts
+      - connection reuse and keep-alive in clients
+      - NodeLocal DNSCache or eBPF data paths reducing conntrack use
+    rubric:
+      excellent: Confirms with conntrack metrics, applies a safe immediate mitigation, finds the traffic pattern responsible, and fixes it structurally with reuse, DNS caching or data plane changes.
+      good: Raises the table limit and identifies short-lived connections as a cause.
+      weak: Reboots nodes or cannot interpret the kernel message.
+    followups:
+      - Why does DNS traffic contribute so much to this?
+      - What would you alert on to catch it early?
+    common_errors:
+      - Raising the limit without considering memory or the root cause.
+
+  - external_key: technical.devops_kubernetes.backup_restore
+    competency_key: kubernetes
+    topic: Backing up and restoring cluster workloads
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How would you design backup and restore for a cluster running stateless services and a few stateful
+      ones, and how would you know the restore actually works?
+    expected_concepts:
+      - stateless workloads rebuilt from Git rather than backed up
+      - Velero or similar for resources and volume snapshots
+      - CSI snapshots and application-consistent backups
+      - database-native backups and point-in-time recovery
+      - regular restore drills into a separate cluster with recovery time targets
+    rubric:
+      excellent: Separates declarative state from data, picks the right backup method per data type with consistency guarantees, and proves recovery through scheduled restore tests against targets.
+      good: Uses a backup tool with snapshots and mentions testing restores.
+      weak: Only backs up etcd or has never tested a restore.
+    followups:
+      - Why is a crash-consistent disk snapshot risky for some databases?
+      - How would you restore a single namespace without disturbing others?
+    common_errors:
+      - Treating an etcd snapshot as a backup of application data.
+
+  - external_key: technical.devops_kubernetes.database_on_k8s_drain
+    competency_key: kubernetes
+    topic: Running databases through node maintenance
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You run PostgreSQL on Kubernetes using an operator, and during the last node upgrade the primary was
+      evicted, failover took several minutes and some writes were lost. How would you investigate and
+      change things?
+    expected_concepts:
+      - how the operator handles planned switchover versus failover
+      - PDBs and drain ordering for replicas and primary
+      - synchronous versus asynchronous replication and data loss
+      - termination grace period and fencing
+      - rehearsing maintenance and coordinating with the operator
+    rubric:
+      excellent: Reconstructs the timeline, distinguishes failover from planned switchover, fixes replication mode, PDBs and drain choreography, and tests the procedure.
+      good: Suggests PDBs and a planned switchover before draining.
+      weak: Concludes databases should never run on Kubernetes without analysing the failure.
+    followups:
+      - What trade-off does synchronous replication bring?
+      - How would you make node upgrades trigger a clean switchover automatically?
+    common_errors:
+      - Letting the drain kill the primary instead of switching over first.
+
+  - external_key: technical.devops_kubernetes.storage_latency_local_pv
+    competency_key: kubernetes
+    topic: Storage performance and local volumes
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      A latency-sensitive data store performs poorly on network-attached block volumes. What options would
+      you weigh, including local NVMe volumes, and what do you give up with each?
+    expected_concepts:
+      - provisioned IOPS and throughput tiers for network volumes
+      - local persistent volumes pin pods to nodes
+      - data lost with the node, so replication is required
+      - scheduling and recovery implications
+      - measuring with realistic benchmarks before deciding
+    rubric:
+      excellent: Benchmarks first, compares tuned network storage with local volumes, and fully accounts for durability, scheduling pinning and recovery when nodes go away.
+      good: Knows local volumes are faster but tie data to the node.
+      weak: Switches to local disks without considering data loss.
+    followups:
+      - How would node autoscaling interact with local volumes?
+      - Which workloads are good candidates for local storage?
+    common_errors:
+      - Ignoring how long it takes to rebuild a replica after losing a node.
+
+  - external_key: technical.devops_kubernetes.mesh_mtls_rollout
+    competency_key: security
+    topic: Mutual TLS rollout breaks traffic
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You switched the service mesh to strict mutual TLS across the cluster and several things broke, including
+      health checks and calls from a legacy service outside the mesh. How would you recover, and how would you
+      roll it out again?
+    expected_concepts:
+      - roll back to permissive mode to restore traffic
+      - identify plaintext clients using mesh telemetry
+      - workloads outside the mesh, health checks and headless or direct pod traffic
+      - per-namespace or per-workload strict policies
+      - staged rollout with verification at each step
+    rubric:
+      excellent: Restores quickly, uses telemetry to find every plaintext path, and plans a staged rollout with targeted exceptions and verification.
+      good: Goes back to permissive mode and plans a namespace-by-namespace rollout.
+      weak: Disables the mesh entirely or does not know why the breakage happened.
+    followups:
+      - How would you bring a legacy service outside the cluster into the trust model?
+      - How do you prove a workload no longer accepts plaintext?
+    common_errors:
+      - Turning on strict mode before measuring how much plaintext traffic exists.

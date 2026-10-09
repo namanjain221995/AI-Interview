@@ -1,0 +1,221 @@
+version: 1
+slug: readings_before_alert_sql
+title: "Readings in the Window Before Each Alert"
+difficulty: easy
+competency_keys: [sql, databases, problem_solving]
+role_tags: [data, data_analyst, dba, sre]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Readings in the Window Before Each Alert
+
+  An IoT monitoring platform stores raw sensor readings and the alerts its rules engine raised.
+  Timestamps are integer Unix seconds.
+
+  Table `readings`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | sensor_id | INTEGER | sensor that produced the reading |
+  | reading_ts | INTEGER | when the reading was taken; several readings may share a timestamp |
+  | value | INTEGER | measured value |
+
+  Table `alerts`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | sensor_id | INTEGER | sensor the alert is about |
+  | alert_ts | INTEGER | when the alert was raised |
+
+  When an engineer opens an alert, the console shows how much data supported it: the number of readings
+  from the **same sensor** taken in the five minutes up to and including the alert, that is, readings
+  whose `reading_ts` lies in the **inclusive** window `[alert_ts - 300, alert_ts]`. Readings taken after
+  the alert do not count, and a reading can count for several alerts whose windows overlap.
+
+  Return one row per alert with the columns `alert_id` and `readings_in_window`. Alerts with no reading in
+  their window must still appear, with a count of `0`. Order the rows by `alert_id` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  readings                                   alerts
+  +----+-----------+------------+-------+    +----+-----------+----------+
+  | id | sensor_id | reading_ts | value |    | id | sensor_id | alert_ts |
+  +----+-----------+------------+-------+    +----+-----------+----------+
+  | 1  | 7         | 1000       | 40    |    | 1  | 7         | 1300     |
+  | 2  | 7         | 1150       | 42    |    | 2  | 9         | 1500     |
+  | 3  | 7         | 1290       | 55    |    | 3  | 7         | 1700     |
+  | 4  | 7         | 1400       | 61    |    | 4  | 12        | 1300     |
+  | 5  | 9         | 1200       | 18    |    +----+-----------+----------+
+  | 6  | 9         | 1310       | 20    |
+  +----+-----------+------------+-------+
+
+  Output
+  +----------+--------------------+
+  | alert_id | readings_in_window |
+  +----------+--------------------+
+  | 1        | 3                  |
+  | 2        | 2                  |
+  | 3        | 1                  |
+  | 4        | 0                  |
+  +----------+--------------------+
+  Alert 1 covers [1000, 1300]: readings 1, 2 and 3 (1000 is on the boundary and counts).
+  Alert 3 covers [1400, 1700]: only reading 4. Sensor 12 has no readings at all.
+  ```
+
+  ### Example 2
+  ```
+  readings                                   alerts
+  +----+-----------+------------+-------+    +----+-----------+----------+
+  | id | sensor_id | reading_ts | value |    | id | sensor_id | alert_ts |
+  +----+-----------+------------+-------+    +----+-----------+----------+
+  | 1  | 3         | 500        | 9     |    | 10 | 3         | 800      |
+  | 2  | 4         | 450        | 1     |    | 11 | 4         | 760      |
+  | 3  | 3         | 801        | 7     |    +----+-----------+----------+
+  +----+-----------+------------+-------+
+
+  Output
+  +----------+--------------------+
+  | alert_id | readings_in_window |
+  +----------+--------------------+
+  | 10       | 1                  |
+  | 11       | 0                  |
+  +----------+--------------------+
+  Reading 3 comes one second after alert 10. Reading 2 is one second too early for alert 11 (window [460, 760]).
+  ```
+
+  ### Constraints
+  - Timestamps are non-negative integers; a window may start below `0` when `alert_ts < 300`.
+  - Both tables may be empty.
+languages: [sql]
+starter_code:
+  sql: |
+    -- For every alert, count the same-sensor readings in [alert_ts - 300, alert_ts].
+    SELECT a.id AS alert_id, 0 AS readings_in_window
+    FROM alerts a
+    ORDER BY a.id;
+reference_solutions:
+  sql: |
+    SELECT a.id AS alert_id, COUNT(r.id) AS readings_in_window
+    FROM alerts a
+    LEFT JOIN readings r
+      ON r.sensor_id = a.sensor_id
+     AND r.reading_ts BETWEEN a.alert_ts - 300 AND a.alert_ts
+    GROUP BY a.id
+    ORDER BY a.id;
+sql_setup: |
+  CREATE TABLE readings (
+    id INTEGER PRIMARY KEY,
+    sensor_id INTEGER NOT NULL,
+    reading_ts INTEGER NOT NULL,
+    value INTEGER NOT NULL
+  );
+  CREATE TABLE alerts (
+    id INTEGER PRIMARY KEY,
+    sensor_id INTEGER NOT NULL,
+    alert_ts INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - inclusive lower boundary, two sensors and an alert without readings"
+    ordered: true
+    setup_sql: |
+      INSERT INTO readings (id, sensor_id, reading_ts, value) VALUES
+        (1, 7, 1000, 40), (2, 7, 1150, 42), (3, 7, 1290, 55), (4, 7, 1400, 61), (5, 9, 1200, 18), (6, 9, 1310, 20);
+      INSERT INTO alerts (id, sensor_id, alert_ts) VALUES (1, 7, 1300), (2, 9, 1500), (3, 7, 1700), (4, 12, 1300);
+    expected_rows: [[1, 3], [2, 2], [3, 1], [4, 0]]
+  - id: t2
+    description: "Example 2 - reading after the alert and reading one second before the window"
+    ordered: true
+    setup_sql: |
+      INSERT INTO readings (id, sensor_id, reading_ts, value) VALUES (1, 3, 500, 9), (2, 4, 450, 1), (3, 3, 801, 7);
+      INSERT INTO alerts (id, sensor_id, alert_ts) VALUES (10, 3, 800), (11, 4, 760);
+    expected_rows: [[10, 1], [11, 0]]
+  - id: t3
+    hidden: true
+    description: "Empty tables"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Readings but no alerts - no rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO readings (id, sensor_id, reading_ts, value) VALUES (1, 1, 100, 5), (2, 1, 200, 6);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Alerts without any readings, inserted out of id order - zero counts sorted by alert_id (inner join pitfall)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO alerts (id, sensor_id, alert_ts) VALUES (5, 1, 100), (2, 1, 50), (9, 2, 10);
+    expected_rows: [[2, 0], [5, 0], [9, 0]]
+  - id: t6
+    hidden: true
+    description: "Exact boundaries - alert_ts - 300 and alert_ts count, alert_ts - 301 and alert_ts + 1 do not"
+    ordered: true
+    setup_sql: |
+      INSERT INTO readings (id, sensor_id, reading_ts, value) VALUES
+        (1, 4, 699, 1), (2, 4, 700, 2), (3, 4, 1000, 3), (4, 4, 1001, 4), (5, 4, 850, 5);
+      INSERT INTO alerts (id, sensor_id, alert_ts) VALUES (1, 4, 1000);
+    expected_rows: [[1, 3]]
+  - id: t7
+    hidden: true
+    description: "Overlapping windows - one reading counts for several alerts, including two alerts at the same time"
+    ordered: true
+    setup_sql: |
+      INSERT INTO readings (id, sensor_id, reading_ts, value) VALUES (1, 2, 1000, 1), (2, 2, 1100, 2), (3, 2, 1250, 3);
+      INSERT INTO alerts (id, sensor_id, alert_ts) VALUES (1, 2, 1100), (2, 2, 1250), (3, 2, 1250), (4, 2, 1500);
+    expected_rows: [[1, 2], [2, 3], [3, 3], [4, 1]]
+  - id: t8
+    hidden: true
+    description: "Duplicate timestamps - every reading counts separately (COUNT DISTINCT reading_ts pitfall)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO readings (id, sensor_id, reading_ts, value) VALUES
+        (1, 8, 500, 1), (2, 8, 500, 1), (3, 8, 500, 2), (4, 8, 450, 9);
+      INSERT INTO alerts (id, sensor_id, alert_ts) VALUES (1, 8, 500), (2, 8, 449);
+    expected_rows: [[1, 4], [2, 0]]
+  - id: t9
+    hidden: true
+    description: "Readings of other sensors at the same time must not leak into the count; window starting below zero"
+    ordered: true
+    setup_sql: |
+      INSERT INTO readings (id, sensor_id, reading_ts, value) VALUES
+        (1, 1, 0, 3), (2, 2, 60, 4), (3, 1, 100, 5), (4, 3, 110, 6), (5, 2, 115, 7), (6, 1, 120, 8);
+      INSERT INTO alerts (id, sensor_id, alert_ts) VALUES (1, 1, 120), (2, 2, 120), (3, 3, 100), (4, 4, 120);
+    expected_rows: [[1, 3], [2, 2], [3, 0], [4, 0]]
+expected_concepts:
+  - "LEFT JOIN so that alerts without readings keep a row"
+  - "range join condition on timestamp (BETWEEN is inclusive)"
+  - "COUNT of a column from the outer-joined table instead of COUNT(*)"
+  - "a composite index on readings (sensor_id, reading_ts) turns each window into a range scan"
+  - "deterministic ORDER BY"
+optimal_complexity: {time: "O(a log r + matches) with an index on readings (sensor_id, reading_ts)", space: "O(a) for the grouped output"}
+rubric:
+  excellent: "Writes a LEFT JOIN with the sensor and inclusive time-window predicate in the ON clause, counts a readings column so empty windows give 0, orders by alert_id, and explains how an index on (sensor_id, reading_ts) bounds each window to a range scan."
+  good: "Correct query after a hint about keeping alerts with no readings or about COUNT(*) returning 1 for them."
+  weak: "Uses an inner join that drops alerts, puts the window filter in WHERE (turning the outer join into an inner join), counts with COUNT(*), or gets the window boundaries wrong."
+  criteria:
+    correctness: "All tests pass, including empty windows, exact boundaries, overlapping windows and duplicate timestamps."
+    efficiency: "Set-based range join; mentions the composite index and avoids a per-alert correlated scan without an index."
+    code_quality: "Clear aliases, named output columns and a readable window predicate."
+    edge_cases: "Alerts without readings, readings exactly on either boundary, readings from other sensors and empty tables."
+    communication: "Explains why the window predicate belongs in the ON clause of the outer join."
+hints:
+  - "Every alert needs exactly one output row, even when nothing happened before it. Which kind of join keeps rows that have no match?"
+  - "Match readings on the same sensor and on a reading time between the alert time minus 300 and the alert time, both ends included. Put these conditions in the join itself, not in a later filter."
+  - "Left join readings to alerts on the sensor and the inclusive time window, group by the alert id, and count a column of the readings table (which is null when nothing matched) so empty windows give zero. Finish by ordering on the alert id."
+followups:
+  - "Why does moving the time-window condition into WHERE drop alerts with no readings?"
+  - "Which index would you create for this query on a billion-row readings table, and in which column order?"
+  - "How would you also return the average value of the readings in each window?"
+  - "How would the query change if the window length were stored per sensor in another table?"
+common_errors:
+  - "Using an inner join, which drops alerts that have no readings in their window."
+  - "Filtering the time window in WHERE after a LEFT JOIN, which silently turns it into an inner join."
+  - "Counting with COUNT(*), which reports 1 instead of 0 for an empty window."
+  - "Using strict comparisons so readings exactly 300 seconds before the alert or at the alert time are missed."
+  - "Forgetting to match on sensor_id, so readings from other sensors are counted."

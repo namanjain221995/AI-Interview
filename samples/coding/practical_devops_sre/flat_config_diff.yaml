@@ -1,0 +1,146 @@
+version: 1
+slug: flat_config_diff
+title: Environment Config Diff
+difficulty: easy
+competency_keys: [data_structures, code_quality]
+role_tags: [devops, platform, backend, qa]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Environment Config Diff
+
+  Before a release goes out, the deployment pipeline posts a short summary of how the service's
+  `.env` file changed. You are given the old file and the new file, each as a list of lines, and must
+  produce that summary.
+
+  Each file is read like this:
+
+  - A line is **ignored** if it is empty or its first character is `#` (a comment).
+  - Every other line is split at its **first** `=`: the text before it is the key, everything after it is
+    the value. The value may itself contain `=` characters and may be empty (`RETRIES=` sets
+    `RETRIES` to the empty string).
+  - If a key appears more than once in the same file, the **last** occurrence wins.
+  - Keys and values are compared exactly as written (case-sensitive, no trimming).
+
+  Return one entry for every key whose state differs between the two files:
+
+  - `"+KEY"` if the key exists only in the new file,
+  - `"-KEY"` if the key exists only in the old file,
+  - `"~KEY"` if the key exists in both files with different values.
+
+  Keys with the same value in both files are left out. Sort the entries by **key** in ascending ASCII
+  order (the `+`, `-` or `~` prefix does not take part in the ordering). Return an empty list when
+  nothing changed.
+
+  ### Example 1
+  ```
+  Input:  old_lines = ["# api settings", "PORT=8080", "LOG_LEVEL=info", "DB_URL=postgres://db:5432/app", "FEATURE_X=on"], new_lines = ["PORT=8080", "LOG_LEVEL=debug", "", "DB_URL=postgres://db:5432/app?sslmode=require", "CACHE_TTL=300"]
+  Output: ["+CACHE_TTL", "~DB_URL", "-FEATURE_X", "~LOG_LEVEL"]
+  Explanation: PORT is unchanged; the comment and the blank line are ignored.
+  ```
+
+  ### Example 2
+  ```
+  Input:  old_lines = ["TOKEN=abc==", "MODE=blue", "MODE=green", "RETRIES="], new_lines = ["MODE=green", "TOKEN=abc=", "RETRIES=", "NEW_FLAG="]
+  Output: ["+NEW_FLAG", "~TOKEN"]
+  Explanation: MODE was last set to green in the old file, so it is unchanged. RETRIES is empty in both files.
+  ```
+
+  ### Constraints
+  - `0 <= old_lines.length, new_lines.length <= 1000`
+  - Each line has at most 200 printable ASCII characters.
+  - Every line that is not ignored contains at least one `=`, and its key is non-empty and has no spaces.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: flat_config_diff
+  params:
+    - {name: old_lines, type: "string[]"}
+    - {name: new_lines, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def flat_config_diff(old_lines: list[str], new_lines: list[str]) -> list[str]:
+        def parse(lines: list[str]) -> dict[str, str]:
+            values: dict[str, str] = {}
+            for line in lines:
+                if not line or line[0] == "#":
+                    continue
+                key, _, value = line.partition("=")
+                values[key] = value  # a later occurrence overwrites an earlier one
+            return values
+
+        old, new = parse(old_lines), parse(new_lines)
+        changes: list[str] = []
+        for key in sorted(old.keys() | new.keys()):
+            if key not in old:
+                changes.append("+" + key)
+            elif key not in new:
+                changes.append("-" + key)
+            elif old[key] != new[key]:
+                changes.append("~" + key)
+        return changes
+  javascript: |
+    function flatConfigDiff(oldLines, newLines) {
+      function parse(lines) {
+        const values = new Map();
+        for (const line of lines) {
+          if (line.length === 0 || line[0] === "#") continue;
+          const cut = line.indexOf("=");
+          values.set(line.slice(0, cut), line.slice(cut + 1));
+        }
+        return values;
+      }
+
+      const oldValues = parse(oldLines);
+      const newValues = parse(newLines);
+      const keys = [...new Set([...oldValues.keys(), ...newValues.keys()])];
+      keys.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      const changes = [];
+      for (const key of keys) {
+        if (!oldValues.has(key)) changes.push("+" + key);
+        else if (!newValues.has(key)) changes.push("-" + key);
+        else if (oldValues.get(key) !== newValues.get(key)) changes.push("~" + key);
+      }
+      return changes;
+    }
+tests:
+  - {id: t1, args: [["# api settings", "PORT=8080", "LOG_LEVEL=info", "DB_URL=postgres://db:5432/app", "FEATURE_X=on"], ["PORT=8080", "LOG_LEVEL=debug", "", "DB_URL=postgres://db:5432/app?sslmode=require", "CACHE_TTL=300"]], expected: ["+CACHE_TTL", "~DB_URL", "-FEATURE_X", "~LOG_LEVEL"], description: "Example 1"}
+  - {id: t2, args: [["TOKEN=abc==", "MODE=blue", "MODE=green", "RETRIES="], ["MODE=green", "TOKEN=abc=", "RETRIES=", "NEW_FLAG="]], expected: ["+NEW_FLAG", "~TOKEN"], description: "Example 2 - repeated key keeps last value, '=' inside values, empty values"}
+  - {id: t3, hidden: true, args: [[], []], expected: [], description: "Both files empty"}
+  - {id: t4, hidden: true, args: [["# only comments", "", "#A=1"], ["", "# A=1"]], expected: [], description: "Only comments and blank lines on both sides - commented-out assignments are not keys"}
+  - {id: t5, hidden: true, args: [["B=2", "A=1", "C=3"], []], expected: ["-A", "-B", "-C"], description: "New file empty - every key removed, output sorted by key"}
+  - {id: t6, hidden: true, args: [[], ["Z=", "y=1", "a_b=2", "A9=3", "_X=4"]], expected: ["+A9", "+Z", "+_X", "+a_b", "+y"], description: "Old file empty - all added; ASCII ordering of digits, uppercase, underscore and lowercase"}
+  - {id: t7, hidden: true, args: [["port=80", "PORT=80", "HOST=a"], ["PORT=80", "HOST=a ", "Port=80"]], expected: ["~HOST", "+Port", "-port"], description: "Case-sensitive keys and a trailing space in a value counts as a change"}
+  - {id: t8, hidden: true, args: [["URL=x", "URL=y", "KEY=1", "KEY=2"], ["URL=x", "KEY=1", "KEY=3", "KEY=2", "NOTE=#not a comment"]], expected: ["+NOTE", "~URL"], description: "Old last value differs although an earlier value matches; new value repeated with last matching; '#' inside a value"}
+  - {id: t9, hidden: true, args: [["DEBUG=false", "EMPTY="], ["DEBUG=", "EMPTY=0"]], expected: ["~DEBUG", "~EMPTY"], description: "Value changed to empty and from empty"}
+  - {id: t10, hidden: true, args: [["SVC_000=v0", "SVC_001=v1", "SVC_002=v2", "SVC_003=v3", "SVC_004=v4", "SVC_005=v5", "SVC_006=v6", "SVC_007=v7", "SVC_008=v8", "SVC_009=v9", "SVC_010=v10", "SVC_011=v11", "SVC_012=v12", "SVC_013=v13", "SVC_014=v14", "SVC_015=v15", "SVC_016=v16", "SVC_017=v17", "SVC_018=v18", "SVC_019=v19", "SVC_020=v20", "SVC_021=v21", "SVC_022=v22", "SVC_023=v23", "SVC_024=v24", "SVC_025=v25", "SVC_026=v26", "SVC_027=v27", "SVC_028=v28", "SVC_029=v29", "SVC_030=v30", "SVC_031=v31", "SVC_032=v32", "SVC_033=v33", "SVC_034=v34", "SVC_035=v35", "SVC_036=v36", "SVC_037=v37", "SVC_038=v38", "SVC_039=v39", "SVC_040=v40", "SVC_041=v41", "SVC_042=v42", "SVC_043=v43", "SVC_044=v44", "SVC_045=v45", "SVC_046=v46", "SVC_047=v47", "SVC_048=v48", "SVC_049=v49", "SVC_050=v50", "SVC_051=v51", "SVC_052=v52", "SVC_053=v53", "SVC_054=v54", "SVC_055=v55", "SVC_056=v56", "SVC_057=v57", "SVC_058=v58", "SVC_059=v59", "SVC_060=v60", "SVC_061=v61", "SVC_062=v62", "SVC_063=v63", "SVC_064=v64", "SVC_065=v65", "SVC_066=v66", "SVC_067=v67", "SVC_068=v68", "SVC_069=v69", "SVC_070=v70", "SVC_071=v71", "SVC_072=v72", "SVC_073=v73", "SVC_074=v74", "SVC_075=v75", "SVC_076=v76", "SVC_077=v77", "SVC_078=v78", "SVC_079=v79", "SVC_080=v80", "SVC_081=v81", "SVC_082=v82", "SVC_083=v83", "SVC_084=v84", "SVC_085=v85", "SVC_086=v86", "SVC_087=v87", "SVC_088=v88", "SVC_089=v89", "SVC_090=v90", "SVC_091=v91", "SVC_092=v92", "SVC_093=v93", "SVC_094=v94", "SVC_095=v95", "SVC_096=v96", "SVC_097=v97", "SVC_098=v98", "SVC_099=v99", "SVC_100=v100", "SVC_101=v101", "SVC_102=v102", "SVC_103=v103", "SVC_104=v104", "SVC_105=v105", "SVC_106=v106", "SVC_107=v107", "SVC_108=v108", "SVC_109=v109", "SVC_110=v110", "SVC_111=v111", "SVC_112=v112", "SVC_113=v113", "SVC_114=v114", "SVC_115=v115", "SVC_116=v116", "SVC_117=v117", "SVC_118=v118", "SVC_119=v119", "SVC_120=v120", "SVC_121=v121", "SVC_122=v122", "SVC_123=v123", "SVC_124=v124", "SVC_125=v125", "SVC_126=v126", "SVC_127=v127", "SVC_128=v128", "SVC_129=v129", "SVC_130=v130", "SVC_131=v131", "SVC_132=v132", "SVC_133=v133", "SVC_134=v134", "SVC_135=v135", "SVC_136=v136", "SVC_137=v137", "SVC_138=v138", "SVC_139=v139", "SVC_140=v140", "SVC_141=v141", "SVC_142=v142", "SVC_143=v143", "SVC_144=v144", "SVC_145=v145", "SVC_146=v146", "SVC_147=v147", "SVC_148=v148", "SVC_149=v149"], ["SVC_010=v10", "SVC_011=v11", "SVC_012=v12", "SVC_013=v13", "SVC_014=v15", "SVC_015=v15", "SVC_016=v16", "SVC_017=v17", "SVC_018=v18", "SVC_019=v19", "SVC_020=v20", "SVC_021=v22", "SVC_022=v22", "SVC_023=v23", "SVC_024=v24", "SVC_025=v25", "SVC_026=v26", "SVC_027=v27", "SVC_028=v29", "SVC_029=v29", "SVC_030=v30", "SVC_031=v31", "SVC_032=v32", "SVC_033=v33", "SVC_034=v34", "SVC_035=v36", "SVC_036=v36", "SVC_037=v37", "SVC_038=v38", "SVC_039=v39", "SVC_040=v40", "SVC_041=v41", "SVC_042=v43", "SVC_043=v43", "SVC_044=v44", "SVC_045=v45", "SVC_046=v46", "SVC_047=v47", "SVC_048=v48", "SVC_049=v50", "SVC_050=v50", "SVC_051=v51", "SVC_052=v52", "SVC_053=v53", "SVC_054=v54", "SVC_055=v55", "SVC_056=v57", "SVC_057=v57", "SVC_058=v58", "SVC_059=v59", "SVC_060=v60", "SVC_061=v61", "SVC_062=v62", "SVC_063=v64", "SVC_064=v64", "SVC_065=v65", "SVC_066=v66", "SVC_067=v67", "SVC_068=v68", "SVC_069=v69", "SVC_070=v71", "SVC_071=v71", "SVC_072=v72", "SVC_073=v73", "SVC_074=v74", "SVC_075=v75", "SVC_076=v76", "SVC_077=v78", "SVC_078=v78", "SVC_079=v79", "SVC_080=v80", "SVC_081=v81", "SVC_082=v82", "SVC_083=v83", "SVC_084=v85", "SVC_085=v85", "SVC_086=v86", "SVC_087=v87", "SVC_088=v88", "SVC_089=v89", "SVC_090=v90", "SVC_091=v92", "SVC_092=v92", "SVC_093=v93", "SVC_094=v94", "SVC_095=v95", "SVC_096=v96", "SVC_097=v97", "SVC_098=v99", "SVC_099=v99", "SVC_100=v100", "SVC_101=v101", "SVC_102=v102", "SVC_103=v103", "SVC_104=v104", "SVC_105=v106", "SVC_106=v106", "SVC_107=v107", "SVC_108=v108", "SVC_109=v109", "SVC_110=v110", "SVC_111=v111", "SVC_112=v113", "SVC_113=v113", "SVC_114=v114", "SVC_115=v115", "SVC_116=v116", "SVC_117=v117", "SVC_118=v118", "SVC_119=v120", "SVC_120=v120", "SVC_121=v121", "SVC_122=v122", "SVC_123=v123", "SVC_124=v124", "SVC_125=v125", "SVC_126=v127", "SVC_127=v127", "SVC_128=v128", "SVC_129=v129", "SVC_130=v130", "SVC_131=v131", "SVC_132=v132", "SVC_133=v134", "SVC_134=v134", "SVC_135=v135", "SVC_136=v136", "SVC_137=v137", "SVC_138=v138", "SVC_139=v139", "SVC_140=v141", "SVC_141=v141", "SVC_142=v142", "SVC_143=v143", "SVC_144=v144", "SVC_145=v145", "SVC_146=v146", "SVC_147=v148", "SVC_148=v148", "SVC_149=v149", "SVC_150=v150", "SVC_151=v151", "SVC_152=v152", "SVC_153=v153", "SVC_154=v155", "SVC_155=v155", "SVC_156=v156", "SVC_157=v157", "SVC_158=v158", "SVC_159=v159"]], expected: ["-SVC_000", "-SVC_001", "-SVC_002", "-SVC_003", "-SVC_004", "-SVC_005", "-SVC_006", "-SVC_007", "-SVC_008", "-SVC_009", "~SVC_014", "~SVC_021", "~SVC_028", "~SVC_035", "~SVC_042", "~SVC_049", "~SVC_056", "~SVC_063", "~SVC_070", "~SVC_077", "~SVC_084", "~SVC_091", "~SVC_098", "~SVC_105", "~SVC_112", "~SVC_119", "~SVC_126", "~SVC_133", "~SVC_140", "~SVC_147", "+SVC_150", "+SVC_151", "+SVC_152", "+SVC_153", "+SVC_154", "+SVC_155", "+SVC_156", "+SVC_157", "+SVC_158", "+SVC_159"], description: "Stress - 150 keys per side with additions, removals and every seventh value changed"}
+expected_concepts:
+  - "parsing key/value lines by splitting on the first separator only"
+  - "hash maps keyed by config name with last-write-wins semantics"
+  - "set union of keys and classification into added, removed and changed"
+  - "deterministic output ordering"
+optimal_complexity: {time: "O(L + K log K) for L lines and K distinct keys", space: "O(K)"}
+rubric:
+  excellent: "Parses both files into maps with a first-separator split, ignores comments and blank lines, takes the sorted union of keys and classifies each in one pass; explains last-write-wins and the empty-value case without prompting."
+  good: "Correct map-based solution that passes the tests, perhaps after fixing the split on values containing '=' or the ordering by key rather than by prefixed string."
+  weak: "Compares the files line by line, splits on every '=' and loses part of the value, treats empty values as missing, or sorts by the prefixed entry."
+  criteria:
+    correctness: "All tests pass, including repeated keys, empty values, values containing '=' and empty files."
+    efficiency: "Linear parsing plus one sort of the distinct keys; no nested scans of the line lists."
+    code_quality: "A single reusable parse helper and a clear three-way classification."
+    edge_cases: "Comments, blank lines, '#' inside a value, trailing spaces, case-sensitive keys and keys repeated in one file."
+    communication: "States the parsing rules being applied and why the sort key excludes the prefix."
+hints:
+  - "Turn each file into a lookup from key to value first; the comparison becomes much simpler once both files are in that shape."
+  - "When splitting a line, only the first equals sign separates the key from the value, and assigning into a map in file order naturally keeps the last value for a repeated key."
+  - "Build one map per file while skipping empty and comment lines, then walk the union of both key sets in sorted order: a key missing from the old map is added, missing from the new map is removed, and present in both with different values is changed."
+followups:
+  - "How would you also report the old and new values while masking anything that looks like a secret?"
+  - "How would you support quoted values or an 'export ' prefix as some .env tools do?"
+  - "What if the files were too large to hold both maps in memory but were already sorted by key?"
+  - "How would you flag a key that is repeated within the same file as a probable mistake?"
+common_errors:
+  - "Splitting on every '=' so values such as base64 tokens or URLs with query strings are truncated."
+  - "Treating an empty value as a missing key, so 'RETRIES=' versus no RETRIES line is not reported."
+  - "Keeping the first occurrence of a repeated key instead of the last."
+  - "Sorting the output strings including their prefix, which groups entries by change type instead of by key."

@@ -1,0 +1,245 @@
+version: 1
+slug: idle_gaps_between_jobs
+title: Idle Gaps Between Machine Jobs
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [dba, data, sre]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Idle Gaps Between Machine Jobs
+
+  A factory scheduling system records every production run in table `job_runs`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key; ids are **not** related to time order |
+  | machine | VARCHAR(40) | machine name |
+  | start_minute | INTEGER | minute the run started |
+  | end_minute | INTEGER | minute the run ended; `end_minute > start_minute` |
+
+  Runs on the same machine never overlap, but one run may start at the exact minute the previous one
+  ended.
+
+  The planners want to find idle time that could host extra work. An **idle gap** is the time between
+  two **consecutive** runs on the same machine (ordered by start time): it starts when the earlier run
+  ends and ends when the next run starts. Time before a machine's first run or after its last run is
+  not a gap, and runs of different machines are never compared.
+
+  Return every idle gap that lasts **at least 30 minutes** with the columns `machine`, `gap_start`
+  (end of the earlier run), `gap_end` (start of the next run) and `gap_minutes` (`gap_end - gap_start`).
+  Order the result by `machine` ascending, then by `gap_start` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  job_runs
+  +----+---------+--------------+------------+
+  | id | machine | start_minute | end_minute |
+  +----+---------+--------------+------------+
+  | 1  | cnc     | 0            | 45         |
+  | 2  | cnc     | 80           | 120        |
+  | 3  | cnc     | 125          | 200        |
+  | 4  | cnc     | 260          | 300        |
+  | 5  | lathe   | 10           | 20         |
+  | 6  | lathe   | 50           | 70         |
+  | 7  | press   | 0            | 500        |
+  +----+---------+--------------+------------+
+
+  Output
+  +---------+-----------+---------+-------------+
+  | machine | gap_start | gap_end | gap_minutes |
+  +---------+-----------+---------+-------------+
+  | cnc     | 45        | 80      | 35          |
+  | cnc     | 200       | 260     | 60          |
+  | lathe   | 20        | 50      | 30          |
+  +---------+-----------+---------+-------------+
+  The 5-minute gap on cnc (120 to 125) is too short; press has a single run and no gap.
+  ```
+
+  ### Example 2
+  ```
+  job_runs
+  +----+---------+--------------+------------+
+  | id | machine | start_minute | end_minute |
+  +----+---------+--------------+------------+
+  | 1  | mill    | 300          | 360        |
+  | 2  | mill    | 0            | 100        |
+  | 3  | mill    | 100          | 130        |
+  | 4  | mill    | 200          | 250        |
+  +----+---------+--------------+------------+
+
+  Output
+  +---------+-----------+---------+-------------+
+  | machine | gap_start | gap_end | gap_minutes |
+  +---------+-----------+---------+-------------+
+  | mill    | 130       | 200     | 70          |
+  | mill    | 250       | 300     | 50          |
+  +---------+-----------+---------+-------------+
+  In time order the runs are ids 2, 3, 4, 1; runs 2 and 3 are back to back, so there is no gap
+  between them.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `0 <= start_minute < end_minute <= 10^9`
+  - Machine names are lowercase letters.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return machine, gap_start, gap_end and gap_minutes for idle gaps of at least 30 minutes.
+    SELECT machine, start_minute AS gap_start, end_minute AS gap_end, end_minute - start_minute AS gap_minutes
+    FROM job_runs
+    ORDER BY machine, gap_start;
+reference_solutions:
+  sql: |
+    WITH ordered AS (
+      SELECT
+        machine,
+        end_minute AS gap_start,
+        LEAD(start_minute) OVER (PARTITION BY machine ORDER BY start_minute) AS gap_end
+      FROM job_runs
+    )
+    SELECT machine, gap_start, gap_end, gap_end - gap_start AS gap_minutes
+    FROM ordered
+    WHERE gap_end - gap_start >= 30
+    ORDER BY machine, gap_start;
+sql_setup: |
+  CREATE TABLE job_runs (
+    id INTEGER PRIMARY KEY,
+    machine VARCHAR(40) NOT NULL,
+    start_minute INTEGER NOT NULL,
+    end_minute INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - a 30-minute gap counts, a 5-minute gap does not, single-run machine has none"
+    ordered: true
+    setup_sql: |
+      INSERT INTO job_runs (id, machine, start_minute, end_minute) VALUES
+        (1, 'cnc', 0, 45), (2, 'cnc', 80, 120), (3, 'cnc', 125, 200), (4, 'cnc', 260, 300),
+        (5, 'lathe', 10, 20), (6, 'lathe', 50, 70), (7, 'press', 0, 500);
+    expected_rows:
+      - ["cnc", 45, 80, 35]
+      - ["cnc", 200, 260, 60]
+      - ["lathe", 20, 50, 30]
+  - id: t2
+    description: "Example 2 - ids are not in time order; back-to-back runs leave no gap"
+    ordered: true
+    setup_sql: |
+      INSERT INTO job_runs (id, machine, start_minute, end_minute) VALUES
+        (1, 'mill', 300, 360), (2, 'mill', 0, 100), (3, 'mill', 100, 130), (4, 'mill', 200, 250);
+    expected_rows: [["mill", 130, 200, 70], ["mill", 250, 300, 50]]
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "One run per machine - no consecutive pairs"
+    ordered: true
+    setup_sql: |
+      INSERT INTO job_runs (id, machine, start_minute, end_minute) VALUES
+        (1, 'cnc', 0, 10), (2, 'lathe', 500, 900);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Gaps of 0 and 29 minutes only - nothing returned"
+    ordered: true
+    setup_sql: |
+      INSERT INTO job_runs (id, machine, start_minute, end_minute) VALUES
+        (1, 'cnc', 0, 10), (2, 'cnc', 10, 20), (3, 'cnc', 49, 60), (4, 'cnc', 89, 100);
+    expected_rows: []
+  - id: t6
+    hidden: true
+    description: "Ordering by id instead of start time produces negative and wrong gaps"
+    ordered: true
+    setup_sql: |
+      INSERT INTO job_runs (id, machine, start_minute, end_minute) VALUES
+        (1, 'drill', 400, 420), (2, 'drill', 0, 50), (3, 'drill', 200, 210), (4, 'drill', 90, 100);
+    expected_rows:
+      - ["drill", 50, 90, 40]
+      - ["drill", 100, 200, 100]
+      - ["drill", 210, 400, 190]
+  - id: t7
+    hidden: true
+    description: "Idle time between runs of different machines is not a gap"
+    ordered: true
+    setup_sql: |
+      INSERT INTO job_runs (id, machine, start_minute, end_minute) VALUES
+        (1, 'alpha', 0, 10), (2, 'beta', 100, 110), (3, 'alpha', 20, 40), (4, 'beta', 115, 300);
+    expected_rows: []
+  - id: t8
+    hidden: true
+    description: "Large minute values near the end of the range"
+    ordered: true
+    setup_sql: |
+      INSERT INTO job_runs (id, machine, start_minute, end_minute) VALUES
+        (1, 'oven', 999000000, 999000060), (2, 'oven', 999000090, 999000100), (3, 'oven', 999999000, 1000000000);
+    expected_rows: [["oven", 999000060, 999000090, 30], ["oven", 999000100, 999999000, 998900]]
+  - id: t9
+    hidden: true
+    description: "Twenty runs on one machine with mixed gap sizes around the threshold"
+    ordered: true
+    setup_sql: |
+      INSERT INTO job_runs (id, machine, start_minute, end_minute) VALUES
+        (1, 'kiln', 31, 48), (2, 'kiln', 77, 101), (3, 'kiln', 131, 162), (4, 'kiln', 207, 220),
+        (5, 'kiln', 225, 245), (6, 'kiln', 245, 272), (7, 'kiln', 303, 337), (8, 'kiln', 366, 382),
+        (9, 'kiln', 412, 435), (10, 'kiln', 480, 510), (11, 'kiln', 515, 527), (12, 'kiln', 527, 546),
+        (13, 'kiln', 577, 603), (14, 'kiln', 632, 665), (15, 'kiln', 695, 710), (16, 'kiln', 755, 777),
+        (17, 'kiln', 782, 811), (18, 'kiln', 811, 822), (19, 'kiln', 853, 871), (20, 'kiln', 900, 925);
+    expected_rows:
+      - ["kiln", 101, 131, 30]
+      - ["kiln", 162, 207, 45]
+      - ["kiln", 272, 303, 31]
+      - ["kiln", 382, 412, 30]
+      - ["kiln", 435, 480, 45]
+      - ["kiln", 546, 577, 31]
+      - ["kiln", 665, 695, 30]
+      - ["kiln", 710, 755, 45]
+      - ["kiln", 822, 853, 31]
+  - id: t10
+    hidden: true
+    description: "Several machines inserted interleaved; result ordered by machine then gap start"
+    ordered: true
+    setup_sql: |
+      INSERT INTO job_runs (id, machine, start_minute, end_minute) VALUES
+        (1, 'router', 100, 130), (2, 'grinder', 0, 30), (3, 'router', 0, 50), (4, 'grinder', 90, 95),
+        (5, 'router', 200, 210), (6, 'grinder', 40, 60), (7, 'welder', 5, 6), (8, 'welder', 600, 601);
+    expected_rows:
+      - ["grinder", 60, 90, 30]
+      - ["router", 50, 100, 50]
+      - ["router", 130, 200, 70]
+      - ["welder", 6, 600, 594]
+expected_concepts:
+  - "LEAD or LAG window functions"
+  - "PARTITION BY machine ORDER BY start time"
+  - "filtering on a window result in an outer query or CTE"
+  - "NULL handling for the last run of each machine"
+  - "inclusive threshold and deterministic ORDER BY"
+optimal_complexity: {time: "O(n log n) for the per-machine sort", space: "O(n)"}
+rubric:
+  excellent: "Uses LEAD (or LAG) partitioned by machine and ordered by start time inside a CTE, filters gaps of at least 30 minutes in the outer query, relies on or explains the NULL for the last run, and orders the output as required."
+  good: "Reaches a correct window-function query with a hint about where the filter must go, or uses a correct correlated subquery for the next start."
+  weak: "Orders runs by id, compares runs across machines, filters on the window function in the same WHERE clause, or uses a strict threshold."
+  criteria:
+    correctness: "All tests pass, including back-to-back runs, the exact 30-minute boundary and ids out of time order."
+    efficiency: "One window pass; no self-join that compares every pair of runs on a machine."
+    code_quality: "A named CTE with clear gap_start and gap_end aliases."
+    edge_cases: "Empty table, single-run machines, idle time between different machines and very large minute values."
+    communication: "Explains why the window must be partitioned by machine and ordered by start time rather than id."
+hints:
+  - "For each run you need the start of the next run on the same machine; think about how to look at the following row within a group."
+  - "A window function can fetch a value from the next row of a partition, as long as the rows are partitioned by machine and ordered by start time."
+  - "In a CTE select the machine, the run's end_minute as the gap start and LEAD of start_minute over a window partitioned by machine and ordered by start_minute as the gap end; in the outer query keep rows whose difference is at least 30 (the last run's NULL drops out) and order by machine and gap start."
+followups:
+  - "How would you report the total idle minutes per machine instead of individual gaps?"
+  - "What changes if runs on the same machine can overlap?"
+  - "How would you also include idle time before a shift start and after a shift end?"
+  - "Which index supports this query on a table with millions of runs?"
+common_errors:
+  - "Ordering the window by id, which pairs runs that are not consecutive in time."
+  - "Putting the window function directly in WHERE, which is not allowed."
+  - "Using greater than 30 instead of at least 30."
+  - "Forgetting PARTITION BY machine, so the last run of one machine is paired with the first run of the next."

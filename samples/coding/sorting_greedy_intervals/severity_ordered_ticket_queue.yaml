@@ -1,0 +1,261 @@
+version: 1
+slug: severity_ordered_ticket_queue
+title: "Severity-Ordered Ticket Queue"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [support_engineer, data_analyst, backend]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Severity-Ordered Ticket Queue
+
+  A support desk stores every ticket in table `tickets`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | title | TEXT | short summary of the problem |
+  | severity | TEXT | always one of `critical`, `high`, `medium`, `low` (lower case) |
+  | status | TEXT | for example `open`, `pending`, `reopened`, `closed`; never NULL |
+  | created_minute | INTEGER | minutes since the desk opened; several tickets can share a minute |
+
+  The on-call agent's work queue shows only tickets whose `status` is **exactly** `open`. Tickets are
+  worked by severity: `critical` first, then `high`, then `medium`, then `low`. Within the same severity
+  the oldest ticket (smallest `created_minute`) comes first, and when two tickets of the same severity
+  were created in the same minute, the smaller `id` comes first.
+
+  Return `id`, `title`, `severity` and `created_minute` for every open ticket, **in queue order**. Note
+  that sorting the `severity` text alphabetically does not produce the required order.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  tickets
+  +----+------------------------------+----------+---------+----------------+
+  | id | title                        | severity | status  | created_minute |
+  +----+------------------------------+----------+---------+----------------+
+  | 1  | Checkout returns 500         | critical | open    | 40             |
+  | 2  | Typo on pricing page         | low      | open    | 5              |
+  | 3  | Slow report export           | medium   | closed  | 12             |
+  | 4  | Password reset mail delayed  | high     | open    | 30             |
+  | 5  | Search times out             | critical | open    | 25             |
+  | 6  | Low contrast in dark mode    | low      | pending | 2              |
+  | 7  | Invoice PDF misaligned       | medium   | open    | 30             |
+  +----+------------------------------+----------+---------+----------------+
+
+  Output
+  +----+------------------------------+----------+----------------+
+  | id | title                        | severity | created_minute |
+  +----+------------------------------+----------+----------------+
+  | 5  | Search times out             | critical | 25             |
+  | 1  | Checkout returns 500         | critical | 40             |
+  | 4  | Password reset mail delayed  | high     | 30             |
+  | 7  | Invoice PDF misaligned       | medium   | 30             |
+  | 2  | Typo on pricing page         | low      | 5              |
+  +----+------------------------------+----------+----------------+
+  Tickets 3 and 6 are not open. Ticket 2 is the oldest open ticket but has the lowest severity.
+  ```
+
+  ### Example 2
+  ```
+  tickets
+  +----+---------------------------+----------+--------+----------------+
+  | id | title                     | severity | status | created_minute |
+  +----+---------------------------+----------+--------+----------------+
+  | 10 | Cache warm-up stuck       | high     | open   | 7              |
+  | 3  | Webhook retries loop      | high     | open   | 7              |
+  | 8  | CSV export encoding wrong | low      | closed | 1              |
+  +----+---------------------------+----------+--------+----------------+
+
+  Output
+  +----+----------------------+----------+----------------+
+  | id | title                | severity | created_minute |
+  +----+----------------------+----------+----------------+
+  | 3  | Webhook retries loop | high     | 7              |
+  | 10 | Cache warm-up stuck  | high     | 7              |
+  +----+----------------------+----------+----------------+
+  Both open tickets are high severity and were created in minute 7, so the smaller id goes first.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `severity` is always one of `critical`, `high`, `medium`, `low`.
+  - `0 <= created_minute <= 10^6`
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return id, title, severity and created_minute of every open ticket, in queue order.
+    SELECT id, title, severity, created_minute
+    FROM tickets;
+reference_solutions:
+  sql: |
+    SELECT id, title, severity, created_minute
+    FROM tickets
+    WHERE status = 'open'
+    ORDER BY
+      CASE severity
+        WHEN 'critical' THEN 1
+        WHEN 'high' THEN 2
+        WHEN 'medium' THEN 3
+        ELSE 4
+      END,
+      created_minute,
+      id;
+sql_setup: |
+  CREATE TABLE tickets (
+    id INTEGER PRIMARY KEY,
+    title VARCHAR(200) NOT NULL,
+    severity VARCHAR(10) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    created_minute INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, title, severity, status, created_minute) VALUES
+        (1, 'Checkout returns 500', 'critical', 'open', 40),
+        (2, 'Typo on pricing page', 'low', 'open', 5),
+        (3, 'Slow report export', 'medium', 'closed', 12),
+        (4, 'Password reset mail delayed', 'high', 'open', 30),
+        (5, 'Search times out', 'critical', 'open', 25),
+        (6, 'Low contrast in dark mode', 'low', 'pending', 2),
+        (7, 'Invoice PDF misaligned', 'medium', 'open', 30);
+    expected_rows:
+      - [5, "Search times out", "critical", 25]
+      - [1, "Checkout returns 500", "critical", 40]
+      - [4, "Password reset mail delayed", "high", 30]
+      - [7, "Invoice PDF misaligned", "medium", 30]
+      - [2, "Typo on pricing page", "low", 5]
+  - id: t2
+    description: "Example 2 - same severity and minute, ordered by id"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, title, severity, status, created_minute) VALUES
+        (10, 'Cache warm-up stuck', 'high', 'open', 7),
+        (3, 'Webhook retries loop', 'high', 'open', 7),
+        (8, 'CSV export encoding wrong', 'low', 'closed', 1);
+    expected_rows:
+      - [3, "Webhook retries loop", "high", 7]
+      - [10, "Cache warm-up stuck", "high", 7]
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "No ticket has status exactly open (reopened must not match a LIKE '%open%' filter)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, title, severity, status, created_minute) VALUES
+        (1, 'A', 'critical', 'closed', 1),
+        (2, 'B', 'high', 'pending', 2),
+        (3, 'C', 'low', 'reopened', 3);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Creation order is the reverse of severity order - alphabetical or time-first sorting fails"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, title, severity, status, created_minute) VALUES
+        (1, 'Low one', 'low', 'open', 1),
+        (2, 'Medium one', 'medium', 'open', 2),
+        (3, 'High one', 'high', 'open', 3),
+        (4, 'Critical one', 'critical', 'open', 4);
+    expected_rows:
+      - [4, "Critical one", "critical", 4]
+      - [3, "High one", "high", 3]
+      - [2, "Medium one", "medium", 2]
+      - [1, "Low one", "low", 1]
+  - id: t6
+    hidden: true
+    description: "Ties on created_minute within one severity broken by id; closed row excluded"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, title, severity, status, created_minute) VALUES
+        (9, 'M9', 'medium', 'open', 50),
+        (4, 'M4', 'medium', 'open', 50),
+        (6, 'M6', 'medium', 'open', 20),
+        (2, 'H2', 'high', 'open', 50),
+        (7, 'M7', 'medium', 'closed', 10);
+    expected_rows:
+      - [2, "H2", "high", 50]
+      - [6, "M6", "medium", 20]
+      - [4, "M4", "medium", 50]
+      - [9, "M9", "medium", 50]
+  - id: t7
+    hidden: true
+    description: "Severity outranks age even for extreme created_minute values"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, title, severity, status, created_minute) VALUES
+        (1, 'Old medium', 'medium', 'open', 0),
+        (2, 'New critical', 'critical', 'open', 1000000),
+        (3, 'Mid high', 'high', 'open', 500),
+        (4, 'Old low', 'low', 'open', 0),
+        (5, 'Another critical', 'critical', 'open', 999999);
+    expected_rows:
+      - [5, "Another critical", "critical", 999999]
+      - [2, "New critical", "critical", 1000000]
+      - [3, "Mid high", "high", 500]
+      - [1, "Old medium", "medium", 0]
+      - [4, "Old low", "low", 0]
+  - id: t8
+    hidden: true
+    description: "Single open ticket"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, title, severity, status, created_minute) VALUES
+        (1, 'Only ticket', 'medium', 'open', 3);
+    expected_rows:
+      - [1, "Only ticket", "medium", 3]
+  - id: t9
+    hidden: true
+    description: "Mixed queue with all severities, statuses and repeated minutes"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, title, severity, status, created_minute) VALUES
+        (11, 'c1', 'critical', 'open', 5), (12, 'h1', 'high', 'open', 5), (13, 'm1', 'medium', 'open', 5),
+        (14, 'l1', 'low', 'open', 5), (15, 'c2', 'critical', 'pending', 4), (16, 'h2', 'high', 'open', 4),
+        (17, 'm2', 'medium', 'closed', 4), (18, 'l2', 'low', 'open', 4), (19, 'c3', 'critical', 'open', 5),
+        (20, 'h3', 'high', 'open', 6), (21, 'm3', 'medium', 'open', 3), (22, 'l3', 'low', 'open', 5);
+    expected_rows:
+      - [11, "c1", "critical", 5]
+      - [19, "c3", "critical", 5]
+      - [16, "h2", "high", 4]
+      - [12, "h1", "high", 5]
+      - [20, "h3", "high", 6]
+      - [21, "m3", "medium", 3]
+      - [13, "m1", "medium", 5]
+      - [18, "l2", "low", 4]
+      - [14, "l1", "low", 5]
+      - [22, "l3", "low", 5]
+expected_concepts:
+  - custom sort order with a CASE expression
+  - multi-key ORDER BY with deterministic tie-breaking
+  - filtering with an exact equality predicate
+optimal_complexity: {time: "O(n log n) for the sort", space: "O(n)"}
+rubric:
+  excellent: "Filters on status = 'open', maps severity to a rank with CASE inside ORDER BY, adds created_minute and id as tie-breakers, and explains why alphabetical ordering of severity is wrong."
+  good: "Correct ranking and filter but needs a nudge to add the id tie-breaker or to drop an unnecessary rank column from the output."
+  weak: "Sorts severity alphabetically, uses LIKE '%open%' so reopened tickets leak in, or omits deterministic tie-breaking."
+  criteria:
+    correctness: "All tests pass, including reversed creation order, ties on created minute and non-open statuses."
+    efficiency: "Single set-based query; mentions that a lookup table or stored severity rank could be indexed on large tables."
+    code_quality: "Readable CASE expression with every severity listed and only the requested output columns."
+    edge_cases: "Empty table, no open tickets, single ticket and full ties on severity and minute."
+    communication: "Explains how each ORDER BY key resolves ties left by the previous key."
+hints:
+  - "Severity is text, and alphabetical order (critical, high, low, medium) is not the order the queue needs - think about turning each severity into a number."
+  - "A CASE expression can map each severity to its rank, and ORDER BY accepts expressions as well as column names."
+  - "Filter on status = 'open', then order by the CASE rank (critical 1 through low 4), then created_minute ascending, then id ascending so that every tie is resolved."
+followups:
+  - "How would you change the design so that adding a new severity does not require editing every query?"
+  - "Which index would help this query when the table holds millions of closed tickets and a few hundred open ones?"
+  - "How would you show only the first ten tickets of the queue, and why does a stable tie-breaker matter for paging?"
+common_errors:
+  - "Ordering by severity text, which puts low before medium and high before critical only by accident."
+  - "Using LIKE '%open%', which also matches reopened tickets."
+  - "Leaving out the id tie-breaker, so tickets of the same severity and minute come back in an arbitrary order."

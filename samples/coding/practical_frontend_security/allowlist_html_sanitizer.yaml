@@ -1,0 +1,293 @@
+version: 1
+slug: allowlist_html_sanitizer
+title: Allowlist HTML Sanitiser for Comments
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving, code_quality]
+role_tags: [security, frontend, backend, fullstack]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Allowlist HTML Sanitiser for Comments
+
+  The team wiki lets people format review comments with a little HTML. Before a comment is stored, it
+  passes through an **allowlist sanitiser**: only tags in `allowed_tags` survive, only safe attributes are
+  kept, and everything else is either dropped or escaped so it can never run in a reader's browser.
+  Implement `sanitize_html(html, allowed_tags)` and return the sanitised HTML string.
+
+  **Reading the input.** Scan `html` from left to right. At a `<` exactly one of these applies, checked in
+  this order:
+
+  1. **Comment** - `<!--` starts a comment that ends at the first `-->` after it. A comment without `-->`
+     runs to the end of the input. Comments are removed entirely.
+  2. **Close tag** - `</`, a tag name, optional spaces, `>`.
+  3. **Open tag** - `<`, a tag name, zero or more attributes, optional spaces, an optional `/`, `>`. Each
+     attribute is one or more spaces, an attribute name, `="`, a value containing no `"`, and `"`.
+  4. Otherwise the `<` is an ordinary text character.
+
+  A tag name is a letter followed by letters or digits; an attribute name is a letter followed by letters,
+  digits or `-`. "Spaces" means the space character only. Tag and attribute names are case-insensitive
+  and are always written in lowercase in the output. Everything that is not part of a comment or a tag is
+  **text**.
+
+  **Rules.**
+
+  - `allowed_tags` holds lowercase tag names. `script` and `style` are **never** allowed: their open tag,
+    everything after it up to and including the next matching close tag (`</script>` or `</style>`, any
+    case, optional spaces before `>`) are removed; with no matching close tag the rest of the input is
+    removed.
+  - A tag that is not allowed is removed, but the text and allowed tags inside it are kept.
+  - An allowed open tag is written as `<name` + kept attributes + `>`. A trailing `/` is ignored. The tags
+    `br`, `hr` and `img` are **void**: they never need closing. Every other allowed open tag stays open
+    until it is closed.
+  - Attributes: if a name appears more than once in a tag, only its first occurrence is considered. Keep
+    `title` on any allowed tag and `href` on `a` only; drop every other attribute. Keep `href` only when its
+    value, after removing leading and trailing spaces, is **safe**: find the first `:`; if there is none,
+    or a `/`, `?` or `#` appears before it, the link is relative and safe; otherwise the text before the
+    `:` is the scheme, and the link is safe only if that scheme is `http`, `https` or `mailto` (any case).
+    Kept attributes are written as ` name="value"` in their original order, with the trimmed value for
+    `href`.
+  - A close tag whose name is currently open closes the most recently opened element with that name and
+    every element opened after it (innermost first), writing `</name>` for each. Any other close tag is
+    removed.
+  - At the end, every element still open is closed, innermost first.
+  - Escaping: in text, replace `&` with `&amp;`, `<` with `&lt;` and `>` with `&gt;` (every `&`, even one
+    that already starts an entity). In kept attribute values also replace `"` with `&quot;`.
+
+  ### Example 1
+  ```
+  Input:  html = "<p>Hi <b>team</b>, see <a href=\"https://wiki.example/x\" onclick=\"run()\">notes</a><script>alert(1)</script></p>", allowed_tags = ["p", "b", "a"]
+  Output: "<p>Hi <b>team</b>, see <a href=\"https://wiki.example/x\">notes</a></p>"
+  ```
+
+  ### Example 2
+  ```
+  Input:  html = "<div title=\"Q3\">5 < 7 & <i>urgent</I><!-- internal --><a href=\" JavaScript:steal()\">x</a>", allowed_tags = ["i", "a"]
+  Output: "5 &lt; 7 &amp; <i>urgent</i><a>x</a>"
+  Explanation: div is not allowed (its text stays), "< " does not start a tag, the comment is removed and
+  the javascript: link loses its href.
+  ```
+
+  ### Example 3
+  ```
+  Input:  html = "<ul><li>one<li>two</ul></span>tail<b>bold", allowed_tags = ["ul", "li", "b"]
+  Output: "<ul><li>one<li>two</li></li></ul>tail<b>bold</b>"
+  Explanation: </ul> closes both open li elements and the ul; </span> was never opened; b is closed at the end.
+  ```
+
+  ### Constraints
+  - `0 <= html.length <= 2000`, printable ASCII characters
+  - `0 <= allowed_tags.length <= 20`, lowercase tag names
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: sanitize_html
+  params:
+    - {name: html, type: string}
+    - {name: allowed_tags, type: "string[]"}
+  return_type: string
+  comparison: exact
+reference_solutions:
+  python: |
+    import re
+
+    OPEN_TAG = re.compile(r'<([A-Za-z][A-Za-z0-9]*)((?: +[A-Za-z][A-Za-z0-9-]*="[^"]*")*) */?>')
+    ATTRIBUTE = re.compile(r' +([A-Za-z][A-Za-z0-9-]*)="([^"]*)"')
+    CLOSE_TAG = re.compile(r'</([A-Za-z][A-Za-z0-9]*) *>')
+    VOID_TAGS = {"br", "hr", "img"}
+    RAW_TEXT_TAGS = {"script", "style"}
+    SAFE_SCHEMES = {"http", "https", "mailto"}
+
+
+    def escape_text(text: str) -> str:
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+    def escape_attribute(text: str) -> str:
+        return escape_text(text).replace('"', "&quot;")
+
+
+    def is_safe_href(value: str) -> bool:
+        colon = value.find(":")
+        if colon == -1 or any(ch in value[:colon] for ch in "/?#"):
+            return True
+        return value[:colon].lower() in SAFE_SCHEMES
+
+
+    def sanitize_html(html: str, allowed_tags: list[str]) -> str:
+        allowed = set(allowed_tags) - RAW_TEXT_TAGS
+        out: list[str] = []
+        stack: list[str] = []
+        i, n = 0, len(html)
+        while i < n:
+            if html[i] != "<":
+                j = html.find("<", i)
+                j = n if j == -1 else j
+                out.append(escape_text(html[i:j]))
+                i = j
+                continue
+            if html.startswith("<!--", i):
+                end = html.find("-->", i + 4)
+                i = n if end == -1 else end + 3
+                continue
+            m = CLOSE_TAG.match(html, i)
+            if m:
+                name = m.group(1).lower()
+                if name in stack:
+                    k = len(stack) - 1 - stack[::-1].index(name)
+                    while len(stack) > k:
+                        out.append(f"</{stack.pop()}>")
+                i = m.end()
+                continue
+            m = OPEN_TAG.match(html, i)
+            if m:
+                name = m.group(1).lower()
+                i = m.end()
+                if name in RAW_TEXT_TAGS:
+                    end = re.compile(rf"</{name} *>", re.IGNORECASE).search(html, i)
+                    i = n if end is None else end.end()
+                elif name in allowed:
+                    kept: list[str] = []
+                    seen: set[str] = set()
+                    for am in ATTRIBUTE.finditer(m.group(2)):
+                        attr, value = am.group(1).lower(), am.group(2)
+                        if attr in seen:
+                            continue
+                        seen.add(attr)
+                        if attr == "title":
+                            kept.append(f' title="{escape_attribute(value)}"')
+                        elif attr == "href" and name == "a":
+                            value = value.strip(" ")
+                            if is_safe_href(value):
+                                kept.append(f' href="{escape_attribute(value)}"')
+                    out.append(f"<{name}{''.join(kept)}>")
+                    if name not in VOID_TAGS:
+                        stack.append(name)
+                continue
+            out.append("&lt;")
+            i += 1
+        while stack:
+            out.append(f"</{stack.pop()}>")
+        return "".join(out)
+  javascript: |
+    const VOID_TAGS = new Set(["br", "hr", "img"]);
+    const RAW_TEXT_TAGS = new Set(["script", "style"]);
+    const SAFE_SCHEMES = new Set(["http", "https", "mailto"]);
+
+    const escapeText = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const escapeAttribute = (s) => escapeText(s).replace(/"/g, "&quot;");
+
+    function isSafeHref(value) {
+      const colon = value.indexOf(":");
+      if (colon === -1 || /[/?#]/.test(value.slice(0, colon))) return true;
+      return SAFE_SCHEMES.has(value.slice(0, colon).toLowerCase());
+    }
+
+    function sanitizeHtml(html, allowedTags) {
+      const allowed = new Set(allowedTags.filter((t) => !RAW_TEXT_TAGS.has(t)));
+      const openTag = /<([A-Za-z][A-Za-z0-9]*)((?: +[A-Za-z][A-Za-z0-9-]*="[^"]*")*) *\/?>/y;
+      const closeTag = /<\/([A-Za-z][A-Za-z0-9]*) *>/y;
+      const out = [];
+      const stack = [];
+      const n = html.length;
+      let i = 0;
+      while (i < n) {
+        if (html[i] !== "<") {
+          let j = html.indexOf("<", i);
+          if (j === -1) j = n;
+          out.push(escapeText(html.slice(i, j)));
+          i = j;
+          continue;
+        }
+        if (html.startsWith("<!--", i)) {
+          const end = html.indexOf("-->", i + 4);
+          i = end === -1 ? n : end + 3;
+          continue;
+        }
+        closeTag.lastIndex = i;
+        let m = closeTag.exec(html);
+        if (m) {
+          const name = m[1].toLowerCase();
+          const k = stack.lastIndexOf(name);
+          if (k !== -1) {
+            while (stack.length > k) out.push(`</${stack.pop()}>`);
+          }
+          i = closeTag.lastIndex;
+          continue;
+        }
+        openTag.lastIndex = i;
+        m = openTag.exec(html);
+        if (m) {
+          const name = m[1].toLowerCase();
+          i = openTag.lastIndex;
+          if (RAW_TEXT_TAGS.has(name)) {
+            const endRe = new RegExp(`</${name} *>`, "gi");
+            endRe.lastIndex = i;
+            const end = endRe.exec(html);
+            i = end ? endRe.lastIndex : n;
+          } else if (allowed.has(name)) {
+            const kept = [];
+            const seen = new Set();
+            for (const am of m[2].matchAll(/ +([A-Za-z][A-Za-z0-9-]*)="([^"]*)"/g)) {
+              const attr = am[1].toLowerCase();
+              if (seen.has(attr)) continue;
+              seen.add(attr);
+              if (attr === "title") {
+                kept.push(` title="${escapeAttribute(am[2])}"`);
+              } else if (attr === "href" && name === "a") {
+                const value = am[2].replace(/^ +| +$/g, "");
+                if (isSafeHref(value)) kept.push(` href="${escapeAttribute(value)}"`);
+              }
+            }
+            out.push(`<${name}${kept.join("")}>`);
+            if (!VOID_TAGS.has(name)) stack.push(name);
+          }
+          continue;
+        }
+        out.push("&lt;");
+        i += 1;
+      }
+      while (stack.length) out.push(`</${stack.pop()}>`);
+      return out.join("");
+    }
+tests:
+  - {id: t1, args: ["<p>Hi <b>team</b>, see <a href=\"https://wiki.example/x\" onclick=\"run()\">notes</a><script>alert(1)</script></p>", ["p", "b", "a"]], expected: "<p>Hi <b>team</b>, see <a href=\"https://wiki.example/x\">notes</a></p>", description: "Example 1 - allowed tags kept, onclick dropped, script and its content removed"}
+  - {id: t2, args: ["<div title=\"Q3\">5 < 7 & <i>urgent</I><!-- internal --><a href=\" JavaScript:steal()\">x</a>", ["i", "a"]], expected: "5 &lt; 7 &amp; <i>urgent</i><a>x</a>", description: "Example 2 - disallowed div keeps its text, literal < and & escaped, mixed-case close tag, comment removed, javascript: href dropped"}
+  - {id: t3, args: ["<ul><li>one<li>two</ul></span>tail<b>bold", ["ul", "li", "b"]], expected: "<ul><li>one<li>two</li></li></ul>tail<b>bold</b>", description: "Example 3 - close tag closes intervening elements, unmatched close dropped, auto-close at end"}
+  - {id: t4, hidden: true, args: ["", ["b"]], expected: "", description: "Empty input"}
+  - {id: t5, hidden: true, args: ["Tom & \"Jerry\" > 3 <3 &amp; &lt;", []], expected: "Tom &amp; \"Jerry\" &gt; 3 &lt;3 &amp;amp; &amp;lt;", description: "Plain text only - every & < > escaped (existing entities are double-escaped), quotes in text untouched"}
+  - {id: t6, hidden: true, args: ["<b>x<SCRIPT type=\"t\">bad()</Script >y</b><style>p{}</style>z<script/>gone</script>w<script>never closed <b>at all", ["b", "script", "style"]], expected: "<b>xy</b>zw", description: "script and style removed even when listed, case-insensitive end with spaces, self-closing script still swallows content, unterminated script drops the rest"}
+  - {id: t7, hidden: true, args: ["<a href=\"/docs/page\">1</a><a href=\"HTTPS://x.io\">2</a><a href=\"mailto:ops@example.com\">3</a><a href=\"data:text/html,x\">4</a><a href=\"ftp://x\">5</a><a href=\"  javascript:void(0)  \">6</a><a href=\"page.html?next=javascript:x\">7</a><a href=\"#top\">8</a><a href=\"java script:x\">9</a><a href=\":x\">10</a>", ["a"]], expected: "<a href=\"/docs/page\">1</a><a href=\"HTTPS://x.io\">2</a><a href=\"mailto:ops@example.com\">3</a><a>4</a><a>5</a><a>6</a><a href=\"page.html?next=javascript:x\">7</a><a href=\"#top\">8</a><a>9</a><a>10</a>", description: "href schemes - relative, uppercase https, mailto kept; data, ftp, padded javascript, scheme with a space and empty scheme dropped; colon after ? is relative"}
+  - {id: t8, hidden: true, args: ["<B TITLE=\"a&b\" Class=\"c\" title=\"2\"><a href=\"javascript:x\" HREF=\"/ok\" title=\"say &quot;hi&quot;\">l</a><img src=\"p.png\" title=\"x>y\"><br/><BR /><hr>t</br></B><span href=\"/x\" title=\"s\">s</span><p href=\"/x\">q</p>", ["b", "a", "img", "br", "hr", "p"]], expected: "<b title=\"a&amp;b\"><a title=\"say &amp;quot;hi&amp;quot;\">l</a><img title=\"x&gt;y\"><br><br><hr>t</b>s<p>q</p>", description: "Attributes - uppercase names, first occurrence wins (an unsafe first href blocks a later safe one), href only on a, values escaped; void tags never closed and their close tags dropped"}
+  - {id: t9, hidden: true, args: ["<a href=x>y</a>< b>c</ b><b<1>2<b title='s'>3<!DOCTYPE html><b title=\"ok\"/>z", ["a", "b"]], expected: "&lt;a href=x&gt;y&lt; b&gt;c&lt;/ b&gt;&lt;b&lt;1&gt;2&lt;b title='s'&gt;3&lt;!DOCTYPE html&gt;<b title=\"ok\">z</b>", description: "Malformed tags become text - unquoted and single-quoted attributes, space after <, digit names, <!DOCTYPE; a trailing / on a non-void tag is ignored"}
+  - {id: t10, hidden: true, args: ["<b><i><b>x</b>y</i>z</b>w</i><p><b>bold<i>both</p>after</b>", ["b", "i", "p"]], expected: "<b><i><b>x</b>y</i>z</b>w<p><b>bold<i>both</i></b></p>after", description: "Nested same-name tags close the most recent one; a close tag closes all intervening elements; stale close tags dropped"}
+  - {id: t11, hidden: true, args: ["a<!-- <b>hidden</b> --><!---->c<div><span>d<em>e</em></span></div><!-- never closed <b>x", ["b"]], expected: "acde", description: "Comments with tags inside, an empty comment, an unterminated comment, disallowed nested wrappers keep only text"}
+  - {id: t12, hidden: true, args: ["<b title=\"lvl1\"><i>1<b title=\"lvl2\"><i>2<b title=\"lvl3\"><i>3<b title=\"lvl4\"><i>4<b title=\"lvl5\"><i>5<b title=\"lvl6\"><i>6<b title=\"lvl7\"><i>7<b title=\"lvl8\"><i>8<b title=\"lvl9\"><i>9<b title=\"lvl10\"><i>10<b title=\"lvl11\"><i>11<b title=\"lvl12\"><i>12<b title=\"lvl13\"><i>13<b title=\"lvl14\"><i>14<b title=\"lvl15\"><i>15<b title=\"lvl16\"><i>16<b title=\"lvl17\"><i>17<b title=\"lvl18\"><i>18<b title=\"lvl19\"><i>19<b title=\"lvl20\"><i>20<b title=\"lvl21\"><i>21<b title=\"lvl22\"><i>22<b title=\"lvl23\"><i>23<b title=\"lvl24\"><i>24<b title=\"lvl25\"><i>25</b><script>x</script><script>x</script><script>x</script>tail & more <!-- note --> <a href=\"https://ok.example/?a=1&b=2\">link</a>", ["b", "i", "a"]], expected: "<b title=\"lvl1\"><i>1<b title=\"lvl2\"><i>2<b title=\"lvl3\"><i>3<b title=\"lvl4\"><i>4<b title=\"lvl5\"><i>5<b title=\"lvl6\"><i>6<b title=\"lvl7\"><i>7<b title=\"lvl8\"><i>8<b title=\"lvl9\"><i>9<b title=\"lvl10\"><i>10<b title=\"lvl11\"><i>11<b title=\"lvl12\"><i>12<b title=\"lvl13\"><i>13<b title=\"lvl14\"><i>14<b title=\"lvl15\"><i>15<b title=\"lvl16\"><i>16<b title=\"lvl17\"><i>17<b title=\"lvl18\"><i>18<b title=\"lvl19\"><i>19<b title=\"lvl20\"><i>20<b title=\"lvl21\"><i>21<b title=\"lvl22\"><i>22<b title=\"lvl23\"><i>23<b title=\"lvl24\"><i>24<b title=\"lvl25\"><i>25</i></b>tail &amp; more  <a href=\"https://ok.example/?a=1&amp;b=2\">link</a></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b></i></b>", description: "Stress - 25 levels of nested b/i; the single close tag only closes the innermost b and its i, the other 48 elements close at the end; repeated scripts; & in an href query string"}
+expected_concepts:
+  - single-pass tokenizer with explicit precedence between comment, close tag, open tag and text
+  - stack of open elements for close-tag matching and auto-closing
+  - allowlists instead of blocklists for tags, attributes and URL schemes
+  - context-specific output escaping for text and attribute values
+  - raw-text handling for script and style
+optimal_complexity: {time: O(n * d) where d is the depth of open elements (O(n) with a per-name count), space: O(n)}
+rubric:
+  excellent: Builds a small tokenizer with clear precedence, keeps a stack of open allowed elements, matches the rules exactly (first attribute occurrence, trimmed href, scheme detection before /?#, raw-text removal) and explains why an allowlist with output escaping is safer than stripping known-bad patterns.
+  good: Produces correct output for well-formed input and most rules, missing one or two edge cases such as unterminated comments, duplicate attributes or a stale close tag, fixed after a hint.
+  weak: Uses regex replacement over the whole string, blocklists dangerous tags, forgets to escape text or attributes, or lets close tags mismatch the stack.
+  criteria:
+    correctness: All tests pass, including malformed tags treated as text, nested same-name elements and unsafe href values.
+    efficiency: Linear scan of the input with constant work per character apart from stack unwinding.
+    code_quality: Separate helpers for escaping, href checking and attribute filtering; the main loop reads as the four token cases.
+    edge_cases: Empty input, unterminated comments and scripts, void elements, duplicate attributes, uppercase names and already-escaped entities.
+    communication: Explains the security reasoning for each rule (why javascript:, why script content is removed, why escape everything).
+hints:
+  - Treat the input as a stream of tokens - comment, close tag, open tag or text - and decide which one starts at each < using the precedence in the statement; anything that does not match a tag pattern exactly is just text.
+  - Keep a stack of the allowed elements that are currently open. Disallowed tags are simply skipped, script and style jump ahead to their closing tag, and a close tag only does something when its name is on the stack.
+  - For an allowed open tag, filter its attributes (first occurrence only, title anywhere, href on a only after trimming and checking the scheme), escape the kept values, write the tag and push it unless it is void; for a close tag pop and write closing tags down to the most recent element with that name; escape all text and close what is left at the end.
+followups:
+  - Why do production sanitisers parse into a DOM tree instead of working on tokens, and what attacks does that prevent?
+  - How would you add a style attribute safely?
+  - What is the difference between sanitising on input and escaping on output, and where would you do each?
+common_errors:
+  - Removing script tags but keeping their content, or keeping content of an unterminated script.
+  - Checking href with startsWith("javascript:") instead of allowlisting schemes, missing padded or uppercase variants.
+  - Forgetting to escape text, so a literal < from the user becomes markup.
+  - Writing close tags for elements that were never opened, or not closing intervening elements.
+  - Using a later duplicate attribute when the first one was unsafe.

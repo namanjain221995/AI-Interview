@@ -1,0 +1,260 @@
+version: 1
+slug: sensor_threshold_breaches
+title: "Sensor Threshold Breaches"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data, sre, data_analyst]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Sensor Threshold Breaches
+
+  A food distribution centre monitors its freezers, chillers and loading docks with temperature
+  sensors. Each sensor has its own upper limit, because a freezer and a chiller tolerate very different
+  temperatures. The quality team wants a daily count of how often each sensor went above its limit.
+
+  Table `sensors`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | name | VARCHAR(40) | unique, lower-case letters and digits |
+  | max_temp | INTEGER | highest acceptable temperature for this sensor, in whole degrees Celsius |
+
+  Table `readings`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | sensor_id | INTEGER | references `sensors.id`; never NULL |
+  | temp | INTEGER | measured temperature in whole degrees Celsius (can be negative) |
+  | read_at | VARCHAR(19) | `'YYYY-MM-DD HH:MM:SS'` |
+
+  A reading is a **breach** when its `temp` is **strictly greater** than the `max_temp` of its own
+  sensor; a reading equal to the limit is fine.
+
+  Return one row for **every** sensor with the columns `sensor_name` and `breach_count` (the number of
+  breaching readings, `0` when the sensor has no breaches or no readings at all). Order the result by
+  `breach_count` descending, then `sensor_name` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  sensors
+  +----+----------+----------+
+  | id | name     | max_temp |
+  +----+----------+----------+
+  | 1  | freezer1 | -18      |
+  | 2  | chiller1 | 4        |
+  | 3  | chiller2 | 4        |
+  +----+----------+----------+
+
+  readings
+  +----+-----------+------+---------------------+
+  | id | sensor_id | temp | read_at             |
+  +----+-----------+------+---------------------+
+  | 1  | 1         | -20  | 2026-06-01 06:00:00 |
+  | 2  | 1         | -15  | 2026-06-01 07:00:00 |
+  | 3  | 1         | -18  | 2026-06-01 08:00:00 |
+  | 4  | 1         | -12  | 2026-06-01 09:00:00 |
+  | 5  | 2         | 3    | 2026-06-01 06:00:00 |
+  | 6  | 2         | 4    | 2026-06-01 07:00:00 |
+  | 7  | 2         | 7    | 2026-06-01 08:00:00 |
+  | 8  | 3         | 2    | 2026-06-01 06:00:00 |
+  | 9  | 3         | 3    | 2026-06-01 07:00:00 |
+  +----+-----------+------+---------------------+
+
+  Output
+  +-------------+--------------+
+  | sensor_name | breach_count |
+  +-------------+--------------+
+  | freezer1    | 2            |
+  | chiller1    | 1            |
+  | chiller2    | 0            |
+  +-------------+--------------+
+  Reading 3 (-18) equals freezer1's limit and is not a breach. chiller2 never went above 4
+  but is still listed with 0.
+  ```
+
+  ### Example 2
+  ```
+  sensors
+  +----+-------+----------+
+  | id | name  | max_temp |
+  +----+-------+----------+
+  | 1  | dock1 | 8        |
+  | 2  | dock2 | 8        |
+  +----+-------+----------+
+
+  readings
+  +----+-----------+------+---------------------+
+  | id | sensor_id | temp | read_at             |
+  +----+-----------+------+---------------------+
+  | 1  | 2         | 9    | 2026-06-02 10:00:00 |
+  | 2  | 2         | 10   | 2026-06-02 11:00:00 |
+  | 3  | 2         | 8    | 2026-06-02 12:00:00 |
+  +----+-----------+------+---------------------+
+
+  Output
+  +-------------+--------------+
+  | sensor_name | breach_count |
+  +-------------+--------------+
+  | dock2       | 2            |
+  | dock1       | 0            |
+  +-------------+--------------+
+  ```
+
+  ### Constraints
+  - At most `10^3` sensors and `10^6` readings; either table may be empty.
+  - `-60 <= max_temp, temp <= 60`
+  - Every `readings.sensor_id` matches an existing sensor.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return sensor_name and breach_count (temp > that sensor's max_temp) for every sensor,
+    -- ordered by breach_count descending, then sensor_name.
+    SELECT s.name AS sensor_name, COUNT(*) AS breach_count
+    FROM sensors s
+    JOIN readings r ON r.sensor_id = s.id
+    WHERE r.temp > s.max_temp
+    GROUP BY s.name
+    ORDER BY breach_count DESC, sensor_name;
+reference_solutions:
+  sql: |
+    SELECT s.name AS sensor_name, COUNT(r.id) AS breach_count
+    FROM sensors s
+    LEFT JOIN readings r
+      ON r.sensor_id = s.id
+     AND r.temp > s.max_temp
+    GROUP BY s.id, s.name
+    ORDER BY breach_count DESC, sensor_name;
+sql_setup: |
+  CREATE TABLE sensors (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(40) NOT NULL UNIQUE,
+    max_temp INTEGER NOT NULL
+  );
+  CREATE TABLE readings (
+    id INTEGER PRIMARY KEY,
+    sensor_id INTEGER NOT NULL REFERENCES sensors (id),
+    temp INTEGER NOT NULL,
+    read_at VARCHAR(19) NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - negative freezer limit, reading equal to the limit is not a breach, chiller2 at 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO sensors (id, name, max_temp) VALUES
+        (1, 'freezer1', -18), (2, 'chiller1', 4), (3, 'chiller2', 4);
+      INSERT INTO readings (id, sensor_id, temp, read_at) VALUES
+        (1, 1, -20, '2026-06-01 06:00:00'), (2, 1, -15, '2026-06-01 07:00:00'), (3, 1, -18, '2026-06-01 08:00:00'),
+        (4, 1, -12, '2026-06-01 09:00:00'), (5, 2, 3, '2026-06-01 06:00:00'), (6, 2, 4, '2026-06-01 07:00:00'),
+        (7, 2, 7, '2026-06-01 08:00:00'), (8, 3, 2, '2026-06-01 06:00:00'), (9, 3, 3, '2026-06-01 07:00:00');
+    expected_rows: [["freezer1", 2], ["chiller1", 1], ["chiller2", 0]]
+  - id: t2
+    description: "Example 2 - sensor with no readings still listed with 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO sensors (id, name, max_temp) VALUES (1, 'dock1', 8), (2, 'dock2', 8);
+      INSERT INTO readings (id, sensor_id, temp, read_at) VALUES
+        (1, 2, 9, '2026-06-02 10:00:00'), (2, 2, 10, '2026-06-02 11:00:00'), (3, 2, 8, '2026-06-02 12:00:00');
+    expected_rows: [["dock2", 2], ["dock1", 0]]
+  - id: t3
+    hidden: true
+    description: "Empty tables - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Sensors without any readings - all 0, ordered by name"
+    ordered: true
+    setup_sql: |
+      INSERT INTO sensors (id, name, max_temp) VALUES
+        (1, 'freezer3', -20), (2, 'chiller9', 5), (3, 'dock4', 10);
+    expected_rows: [["chiller9", 0], ["dock4", 0], ["freezer3", 0]]
+  - id: t5
+    hidden: true
+    description: "Per-sensor limits - the same temperature breaches one sensor but not another"
+    ordered: true
+    setup_sql: |
+      INSERT INTO sensors (id, name, max_temp) VALUES (1, 'chiller1', 4), (2, 'dock1', 12);
+      INSERT INTO readings (id, sensor_id, temp, read_at) VALUES
+        (1, 1, 6, '2026-06-03 01:00:00'), (2, 2, 6, '2026-06-03 01:00:00'), (3, 1, 10, '2026-06-03 02:00:00'),
+        (4, 2, 10, '2026-06-03 02:00:00'), (5, 2, 13, '2026-06-03 03:00:00');
+    expected_rows: [["chiller1", 2], ["dock1", 1]]
+  - id: t6
+    hidden: true
+    description: "Ties on a non-zero count - ordered by sensor name (digits compared as text)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO sensors (id, name, max_temp) VALUES
+        (1, 'freezer10', -18), (2, 'freezer2', -18), (3, 'chiller1', 4);
+      INSERT INTO readings (id, sensor_id, temp, read_at) VALUES
+        (1, 1, -10, '2026-06-04 01:00:00'), (2, 2, -11, '2026-06-04 01:00:00'), (3, 3, 5, '2026-06-04 01:00:00'),
+        (4, 3, 1, '2026-06-04 02:00:00');
+    expected_rows: [["chiller1", 1], ["freezer10", 1], ["freezer2", 1]]
+  - id: t7
+    hidden: true
+    description: "WHERE-filter trap - sensors with readings but no breaches must remain with 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO sensors (id, name, max_temp) VALUES
+        (1, 'freezer1', -18), (2, 'chiller1', 4), (3, 'chiller2', 4);
+      INSERT INTO readings (id, sensor_id, temp, read_at) VALUES
+        (1, 1, -25, '2026-06-05 01:00:00'), (2, 1, -19, '2026-06-05 02:00:00'), (3, 2, 4, '2026-06-05 01:00:00'),
+        (4, 2, 0, '2026-06-05 02:00:00'), (5, 3, 5, '2026-06-05 01:00:00');
+    expected_rows: [["chiller2", 1], ["chiller1", 0], ["freezer1", 0]]
+  - id: t8
+    hidden: true
+    description: "One sensor with 20 readings oscillating around its limit"
+    ordered: true
+    setup_sql: |
+      INSERT INTO sensors (id, name, max_temp) VALUES (1, 'blast1', -30), (2, 'chiller5', 3);
+      INSERT INTO readings (id, sensor_id, temp, read_at) VALUES
+        (1, 1, -32, '2026-06-06 01:00:00'), (2, 1, -31, '2026-06-06 02:00:00'), (3, 1, -30, '2026-06-06 03:00:00'),
+        (4, 1, -29, '2026-06-06 04:00:00'), (5, 1, -28, '2026-06-06 05:00:00'), (6, 1, -33, '2026-06-06 06:00:00'),
+        (7, 1, -32, '2026-06-06 07:00:00'), (8, 1, -31, '2026-06-06 08:00:00'), (9, 1, -30, '2026-06-06 09:00:00'),
+        (10, 1, -29, '2026-06-06 10:00:00'), (11, 1, -28, '2026-06-06 11:00:00'), (12, 1, -33, '2026-06-06 12:00:00'),
+        (13, 1, -32, '2026-06-06 13:00:00'), (14, 1, -31, '2026-06-06 14:00:00'), (15, 1, -30, '2026-06-06 15:00:00'),
+        (16, 1, -29, '2026-06-06 16:00:00'), (17, 1, -28, '2026-06-06 17:00:00'), (18, 1, -33, '2026-06-06 18:00:00'),
+        (19, 1, -32, '2026-06-06 19:00:00'), (20, 1, -31, '2026-06-06 20:00:00');
+    expected_rows: [["blast1", 6], ["chiller5", 0]]
+  - id: t9
+    hidden: true
+    description: "All readings are breaches across several sensors"
+    ordered: true
+    setup_sql: |
+      INSERT INTO sensors (id, name, max_temp) VALUES (1, 'dock7', 10), (2, 'dock8', 10);
+      INSERT INTO readings (id, sensor_id, temp, read_at) VALUES
+        (1, 1, 11, '2026-06-07 09:00:00'), (2, 1, 20, '2026-06-07 10:00:00'), (3, 1, 15, '2026-06-07 11:00:00'),
+        (4, 2, 30, '2026-06-07 09:00:00');
+    expected_rows: [["dock7", 3], ["dock8", 1]]
+expected_concepts:
+  - "LEFT JOIN with the filter in the ON clause"
+  - "comparing against a per-row threshold from the joined table"
+  - "COUNT(column) versus COUNT(*) after an outer join"
+  - "ORDER BY with a descending key and a tie-breaker"
+optimal_complexity: {time: "O(n + m) with an index on readings.sensor_id, plus O(s log s) to sort the sensors", space: "O(s) for the grouped result"}
+rubric:
+  excellent: "Left joins readings with the breach condition inside the ON clause (or uses conditional aggregation), counts a readings column, keeps every sensor with 0, uses each sensor's own limit with a strict comparison and orders with the tie-breaker."
+  good: "Correct query after a hint that a WHERE filter or inner join drops sensors with no breaches."
+  weak: "Filters breaches in WHERE so non-breaching sensors vanish, uses a single global threshold, uses greater-or-equal, or counts with COUNT(*) after the outer join."
+  criteria:
+    correctness: "All tests pass, including sensors without readings, readings equal to the limit and negative limits."
+    efficiency: "One join and aggregation; mentions an index on readings.sensor_id."
+    code_quality: "The breach condition is stated once and the output columns are named as required."
+    edge_cases: "Empty tables, sensors without readings, equal-to-limit readings, negative temperatures and ties."
+    communication: "Explains why a condition in WHERE behaves differently from the same condition in the ON clause of an outer join."
+hints:
+  - "Every sensor must appear in the output, even one that never breached, so think about which table drives the query."
+  - "If you join the readings and then filter breaches in WHERE, the sensors without breaches disappear; the breach condition has to be applied without removing the sensor row."
+  - "Left join readings to sensors on the sensor id and put the strict comparison against that sensor's max_temp in the ON clause (or add up a CASE expression instead), count the reading id so sensors without matches get 0, group by sensor and order by the count descending and then by name."
+followups:
+  - "How would you report only breaches that lasted at least three consecutive readings?"
+  - "How would you restrict the count to the last 24 hours while still listing every sensor?"
+  - "Which index would make this fast with a billion readings?"
+common_errors:
+  - "Filtering breaches in WHERE after a LEFT JOIN, which turns it into an inner join and drops quiet sensors."
+  - "Using COUNT(*) after the outer join, which reports 1 for sensors with no breaches."
+  - "Using greater-or-equal, which counts readings exactly at the limit."

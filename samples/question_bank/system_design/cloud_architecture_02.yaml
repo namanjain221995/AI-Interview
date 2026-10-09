@@ -1,0 +1,619 @@
+# System design: cloud architecture (2 of 4) — network topology, hybrid connectivity and the edge.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [cloud, devops]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.cloud_architecture.cloud_app_to_onprem_database
+    competency_key: networking
+    topic: First path from a cloud app to an on-premises database
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      As a first migration step, a new application in the cloud needs to query a database that stays in your
+      data centre. Walk me through the end-to-end network path you'd design, and what you'd check before
+      calling it ready.
+    expected_concepts:
+      - private connectivity such as a site-to-site VPN or dedicated link
+      - non-overlapping address ranges and routes on both sides
+      - firewall rules in both directions scoped to the database port
+      - name resolution of the on-premises database from the cloud
+      - latency and its effect on chatty queries
+      - encryption in transit
+    rubric:
+      excellent: Traces the whole path including routing, firewalls, DNS and encryption, and raises latency and link redundancy as design concerns for a database dependency.
+      good: Sets up private connectivity with routes and firewall rules, but forgets DNS or the latency impact.
+      weak: Exposes the database to the internet or assumes the cloud can reach it with no routing or firewall work.
+    followups:
+      - The application suddenly feels slow even though the database is fine. What would you suspect?
+      - What happens to the application if the link drops for ten minutes?
+    common_errors:
+      - Overlooking that a single VPN tunnel is a single point of failure for a production dependency.
+
+  - external_key: system_design.cloud_architecture.workforce_access_private_apps
+    competency_key: security
+    topic: Employee access to private cloud applications
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Staff in several offices and working remotely need to reach internal web applications that run privately in
+      the cloud. How would you design that access?
+    expected_concepts:
+      - identity-aware proxy or zero-trust access over a traditional VPN
+      - single sign-on with multi-factor authentication
+      - per-application authorisation rather than network-wide access
+      - device posture checks where relevant
+      - access logging
+    rubric:
+      excellent: Compares VPN and identity-aware access, prefers per-application access tied to identity and device, and covers authentication strength and logging.
+      good: Proposes a VPN or proxy with single sign-on and reasonable restrictions.
+      weak: Puts the internal applications on the public internet protected only by passwords, or gives every employee full network access.
+    followups:
+      - A contractor needs only one of these apps for a month. How does your design handle that?
+      - How would you handle an internal app that only supports basic authentication?
+    common_errors:
+      - Granting VPN users the whole private network when they only need two applications.
+
+  - external_key: system_design.cloud_architecture.global_static_site
+    competency_key: cloud_cost_optimization
+    topic: Hosting a global static website cheaply
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Marketing wants a mostly static website that loads quickly for visitors worldwide and costs very little to
+      run. How would you host it?
+    expected_concepts:
+      - object storage as the source of content
+      - content delivery network with caching rules
+      - restricting direct access to the storage bucket
+      - managed TLS certificate and DNS
+      - cache invalidation or versioned asset names on deploy
+    rubric:
+      excellent: Uses storage plus a CDN with the bucket locked to the CDN, handles TLS and DNS, explains cache strategy for deployments and estimates where cost actually comes from.
+      good: Proposes storage and a CDN with TLS, with little detail on caching or locking down the bucket.
+      weak: Runs the site on a fleet of virtual machines behind a load balancer for a mostly static workload.
+    followups:
+      - A deploy went out but users still see the old page. Why, and how do you avoid it?
+      - Marketing now wants a contact form. What would you add?
+    common_errors:
+      - Leaving the storage bucket publicly readable so visitors can bypass the CDN.
+
+  - external_key: system_design.cloud_architecture.fixed_egress_ips
+    competency_key: networking
+    topic: Fixed outbound IP addresses for a partner allow-list
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A payment partner will only accept calls from a short list of fixed IP addresses. Your services run across
+      three availability zones and autoscale. How would you make sure every call to that partner comes from
+      known addresses?
+    expected_concepts:
+      - NAT gateways with static public addresses
+      - one NAT per zone for resilience versus the number of addresses to share
+      - routing only partner-bound traffic through the fixed path if needed
+      - an egress proxy as an alternative
+      - telling the partner about every address including failover ones
+    rubric:
+      excellent: Routes traffic through NAT or a proxy with static addresses, keeps zone resilience, explains the trade-off between address count and redundancy and makes sure the partner allow-lists all of them.
+      good: Uses NAT with static addresses correctly but does not consider zone failure or address changes.
+      weak: Assigns public addresses to individual instances, which breaks as soon as the group scales.
+    followups:
+      - The partner allows only two addresses but you have three zones. What would you do?
+      - How would you test that failover still lands on an allow-listed address?
+    common_errors:
+      - Sending all zones through a single NAT gateway and losing outbound access when that zone fails.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.cloud_architecture.resilient_dedicated_links
+    competency_key: networking
+    topic: Resilient dedicated connectivity to the cloud
+    difficulty: medium
+    text: >-
+      Your production systems now depend on a dedicated circuit between your data centre and the cloud. Design the
+      connectivity so that losing a circuit, a device or a whole colocation facility doesn't take you down.
+    expected_concepts:
+      - two or more circuits at separate locations
+      - diverse routers and provider paths
+      - BGP configuration for preference and fast failover
+      - VPN over the internet as a lower-capacity backup
+      - capacity planning so remaining links carry the load
+      - regular failover testing
+    rubric:
+      excellent: Designs location and device diversity, uses BGP attributes to control primary and backup paths, sizes surviving capacity and plans scheduled failover tests.
+      good: Proposes two circuits with a VPN backup and some routing preference, but misses location diversity or capacity during failover.
+      weak: Adds a second circuit on the same router at the same location and calls it redundant.
+    followups:
+      - How would you make failover faster than the default BGP timers allow?
+      - The backup VPN can carry only a fifth of normal traffic. What do you do during an outage?
+    common_errors:
+      - Never testing failover, so the backup path turns out to be misconfigured during a real outage.
+
+  - external_key: system_design.cloud_architecture.central_egress_inspection
+    competency_key: networking
+    topic: Centralised egress with traffic inspection
+    difficulty: medium
+    text: >-
+      Security wants all internet-bound traffic from fifty VPCs inspected by a firewall. Design a centralised
+      egress architecture and talk me through the cost and throughput trade-offs.
+    expected_concepts:
+      - inspection VPC or hub routed through a transit gateway or virtual WAN
+      - zonal firewall deployment with symmetric routing
+      - scaling the firewall layer, for example behind a gateway load balancer
+      - data processing charges at the hub and NAT
+      - exempting high-volume traffic to provider services via private endpoints
+      - centralised versus distributed egress trade-off
+    rubric:
+      excellent: Designs a hub with zonal, scalable inspection and symmetric routing, quantifies where data processing charges come from, and keeps high-volume provider traffic off the inspection path.
+      good: Proposes a central inspection hub with firewalls and NAT, but misses symmetric routing or cost of data processing.
+      weak: Puts one firewall instance in one zone in the path of all traffic.
+    followups:
+      - Your egress bill tripled after the change. Where would you look first?
+      - How would you keep this working when one zone's firewalls fail?
+    common_errors:
+      - Sending traffic to object storage and other provider services through the firewall and paying for every byte twice.
+
+  - external_key: system_design.cloud_architecture.ingress_placement_multi_account
+    competency_key: security
+    topic: Centralised versus per-account internet ingress
+    difficulty: medium
+    text: >-
+      Across forty workload accounts, should public traffic come in through a central ingress account, or should
+      each account own its load balancers and firewall rules? Design what you'd recommend and explain why.
+    expected_concepts:
+      - web application firewall and DDoS protection policy
+      - central policy management even with distributed load balancers
+      - team autonomy and blast radius of a shared ingress
+      - TLS certificate ownership
+      - guardrails preventing unmanaged public endpoints
+      - logging of all ingress traffic
+    rubric:
+      excellent: Weighs control and consistency against autonomy and blast radius, recommends a model with reasons, and shows how central policy can apply even to distributed ingress while preventing shadow public endpoints.
+      good: Recommends one model with sensible reasons, covering firewall policy and logging.
+      weak: Picks one option without discussing trade-offs, or ignores how unmanaged public endpoints are prevented.
+    followups:
+      - A team creates a public load balancer outside your pattern. How would you detect or prevent it?
+      - How does your choice change if teams deploy ten times a day?
+    common_errors:
+      - Centralising ingress so tightly that every routing change needs a ticket to one overloaded team.
+
+  - external_key: system_design.cloud_architecture.bulk_data_transfer_migration
+    competency_key: networking
+    topic: Moving hundreds of terabytes into the cloud
+    difficulty: medium
+    text: >-
+      You need to move about four hundred terabytes of files from a data centre into cloud storage, and keep
+      changes in sync until cutover, without saturating the link that production also uses. How would you design
+      the transfer?
+    expected_concepts:
+      - estimating transfer time against available bandwidth
+      - offline transfer appliances for the initial bulk copy
+      - incremental sync of changes over the network
+      - throttling or quality of service to protect production traffic
+      - verification with checksums and file counts
+      - cutover plan with a final delta sync
+    rubric:
+      excellent: Does the bandwidth arithmetic, chooses between offline and online transfer on that basis, protects production traffic, verifies integrity and plans a short final delta at cutover.
+      good: Chooses a reasonable transfer method and incremental sync, but skips the arithmetic or integrity checks.
+      weak: Starts a single large copy over the shared link without estimating time or impact.
+    followups:
+      - Roughly how long would four hundred terabytes take over a one gigabit link?
+      - Some files change every minute right up to cutover. How do you handle them?
+    common_errors:
+      - Forgetting per-request costs and small-file overhead when transferring millions of tiny files.
+
+  - external_key: system_design.cloud_architecture.retail_branch_connectivity
+    competency_key: networking
+    topic: Connecting many branch sites to cloud applications
+    difficulty: medium
+    text: >-
+      A retailer has sixty stores whose point-of-sale and inventory systems are moving to the cloud. Design how the
+      stores connect, and what happens in a store when its connection drops.
+    expected_concepts:
+      - SD-WAN or cloud WAN with dual internet links per store
+      - local internet breakout versus backhaul
+      - segmentation of payment traffic from guest and staff traffic
+      - offline mode for point of sale with later sync
+      - central management and monitoring of store devices
+    rubric:
+      excellent: Designs resilient store links and segmentation, explicitly designs the offline behaviour of critical store systems and covers central management of many small sites.
+      good: Proposes reasonable connectivity and some redundancy, but does not address what stores do while offline.
+      weak: Assumes the store connection is always available and puts critical sales flow entirely in the cloud.
+    followups:
+      - How would you roll out a configuration change to all sixty stores safely?
+      - What data must a store be able to work with while it is offline?
+    common_errors:
+      - Backhauling all store internet traffic through a central site and creating a bottleneck.
+
+  - external_key: system_design.cloud_architecture.latency_across_hybrid_split
+    competency_key: system_design
+    topic: Managing latency when an app is split across cloud and data centre
+    difficulty: medium
+    text: >-
+      A web front end has moved to the cloud, but it still calls a back-end system in your data centre, sometimes
+      twenty times per page. Page times have doubled. How would you redesign the architecture to fix that?
+    expected_concepts:
+      - measuring round trips per request and latency per call
+      - choosing a cloud region close to the data centre
+      - batching or aggregating calls in a back-end-for-front-end layer
+      - caching reference data in the cloud
+      - asynchronous patterns for non-critical calls
+      - moving the dependency or the caller so chatty parts are co-located
+    rubric:
+      excellent: Diagnoses round-trip amplification, combines placement, batching and caching, and frames the longer-term fix as moving tightly coupled components together.
+      good: Suggests caching or batching and region placement, without a clear diagnosis of why latency doubled.
+      weak: Proposes only a bigger link, which adds bandwidth but not lower latency.
+    followups:
+      - Which of the twenty calls would you look at first, and how would you find out?
+      - The cached data must never be more than a minute stale. How does that change your design?
+    common_errors:
+      - Confusing bandwidth with latency and expecting a faster circuit to fix a round-trip problem.
+
+  - external_key: system_design.cloud_architecture.global_entry_for_realtime_api
+    competency_key: distributed_systems
+    topic: Global entry point for an API with long-lived connections
+    difficulty: medium
+    text: >-
+      Your mobile app keeps long-lived WebSocket connections to an API that runs in two regions. Design the global
+      entry layer so users reach a nearby region and get moved cleanly when a region has problems.
+    expected_concepts:
+      - anycast global load balancer versus DNS-based routing
+      - TLS termination at the edge
+      - connection draining and reconnect with backoff and jitter
+      - session state kept outside the connection so reconnects can land anywhere
+      - avoiding reconnect storms after failover
+      - routing based on latency and availability
+    rubric:
+      excellent: Compares anycast and DNS approaches for long-lived connections, designs reconnect behaviour and state so failover is clean, and addresses thundering-herd reconnects.
+      good: Proposes a sensible global routing layer and mentions reconnects, but misses state or reconnect storms.
+      weak: Relies on DNS changes alone without considering that clients hold connections and cache records.
+    followups:
+      - A region recovers. How do you move users back without a huge reconnect wave?
+      - What state would a reconnecting client need, and where would it live?
+    common_errors:
+      - Assuming changing DNS moves users immediately when existing connections stay pinned to the old region.
+
+  - external_key: system_design.cloud_architecture.cloud_to_cloud_private_link
+    competency_key: networking
+    topic: Private high-throughput link between two cloud providers
+    difficulty: medium
+    text: >-
+      A data processing system on one cloud provider needs to exchange several terabytes a day with services on
+      another provider, privately. How would you design the connectivity, and what drives the cost?
+    expected_concepts:
+      - VPN over the internet versus interconnects meeting at a shared colocation or partner fabric
+      - egress charges on each provider
+      - throughput limits of VPN tunnels and the need for multiple tunnels
+      - non-overlapping address planning across clouds
+      - routing and DNS across both sides
+      - redundancy of the link
+    rubric:
+      excellent: Compares VPN with interconnect through a colocation or partner fabric using throughput and cost arithmetic, accounts for egress on both sides and covers addressing, DNS and redundancy.
+      good: Picks a reasonable connectivity option and mentions egress costs, but has little on throughput limits or redundancy.
+      weak: Sends the data over the public internet without encryption or cost analysis.
+    followups:
+      - At what daily volume would a dedicated interconnect start paying for itself?
+      - Could you reduce how much data crosses clouds in the first place?
+    common_errors:
+      - Ignoring per-tunnel throughput ceilings and planning a single VPN tunnel for multi-gigabit transfers.
+
+  - external_key: system_design.cloud_architecture.vendor_support_access
+    competency_key: security
+    topic: Network access for an external support vendor
+    difficulty: medium
+    text: >-
+      An external vendor supports a system that has parts in your data centre and parts in the cloud, and their
+      engineers need occasional access. Design how they connect and what they can reach.
+    expected_concepts:
+      - identity-based access through a broker or privileged access gateway
+      - access only to the specific systems they support
+      - just-in-time approval and time-limited sessions
+      - session recording and logging
+      - no standing site-to-site VPN into the corporate network
+    rubric:
+      excellent: Provides brokered, identity-based, time-limited access scoped to specific systems with session recording, and explains why a standing VPN is a poor fit.
+      good: Restricts vendor access to specific systems with approval, but misses recording or time limits.
+      weak: Gives the vendor a permanent VPN into the internal network or shared administrator credentials.
+    followups:
+      - The vendor's own laptop is compromised. What can the attacker reach in your design?
+      - How would you review what the vendor did during a session last month?
+    common_errors:
+      - Sharing one generic vendor account so actions cannot be traced to an individual.
+
+  - external_key: system_design.cloud_architecture.layer7_flood_protection
+    competency_key: security
+    topic: Protecting a public API from application-layer floods
+    difficulty: medium
+    text: >-
+      During a product launch your public API was hit by a flood of application-layer requests that looked
+      mostly legitimate and overwhelmed the back end. Design the edge architecture so the next one is absorbed.
+    expected_concepts:
+      - CDN or edge proxy in front with origin locked to it
+      - web application firewall rate-based rules and bot detection
+      - caching of cacheable responses at the edge
+      - per-client and per-endpoint rate limits close to the edge
+      - load shedding and graceful degradation in the back end
+      - autoscaling with sensible upper limits
+    rubric:
+      excellent: Layers edge absorption, rate limiting, bot controls and caching in front of a locked-down origin, and adds back-end load shedding so overload degrades gracefully rather than failing.
+      good: Adds a firewall with rate limiting and a CDN, but leaves the origin reachable directly or skips load shedding.
+      weak: Relies only on autoscaling the back end, which turns an attack into a large bill.
+    followups:
+      - How would you tell an attack apart from a genuinely viral launch?
+      - Attackers find the origin's address. What protects you then?
+    common_errors:
+      - Leaving the origin publicly reachable so attackers simply bypass the edge.
+
+  - external_key: system_design.cloud_architecture.cloud_as_dr_site_network
+    competency_key: networking
+    topic: Network design for using the cloud as a DR site
+    difficulty: medium
+    text: >-
+      You want to use the cloud as the disaster recovery site for applications that normally run in your data
+      centre. How would you design the network side, so that users and partners actually reach the recovered
+      systems after a failover?
+    expected_concepts:
+      - keeping addresses versus readdressing and the effect on applications
+      - DNS failover with low time-to-live values set in advance
+      - advertising routes from the cloud side during failover
+      - partner VPNs and allow-lists prepared for DR addresses
+      - user access paths when the data centre, and maybe the office VPN, is gone
+      - pre-provisioned connectivity rather than built during the disaster
+    rubric:
+      excellent: Covers addressing strategy, DNS and route changes, partner and user access paths, and insists that DR connectivity is built and tested before it is needed.
+      good: Handles DNS and basic connectivity to the cloud site, but misses partner allow-lists or user access when the data centre is down.
+      weak: Assumes the network can be set up after the disaster or that applications will just work with new addresses.
+    followups:
+      - Some applications have IP addresses hard-coded by partners. What are your options?
+      - How would you test this without failing over production?
+    common_errors:
+      - Routing all remote users through a VPN concentrator that lives in the failed data centre.
+
+  - external_key: system_design.cloud_architecture.device_telemetry_ingest
+    competency_key: system_design
+    topic: Ingesting telemetry from a large device fleet
+    difficulty: medium
+    text: >-
+      Fifty thousand field devices send telemetry over cellular networks every few seconds, and connectivity is
+      patchy. Design the cloud-side ingest architecture.
+    expected_concepts:
+      - lightweight protocol such as MQTT through a managed IoT gateway
+      - per-device identity with certificates and rotation
+      - regional endpoints and buffering on the device for offline periods
+      - a durable stream decoupling ingest from processing
+      - handling bursts when many devices reconnect at once
+      - data cost and payload size on cellular links
+    rubric:
+      excellent: Designs device identity, a suitable protocol, device-side buffering, a durable stream behind the gateway and burst handling, and keeps cellular data cost in view.
+      good: Proposes a managed gateway and stream with device authentication, but misses reconnect bursts or offline buffering.
+      weak: Has devices call a REST API directly that writes straight to a database.
+    followups:
+      - A device is stolen. How do you stop it from sending data?
+      - After a network outage, all devices reconnect at once and replay hours of data. What happens?
+    common_errors:
+      - Sharing one credential across the whole fleet so a single compromised device exposes everything.
+
+  - external_key: system_design.cloud_architecture.hybrid_network_visibility
+    competency_key: observability
+    topic: Network visibility across cloud and data centre
+    difficulty: medium
+    text: >-
+      Whenever something is slow, the application teams blame the network and the network team blames the
+      application, and nobody can prove either way. Design the network visibility you'd build across your cloud
+      accounts, the dedicated links and the data centre.
+    expected_concepts:
+      - flow logs centralised and queryable across accounts
+      - synthetic probes measuring latency and loss between key points
+      - link and tunnel metrics from the provider and on-premises devices
+      - DNS query logging and resolution latency
+      - shared dashboards aligned with application latency
+      - topology and path documentation kept current
+    rubric:
+      excellent: Combines flow data, active probing, link metrics and DNS visibility into shared views that line up with application latency, so either side can quickly confirm or rule out the network.
+      good: Proposes flow logs and some link monitoring, but lacks active probing or correlation with application signals.
+      weak: Relies on ping tests run by hand during incidents.
+    followups:
+      - Flow logs show traffic but not latency. What fills that gap?
+      - How would you keep the cost of storing flow logs reasonable?
+    common_errors:
+      - Collecting flow logs in every account but never making them searchable in one place.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.cloud_architecture.global_wan_design
+    competency_key: networking
+    topic: Global network spanning cloud regions and data centres
+    difficulty: hard
+    text: >-
+      Your company operates in twelve cloud regions plus a dozen data centres and colocation sites on four
+      continents. Design the global network that connects all of it, and explain where you'd rely on the provider's
+      backbone versus your own circuits.
+    expected_concepts:
+      - regional hubs connected over the provider backbone
+      - colocation sites as meeting points for dedicated circuits
+      - segmentation of production, non-production and partner traffic across the WAN
+      - routing policy, route summarisation and preventing loops
+      - failure domains so one region's issue stays local
+      - cost of inter-region and inter-continent transfer
+    rubric:
+      excellent: Designs a hub-based topology with clear roles for backbone and private circuits, defines segmentation and routing policy, limits failure domains, and reasons about cost and latency between continents.
+      good: Proposes a sensible hub topology with redundancy, but is vague on routing policy, segmentation or cost.
+      weak: Proposes full-mesh peering or VPNs everywhere without considering routing scale or failure isolation.
+    followups:
+      - A route change in one region propagated everywhere and caused an outage. How would you contain that?
+      - How would you decide whether to use the provider's managed WAN product?
+    common_errors:
+      - Advertising every specific route everywhere and hitting route table limits as the network grows.
+
+  - external_key: system_design.cloud_architecture.hybrid_routing_guardrails
+    competency_key: networking
+    topic: Preventing hybrid routing mistakes
+    difficulty: hard
+    text: >-
+      An engineer on the data centre side accidentally advertised a default route over your dedicated link, and
+      suddenly all cloud internet traffic was going back through the data centre. Design guardrails so a
+      routing mistake on either side can't cause that kind of outage again.
+    expected_concepts:
+      - prefix filters and allowed-prefix lists on both sides of BGP sessions
+      - maximum-prefix limits
+      - explicit route preferences so internet egress stays in the cloud
+      - change review and automation for router configuration
+      - monitoring route tables and alerting on unexpected prefixes
+      - documented ownership of each routing domain
+    rubric:
+      excellent: Combines prefix filtering, max-prefix limits and route preference so mistakes cannot propagate, adds reviewed automated changes and route monitoring, and assigns clear ownership.
+      good: Adds prefix filtering and better change control, but misses monitoring or route preference design.
+      weak: Proposes only a process change such as more careful review, with no technical control on what routes are accepted.
+    followups:
+      - Which side of the link should own the filter, and why?
+      - How would you detect within a minute that traffic is flowing an unexpected way?
+    common_errors:
+      - Accepting any prefix the other side advertises because filters were never configured.
+
+  - external_key: system_design.cloud_architecture.data_centre_exit_network
+    competency_key: networking
+    topic: Moving core network services out of the last data centre
+    difficulty: hard
+    text: >-
+      Your final data centre closes in six months. Most applications have moved, but DNS, directory services,
+      time, egress, partner VPNs and a few legacy systems still live there. How would you plan the network side of
+      the exit?
+    expected_concepts:
+      - inventory of every service and every flow still passing through the data centre
+      - dependency ordering, moving foundational services such as DNS and directory early
+      - flow logs and traffic analysis to find unknown dependencies
+      - coordinating partner VPN and allow-list changes ahead of time
+      - test cutovers and a final traffic watch before power-off
+      - rollback options while the site still exists
+    rubric:
+      excellent: Builds a traffic-evidence-based inventory, orders moves by dependency, coordinates external parties early, and uses staged cutovers with monitoring for stray traffic before shutdown.
+      good: Lists the services and plans their moves, but relies on documentation rather than traffic evidence or misses partner lead times.
+      weak: Plans to switch everything off on a date and fix whatever breaks.
+    followups:
+      - After moving everything, you still see traffic hitting an old address range. What do you do?
+      - Which move would you schedule last, and why?
+    common_errors:
+      - Discovering hard-coded addresses and forgotten dependencies only after the site is powered off.
+
+  - external_key: system_design.cloud_architecture.self_service_network_platform
+    competency_key: terraform
+    topic: Self-service network provisioning as code
+    difficulty: hard
+    text: >-
+      Three hundred teams wait days for the network team to create VPCs and change firewall rules. Design a
+      self-service platform where teams get networks and firewall changes through code, while the network team
+      keeps control of what matters.
+    expected_concepts:
+      - automated address allocation from a central IP address management system
+      - network vending through templates and modules
+      - firewall rule requests as pull requests with automated policy checks
+      - risk-based auto-approval and human review for sensitive changes
+      - drift detection and protection of centrally owned components
+      - rollback and audit trail
+    rubric:
+      excellent: Combines automated address allocation, templated network vending and policy-checked firewall changes with risk-based approval, while keeping central control of shared routing and auditability.
+      good: Automates VPC creation and handles rule changes through code review, but approval rules or address management are thin.
+      weak: Builds a request form that still lands as a manual ticket, or gives teams direct write access to shared routing.
+    followups:
+      - What would an automated policy check reject outright?
+      - A team's change broke connectivity for another team. How does your platform let you roll back quickly?
+    common_errors:
+      - Allocating address ranges by spreadsheet so overlaps creep in as the platform scales.
+
+  - external_key: system_design.cloud_architecture.global_media_relay
+    competency_key: distributed_systems
+    topic: Placing media relays for real-time calls
+    difficulty: hard
+    text: >-
+      Your product adds real-time voice and video calls between users around the world. Design where media relay
+      servers run and how a call picks its relays to keep latency and cost under control.
+    expected_concepts:
+      - relays in many regions or edge locations close to users
+      - choosing relays from measured latency rather than geography alone
+      - routing between relays over the provider backbone
+      - UDP-friendly load balancing and NAT traversal
+      - egress cost of media traffic
+      - capacity and failover of a relay mid-call
+    rubric:
+      excellent: Places relays close to users, selects them from live latency data, uses backbone routing between relays, handles UDP and NAT traversal, and puts egress cost and mid-call failover into the design.
+      good: Distributes relays regionally and chooses nearby ones, but neglects backbone routing, egress cost or mid-call failure.
+      weak: Routes all media through one central region regardless of where participants are.
+    followups:
+      - Two participants are in the same city. Where should their media flow?
+      - A relay fails during a call. What does the user experience?
+    common_errors:
+      - Ignoring that media egress dominates the bill and designing as if bandwidth were free.
+
+  - external_key: system_design.cloud_architecture.partner_connectivity_hub
+    competency_key: networking
+    topic: Hub for connecting hundreds of business partners
+    difficulty: hard
+    text: >-
+      Your company exchanges data with two hundred business partners over VPNs, file transfers and APIs, and
+      several partners use the same private address ranges you do. Design a partner connectivity hub in the cloud.
+    expected_concepts:
+      - dedicated partner account and network isolated from internal networks
+      - per-partner isolation and segmentation
+      - NAT to resolve overlapping address ranges
+      - managed file transfer and API gateway as the preferred interfaces
+      - partner onboarding automation and certificate management
+      - monitoring per partner connection
+    rubric:
+      excellent: Isolates partners from each other and from internal networks, solves address overlap with NAT, steers partners toward managed interfaces and automates onboarding and monitoring.
+      good: Builds an isolated hub with per-partner VPNs and handles overlap somehow, but onboarding or monitoring is manual.
+      weak: Terminates partner VPNs directly into the internal network with broad access.
+    followups:
+      - One partner is compromised. What can the attacker reach through your hub?
+      - How would you move partners from VPNs to APIs over time?
+    common_errors:
+      - Letting partners reach each other through the shared hub because routing was not segmented.
+
+  - external_key: system_design.cloud_architecture.store_edge_compute
+    competency_key: system_design
+    topic: Edge compute that keeps sites running offline
+    difficulty: hard
+    text: >-
+      Each of a thousand sites, say warehouses, runs local software that must keep working for days if the
+      internet connection fails, but is managed and updated centrally from the cloud. Design that architecture.
+    expected_concepts:
+      - small local compute cluster with the critical services and data
+      - local data store with later sync and conflict handling
+      - central fleet management with staged rollouts and rollback
+      - pull-based updates that tolerate intermittent connectivity
+      - local identity and authentication when the cloud is unreachable
+      - remote monitoring with buffered telemetry
+    rubric:
+      excellent: Defines what runs locally versus centrally, designs sync and conflict handling, makes updates and identity work offline, and uses staged fleet rollouts with rollback.
+      good: Places critical services at the edge and syncs data, but neglects offline authentication or fleet rollout safety.
+      weak: Keeps the critical path in the cloud and treats offline operation as an edge case.
+    followups:
+      - A site was offline for three days and both sides changed the same record. How is it resolved?
+      - A bad update bricks the local cluster at ten sites. How do you recover them?
+    common_errors:
+      - Requiring the cloud identity provider for local logins, so staff are locked out during an outage.
+
+  - external_key: system_design.cloud_architecture.mandatory_egress_tls_inspection
+    competency_key: security
+    topic: Inspecting encrypted outbound traffic
+    difficulty: hard
+    text: >-
+      A regulator requires that outbound traffic from a sensitive environment be inspected, including encrypted
+      traffic. Design how you'd meet that requirement without breaking applications or creating a new security
+      risk.
+    expected_concepts:
+      - explicit or transparent proxy with TLS interception
+      - managing the interception certificate authority and its trust distribution
+      - bypass lists for certificate-pinned or sensitive destinations
+      - allow-listing destinations as a simpler alternative where possible
+      - protecting decrypted data and logs
+      - throughput and latency of the inspection layer
+    rubric:
+      excellent: Designs interception with careful certificate authority management, handles pinning and bypasses, considers destination allow-listing as a lighter control, and treats the inspection layer itself as a sensitive asset.
+      good: Proposes a TLS-intercepting proxy with certificate distribution and some bypasses, with less on protecting the proxy or performance.
+      weak: Claims encrypted traffic can be inspected without decrypting it, or ignores the risk of the interception authority.
+    followups:
+      - Some workloads pin certificates and fail behind the proxy. What do you do?
+      - Who should be able to read the decrypted traffic logs?
+    common_errors:
+      - Storing the interception authority's private key where many people or systems can reach it.

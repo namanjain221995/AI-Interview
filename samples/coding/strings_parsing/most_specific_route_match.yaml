@@ -1,0 +1,187 @@
+version: 1
+slug: most_specific_route_match
+title: Most Specific Route Match
+difficulty: medium
+competency_keys: [algorithms, problem_solving]
+role_tags: [backend, frontend, fullstack]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Most Specific Route Match
+
+  A web framework's router decides which handler serves a request path. You are given the registered
+  `routes` (in registration order) and a request `path`; return the route that handles it.
+
+  Both routes and paths start with `/` and are split into segments by `/`. A **single trailing slash is
+  ignored**, so `/api/v1/` and `/api/v1` have the same segments, and `/` has zero segments. Route
+  segments come in three kinds:
+
+  - **static** text such as `users`, which matches a path segment with exactly the same text
+    (case-sensitive);
+  - **param** `:name` such as `:id`, which matches any one path segment;
+  - **wildcard** `*`, allowed only as the last route segment, which matches **one or more** remaining
+    path segments.
+
+  A route without a wildcard matches only paths with the same number of segments.
+
+  If several routes match, compare them position by position over the path segments, looking at the kind
+  of route segment that covers each position (a wildcard covers every position from where it starts). At
+  the **first position where the kinds differ**, the route with the more specific kind wins: static beats
+  param, and param beats wildcard. If no position differs, the route registered **earliest** wins.
+
+  Return the winning route exactly as it appears in `routes`, or `""` if no route matches.
+
+  ### Example 1
+  ```
+  Input:  routes = ["/users/:id", "/users/me", "/users/*"], path = "/users/me"
+  Output: "/users/me"
+  ```
+
+  ### Example 2
+  ```
+  Input:  routes = ["/files/*", "/:section/:name/raw", "/files/:name/raw"], path = "/files/report.pdf/raw/"
+  Output: "/files/:name/raw"
+  Explanation: "/:section/:name/raw" loses at position 0 (param vs static); "/files/*" loses at
+  position 1 (wildcard vs param).
+  ```
+
+  ### Example 3
+  ```
+  Input:  routes = ["/static/*", "/health"], path = "/static"
+  Output: ""
+  Explanation: The wildcard needs at least one segment after "static".
+  ```
+
+  ### Constraints
+  - `1 <= routes.length <= 100`
+  - Every route and path starts with `/`, has at most `20` segments and at most one trailing `/`; apart from
+    that trailing slash no segment is empty.
+  - Path segments and static route segments use letters, digits, `.`, `-` and `_`.
+  - A param segment is `:` followed by at least one letter; `*` appears only as a whole, final route segment.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: select_route
+  params:
+    - {name: routes, type: "string[]"}
+    - {name: path, type: string}
+  return_type: string
+  comparison: exact
+reference_solutions:
+  python: |
+    STATIC, PARAM, WILDCARD = 2, 1, 0
+
+
+    def _segments(text: str) -> list[str]:
+        text = text[1:]
+        if text.endswith("/"):
+            text = text[:-1]
+        return text.split("/") if text else []
+
+
+    def _specificity(route: list[str], path: list[str]) -> list[int] | None:
+        """Kind of route segment covering each path position, or None if the route does not match."""
+        wildcard = bool(route) and route[-1] == "*"
+        fixed = route[:-1] if wildcard else route
+        if wildcard and len(path) <= len(fixed):
+            return None
+        if not wildcard and len(path) != len(fixed):
+            return None
+        kinds = []
+        for segment, actual in zip(fixed, path):
+            if segment.startswith(":"):
+                kinds.append(PARAM)
+            elif segment == actual:
+                kinds.append(STATIC)
+            else:
+                return None
+        kinds.extend([WILDCARD] * (len(path) - len(fixed)))
+        return kinds
+
+
+    def select_route(routes: list[str], path: str) -> str:
+        path_segments = _segments(path)
+        best, best_kinds = "", None
+        for route in routes:
+            kinds = _specificity(_segments(route), path_segments)
+            # Equal-length lists compare at the first differing position; strict > keeps the earliest.
+            if kinds is not None and (best_kinds is None or kinds > best_kinds):
+                best, best_kinds = route, kinds
+        return best
+  javascript: |
+    function selectRoute(routes, path) {
+      const segments = (text) => {
+        let body = text.slice(1);
+        if (body.endsWith("/")) body = body.slice(0, -1);
+        return body === "" ? [] : body.split("/");
+      };
+      const specificity = (route, actual) => {
+        const wildcard = route.length > 0 && route[route.length - 1] === "*";
+        const fixed = wildcard ? route.slice(0, -1) : route;
+        if (wildcard ? actual.length <= fixed.length : actual.length !== fixed.length) return null;
+        const kinds = [];
+        for (let i = 0; i < fixed.length; i++) {
+          if (fixed[i].startsWith(":")) kinds.push(1);
+          else if (fixed[i] === actual[i]) kinds.push(2);
+          else return null;
+        }
+        while (kinds.length < actual.length) kinds.push(0);
+        return kinds;
+      };
+      const better = (a, b) => {
+        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i];
+        return false;
+      };
+      const pathSegments = segments(path);
+      let best = "";
+      let bestKinds = null;
+      for (const route of routes) {
+        const kinds = specificity(segments(route), pathSegments);
+        if (kinds !== null && (bestKinds === null || better(kinds, bestKinds))) {
+          best = route;
+          bestKinds = kinds;
+        }
+      }
+      return best;
+    }
+tests:
+  - {id: t1, args: [["/users/:id", "/users/me", "/users/*"], "/users/me"], expected: "/users/me", description: "Example 1 - static beats param and wildcard"}
+  - {id: t2, args: [["/files/*", "/:section/:name/raw", "/files/:name/raw"], "/files/report.pdf/raw/"], expected: "/files/:name/raw", description: "Example 2 - first differing position decides; trailing slash on the path ignored"}
+  - {id: t3, args: [["/static/*", "/health"], "/static"], expected: "", description: "Example 3 - wildcard needs at least one segment; no match"}
+  - {id: t4, hidden: true, args: [["/", "/*"], "/"], expected: "/", description: "Root path matches only the root route, not the wildcard"}
+  - {id: t5, hidden: true, args: [["/*", "/api/:v/status"], "/api/v2/status"], expected: "/api/:v/status", description: "Catch-all registered first loses to a more specific route"}
+  - {id: t6, hidden: true, args: [["/orders/:id", "/orders/:orderId"], "/orders/77"], expected: "/orders/:id", description: "Full tie between param names resolved to the earliest route"}
+  - {id: t7, hidden: true, args: [["/:a/b/c", "/a/:b/:c"], "/a/b/c"], expected: "/a/:b/:c", description: "Earlier position outweighs later ones: more static segments overall still loses"}
+  - {id: t8, hidden: true, args: [["/Health"], "/health"], expected: "", description: "Static comparison is case-sensitive"}
+  - {id: t9, hidden: true, args: [["/api/v1/", "/api/:version"], "/api/v1"], expected: "/api/v1/", description: "Route with a trailing slash matches and is returned as written"}
+  - {id: t10, hidden: true, args: [["/a/*", "/a/:b/*", "/a/:b/c"], "/a/x/c/d"], expected: "/a/:b/*", description: "Longer fixed route does not match; param before wildcard wins"}
+  - {id: t11, hidden: true, args: [["/reports/:year/:month", "/reports/*"], "/reports/2024"], expected: "/reports/*", description: "Param route needs the exact segment count; wildcard wins"}
+  - {id: t12, hidden: true, args: [["/svc0/:id", "/svc1/:id", "/svc2/:id", "/svc3/:id", "/svc4/:id", "/svc5/:id", "/svc6/:id", "/svc7/:id", "/svc8/:id", "/svc9/:id", "/svc10/:id", "/svc11/:id", "/svc12/:id", "/svc13/:id", "/svc14/:id", "/svc15/:id", "/svc16/:id", "/svc17/:id", "/svc18/:id", "/svc19/:id", "/svc20/:id", "/svc21/:id", "/svc22/:id", "/svc23/:id", "/svc24/:id", "/svc25/:id", "/svc26/:id", "/svc27/:id", "/svc28/:id", "/svc29/:id", "/svc30/:id", "/svc31/:id", "/svc32/:id", "/svc33/:id", "/svc34/:id", "/svc35/:id", "/svc36/:id", "/svc37/:id", "/svc38/:id", "/svc39/:id", "/svc40/:id", "/svc41/:id", "/svc42/:id", "/svc43/:id", "/svc44/:id", "/svc45/:id", "/svc46/:id", "/svc47/:id", "/svc48/:id", "/svc49/:id", "/svc50/:id", "/svc51/:id", "/svc52/:id", "/svc53/:id", "/svc54/:id", "/svc54/*", "/:svc/items/:id", "/svc54/items/:id", "/svc54/items/latest", "/*"], "/svc54/items/latest"], expected: "/svc54/items/latest", description: "60 routes; the most specific match is near the end"}
+expected_concepts:
+  - splitting and normalising paths into segments
+  - per-route matching with segment-count rules for wildcards
+  - encoding specificity as a comparable sequence of kinds
+  - stable tie-breaking by registration order
+optimal_complexity: {time: O(R * S), space: O(S)}
+rubric:
+  excellent: Normalises routes and paths into segments, matches each route with the right count rules for wildcards, encodes each match as a sequence of kind ranks so the first differing position decides, keeps the earliest route on ties with a strict comparison, and discusses how a trie would scale to many routes.
+  good: Correct linear scan with an explicit comparison function; one fix needed after tests, such as the root path or trailing slashes.
+  weak: Ranks routes by counting static segments overall, lets a wildcard match zero segments, or ignores the registration-order tie rule.
+  criteria:
+    correctness: All tests pass, including root, trailing slashes, ties and wildcard length rules.
+    efficiency: Each route is checked in time proportional to its segments; no exponential matching.
+    code_quality: Matching and ranking are separate helpers; segment kinds have names rather than magic numbers.
+    edge_cases: Root path, empty matches, case sensitivity, wildcard at the boundary of the path length.
+    communication: Explains the specificity rule with an example where the total count of static segments misleads.
+hints:
+  - First decide, for each route on its own, whether it matches the path at all; only then worry about choosing between matches.
+  - For a matching route, write down the kind of route segment that covers each path position. Two matching routes cover the same number of positions, so these sequences can be compared position by position.
+  - Split both strings into segments after dropping the leading slash and one trailing slash; a route without a wildcard needs exactly as many segments as the path, a route ending in a wildcard needs strictly more path segments than its fixed part. Map static to 2, param to 1 and each wildcard-covered position to 0, compare the sequences lexicographically, and replace the best only when the new one is strictly greater so the earliest route wins ties.
+followups:
+  - How would you organise thousands of routes in a trie so that matching does not scan every route?
+  - How would you also return the captured parameter values and the wildcard tail?
+  - How would you detect at registration time that two routes can never be told apart?
+  - What changes if params can have type constraints such as digits only?
+common_errors:
+  - Counting static segments across the whole route instead of deciding at the first differing position.
+  - Letting a wildcard match zero segments, so the wildcard route matches its own prefix.
+  - Treating "/" as one empty segment, which breaks root matching.
+  - Using a non-strict comparison, so a later tied route replaces the earlier one.

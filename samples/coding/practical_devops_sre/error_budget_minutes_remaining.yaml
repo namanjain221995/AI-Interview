@@ -1,0 +1,108 @@
+version: 1
+slug: error_budget_minutes_remaining
+title: Remaining Downtime Budget
+difficulty: easy
+competency_keys: [problem_solving, code_quality]
+role_tags: [sre, devops, platform, general]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Remaining Downtime Budget
+
+  The reliability dashboard shows how much downtime a service can still afford before it breaks its
+  availability objective. An objective of `slo_percent` over a rolling window of `window_days` days
+  allows the service to be unavailable for
+
+  ```
+  allowed_minutes = window_days * 1440 * (100 - slo_percent) / 100
+  ```
+
+  minutes in that window (a day has 1440 minutes). You are given the durations, in whole minutes, of
+  every outage recorded in the current window in `outage_minutes`.
+
+  Return the number of downtime minutes **remaining**: the allowed minutes minus the total outage
+  minutes. The result is **negative** when the budget is already overspent, and equals the full
+  allowance when there have been no outages.
+
+  Answers within a relative tolerance of `1e-6` of the expected value are accepted.
+
+  ### Example 1
+  ```
+  Input:  slo_percent = 99.9, window_days = 30, outage_minutes = [12, 5, 20]
+  Output: 6.2
+  Explanation: 30 * 1440 * 0.1 / 100 = 43.2 allowed minutes; 43.2 - 37 = 6.2
+  ```
+
+  ### Example 2
+  ```
+  Input:  slo_percent = 99.5, window_days = 7, outage_minutes = [45, 30]
+  Output: -24.6
+  Explanation: 7 * 1440 * 0.5 / 100 = 50.4 allowed minutes; 75 minutes of outages overspend it by 24.6.
+  ```
+
+  ### Constraints
+  - `0 <= slo_percent <= 100`
+  - `1 <= window_days <= 366`
+  - `0 <= outage_minutes.length <= 10^5`
+  - `0 <= outage_minutes[i] <= 2 * 10^9` (the total can exceed 32-bit range)
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: error_budget_minutes_remaining
+  params:
+    - {name: slo_percent, type: float}
+    - {name: window_days, type: int}
+    - {name: outage_minutes, type: "int[]"}
+  return_type: float
+  comparison: float_tolerance
+  tolerance: 0.000001
+reference_solutions:
+  python: |
+    def error_budget_minutes_remaining(slo_percent: float, window_days: int, outage_minutes: list[int]) -> float:
+        allowed = window_days * 1440 * (100.0 - slo_percent) / 100.0
+        used = sum(outage_minutes)  # exact integer sum; never overflows in Python
+        return allowed - used
+  javascript: |
+    function errorBudgetMinutesRemaining(sloPercent, windowDays, outageMinutes) {
+      const allowed = windowDays * 1440 * (100 - sloPercent) / 100;
+      let used = 0;
+      for (const minutes of outageMinutes) used += minutes;
+      return allowed - used;
+    }
+tests:
+  - {id: t1, args: [99.9, 30, [12, 5, 20]], expected: 6.199999999997544, description: "Example 1 - budget partly spent"}
+  - {id: t2, args: [99.5, 7, [45, 30]], expected: -24.6, description: "Example 2 - budget overspent, negative result"}
+  - {id: t3, hidden: true, args: [99.95, 28, []], expected: 20.159999999998853, description: "No outages returns the full allowance"}
+  - {id: t4, hidden: true, args: [100.0, 30, [1]], expected: -1.0, description: "100 percent objective allows no downtime at all"}
+  - {id: t5, hidden: true, args: [0.0, 1, [0, 0, 0]], expected: 1440.0, description: "0 percent objective and zero-length outages"}
+  - {id: t6, hidden: true, args: [99.0, 366, [2000000000, 2000000000, 1]], expected: -3999994730.6, description: "Outage total above 2^31 (32-bit overflow pitfall)"}
+  - {id: t7, hidden: true, args: [99.99, 90, [3, 1, 4, 1, 5]], expected: -1.0399999999933698, description: "Four nines over a quarter, nearly exhausted"}
+  - {id: t8, hidden: true, args: [90.0, 1, [100, 44]], expected: 0.0, description: "Budget spent exactly to zero"}
+  - {id: t9, hidden: true, args: [99.9, 365, [7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]], expected: 175.59999999997012, description: "Fifty identical outages over a year"}
+expected_concepts:
+  - translating an availability percentage into an allowed downtime amount
+  - summing outages in a 64-bit or floating accumulator to avoid overflow
+  - negative remaining budget signals overspend
+  - floating-point comparison with a tolerance
+optimal_complexity: {time: "O(n) for n outages", space: "O(1)"}
+rubric:
+  excellent: "Derives the allowance formula from first principles, sums outages in a 64-bit accumulator, returns negative values for overspend without clamping, and explains why floating results are compared with a tolerance."
+  good: "Correct formula and sum; needs a nudge on overflow of the total or on not clamping to zero."
+  weak: "Uses slo_percent as the downtime fraction, clamps the result at zero, or overflows a 32-bit sum."
+  criteria:
+    correctness: "All tests pass, including 100 percent objectives, overspent budgets and very large outage totals."
+    efficiency: "Single pass over the outages with constant extra memory."
+    code_quality: "Named intermediate values such as allowed and used make the formula readable; no magic numbers without explanation."
+    edge_cases: "No outages, zero-length outages, a 100 percent objective, a 0 percent objective and totals above 2^31."
+    communication: "Explains what a negative budget means for release decisions and why exact float equality is not used."
+hints:
+  - "Work out first how many minutes of unavailability the objective permits over the whole window."
+  - "The permitted fraction of time is one hundred minus the objective, divided by one hundred; multiply that by the number of minutes in the window, then subtract what has already been spent."
+  - "Compute the window length in minutes as days times 1440, multiply by the permitted downtime fraction, sum all outage durations in a 64-bit or floating accumulator so large totals cannot overflow, and return the difference without clamping it at zero."
+followups:
+  - "How would you compute the burn rate and alert when the budget will run out within the next 6 hours?"
+  - "How would you handle outages that overlap in time if you were given start and end timestamps instead?"
+  - "How would partial degradations, such as 30 percent of requests failing, change the calculation?"
+common_errors:
+  - "Using slo_percent itself as the downtime fraction, which gives almost the whole window as budget."
+  - "Clamping the result at zero so overspend is hidden from the dashboard."
+  - "Summing large outage values in a 32-bit integer and overflowing."
+  - "Doing the division in integer arithmetic and losing the fractional minutes."

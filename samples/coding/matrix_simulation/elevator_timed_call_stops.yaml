@@ -1,0 +1,168 @@
+version: 1
+slug: elevator_timed_call_stops
+title: Elevator Call Log Replay
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [backend, qa, general, platform]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Elevator Call Log Replay
+
+  A building-automation team wants to replay a day's elevator call log against its controller rules to
+  check the stop log the controller produced. There is one elevator. At time `0` it is **idle** at
+  `start_floor`. Each entry of `calls` is `[time, floor]`: a request to stop at `floor`, which the
+  controller learns about at `time`. The log is **not** necessarily sorted.
+
+  The elevator moves exactly one floor per time unit, and stopping takes no time. At every integer time
+  `t = 0, 1, 2, ...`, with the elevator at floor `f`, the controller does the following in order:
+
+  1. **Learn**: every call whose `time` equals `t` becomes pending.
+  2. **Serve**: if any pending call is for floor `f`, all of them are served together and the stop
+     `[t, f]` is recorded once.
+  3. **Choose a direction**:
+     - If the elevator is moving up (or down) and some pending floor lies ahead in that direction, it
+       keeps its direction. Otherwise, if some pending floor lies behind it, it reverses. Otherwise it
+       becomes idle.
+     - If the elevator is idle (including when the previous rule has just made it idle) and calls are pending, it
+       heads towards the **nearest** pending floor; when two are equally near it picks the **lower**
+       floor.
+  4. **Move**: a moving elevator travels one floor in its direction and arrives at time `t + 1`; an
+     idle elevator stays where it is.
+
+  The replay ends once every call has been learned and served. Return the recorded stops as a list of
+  `[time, floor]` pairs in the order they happen (an empty list if there are no calls). A floor may be
+  stopped at more than once.
+
+  ### Example 1
+  ```
+  Input:  start_floor = 0, calls = [[0, 5], [2, 3], [3, 1]]
+  Output: [[3, 3], [5, 5], [9, 1]]
+  Explanation: Heading up for 5, it passes floor 1 at t=1 before that call exists (t=3).
+               It stops at 3 on the way up (t=3), at 5 (t=5), then reverses and reaches 1 at t=9.
+  ```
+
+  ### Example 2
+  ```
+  Input:  start_floor = 4, calls = [[0, 4], [1, 6], [1, 2], [10, 9]]
+  Output: [[0, 4], [3, 2], [7, 6], [13, 9]]
+  Explanation: The call for floor 4 is served at once. At t=1 floors 2 and 6 are equally near, so it goes down first.
+               It is idle from t=7 until the call at t=10 arrives.
+  ```
+
+  ### Constraints
+  - `0 <= start_floor <= 200`
+  - `0 <= calls.length <= 300`, each `calls[i] = [time, floor]`
+  - `0 <= time <= 10^5`, `0 <= floor <= 200`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: elevator_timed_stops
+  params:
+    - {name: start_floor, type: "int"}
+    - {name: calls, type: "int[][]"}
+  return_type: "int[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def elevator_timed_stops(start_floor: int, calls: list[list[int]]) -> list[list[int]]:
+        log = sorted(calls, key=lambda call: call[0])
+        stops: list[list[int]] = []
+        pending: set[int] = set()
+        t, floor, direction, i = 0, start_floor, 0, 0
+        while i < len(log) or pending:
+            while i < len(log) and log[i][0] <= t:
+                pending.add(log[i][1])
+                i += 1
+            if floor in pending:
+                pending.discard(floor)
+                stops.append([t, floor])
+            if direction != 0:
+                ahead = any((p - floor) * direction > 0 for p in pending)
+                if not ahead:
+                    direction = -direction if pending else 0
+            if direction == 0 and pending:
+                target = min(pending, key=lambda p: (abs(p - floor), p))
+                direction = 1 if target > floor else -1
+            if direction == 0:
+                if i < len(log):
+                    t = log[i][0]
+                continue
+            floor += direction
+            t += 1
+        return stops
+  javascript: |
+    function elevatorTimedStops(startFloor, calls) {
+      const log = calls.slice().sort((a, b) => a[0] - b[0]);
+      const stops = [];
+      const pending = new Set();
+      let t = 0, floor = startFloor, direction = 0, i = 0;
+      while (i < log.length || pending.size > 0) {
+        while (i < log.length && log[i][0] <= t) pending.add(log[i++][1]);
+        if (pending.has(floor)) {
+          pending.delete(floor);
+          stops.push([t, floor]);
+        }
+        if (direction !== 0) {
+          let ahead = false;
+          for (const p of pending) if ((p - floor) * direction > 0) ahead = true;
+          if (!ahead) direction = pending.size > 0 ? -direction : 0;
+        }
+        if (direction === 0 && pending.size > 0) {
+          let target = null;
+          for (const p of pending) {
+            const d = Math.abs(p - floor);
+            if (target === null || d < Math.abs(target - floor) || (d === Math.abs(target - floor) && p < target)) target = p;
+          }
+          direction = target > floor ? 1 : -1;
+        }
+        if (direction === 0) {
+          if (i < log.length) t = log[i][0];
+          continue;
+        }
+        floor += direction;
+        t += 1;
+      }
+      return stops;
+    }
+tests:
+  - {id: t1, args: [0, [[0, 5], [2, 3], [3, 1]]], expected: [[3, 3], [5, 5], [9, 1]], description: "Example 1 - floor passed before its call is known is served on the way back"}
+  - {id: t2, args: [4, [[0, 4], [1, 6], [1, 2], [10, 9]]], expected: [[0, 4], [3, 2], [7, 6], [13, 9]], description: "Example 2 - served at the idle floor, tie broken towards the lower floor, idle gap"}
+  - {id: t3, hidden: true, args: [7, []], expected: [], description: "No calls - empty stop log"}
+  - {id: t4, hidden: true, args: [3, [[5, 3]]], expected: [[5, 3]], description: "Single late call for the idle floor - served at its arrival time"}
+  - {id: t5, hidden: true, args: [4, [[0, 4], [0, 4], [2, 1], [3, 4]]], expected: [[0, 4], [5, 1], [8, 4]], description: "Duplicate calls at the idle floor give one stop; a later call for that floor after leaving gives a second stop"}
+  - {id: t6, hidden: true, args: [10, [[0, 15], [2, 9], [3, 13]]], expected: [[3, 13], [5, 15], [11, 9]], description: "Call behind while moving is deferred until nothing lies ahead"}
+  - {id: t7, hidden: true, args: [0, [[6, 2], [0, 3], [1, 0]]], expected: [[3, 3], [6, 0], [8, 2]], description: "Unsorted log; call for the start floor learned after leaving it"}
+  - {id: t8, hidden: true, args: [5, [[0, 8], [0, 2], [3, 5]]], expected: [[3, 2], [6, 5], [9, 8]], description: "Equal-distance tie at the start (3 floors each way) goes to the lower floor; call learned on the way"}
+  - {id: t9, hidden: true, args: [200, [[100000, 0], [0, 200], [99990, 195]]], expected: [[0, 200], [99995, 195], [100195, 0]], description: "Large times and top floor - idle jumps must not loop per time unit forever"}
+  - {id: t10, hidden: true, args: [30, [[209, 33], [277, 44], [59, 11], [194, 14], [148, 1], [115, 7], [291, 0], [51, 10], [396, 32], [352, 19], [355, 40], [193, 37], [207, 49], [353, 42], [166, 22], [37, 21], [144, 39], [81, 7], [261, 4], [301, 6], [138, 20], [55, 60], [320, 52], [148, 2], [176, 24], [49, 30], [243, 58], [97, 12], [66, 16], [382, 15], [397, 3], [22, 43], [348, 27], [363, 2], [378, 45], [355, 47], [334, 51], [168, 23], [241, 40], [232, 37], [276, 9], [119, 30], [233, 50], [377, 43], [177, 39], [377, 2], [142, 10], [4, 14], [7, 37], [385, 38], [331, 35], [278, 18], [182, 36], [101, 25], [57, 23], [174, 7], [114, 38], [366, 3], [221, 48], [24, 43], [319, 30], [62, 9], [91, 59], [328, 47], [2, 39], [332, 18], [330, 4], [139, 4], [3, 27], [140, 11], [352, 33], [320, 43], [98, 54], [31, 17], [247, 16], [33, 32], [384, 55], [307, 21], [279, 51], [249, 4], [145, 31], [153, 25], [206, 19], [280, 56], [230, 4], [162, 16], [67, 60], [67, 42], [67, 4], [226, 25], [333, 22], [227, 5], [140, 57], [294, 49], [68, 17], [381, 34], [257, 52], [185, 15], [17, 44], [119, 35], [249, 4], [258, 17], [211, 44], [71, 60], [231, 16], [67, 14], [305, 23], [270, 7], [163, 20], [254, 9], [2, 5], [207, 60], [325, 43], [353, 51], [206, 24], [294, 40], [380, 60], [351, 32], [229, 14], [112, 10], [354, 9], [376, 0], [170, 19], [7, 34], [356, 13], [311, 8], [85, 12], [278, 1], [39, 7], [48, 25], [273, 32], [26, 40], [157, 25], [65, 17], [323, 10], [347, 39], [352, 4], [164, 34], [303, 59], [163, 41], [318, 52], [147, 1], [17, 50], [105, 7], [99, 1], [84, 4], [88, 35], [59, 54], [80, 57], [219, 44]]], expected: [[9, 37], [11, 39], [16, 34], [23, 27], [33, 17], [36, 14], [43, 7], [45, 5], [61, 21], [63, 23], [65, 25], [70, 30], [72, 32], [80, 40], [82, 42], [83, 43], [84, 44], [90, 50], [94, 54], [97, 57], [99, 59], [100, 60], [106, 54], [122, 38], [125, 35], [130, 30], [135, 25], [140, 20], [143, 17], [144, 16], [146, 14], [148, 12], [149, 11], [150, 10], [151, 9], [153, 7], [156, 4], [158, 2], [159, 1], [174, 16], [177, 19], [178, 20], [180, 22], [181, 23], [182, 24], [183, 25], [189, 31], [192, 34], [194, 36], [195, 37], [197, 39], [199, 41], [207, 49], [215, 57], [218, 60], [230, 48], [234, 44], [241, 37], [245, 33], [253, 25], [254, 24], [259, 19], [261, 17], [262, 16], [263, 15], [264, 14], [269, 9], [271, 7], [273, 5], [274, 4], [279, 9], [288, 18], [302, 32], [310, 40], [314, 44], [319, 49], [320, 50], [321, 51], [322, 52], [326, 56], [328, 58], [329, 59], [337, 51], [341, 47], [345, 43], [349, 39], [353, 35], [355, 33], [356, 32], [358, 30], [361, 27], [365, 23], [366, 22], [367, 21], [369, 19], [370, 18], [375, 13], [378, 10], [379, 9], [380, 8], [382, 6], [384, 4], [385, 3], [386, 2], [387, 1], [388, 0], [403, 15], [420, 32], [422, 34], [426, 38], [428, 40], [430, 42], [431, 43], [433, 45], [435, 47], [439, 51], [443, 55], [448, 60], [505, 3]], description: "150 random calls over 61 floors (stress)"}
+expected_concepts:
+  - event-driven simulation over discrete time
+  - set of pending floors
+  - processing calls sorted by time
+  - direction rules - keep, reverse or go idle
+  - skipping idle gaps to the next call
+  - nearest-floor tie-breaking
+optimal_complexity: {time: "O(T * P + C log C), T simulated steps, P pending floors, C calls", space: "O(C)"}
+rubric:
+  excellent: Sorts the log, keeps a set of pending floors, follows learn-serve-choose-move order exactly, applies the tie-break, jumps over idle gaps instead of ticking through them and explains how the step order decides which calls are served on arrival.
+  good: Correct simulation that ticks every time unit (no idle jump) or needs a hint on the order of learning and serving.
+  weak: Serves calls before they are learned, records duplicate stops for duplicate calls, reverses too early, or loops forever when idle with calls still to come.
+  criteria:
+    correctness: All tests pass, including duplicates, unsorted logs and calls for the current floor.
+    efficiency: Work is proportional to the simulated travel time plus sorting; idle periods are skipped.
+    code_quality: The four phases are clearly separated and direction is a small signed value.
+    edge_cases: Empty log, calls for the idle floor, equal-distance ties and large idle gaps.
+    communication: Traces the first example step by step and justifies each direction change.
+hints:
+  - Treat this as a clock-driven simulation and do the four phases in exactly the stated order each time unit.
+  - Sort the calls by time so you can add them to a set of pending floors as the clock passes their time, and keep the direction as up, down or idle.
+  - "Each step, add calls whose time has come, serve the current floor if it is pending, then keep the direction while a pending floor is ahead, else reverse if anything is pending, else go idle and pick the nearest pending floor (lower on ties). When idle with nothing pending, jump the clock straight to the next call's time."
+followups:
+  - How would you speed up the ahead and behind checks with an ordered structure when many floors are pending?
+  - How would the rules change for separate up and down call buttons on each floor?
+  - How would you extend the replay to two elevators sharing the same call log?
+  - How would you report the waiting time of each call?
+common_errors:
+  - Serving a floor the elevator passed before that call was learned.
+  - Recording one stop per call instead of one per arrival.
+  - Choosing the nearest floor while moving instead of continuing in the current direction.
+  - Ticking the clock one unit at a time through long idle gaps, or never advancing it while idle.

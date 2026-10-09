@@ -1,0 +1,633 @@
+# Site reliability engineering, part 4: SLO nuances, degradation, readiness, deep debugging and incident process.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [sre]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: technical.sre.health_endpoint_depth
+    competency_key: distributed_systems
+    topic: How deep a health endpoint should check
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What should a service's health endpoint actually check, and what goes wrong when it checks too much or
+      too little?
+    expected_concepts:
+      - shallow checks for liveness of the process itself
+      - readiness reflecting whether the instance can serve traffic
+      - deep dependency checks can remove every instance when a shared dependency fails
+      - too shallow checks keep broken instances in rotation
+      - separate endpoints or detailed diagnostics for humans
+    rubric:
+      excellent: Distinguishes liveness from readiness, explains how deep dependency checks cause fleet-wide removal, and describes a balanced design with separate diagnostics.
+      good: Knows the difference between shallow and deep checks and one risk of each.
+      weak: Proposes checking every dependency on every probe without seeing the risk.
+    followups:
+      - What happens to your fleet if every instance checks the database and the database blips?
+      - Where would you expose detailed dependency status instead?
+    common_errors:
+      - Making the liveness check depend on a downstream service.
+
+  - external_key: technical.sre.suspicious_alert_validation
+    competency_key: observability
+    topic: Is this alert real
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      An alert fires saying the error rate is three percent, but the main dashboard looks normal. How do you
+      work out whether the alert is real?
+    expected_concepts:
+      - read the exact alert query, scope and time window
+      - compare with the dashboard's query and aggregation
+      - check a specific subset such as one endpoint, region or instance
+      - cross-check with logs, traces or synthetic probes
+      - fix whichever of the alert or dashboard is misleading
+    rubric:
+      excellent: Compares the alert expression and the dashboard query directly, narrows to the affected subset, confirms with an independent signal, and fixes the source of the mismatch.
+      good: Checks the alert query and looks for a narrower slice of traffic.
+      weak: Assumes the alert is wrong because the dashboard is green.
+    followups:
+      - How could both the alert and the dashboard be right at the same time?
+      - What would you change afterwards?
+    common_errors:
+      - Acknowledging and ignoring the alert because the overview graph looks flat.
+
+  - external_key: technical.sre.availability_target_meaning
+    competency_key: observability
+    topic: What an availability target means day to day
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How would you explain to a development team what an availability objective of ninety-nine point
+      nine five percent actually means for how they work day to day?
+    expected_concepts:
+      - translating the target into allowed bad minutes or failed requests per window
+      - time-based versus request-based availability
+      - how much one bad deploy can consume
+      - what the remaining budget allows (risky releases, experiments)
+      - who watches the budget and how often
+    rubric:
+      excellent: Converts the target into concrete numbers, explains request versus time-based counting, and links it to practical decisions such as release pace and rollback speed.
+      good: Gives an approximate downtime figure and relates it to deploy risk.
+      weak: Repeats the percentage without making it concrete.
+    followups:
+      - Roughly how many minutes a month does that allow?
+      - How does fast rollback change what you can afford?
+    common_errors:
+      - Ignoring that a partial outage affecting a few percent of requests still consumes budget.
+
+  - external_key: technical.sre.timeline_during_incident
+    competency_key: incident_response
+    topic: Capturing an incident timeline
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Why does an accurate incident timeline matter, and how do you capture one while the incident is still
+      going on?
+    expected_concepts:
+      - timestamps for detection, decisions, actions and recovery
+      - a designated scribe or incident bot
+      - recording hypotheses and why decisions were made
+      - pulling timestamps from tooling (alerts, deploys, chat)
+      - timeline feeds detection and response metrics in the review
+    rubric:
+      excellent: Explains how the timeline drives learning and metrics, assigns someone to record it live, captures decisions and reasoning, and uses tooling to fill in precise times.
+      good: Records key events with timestamps during the incident.
+      weak: Reconstructs everything from memory afterwards.
+    followups:
+      - Why record hypotheses that turned out to be wrong?
+      - How do you keep the scribe from being pulled into debugging?
+    common_errors:
+      - Recording what was done but not why it was decided.
+
+  - external_key: technical.sre.change_correlation
+    competency_key: observability
+    topic: Linking an error spike to a change
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Errors spike suddenly on a service. How would you quickly find out whether a deploy, a configuration
+      change or a feature flag caused it?
+    expected_concepts:
+      - change events or annotations on dashboards
+      - deploy history across the service and its dependencies
+      - feature flag and configuration audit logs
+      - correlating start time and affected slice with the change
+      - reverting the suspect change to confirm
+    rubric:
+      excellent: Uses a central record of changes across code, config and flags, matches timing and affected scope, and confirms by reverting the most likely change.
+      good: Checks deploy history and recent config or flag changes.
+      weak: Checks only the service's own deploys and misses other kinds of change.
+    followups:
+      - How would you find changes made by another team that affect you?
+      - What would you do if no change lines up with the spike?
+    common_errors:
+      - Overlooking feature flag flips because they do not show up as deploys.
+
+  - external_key: technical.sre.timeouts_and_retries
+    competency_key: distributed_systems
+    topic: Choosing timeouts and retries
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When one service calls another, how do you choose the timeout and the retry settings for that call?
+    expected_concepts:
+      - timeout based on the dependency's observed latency distribution
+      - fit within the caller's own deadline
+      - retry only idempotent or safe operations
+      - exponential backoff with jitter and a small retry limit
+      - retrying at one layer only
+    rubric:
+      excellent: Derives timeouts from measured latency and the caller's deadline, limits retries to safe operations with backoff and jitter, and explains why retrying at multiple layers is dangerous.
+      good: Chooses a reasonable timeout and uses backoff on retries.
+      weak: Uses library defaults or retries indefinitely.
+    followups:
+      - Why does jitter matter?
+      - What's wrong with a thirty-second default timeout?
+    common_errors:
+      - Retrying non-idempotent writes and creating duplicates.
+
+  - external_key: technical.sre.preparing_for_oncall
+    competency_key: incident_response
+    topic: Preparing to join an on-call rotation
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Before you join an on-call rotation for a system that's new to you, how do you prepare?
+    expected_concepts:
+      - read architecture docs, runbooks and recent postmortems
+      - shadow an experienced engineer for a shift
+      - confirm access to dashboards, logs, consoles and paging tools
+      - know the escalation paths and contacts
+      - practice common mitigations in a safe environment
+    rubric:
+      excellent: Describes a deliberate plan covering knowledge, access, escalation and hands-on practice, and suggests improving onboarding material along the way.
+      good: Reads runbooks, checks access and shadows someone.
+      weak: Plans to learn the system during the first real page.
+    followups:
+      - What would you check about your access before the shift starts?
+      - What would you improve for the next person joining?
+    common_errors:
+      - Discovering missing permissions in the middle of an incident.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: technical.sre.slo_window_choice
+    competency_key: observability
+    topic: Rolling versus calendar SLO windows
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When you set an SLO, how do you choose between a rolling window and a calendar window, and how long a
+      window would you use?
+    expected_concepts:
+      - rolling windows reflect recent user experience continuously
+      - calendar windows align with business reporting and SLAs
+      - calendar windows reset the budget abruptly
+      - longer windows smooth noise, shorter ones react faster
+      - window length affects burn-rate alert maths
+    rubric:
+      excellent: Explains the behaviour of each window type including the reset effect, matches choices to purpose (operations versus reporting), and connects window length to alerting.
+      good: Describes the difference and picks a sensible default with a reason.
+      weak: Does not know the difference matters.
+    followups:
+      - What odd behaviour can a calendar window cause at the start of a month?
+      - Why do many teams prefer a twenty-eight day rolling window?
+    common_errors:
+      - Treating a fresh month as permission to take big risks regardless of recent outages.
+
+  - external_key: technical.sre.green_slos_unhappy_users
+    competency_key: observability
+    topic: SLOs green but users unhappy
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      All your SLOs have been green for months, but support tickets about slowness keep coming in. What
+      might be going on, and what would you change?
+    expected_concepts:
+      - SLIs not measuring the journeys users complain about
+      - measurement point missing client, network or CDN time
+      - aggregation hiding specific segments of users
+      - targets set too loosely
+      - using support data to refine SLIs
+    rubric:
+      excellent: Treats the mismatch as evidence the SLIs are wrong, investigates measurement point, coverage, segmentation and target level, and revises SLIs with input from support data.
+      good: Suspects the SLIs miss something and proposes measuring closer to users.
+      weak: Trusts the SLOs and dismisses the tickets.
+    followups:
+      - How would you use the support tickets as data?
+      - When would you tighten a target rather than change the indicator?
+    common_errors:
+      - Defending the existing SLO instead of questioning it.
+
+  - external_key: technical.sre.logs_versus_direct_metrics
+    competency_key: observability
+    topic: Deriving metrics from logs
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When would you derive metrics from logs rather than instrumenting the code to emit metrics directly,
+      and what are the trade-offs?
+    expected_concepts:
+      - logs to metrics useful for legacy or third-party components
+      - cost and latency of processing large log volumes
+      - fragility when log formats change
+      - direct metrics are cheaper and more precise for hot paths
+      - consistency between the two sources
+    rubric:
+      excellent: Gives clear criteria for each approach, discusses cost, latency and fragility, and describes keeping definitions consistent when both exist.
+      good: Explains that direct metrics are cheaper and logs are useful when code cannot change.
+      weak: Sees no difference between the approaches.
+    followups:
+      - What breaks when a developer changes a log message format?
+      - How would you alert on something only visible in a vendor's logs?
+    common_errors:
+      - Building critical alerts on log parsing that silently breaks after a format change.
+
+  - external_key: technical.sre.third_party_outage
+    competency_key: incident_response
+    topic: Outage at a third-party provider
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your payments provider is having a major outage, and the cause is completely outside your control. What
+      can you still do during the incident, and afterwards?
+    expected_concepts:
+      - confirm it is the provider and quantify impact
+      - fail over to a secondary provider or queue requests for later
+      - degrade gracefully and communicate clearly to users
+      - avoid retry floods against the provider
+      - review provider redundancy, contracts and monitoring afterwards
+    rubric:
+      excellent: Confirms and quantifies impact, uses failover or queueing where safe, protects the provider from retry floods, communicates well, and follows up on redundancy and contracts.
+      good: Communicates impact, considers a fallback and opens a ticket with the provider.
+      weak: Waits for the provider without mitigating or communicating.
+    followups:
+      - What are the risks of queueing payment requests for later?
+      - How would you monitor a provider's health independently of their status page?
+    common_errors:
+      - Hammering the provider with retries while it is trying to recover.
+
+  - external_key: technical.sre.graceful_degradation_design
+    competency_key: distributed_systems
+    topic: Designing graceful degradation
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Tell me about a service you've designed or worked on that degrades gracefully. Which features does it
+      give up first under stress, and how is that decided?
+    expected_concepts:
+      - ranking features by business criticality
+      - fallbacks such as cached or default responses
+      - feature switches or automatic triggers for degraded mode
+      - making degraded mode visible to operators and sometimes users
+      - testing degraded mode regularly
+    rubric:
+      excellent: Describes a concrete system with prioritised features, specific fallbacks, triggers and visibility, and explains how degraded mode is tested.
+      good: Gives an example with sensible priorities and a fallback mechanism.
+      weak: Speaks only in general terms or has no example.
+    followups:
+      - Who should decide which features are sacrificed first?
+      - How do you stop a degraded mode from becoming permanent unnoticed?
+    common_errors:
+      - Having fallback code paths that have never been exercised.
+
+  - external_key: technical.sre.slow_memory_leak
+    competency_key: kubernetes
+    topic: Slow memory leak in production
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A service's memory grows steadily and its pods are killed for running out of memory about every three
+      days. How would you protect users while you find the cause?
+    expected_concepts:
+      - confirm OOM kills and the growth pattern per pod
+      - stagger restarts or schedule rolling restarts as a stop-gap
+      - correlate growth with traffic, version or specific endpoints
+      - heap profiles or dumps taken at different ages
+      - verify the fix with a soak test
+    rubric:
+      excellent: Uses controlled rolling restarts to protect users, correlates growth with releases and traffic, captures profiles at different ages to locate the leak, and verifies the fix with a soak test.
+      good: Adds a temporary restart schedule and profiles memory.
+      weak: Raises the memory limit and moves on.
+    followups:
+      - How would you tell a leak from a cache that's simply growing as designed?
+      - Why are synchronised restarts of every pod dangerous?
+    common_errors:
+      - Raising memory limits so the leak takes longer to show up.
+
+  - external_key: technical.sre.capacity_per_business_unit
+    competency_key: system_design
+    topic: Capacity per unit of business demand
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you build a capacity model that expresses resource needs per unit of business demand, like
+      per order or per active user, and what would you use it for?
+    expected_concepts:
+      - choose a demand driver that correlates with load
+      - measure resources per unit across each tier
+      - find the first resource to run out per unit growth
+      - use business forecasts to plan capacity and cost
+      - detect efficiency regressions when cost per unit rises
+    rubric:
+      excellent: Picks a meaningful demand driver, measures per-unit cost across tiers, uses it for planning and cost forecasting, and monitors it to catch efficiency regressions.
+      good: Relates resource usage to a business metric for planning.
+      weak: Plans capacity only from infrastructure trends.
+    followups:
+      - What if two features have very different cost per order?
+      - How would a release that doubles cost per request show up?
+    common_errors:
+      - Choosing a demand driver that does not actually correlate with load.
+
+  - external_key: technical.sre.ephemeral_port_exhaustion
+    competency_key: networking
+    topic: Outbound connection failures under load
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Under heavy load, a service starts failing outbound calls with an error saying it cannot assign the
+      requested address. Walk me through what's happening and how you'd fix it.
+    expected_concepts:
+      - ephemeral port exhaustion
+      - many short-lived connections and TIME_WAIT sockets
+      - connection reuse with keep-alive and pooling
+      - NAT gateway or proxy port limits
+      - tuning port range only as a temporary measure
+    rubric:
+      excellent: Identifies ephemeral port exhaustion, explains TIME_WAIT and connection churn, proposes connection pooling and keep-alive as the real fix, and considers NAT or proxy limits.
+      good: Recognises port exhaustion and suggests reusing connections.
+      weak: Restarts the service or adds instances without understanding the error.
+    followups:
+      - How would you confirm this with standard Linux tools?
+      - Why can a NAT gateway hit the same problem for a whole fleet?
+    common_errors:
+      - Tuning kernel settings while the client keeps opening a new connection per request.
+
+  - external_key: technical.sre.near_miss_reviews
+    competency_key: incident_response
+    topic: Learning from near misses
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you learn from near misses, the events that almost caused an outage but didn't affect users,
+      and have you seen that pay off?
+    expected_concepts:
+      - near misses reveal weaknesses before impact
+      - lightweight review format so teams actually report them
+      - focus on what saved the day and whether it was luck
+      - tracking themes alongside real incidents
+      - encouraging reporting without blame
+    rubric:
+      excellent: Explains the value of near misses, describes a lightweight process that encourages reporting, analyses what prevented impact, and gives an example of a later incident avoided.
+      good: Reviews near misses informally and acts on findings.
+      weak: Sees no value in reviewing events without user impact.
+    followups:
+      - How do you keep the reporting overhead low?
+      - What would you do if the only thing that prevented impact was luck?
+    common_errors:
+      - Requiring a full postmortem for every near miss, so people stop reporting them.
+
+  - external_key: technical.sre.tracing_adoption
+    competency_key: observability
+    topic: Driving tracing adoption
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your organisation has a tracing system, but only three of thirty services are instrumented and most
+      traces are broken. How would you get it to the point where it actually helps in incidents?
+    expected_concepts:
+      - start with the most critical request paths end to end
+      - auto-instrumentation and shared libraries to lower effort
+      - fix propagation at gateways and common clients
+      - show value with a real incident example
+      - include instrumentation in service templates and readiness checks
+    rubric:
+      excellent: Prioritises complete critical paths, lowers the cost of adoption through libraries and templates, fixes shared propagation points, and demonstrates value to drive further adoption.
+      good: Proposes instrumenting key services with shared libraries.
+      weak: Mandates that every team instruments everything at once.
+    followups:
+      - Which services would you instrument first, and why?
+      - How would you measure trace completeness?
+    common_errors:
+      - Instrumenting services one by one without fixing the shared gateways that break every trace.
+
+  - external_key: technical.sre.production_readiness_review
+    competency_key: system_design
+    topic: Production readiness review
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What do you check in a production readiness review before a new service goes live, and how do you keep
+      that review from becoming a box-ticking exercise?
+    expected_concepts:
+      - SLOs, dashboards and alerts with runbooks
+      - capacity testing and scaling limits
+      - dependency failure handling and timeouts
+      - deploy and rollback process
+      - on-call ownership and documentation
+      - focus on risks specific to the service rather than a fixed checklist
+    rubric:
+      excellent: Covers observability, capacity, dependencies, rollout and ownership, and keeps the review useful by focusing on the service's specific risks and making it collaborative.
+      good: Lists the main areas a review should cover.
+      weak: Treats readiness as the code passing tests.
+    followups:
+      - What would make you block a launch?
+      - How would you handle a team that sees the review as bureaucracy?
+    common_errors:
+      - Running the review so late that findings cannot be fixed before launch.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: technical.sre.low_traffic_slo
+    competency_key: observability
+    topic: SLOs for low-traffic services
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How do you set and alert on SLOs for a low-traffic service, where a handful of failed requests can burn
+      a big share of the error budget in minutes?
+    expected_concepts:
+      - statistical noise from small request counts
+      - synthetic traffic to add a steady signal
+      - minimum request count conditions on alerts
+      - longer windows or combining similar services
+      - choosing alert thresholds based on absolute counts
+    rubric:
+      excellent: Explains the statistics of small samples, and combines synthetic traffic, minimum count conditions, longer windows or grouping to get alerts that are both timely and not noisy.
+      good: Recognises the noise problem and proposes synthetic traffic or minimum counts.
+      weak: Applies the same burn-rate rules as a high-traffic service.
+    followups:
+      - How would synthetic traffic affect what the SLO really means?
+      - What if the service handles only a few hundred requests a day?
+    common_errors:
+      - Paging on a single failed request because it is a large percentage.
+
+  - external_key: technical.sre.conflicting_expert_opinions
+    competency_key: incident_response
+    topic: Deciding between conflicting proposals
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You're leading a major incident and two senior engineers strongly disagree. One wants to fail over to
+      another region, the other wants to roll back a deploy. How do you decide?
+    expected_concepts:
+      - ask each for the evidence behind their hypothesis
+      - compare reversibility, risk and time to effect of each action
+      - choose the safest, fastest reversible step first
+      - set a time box and success signal to evaluate the decision
+      - record the decision and reasoning
+    rubric:
+      excellent: Gathers evidence quickly, weighs reversibility, risk and speed, makes a clear time-boxed decision with a success signal, and records the rationale while keeping both engineers engaged.
+      good: Considers the risks of each option and makes a decision.
+      weak: Lets the discussion run on without deciding, or picks based on seniority.
+    followups:
+      - What would make you do both at once?
+      - How do you handle it if the option you rejected turns out to be right?
+    common_errors:
+      - Debating root cause while users remain affected.
+
+  - external_key: technical.sre.client_side_availability
+    competency_key: observability
+    topic: Availability as clients see it
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your server-side metrics say availability is ninety-nine point nine eight percent, but data from mobile
+      apps suggests users see far more failures. How would you design indicators that capture the real user
+      experience?
+    expected_concepts:
+      - client-side telemetry from apps and browsers
+      - failures before reaching servers (DNS, TLS, CDN, network)
+      - separating user network problems from service problems
+      - sampling and delayed upload of client data
+      - combining client and server views with clear definitions
+    rubric:
+      excellent: Designs client-side indicators, explains failure modes invisible to servers, addresses attribution of network versus service failures and data delays, and combines both views coherently.
+      good: Proposes client-side measurement to complement server metrics.
+      weak: Trusts server metrics and blames user networks.
+    followups:
+      - How would you separate a bad mobile network from a real outage?
+      - What are the limits of client-reported data?
+    common_errors:
+      - Counting every client error as a service failure without attribution.
+
+  - external_key: technical.sre.cross_region_split_brain
+    competency_key: distributed_systems
+    topic: Split brain after automated failover
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      An automated database failover to another region triggered during a brief network blip, and now both
+      regions are accepting writes. How would you handle the incident and prevent it from recurring?
+    expected_concepts:
+      - stop writes on one side immediately to limit divergence
+      - identify and reconcile conflicting writes
+      - fencing and leader leases to prevent two primaries
+      - quorum-based failure detection across regions
+      - failover thresholds that tolerate short blips
+    rubric:
+      excellent: Stops divergence fast, plans reconciliation with business owners, and redesigns failover with fencing, quorum-based detection and sensible thresholds.
+      good: Stops writes to one side and proposes stricter failover conditions.
+      weak: Picks one side and discards the other's writes without assessment.
+    followups:
+      - How would you reconcile two sets of conflicting writes?
+      - What is fencing and how does it help?
+    common_errors:
+      - Making failover so sensitive that a short blip promotes a second primary.
+
+  - external_key: technical.sre.below_application_latency
+    competency_key: linux
+    topic: Latency caused below the application
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How would you track down a latency problem that you suspect is happening below the application, in the
+      runtime, the container or the operating system?
+    expected_concepts:
+      - CPU throttling from container limits and CFS quotas
+      - garbage collection pauses in the runtime
+      - scheduler delay, steal time and noisy neighbours
+      - disk or network stalls and page faults
+      - tools such as perf, eBPF, cgroup statistics and runtime profilers
+    rubric:
+      excellent: Systematically considers runtime, container and kernel causes, names the evidence and tools for each, and explains how to correlate them with request latency.
+      good: Considers throttling and garbage collection with some tooling.
+      weak: Only looks at application code and logs.
+    followups:
+      - How would CPU throttling show up even when average CPU is low?
+      - How would you correlate a garbage collection pause with slow requests?
+    common_errors:
+      - Ignoring throttling because average CPU usage looks low.
+
+  - external_key: technical.sre.load_testing_in_production
+    competency_key: system_design
+    topic: Load testing in production safely
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You need to validate that the platform can handle five times its current traffic, but staging looks
+      nothing like production. How would you safely load test in production?
+    expected_concepts:
+      - synthetic traffic marked and isolated from real business effects
+      - shadowing or replaying real traffic
+      - ramping gradually with automated abort on SLOs
+      - running at low-traffic times and coordinating with dependents
+      - cleaning up test data and excluding it from analytics
+    rubric:
+      excellent: Designs tagged synthetic or shadow traffic with side-effect isolation, ramps gradually with automated stops, coordinates with dependent teams and handles data cleanup.
+      good: Proposes a gradual ramp of synthetic traffic with abort conditions.
+      weak: Fires full load at production without safeguards or isolation.
+    followups:
+      - How would you stop test orders from reaching real fulfilment or billing?
+      - Which dependencies would you warn first?
+    common_errors:
+      - Letting test traffic pollute business metrics or trigger real side effects.
+
+  - external_key: technical.sre.incident_process_from_scratch
+    competency_key: incident_response
+    topic: Building an incident process from scratch
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      If you were setting up incident management for an engineering organisation of two hundred people from
+      scratch, what would you put in place, and in what order?
+    expected_concepts:
+      - severity definitions and declaration criteria
+      - roles such as incident commander and communications lead, with training
+      - tooling for channels, paging, status pages and timelines
+      - postmortem process with tracked follow-ups
+      - starting small and iterating based on real incidents
+    rubric:
+      excellent: Lays out a sequenced plan covering severities, roles, training, tooling, communication and review, and explains how to roll it out incrementally and measure whether it works.
+      good: Covers severities, roles and postmortems in a sensible order.
+      weak: Focuses only on buying a tool or writing a long policy document.
+    followups:
+      - How would you train incident commanders?
+      - How would you know after six months whether the process is working?
+    common_errors:
+      - Designing a heavyweight process that teams avoid using for smaller incidents.

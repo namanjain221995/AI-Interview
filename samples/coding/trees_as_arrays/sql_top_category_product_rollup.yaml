@@ -1,0 +1,252 @@
+version: 1
+slug: sql_top_category_product_rollup
+title: "Top-Level Category Product Rollup (SQL)"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, backend, data, business_analyst]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Top-Level Category Product Rollup
+
+  A home-goods retailer's catalogue analysts want a department-level view of how many products each part
+  of the range holds. Categories form a tree of **any depth**: a top-level category (a department) has no parent, and every
+  other category has exactly one parent category. Each product is assigned to exactly one category,
+  which can sit at any depth.
+
+  Table `categories`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | name | VARCHAR(100) | names of top-level categories are unique |
+  | parent_id | INTEGER | `categories.id` of the parent; **NULL for a top-level category** |
+
+  Table `products`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | name | VARCHAR(100) | |
+  | category_id | INTEGER | references `categories.id`; never NULL |
+
+  For **every top-level category** return:
+
+  - `category_name`: its name;
+  - `product_count`: the number of products assigned to that category **or to any category below it**
+    (children, grandchildren and so on).
+
+  Top-level categories without any products must appear with `product_count = 0`. Order the rows by
+  `product_count` descending, then by `category_name` ascending. If there are no categories, return no
+  rows.
+
+  Every non-NULL `parent_id` refers to an existing category and the tree has **no cycles**. Write standard
+  SQL that runs on both PostgreSQL and SQLite (a recursive common table expression is expected).
+
+  ### Example 1
+  ```
+  categories                         products
+  +----+------------+-----------+    +----+----------------+-------------+
+  | id | name       | parent_id |    | id | name           | category_id |
+  +----+------------+-----------+    +----+----------------+-------------+
+  | 1  | Lighting   | NULL      |    | 1  | LED bulb       | 3           |
+  | 2  | Lamps      | 1         |    | 2  | Smart bulb     | 3           |
+  | 3  | Bulbs      | 2         |    | 3  | Desk lamp      | 2           |
+  | 4  | Outdoor    | NULL      |    | 4  | Light strip    | 1           |
+  | 5  | Grills     | 4         |    | 5  | Charcoal grill | 5           |
+  | 6  | Stationery | NULL      |    | 6  | Gas grill      | 5           |
+  +----+------------+-----------+    | 7  | Fire pit       | 4           |
+                                     +----+----------------+-------------+
+
+  Output
+  +---------------+---------------+
+  | category_name | product_count |
+  +---------------+---------------+
+  | Lighting      | 4             |
+  | Outdoor       | 3             |
+  | Stationery    | 0             |
+  +---------------+---------------+
+  Lighting counts its own product, the lamp in Lamps and both bulbs two levels down.
+  ```
+
+  ### Example 2
+  ```
+  categories                          products
+  +----+----------+-----------+       +----+---------+-------------+
+  | id | name     | parent_id |       | id | name    | category_id |
+  +----+----------+-----------+       +----+---------+-------------+
+  | 10 | Office   | NULL      |       | 1  | A4 ream | 11          |
+  | 11 | Paper    | 10        |       | 2  | Earbuds | 14          |
+  | 12 | Audio    | NULL      |       +----+---------+-------------+
+  | 13 | Headsets | 12        |
+  | 14 | Wireless | 13        |
+  +----+----------+-----------+
+
+  Output
+  +---------------+---------------+
+  | category_name | product_count |
+  +---------------+---------------+
+  | Audio         | 1             |
+  | Office        | 1             |
+  +---------------+---------------+
+  Both departments have one product, so they are ordered by name.
+  ```
+
+  ### Constraints
+  - `0 <=` number of categories `<= 10^4`, `0 <=` number of products `<= 10^6`; the tree can be many levels deep.
+  - Top-level category names are unique; every `products.category_id` exists in `categories`.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return category_name and product_count for every top-level category (including its subcategories).
+    SELECT c.name AS category_name, COUNT(p.id) AS product_count
+    FROM categories c
+    LEFT JOIN products p ON p.category_id = c.id
+    WHERE c.parent_id IS NULL
+    GROUP BY c.id, c.name
+    ORDER BY product_count DESC, category_name ASC;
+reference_solutions:
+  sql: |
+    WITH RECURSIVE subtree (root_id, category_id) AS (
+      SELECT id, id
+      FROM categories
+      WHERE parent_id IS NULL
+      UNION ALL
+      SELECT s.root_id, c.id
+      FROM categories c
+      JOIN subtree s ON c.parent_id = s.category_id
+    )
+    SELECT r.name AS category_name, COUNT(p.id) AS product_count
+    FROM categories r
+    JOIN subtree s ON s.root_id = r.id
+    LEFT JOIN products p ON p.category_id = s.category_id
+    GROUP BY r.id, r.name
+    ORDER BY product_count DESC, category_name ASC;
+sql_setup: |
+  CREATE TABLE categories (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    parent_id INTEGER REFERENCES categories (id)
+  );
+  CREATE TABLE products (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    category_id INTEGER NOT NULL REFERENCES categories (id)
+  );
+tests:
+  - id: t1
+    description: "Example 1 - products two levels deep roll up; a department without products shows 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (1, 'Lighting', NULL), (2, 'Lamps', 1), (3, 'Bulbs', 2), (4, 'Outdoor', NULL), (5, 'Grills', 4),
+        (6, 'Stationery', NULL);
+      INSERT INTO products (id, name, category_id) VALUES
+        (1, 'LED bulb', 3), (2, 'Smart bulb', 3), (3, 'Desk lamp', 2), (4, 'Light strip', 1),
+        (5, 'Charcoal grill', 5), (6, 'Gas grill', 5), (7, 'Fire pit', 4);
+    expected_rows: [["Lighting", 4], ["Outdoor", 3], ["Stationery", 0]]
+  - id: t2
+    description: "Example 2 - tie on product_count broken by category_name"
+    ordered: true
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (10, 'Office', NULL), (11, 'Paper', 10), (12, 'Audio', NULL), (13, 'Headsets', 12), (14, 'Wireless', 13);
+      INSERT INTO products (id, name, category_id) VALUES (1, 'A4 ream', 11), (2, 'Earbuds', 14);
+    expected_rows: [["Audio", 1], ["Office", 1]]
+  - id: t3
+    hidden: true
+    description: "Empty tables - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Categories but no products - every department with 0, ordered by name"
+    ordered: true
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (1, 'Toys', NULL), (2, 'Kitchen', NULL), (3, 'Pantry', 2), (4, 'Bakery', NULL);
+    expected_rows: [["Bakery", 0], ["Kitchen", 0], ["Toys", 0]]
+  - id: t5
+    hidden: true
+    description: "Chain six levels deep with products at several depths and child ids smaller than parent ids"
+    ordered: true
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (60, 'Hardware', NULL), (50, 'Fasteners', 60), (40, 'Screws', 50), (30, 'Wood', 40),
+        (20, 'Brass', 30), (10, 'Tiny', 20), (70, 'Paint', NULL);
+      INSERT INTO products (id, name, category_id) VALUES
+        (1, 'p1', 10), (2, 'p2', 10), (3, 'p3', 20), (4, 'p4', 40), (5, 'p5', 60), (6, 'p6', 70);
+    expected_rows: [["Hardware", 5], ["Paint", 1]]
+  - id: t6
+    hidden: true
+    description: "Three-way tie on product_count plus one larger department; middle categories have no own products"
+    ordered: true
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (1, 'Pets', NULL), (2, 'Dogs', 1), (3, 'Cats', 1), (4, 'Music', NULL), (5, 'Vinyl', 4),
+        (6, 'Auto', NULL), (7, 'Tyres', 6), (8, 'Winter', 7), (9, 'Baby', NULL);
+      INSERT INTO products (id, name, category_id) VALUES
+        (1, 'leash', 2), (2, 'bowl', 3), (3, 'record', 5), (4, 'sleeve', 5), (5, 'snow tyre', 8),
+        (6, 'chain', 8), (7, 'stroller', 9), (8, 'crib', 9), (9, 'bib', 9), (10, 'rattle', 9);
+    expected_rows: [["Baby", 4], ["Auto", 2], ["Music", 2], ["Pets", 2]]
+  - id: t7
+    hidden: true
+    description: "Single department with products only on itself (no recursion needed beyond the anchor)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES (5, 'Outlet', NULL);
+      INSERT INTO products (id, name, category_id) VALUES (1, 'a', 5), (2, 'b', 5), (3, 'c', 5);
+    expected_rows: [["Outlet", 3]]
+  - id: t8
+    hidden: true
+    description: "30 categories under 6 departments, 50 products spread over all depths; Beauty has none"
+    ordered: true
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (1, 'Apparel', NULL), (2, 'Beauty', NULL), (3, 'Computing', NULL), (4, 'Furniture', NULL), (5, 'Grocery', NULL), (6, 'Sports', NULL),
+        (7, 'sub7', 4), (8, 'sub8', 7), (9, 'sub9', 8), (10, 'sub10', 8), (11, 'sub11', 9), (12, 'sub12', 10),
+        (13, 'sub13', 4), (14, 'sub14', 3), (15, 'sub15', 13), (16, 'sub16', 9), (17, 'sub17', 16), (18, 'sub18', 6),
+        (19, 'sub19', 4), (20, 'sub20', 15), (21, 'sub21', 10), (22, 'sub22', 5), (23, 'sub23', 3), (24, 'sub24', 18),
+        (25, 'sub25', 23), (26, 'sub26', 21), (27, 'sub27', 2), (28, 'sub28', 20), (29, 'sub29', 13), (30, 'sub30', 15);
+      INSERT INTO products (id, name, category_id) VALUES
+        (1, 'item01', 22), (2, 'item02', 25), (3, 'item03', 21), (4, 'item04', 22), (5, 'item05', 7), (6, 'item06', 21),
+        (7, 'item07', 1), (8, 'item08', 29), (9, 'item09', 18), (10, 'item10', 4), (11, 'item11', 3), (12, 'item12', 3),
+        (13, 'item13', 8), (14, 'item14', 9), (15, 'item15', 21), (16, 'item16', 1), (17, 'item17', 26), (18, 'item18', 16),
+        (19, 'item19', 12), (20, 'item20', 16), (21, 'item21', 20), (22, 'item22', 29), (23, 'item23', 8), (24, 'item24', 18),
+        (25, 'item25', 9), (26, 'item26', 22), (27, 'item27', 11), (28, 'item28', 17), (29, 'item29', 1), (30, 'item30', 23),
+        (31, 'item31', 4), (32, 'item32', 16), (33, 'item33', 22), (34, 'item34', 10), (35, 'item35', 15), (36, 'item36', 19),
+        (37, 'item37', 29), (38, 'item38', 4), (39, 'item39', 24), (40, 'item40', 10), (41, 'item41', 12), (42, 'item42', 26),
+        (43, 'item43', 9), (44, 'item44', 18), (45, 'item45', 11), (46, 'item46', 1), (47, 'item47', 4), (48, 'item48', 20),
+        (49, 'item49', 26), (50, 'item50', 5);
+    expected_rows: [["Furniture", 33], ["Grocery", 5], ["Apparel", 4], ["Computing", 4], ["Sports", 4], ["Beauty", 0]]
+expected_concepts:
+  - "WITH RECURSIVE that carries the top-level ancestor id down to every descendant category"
+  - "LEFT JOIN so departments without products keep a zero count"
+  - "COUNT of a nullable column versus COUNT(*) after an outer join"
+  - "grouping by the top-level category"
+  - "deterministic ORDER BY with a tie-breaker"
+optimal_complexity: {time: "O(C + P) with indexes on parent_id and category_id", space: "O(C)"}
+rubric:
+  excellent: "Builds a recursive CTE that maps every category to its top-level ancestor, outer-joins products, counts product ids per department so empty departments show 0, applies both sort keys and explains why COUNT(*) would report 1 for an empty department."
+  good: "Correct query after a hint about carrying the root id through the recursion, the outer join or the tie-breaker."
+  weak: "Counts only products attached directly to the department or its immediate subcategories, drops departments without products, or counts NULL rows from the outer join."
+  criteria:
+    correctness: "All tests pass, including deep chains, empty departments and ties."
+    efficiency: "Each category is visited once by the recursion; mentions indexes on parent_id and category_id."
+    code_quality: "Named CTE with explicit columns and clear output aliases."
+    edge_cases: "Empty tables, categories without products, products on the department itself and child ids smaller than parent ids."
+    communication: "Explains how the root id is propagated and why the outer join is needed."
+hints:
+  - "The hard part is knowing, for every category at any depth, which department it ultimately belongs to; once you have that mapping the counting is ordinary grouping."
+  - "Use a recursive common table expression that starts from the top-level categories and walks down one level at a time, remembering which top-level category each row started from."
+  - "Anchor the CTE on categories with a NULL parent, emitting each id as both the root and the current category. In the recursive member join categories whose parent is the current category and keep the same root. Then join departments to this mapping, LEFT JOIN products on the mapped category, count the product ids per department and order by the count descending and the name ascending."
+followups:
+  - "How would you report the count for every category at every level, not just the departments?"
+  - "How would the query change if a product could belong to several categories?"
+  - "What would you add to protect the query against a cycle introduced by a bad catalogue import?"
+  - "How would you precompute this rollup if the dashboard is refreshed every few seconds?"
+common_errors:
+  - "Counting only products whose category is the department or one level below it."
+  - "Using an inner join with products, so departments without products disappear."
+  - "Using COUNT(*) after the outer join, which reports 1 instead of 0 for an empty department."
+  - "Losing the top-level id in the recursive member, so descendants cannot be grouped by department."
+  - "Ordering only by the count, leaving ties in an arbitrary order."

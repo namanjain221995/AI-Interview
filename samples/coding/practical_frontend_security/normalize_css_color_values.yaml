@@ -1,0 +1,238 @@
+version: 1
+slug: normalize_css_color_values
+title: Normalise CSS Colour Values
+difficulty: medium
+competency_keys: [problem_solving, code_quality]
+role_tags: [frontend, fullstack, ux_designer]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Normalise CSS Colour Values
+
+  The design team exports themes from several tools, and every tool writes colours differently. Before a
+  theme is stored, the importer converts each colour to one canonical form: a lowercase
+  **`#rrggbbaa`** string (red, green, blue and alpha as two hex digits each). Anything it cannot read
+  exactly becomes the string **`"invalid"`**, so a bad theme is rejected instead of silently drifting.
+
+  Given a list of colour strings, return the normalised value for each one, in the same order.
+
+  First remove leading and trailing **space characters** from the value. Then it must be exactly one of:
+
+  1. **Hex** - `#` followed by 3, 4, 6 or 8 hex digits (`0-9`, `a-f`, any case). In the 3- and 4-digit
+     forms every digit is doubled (`#f0a` means `#ff00aa`). Without an alpha part the alpha is `ff`.
+  2. **Functional** - `rgb(r, g, b)` or `rgba(r, g, b, a)`. The function name is case-insensitive and is
+     followed directly by `(`; spaces are allowed anywhere around the arguments and commas. `rgb` takes
+     exactly three arguments and `rgba` exactly four.
+     - The three colour channels are either **all integers** `0`-`255` (digits only, leading zeros
+       allowed) or **all percentages** `0%`-`100%` (digits followed by `%`). A percentage `p` becomes
+       `floor((p * 255 + 50) / 100)`, i.e. `p * 2.55` rounded with halves going up. Mixing integers and
+       percentages is invalid.
+     - The alpha is either a percentage `0%`-`100%` (converted exactly like a channel) or a decimal number
+       from `0` to `1`: digits with an optional decimal point that must be followed by at least one digit,
+       where the integer part may be omitted (`1`, `0.5`, `.75` are fine; `1.` and `.` are not). A decimal
+       alpha `a` becomes `floor(a * 255 + 0.5)`.
+  3. **Named** - `black`, `white`, `red`, `green` (`#008000`), `blue` or `transparent` (`#00000000`),
+     case-insensitive. The other named colours have alpha `ff`.
+
+  Values out of range are **invalid** (never clamp). No signs (`+`, `-`), exponents or other whitespace
+  characters are accepted. Output hex digits are lowercase.
+
+  ### Example 1
+  ```
+  Input:  values = ["#1A2b3C", "#F0A", "Green"]
+  Output: ["#1a2b3cff", "#ff00aaff", "#008000ff"]
+  ```
+
+  ### Example 2
+  ```
+  Input:  values = ["rgb(255, 128, 0)", "rgba( 100%, 50%, 0% , 0.25 )", "rgba(0, 0, 0, 40%)"]
+  Output: ["#ff8000ff", "#ff800040", "#00000066"]
+  Explanation: 50% -> floor((50 * 255 + 50) / 100) = 128 = 0x80; alpha 0.25 -> floor(63.75 + 0.5) = 64 = 0x40;
+  alpha 40% -> 102 = 0x66.
+  ```
+
+  ### Example 3
+  ```
+  Input:  values = ["rgb(256, 0, 0)", "#12345", "rgb(10%, 20, 30)", "teal"]
+  Output: ["invalid", "invalid", "invalid", "invalid"]
+  Explanation: 256 is out of range, five hex digits is not a valid length, the channels mix a percentage
+  with integers, and teal is not one of the supported names.
+  ```
+
+  ### Constraints
+  - `0 <= values.length <= 50`
+  - Each value has `0` to `40` printable ASCII characters.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: normalize_css_colors
+  params:
+    - {name: values, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import math
+    import re
+
+    NAMED = {
+        "black": "#000000ff",
+        "white": "#ffffffff",
+        "red": "#ff0000ff",
+        "green": "#008000ff",
+        "blue": "#0000ffff",
+        "transparent": "#00000000",
+    }
+    HEX_DIGITS = set("0123456789abcdef")
+
+
+    def _percent(text: str) -> int | None:
+        if not re.fullmatch(r"[0-9]+%", text):
+            return None
+        p = int(text[:-1])
+        return (p * 255 + 50) // 100 if p <= 100 else None
+
+
+    def _normalize(raw: str) -> str:
+        s = raw.strip(" ").lower()
+        if s in NAMED:
+            return NAMED[s]
+        if s.startswith("#"):
+            digits = s[1:]
+            if len(digits) not in (3, 4, 6, 8) or not set(digits) <= HEX_DIGITS:
+                return "invalid"
+            if len(digits) <= 4:
+                digits = "".join(c * 2 for c in digits)
+            return "#" + (digits + "ff" if len(digits) == 6 else digits)
+        m = re.fullmatch(r"(rgba?)\((.*)\)", s)
+        if not m:
+            return "invalid"
+        parts = [p.strip(" ") for p in m.group(2).split(",")]
+        if len(parts) != (4 if m.group(1) == "rgba" else 3):
+            return "invalid"
+        channels = parts[:3]
+        if all(re.fullmatch(r"[0-9]+", p) for p in channels):
+            values = [int(p) for p in channels]
+            if any(v > 255 for v in values):
+                return "invalid"
+        elif all(p.endswith("%") for p in channels):
+            values = [_percent(p) for p in channels]
+            if any(v is None for v in values):
+                return "invalid"
+        else:
+            return "invalid"
+        alpha = 255
+        if len(parts) == 4:
+            a = parts[3]
+            if a.endswith("%"):
+                alpha = _percent(a)
+                if alpha is None:
+                    return "invalid"
+            elif re.fullmatch(r"[0-9]*\.?[0-9]+", a) and float(a) <= 1:
+                alpha = math.floor(float(a) * 255 + 0.5)
+            else:
+                return "invalid"
+        return "#" + "".join(f"{v:02x}" for v in values + [alpha])
+
+
+    def normalize_css_colors(values: list[str]) -> list[str]:
+        return [_normalize(v) for v in values]
+  javascript: |
+    const NAMED = {
+      black: "#000000ff",
+      white: "#ffffffff",
+      red: "#ff0000ff",
+      green: "#008000ff",
+      blue: "#0000ffff",
+      transparent: "#00000000",
+    };
+
+    function percentValue(text) {
+      if (!/^[0-9]+%$/.test(text)) return null;
+      const p = parseInt(text.slice(0, -1), 10);
+      return p <= 100 ? Math.floor((p * 255 + 50) / 100) : null;
+    }
+
+    function normalizeOne(raw) {
+      const s = raw.replace(/^ +| +$/g, "").toLowerCase();
+      if (Object.prototype.hasOwnProperty.call(NAMED, s)) return NAMED[s];
+      if (s.startsWith("#")) {
+        let digits = s.slice(1);
+        if (![3, 4, 6, 8].includes(digits.length) || !/^[0-9a-f]*$/.test(digits)) return "invalid";
+        if (digits.length <= 4) digits = [...digits].map((c) => c + c).join("");
+        return "#" + (digits.length === 6 ? digits + "ff" : digits);
+      }
+      const m = /^(rgba?)\((.*)\)$/.exec(s);
+      if (!m) return "invalid";
+      const parts = m[2].split(",").map((p) => p.replace(/^ +| +$/g, ""));
+      if (parts.length !== (m[1] === "rgba" ? 4 : 3)) return "invalid";
+      const channels = parts.slice(0, 3);
+      let values;
+      if (channels.every((p) => /^[0-9]+$/.test(p))) {
+        values = channels.map((p) => parseInt(p, 10));
+        if (values.some((v) => v > 255)) return "invalid";
+      } else if (channels.every((p) => p.endsWith("%"))) {
+        values = channels.map(percentValue);
+        if (values.some((v) => v === null)) return "invalid";
+      } else {
+        return "invalid";
+      }
+      let alpha = 255;
+      if (parts.length === 4) {
+        const a = parts[3];
+        if (a.endsWith("%")) {
+          alpha = percentValue(a);
+          if (alpha === null) return "invalid";
+        } else if (/^[0-9]*\.?[0-9]+$/.test(a) && parseFloat(a) <= 1) {
+          alpha = Math.floor(parseFloat(a) * 255 + 0.5);
+        } else {
+          return "invalid";
+        }
+      }
+      return "#" + [...values, alpha].map((v) => v.toString(16).padStart(2, "0")).join("");
+    }
+
+    function normalizeCssColors(values) {
+      return values.map(normalizeOne);
+    }
+tests:
+  - {id: t1, args: [["#1A2b3C", "#F0A", "Green"]], expected: ["#1a2b3cff", "#ff00aaff", "#008000ff"], description: "Example 1 - six-digit hex with mixed case, three-digit shorthand and a named colour"}
+  - {id: t2, args: [["rgb(255, 128, 0)", "rgba( 100%, 50%, 0% , 0.25 )", "rgba(0, 0, 0, 40%)"]], expected: ["#ff8000ff", "#ff800040", "#00000066"], description: "Example 2 - integer channels, percentage channels with a decimal alpha and spaces, percentage alpha"}
+  - {id: t3, args: [["rgb(256, 0, 0)", "#12345", "rgb(10%, 20, 30)", "teal"]], expected: ["invalid", "invalid", "invalid", "invalid"], description: "Example 3 - out of range, bad hex length, mixed channel kinds, unsupported name"}
+  - {id: t4, hidden: true, args: [["#abcd", "#ABCDEF12", "#000", "#fFfFfFfF", " #0a0B0c  ", "#00000000"]], expected: ["#aabbccdd", "#abcdef12", "#000000ff", "#ffffffff", "#0a0b0cff", "#00000000"], description: "All four hex lengths, uppercase digits and surrounding spaces"}
+  - {id: t5, hidden: true, args: [["#", "#ggg", "#12", "#1234567", "123456", "#123456789", "# 123", "#12 3", "##123"]], expected: ["invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid"], description: "Malformed hex - empty, non-hex digits, lengths 2/5/7/9, missing #, inner space"}
+  - {id: t6, hidden: true, args: [["BLACK", "white", "Red", "bLuE", "TRANSPARENT", "  green  ", "grey", "lime", "green green"]], expected: ["#000000ff", "#ffffffff", "#ff0000ff", "#0000ffff", "#00000000", "#008000ff", "invalid", "invalid", "invalid"], description: "Named colours in any case with padding; unsupported names stay invalid"}
+  - {id: t7, hidden: true, args: [["rgb(0,0,0)", "rgb(255,255,255)", "rgba(0, 0, 0, 0)", "rgba(0,0,0,1)", "rgba(0, 0, 0, 1.0)", "rgb(007, 0, 0)", "rgba(1,2,3,100%)", "rgba(1,2,3,0%)", "rgb(100%,100%,100%)", "rgb(0%, 0%, 0%)"]], expected: ["#000000ff", "#ffffffff", "#00000000", "#000000ff", "#000000ff", "#070000ff", "#010203ff", "#01020300", "#ffffffff", "#000000ff"], description: "Range boundaries - 0 and 255, alpha 0 and 1 (also 1.0), leading zeros, 0% and 100%"}
+  - {id: t8, hidden: true, args: [["rgb(1%, 2%, 3%)", "rgb(50%, 33%, 99%)", "rgba(0%, 0%, 0%, 0.5)", "rgba(10, 20, 30, .1)", "rgba(10,20,30,50%)", "rgba(255, 255, 255, 0.333)", "Rgba(  4 ,5,6 , 0.2)", "RGB( 12 , 34 , 56 )"]], expected: ["#030508ff", "#8054fcff", "#00000080", "#0a141e1a", "#0a141e80", "#ffffff55", "#04050633", "#0c2238ff"], description: "Percentage rounding with halves up, decimal alpha with omitted integer part, case-insensitive function names and loose spacing"}
+  - {id: t9, hidden: true, args: [["rgb(1, 2)", "rgb(1, 2, 3, 0.5)", "rgba(1, 2, 3)", "rgb(-1, 0, 0)", "rgb(1.5, 0, 0)", "rgba(0, 0, 0, 1.5)", "rgb(101%, 0%, 0%)", "rgba(0, 0, 0, 101%)", "rgb (1, 2, 3)", "rgb(1, 2, 3", "rgb(1,,3)", "rgb(+1, 2, 3)", "rgba(0, 0, 0, 0.)", "rgba(0,0,0,.)", "rgb(1,2,3)x", "rgb(99999999999999999999, 0, 0)", "rgba(0, 0, 0, 2)", "rgba(0, 0, 0, 1e0)"]], expected: ["invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "invalid"], description: "Malformed functional values - wrong arity for rgb/rgba, negatives, fractional channels, alpha > 1, > 100%, space before (, missing ), empty argument, plus sign, bad decimals, trailing junk, huge integer, exponent"}
+  - {id: t10, hidden: true, args: [[]], expected: [], description: "Empty list"}
+  - {id: t11, hidden: true, args: [["", "   ", "rgb(1, 2, 3)", "rgb(1%, 2%, 3)", "rgba(10%, 20%, 30%, 0.75)", "\trgb(1, 2, 3)"]], expected: ["invalid", "invalid", "#010203ff", "invalid", "#1a334dbf", "invalid"], description: "Empty and all-space strings, percentage channels with one missing %, tab is not a trimmable space"}
+expected_concepts:
+  - splitting parsing into small validators per format (hex, functional, named)
+  - strict whole-string matching instead of partial matches
+  - range checking without clamping
+  - exact integer rounding for percentages
+  - consistent lowercase hex formatting with zero padding
+optimal_complexity: {time: O(total length of all values), space: O(longest value)}
+rubric:
+  excellent: Structures the parser as small per-format helpers, matches each format against the whole string, rejects out-of-range and mixed channels instead of clamping, uses integer arithmetic for percentages and walks through tricky inputs (1., .5, rgb with four arguments) before running tests.
+  good: Handles hex, functional and named colours correctly with one or two misses on malformed input (for example accepting 1. or a space before the parenthesis) that are fixed after a hint.
+  weak: Uses loose substring checks or parseInt-style prefix parsing that accepts trailing junk, clamps out-of-range values, or forgets to expand short hex forms and add the default alpha.
+  criteria:
+    correctness: All tests pass, including every malformed form returning invalid and the exact rounding of percentages and decimal alpha.
+    efficiency: One linear pass per value; no repeated re-parsing.
+    code_quality: Separate helpers for hex, channel, percentage and alpha parsing with shared conversion code; no duplicated formatting logic.
+    edge_cases: Empty strings, padding spaces, short hex forms, 0%/100%, alpha 1.0 and .5, huge integers, wrong argument counts.
+    communication: States the accepted grammar explicitly and explains why invalid input is rejected rather than clamped.
+hints:
+  - Decide first which of the three families a trimmed value belongs to (it starts with #, it looks like a function call, or it is a bare word), and validate each family on its own.
+  - Many bugs come from accepting a valid prefix followed by junk. Check that the entire value matches the format, and convert numbers only after their text has been validated (digits only for channels, digits plus % for percentages).
+  - For functional values strip the name and parentheses, split the inside on commas, trim spaces from each part, check the argument count for rgb versus rgba, require the three channels to be all integers or all percentages, convert with integer rounding, then format the four bytes as two lowercase hex digits each.
+followups:
+  - How would you extend the parser to the space-separated CSS Color 4 syntax such as rgb(255 0 0 / 50%)?
+  - Should the importer report why a value is invalid, and how would you shape that error?
+  - How would you add hsl() support while keeping a single output format?
+common_errors:
+  - Using parseInt or parseFloat on unvalidated text, which accepts 12px, 1e0 or trailing junk.
+  - Clamping 256 to 255 or 101% to 100% instead of rejecting the value.
+  - Forgetting to double the digits of #rgb and #rgba, or forgetting the default ff alpha.
+  - Computing p * 2.55 in floating point and rounding 50% down to 127.
+  - Accepting four arguments in rgb() or three in rgba().

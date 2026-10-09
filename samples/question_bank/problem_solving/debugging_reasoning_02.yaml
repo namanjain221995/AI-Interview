@@ -1,0 +1,562 @@
+# Curated questions: debugging reasoning (part 2 of 4).
+# Time and dates, caching and stale state, concurrency and ordering, leaks, performance under scale.
+# Spoken scenario questions; the candidate reasons aloud without running code.
+version: 1
+defaults:
+  competency_key: debugging
+  kind: scenario
+  role_tags: [backend, frontend, qa, mobile]
+  round_types: [problem_solving, combined]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: problem_solving.debugging_reasoning.report_differs_by_viewer
+    topic: Same report, different totals
+    difficulty: easy
+    text: >-
+      A daily sales report shows different totals depending on which team member runs it. How would you
+      start figuring out why?
+    expected_concepts:
+      - compare the exact inputs and parameters each person used
+      - time zone or locale of the user affecting day boundaries
+      - permissions or filters limiting visible data
+      - caching or different data refresh times
+      - reproduce by running as each user or with each setting
+    rubric:
+      excellent: Treats the person as a set of inputs (time zone, permissions, filters, cache state), compares them side by side and reproduces the difference by switching one input at a time.
+      good: Suspects time zones or permissions and compares two users' settings.
+      weak: Assumes one person is using the report wrongly without checking.
+    followups:
+      - Both people have the same permissions and filters. What next?
+      - How would you decide which total is the correct one?
+    common_errors:
+      - Not checking how "today" is defined for each viewer.
+
+  - external_key: problem_solving.debugging_reasoning.last_day_of_month
+    topic: Date boundary bugs
+    difficulty: easy
+    text: >-
+      A billing calculation works all month and then fails on the last day of the month. What would you
+      look at first, and how would you reproduce it without waiting for the calendar?
+    expected_concepts:
+      - month lengths and adding a month to the 31st
+      - leap years and February
+      - time zone of the server versus the business
+      - injectable or mockable clock
+      - tests that cover month-end dates explicitly
+    rubric:
+      excellent: Pinpoints date arithmetic around month ends, considers time zones, and reproduces by controlling the clock in tests with a set of boundary dates.
+      good: Suspects date arithmetic and suggests faking the date to reproduce.
+      weak: Waits for the next month-end to watch it fail, or patches it with a special case for the 31st.
+    followups:
+      - What should adding one month to January 31st return in a billing system?
+      - How would you make the current time controllable in code that calls the system clock directly?
+    common_errors:
+      - Forgetting that the server may be in a different time zone than the customer.
+
+  - external_key: problem_solving.debugging_reasoning.old_version_after_deploy
+    topic: Users stuck on an old frontend
+    difficulty: easy
+    text: >-
+      After a frontend deploy, some users still see the old version of a page and get errors when they click
+      things. How would you work out what's going on?
+    expected_concepts:
+      - browser or CDN caching of HTML or bundles
+      - service worker serving stale assets
+      - old bundle calling a changed API
+      - check response headers and which asset versions load
+      - compare a fresh session with an affected user's session
+    rubric:
+      excellent: Identifies layers that could serve stale assets (browser, CDN, service worker), explains why old code breaks against a new API, and checks headers and loaded versions to locate the stale layer.
+      good: Suspects caching and checks whether a hard refresh or cleared cache fixes it.
+      weak: Tells users to clear their cache without finding which layer is at fault.
+    followups:
+      - How would you design deploys so old clients keep working for a while?
+      - How could you tell from server logs which client version a user is running?
+    common_errors:
+      - Overlooking a service worker that keeps serving the old files.
+
+  - external_key: problem_solving.debugging_reasoning.duplicate_orders_layer
+    topic: Duplicate submissions
+    difficulty: easy
+    text: >-
+      Customers occasionally end up with two identical orders placed seconds apart. How would you work out
+      whether the cause is in the frontend, the network or the backend?
+    expected_concepts:
+      - check whether two requests arrived at the server and from where
+      - double clicks or missing button disabling
+      - client or proxy retries after a timeout
+      - request IDs or idempotency keys to tell duplicates apart
+      - reproduce with slow network or rapid clicks
+    rubric:
+      excellent: Uses server-side evidence (timings, request IDs, client info) to tell user double clicks from automatic retries, reproduces with throttled network and mentions idempotency as the durable fix.
+      good: Checks logs for two requests and suspects double clicking or retries.
+      weak: Adds a duplicate check in the database without understanding where the second request comes from.
+    followups:
+      - What would the logs look like for a double click versus a retry?
+      - How does an idempotency key help here?
+    common_errors:
+      - Fixing only the button and missing retries from the network layer.
+
+  - external_key: problem_solving.debugging_reasoning.one_cent_off
+    topic: Rounding differences
+    difficulty: easy
+    text: >-
+      A price calculation comes out one cent wrong for some products but not others. How would you reason
+      about where that difference comes from?
+    expected_concepts:
+      - floating point representation of decimal amounts
+      - where rounding happens (per item, per line, on total)
+      - rounding mode differences between components
+      - find which products are affected and what their values share
+      - compare intermediate values step by step
+    rubric:
+      excellent: Names floating point and rounding order as likely causes, compares affected and unaffected values to find the pattern and traces intermediate values to the exact step that diverges.
+      good: Suspects floating point or rounding and looks at affected products.
+      weak: Adds a correction of one cent where it appears.
+    followups:
+      - How should money be represented to avoid this?
+      - Two services round differently. How would you decide which is right?
+    common_errors:
+      - Treating it as a display problem when the stored values are already off.
+
+  - external_key: problem_solving.debugging_reasoning.legacy_signup_crash
+    topic: Crashes tied to a data origin
+    difficulty: easy
+    text: >-
+      A profile page crashes, and you notice every affected account was created through a signup flow that
+      was retired last year. How would you confirm that link and find the field that's causing the crash?
+    expected_concepts:
+      - confirm with data that affected accounts share that origin and others don't
+      - compare a crashing record with a working one field by field
+      - missing, null or differently formatted fields
+      - code that assumes newer fields always exist
+      - fix the code to handle it and decide whether to backfill
+    rubric:
+      excellent: Confirms the correlation with a query, compares records side by side to find the missing or differently shaped field and fixes both the code assumption and, if appropriate, the data.
+      good: Compares an affected record with a working one and finds the odd field.
+      weak: Assumes the link without checking, or deletes the problem accounts' data.
+    followups:
+      - Would you fix this in the code, in the data, or both?
+      - How could you find other places that make the same assumption?
+    common_errors:
+      - Fixing the one crashing page while other screens share the assumption.
+
+  - external_key: problem_solving.debugging_reasoning.tab_slows_over_time
+    topic: Browser tab getting slower
+    difficulty: easy
+    text: >-
+      Users say your web app gets slower the longer they keep the tab open, until they reload the page. How
+      would you confirm what's growing and find the cause?
+    expected_concepts:
+      - measure memory and DOM node count over time
+      - heap snapshots compared before and after repeated actions
+      - event listeners, timers or subscriptions never cleaned up
+      - caches or stores growing without limit
+      - reproduce with a repeated sequence of actions
+    rubric:
+      excellent: Reproduces with a repeated action, compares heap snapshots to see what is retained and names typical culprits such as leftover listeners, timers and unbounded stores.
+      good: Uses the browser's memory tools and suspects listeners or growing data.
+      weak: Suggests users reload more often or blames the browser.
+    followups:
+      - How do you read a heap snapshot to see what's keeping objects alive?
+      - What if memory is stable but it still gets slower?
+    common_errors:
+      - Taking a single snapshot instead of comparing snapshots over time.
+
+  - external_key: problem_solving.debugging_reasoning.effect_refetch_loop
+    topic: Repeated API calls from a component
+    difficulty: easy
+    text: >-
+      A React component calls the same API endpoint over and over in a loop as soon as the page loads. How
+      would you track down why it keeps firing?
+    expected_concepts:
+      - effect dependencies that change on every render
+      - new object or function identities created each render
+      - state updates inside the effect that trigger re-renders
+      - use the network tab and render tracing to confirm the cycle
+      - stabilise dependencies or move the call
+    rubric:
+      excellent: Explains the render, effect, state update cycle, identifies unstable dependencies as the usual trigger and confirms it with dev tools before fixing.
+      good: Looks at the effect's dependency list and suspects it changes each render.
+      weak: Removes the dependencies to silence the loop without understanding it.
+    followups:
+      - How would you confirm which dependency is changing?
+      - Why is deleting the dependency array a risky fix?
+    common_errors:
+      - Silencing the linter warning instead of fixing the dependency.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: problem_solving.debugging_reasoning.edits_lost_two_tabs
+    topic: Lost updates across tabs
+    difficulty: medium
+    text: >-
+      A user edits the same document in two browser tabs and later finds that changes made in one tab have
+      vanished. How would you reproduce it and pin down where those changes were lost?
+    expected_concepts:
+      - last write wins overwriting whole documents
+      - stale client state saved over newer server state
+      - reproduce by editing in two tabs in a controlled order
+      - inspect requests and payloads sent by each tab
+      - versioning, conditional updates or merging as fixes
+    rubric:
+      excellent: Reproduces with a precise sequence across two tabs, shows from request payloads that a stale full-document save overwrote newer data, and proposes version checks or field-level updates.
+      good: Suspects last write wins and reproduces it with two tabs.
+      weak: Tells users not to use two tabs.
+    followups:
+      - How would an optimistic concurrency check change the user experience?
+      - Would field-level patches fully solve it?
+    common_errors:
+      - Assuming the server lost the data rather than a client overwriting it.
+
+  - external_key: problem_solving.debugging_reasoning.price_stale_some_users
+    topic: Finding the stale cache layer
+    difficulty: medium
+    text: >-
+      After you update a product's price in the admin panel, the storefront shows the old price to some
+      users and the new one to others. How would you track down which layer is serving the stale data?
+    expected_concepts:
+      - list every cache between database and user (application, distributed cache, CDN, browser)
+      - inspect response headers and cache status
+      - request directly at each layer to compare
+      - per-instance in-memory caches explaining a mixed result
+      - invalidation path on update
+    rubric:
+      excellent: Enumerates every caching layer, queries each one directly to find where the old value lives, and explains why only some users see it (per-instance caches, CDN edges).
+      good: Checks the CDN and application caches and looks at response headers.
+      weak: Purges everything and moves on without knowing which layer was at fault.
+    followups:
+      - Why would some users see the old value and others the new one?
+      - How would you design invalidation so this doesn't recur?
+    common_errors:
+      - Forgetting per-instance in-memory caches when there are several servers.
+
+  - external_key: problem_solving.debugging_reasoning.dst_job_twice_or_never
+    topic: Daylight saving time scheduling
+    difficulty: medium
+    text: >-
+      A scheduled job ran twice on one night in the autumn and didn't run at all on one night in the spring.
+      Walk me through how you'd confirm the cause.
+    expected_concepts:
+      - clock changes repeat or skip an hour
+      - schedule defined in local time at an affected hour
+      - check job run timestamps in UTC against the clock change dates
+      - reproduce by simulating the transition in a test
+      - schedule in UTC or make the job idempotent
+    rubric:
+      excellent: Links the dates to daylight saving changes, confirms with UTC timestamps of the runs, reproduces by simulating the transition and fixes via UTC scheduling or idempotent jobs.
+      good: Recognises daylight saving as the cause and suggests UTC scheduling.
+      weak: Adds a manual workaround for those two nights.
+    followups:
+      - The job must run at 2am local time for business reasons. What do you do?
+      - How would you test this without waiting for the next clock change?
+    common_errors:
+      - Reading logs in local time and missing the repeated hour.
+
+  - external_key: problem_solving.debugging_reasoning.service_memory_climbs
+    topic: Memory growth in a backend service
+    difficulty: medium
+    text: >-
+      A backend service's memory climbs steadily over a day until it's restarted. How would you work out
+      whether it's a real leak, and what is holding on to the memory?
+    expected_concepts:
+      - distinguish a leak from caches warming up or runtime heap behaviour
+      - correlate growth with traffic or particular operations
+      - heap dumps at two points in time and compare
+      - unbounded caches, collections, listeners, connections
+      - reproduce growth with a load test of the suspected path
+    rubric:
+      excellent: Separates true leaks from expected growth, correlates the growth rate with workload, compares heap dumps over time to find what is retained and reproduces with targeted load.
+      good: Takes heap dumps and looks for large or growing collections.
+      weak: Schedules regular restarts or raises the memory limit.
+    followups:
+      - How would you tell if growth is per request or per user?
+      - Taking a heap dump in production is risky. How would you do it safely?
+    common_errors:
+      - Taking one heap dump and guessing from the biggest object.
+
+  - external_key: problem_solving.debugging_reasoning.deadlock_two_jobs
+    topic: Database deadlocks between jobs
+    difficulty: medium
+    text: >-
+      Every few days, two background jobs that update the same tables both fail, and the database reports a
+      deadlock. How would you figure out which code paths are colliding?
+    expected_concepts:
+      - database deadlock reports show the statements and locks involved
+      - map statements back to code paths
+      - lock ordering differs between the two jobs
+      - reproduce by running both concurrently with controlled timing
+      - consistent ordering, shorter transactions or retries
+    rubric:
+      excellent: Uses the database's deadlock diagnostics to identify statements, maps them to code, explains the inconsistent lock order and reproduces it with controlled concurrent runs before fixing.
+      good: Finds the queries involved and suggests consistent ordering or retries.
+      weak: Schedules the jobs at different times without understanding the conflict.
+    followups:
+      - Is retrying on deadlock a fix or a workaround?
+      - How would you reproduce a deadlock deterministically in a test?
+    common_errors:
+      - Not checking the database's own deadlock logs.
+
+  - external_key: problem_solving.debugging_reasoning.status_goes_backwards
+    topic: Events handled out of order
+    difficulty: medium
+    text: >-
+      An order's status sometimes goes from shipped back to processing in your system. You suspect events
+      are being handled out of order. How would you prove it?
+    expected_concepts:
+      - collect event IDs, timestamps and sequence numbers for an affected order
+      - compare produce order with consume order
+      - parallel consumers, partitions or retries reordering events
+      - check whether handlers ignore stale events
+      - reproduce by delivering events in a different order in a test
+    rubric:
+      excellent: Reconstructs the exact event timeline for an affected order, identifies where ordering is lost (partitions, parallelism, retries) and reproduces it with reordered delivery before proposing version checks.
+      good: Compares event timestamps for an affected order and identifies reordering.
+      weak: Adds a rule that status can't go backwards without understanding why events arrive out of order.
+    followups:
+      - Timestamps from different producers can disagree. How does that affect your evidence?
+      - How would you make the handler safe against reordering?
+    common_errors:
+      - Trusting wall-clock timestamps from different machines to establish order.
+
+  - external_key: problem_solving.debugging_reasoning.first_request_slow
+    topic: Cold start cost
+    difficulty: medium
+    text: >-
+      The first request to an endpoint after a deploy takes eight seconds, and every request after that is
+      fast. How would you work out where that first-request cost comes from?
+    expected_concepts:
+      - lazy initialisation (connections, clients, caches, configuration)
+      - runtime warm-up such as JIT compilation or class loading
+      - time each phase of the first request
+      - compare with a startup that pre-warms
+      - readiness checks and warm-up before taking traffic
+    rubric:
+      excellent: Lists likely lazy-initialisation and warm-up costs, measures the phases of the first request to confirm which dominates and moves that work before the instance accepts traffic.
+      good: Suspects lazy connections or caches and suggests warming them at startup.
+      weak: Accepts it as normal or adds a dummy request after deploy without understanding it.
+    followups:
+      - How would you get a timing breakdown of just that first request?
+      - What are the risks of doing all that work at startup instead?
+    common_errors:
+      - Measuring averages, which hide the single slow request.
+
+  - external_key: problem_solving.debugging_reasoning.failure_outlasts_blip
+    topic: Failures that persist after recovery
+    difficulty: medium
+    text: >-
+      A downstream service had a thirty-second blip, but your service kept failing for twenty minutes after
+      it recovered. How would you reason about what kept the failure going?
+    expected_concepts:
+      - retries amplifying load on the recovering dependency
+      - exhausted pools or queues that take time to drain
+      - circuit breakers stuck open or bad state cached
+      - backlog of work processed slowly
+      - check the timeline of each metric to see what lagged
+    rubric:
+      excellent: Proposes several self-sustaining mechanisms (retry storms, pool exhaustion, cached failures, backlogs) and uses metric timelines to identify which one held the failure in place.
+      good: Suspects retries or exhausted connection pools and checks metrics.
+      weak: Blames the downstream service alone.
+    followups:
+      - How would retries with backoff and jitter have changed things?
+      - What metrics would you want on a dashboard to spot this pattern quickly?
+    common_errors:
+      - Treating the dependency blip as the whole story.
+
+  - external_key: problem_solving.debugging_reasoning.list_fine_small_slow_large
+    topic: Code that scales badly
+    difficulty: medium
+    text: >-
+      A list screen is fine with fifty items but becomes unusable with a few thousand. How would you find
+      which part of the code scales badly?
+    expected_concepts:
+      - measure time as size grows to see the growth curve
+      - profile with the large dataset
+      - nested loops or repeated lookups giving quadratic work
+      - per-item queries or requests
+      - rendering every item instead of virtualising
+    rubric:
+      excellent: Measures at several sizes to see how cost grows, profiles the large case to find the hot spot and names typical quadratic patterns on both data and rendering sides.
+      good: Profiles with a large dataset and finds the slow loop or query.
+      weak: Adds pagination without knowing what is slow.
+    followups:
+      - Doubling the items makes it four times slower. What does that tell you?
+      - How would you tell if the cost is in data loading or in rendering?
+    common_errors:
+      - Profiling only with small test data.
+
+  - external_key: problem_solving.debugging_reasoning.too_many_open_files
+    topic: Resource leaks
+    difficulty: medium
+    text: >-
+      A service starts throwing too-many-open-files errors after running for a few days. How would you trace
+      what's leaking?
+    expected_concepts:
+      - list open file descriptors for the process and their types
+      - sockets versus files versus pipes
+      - growth rate correlated with particular operations
+      - missing close on error paths
+      - connection or client objects created per request
+    rubric:
+      excellent: Inspects open descriptors to see what kind is accumulating and to where, correlates growth with operations and finds the code path that fails to close them, often on error paths.
+      good: Checks open descriptors and looks for missing close calls.
+      weak: Raises the file limit and restarts.
+    followups:
+      - The descriptors are mostly sockets to one host. What does that tell you?
+      - How would you make this kind of leak impossible in code?
+    common_errors:
+      - Only checking the happy path for cleanup.
+
+  - external_key: problem_solving.debugging_reasoning.form_wiped_after_switch
+    topic: Mobile state lost in background
+    difficulty: medium
+    text: >-
+      On mobile, users who switch to another app for a few minutes come back to find their half-filled form
+      wiped. How would you reproduce that and track down why the state is lost?
+    expected_concepts:
+      - operating system kills backgrounded apps under memory pressure
+      - state only held in memory, not saved and restored
+      - developer options or tools to force process death
+      - lifecycle callbacks for saving and restoring state
+      - test on low-memory devices
+    rubric:
+      excellent: Explains that the process is killed in the background, reproduces it by forcing process death with platform tools and traces which state isn't saved or restored through lifecycle hooks.
+      good: Suspects the app being killed and checks state saving.
+      weak: Can't reproduce it on a high-end phone and closes the ticket.
+    followups:
+      - How do you force this on Android and on iOS?
+      - Which form data should you not persist, and why?
+    common_errors:
+      - Only testing quick app switches, where the process stays alive.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: problem_solving.debugging_reasoning.unread_count_drifts
+    topic: Counters drifting from reality
+    difficulty: hard
+    text: >-
+      The unread message counter for users slowly drifts out of sync with the messages that are actually
+      unread. How would you find where the count goes wrong?
+    expected_concepts:
+      - read-modify-write races on the counter
+      - increments and decrements on paths that can fail or repeat
+      - retries or duplicate events applying twice
+      - compare the counter with a recomputed value to find when it diverges
+      - audit trail of counter changes for affected users
+    rubric:
+      excellent: Lists every code path that changes the counter, checks each for races, partial failures and duplicate delivery, uses recomputation and change history to find which path diverges and considers deriving the count instead.
+      good: Suspects concurrent updates or duplicated events and compares counter and real data.
+      weak: Adds a nightly job that resets counters without finding the cause.
+    followups:
+      - How would you detect which operation caused a specific drift?
+      - When is storing a derived counter worth the risk at all?
+    common_errors:
+      - Looking only for races and missing paths that increment but never roll back on failure.
+
+  - external_key: problem_solving.debugging_reasoning.logged_out_on_some_servers
+    topic: Clock skew between servers
+    difficulty: hard
+    text: >-
+      Some users get logged out immediately after logging in, but only when their requests land on certain
+      servers. How would you find the cause?
+    expected_concepts:
+      - correlate failures with specific hosts
+      - compare configuration, secrets and clocks across hosts
+      - clock skew making new tokens look expired or not yet valid
+      - inspect token timestamps against each host's time
+      - time sync monitoring and leeway in validation
+    rubric:
+      excellent: Pins the failures to specific hosts, compares what differs (clock, signing keys, config) and proves clock skew or key mismatch by inspecting token timestamps against host time.
+      good: Correlates with hosts and checks configuration differences between them.
+      weak: Increases token lifetime or disables a validation check.
+    followups:
+      - How would you prove clock skew from logs alone?
+      - What's a safe amount of leeway when validating token times?
+    common_errors:
+      - Not checking whether the failures cluster on particular hosts.
+
+  - external_key: problem_solving.debugging_reasoning.crashes_in_random_places
+    topic: Crashes with inconsistent stack traces
+    difficulty: hard
+    text: >-
+      A service occasionally crashes in a different place each time, with stack traces that don't seem to
+      have anything in common. How would you approach a bug like that?
+    expected_concepts:
+      - inconsistent crash sites suggest shared corruption or resource exhaustion
+      - unsafe concurrent access to shared data
+      - native extensions, unsafe code or buffer misuse
+      - collect many crashes and look for common context (host, load, time, version)
+      - sanitizers, race detectors or memory checkers in testing
+    rubric:
+      excellent: Recognises that varied crash sites point to a shared underlying cause, considers memory corruption, races and exhaustion, aggregates crash context and proposes sanitizers or race detectors to catch the root cause.
+      good: Suspects concurrency or memory problems and looks for patterns across crashes.
+      weak: Fixes each crash site individually.
+    followups:
+      - Which tools would you run in testing to catch this earlier?
+      - What host-level problems could cause the same symptom?
+    common_errors:
+      - Treating each stack trace as a separate bug.
+
+  - external_key: problem_solving.debugging_reasoning.hourly_latency_spike
+    topic: Synchronised load spikes
+    difficulty: hard
+    text: >-
+      Every hour, on the hour, latency spikes and database CPU maxes out for about a minute. How would you
+      work out what's synchronising that load?
+    expected_concepts:
+      - scheduled jobs or cron tasks on the hour
+      - cache entries expiring together and stampeding
+      - clients with fixed polling or token refresh intervals
+      - identify the queries or requests that spike at that moment
+      - jitter, staggered expiry or request coalescing
+    rubric:
+      excellent: Generates candidate synchronisers (jobs, cache expiry, client schedules), identifies the dominant queries or callers during the spike and proposes jitter or coalescing matched to the cause.
+      good: Checks scheduled jobs and the database's top queries during the spike.
+      weak: Scales up the database without identifying the trigger.
+    followups:
+      - Top queries during the spike are all the same read. What does that suggest?
+      - How would you add jitter without breaking business requirements?
+    common_errors:
+      - Assuming it's a scheduled job without checking which queries spike.
+
+  - external_key: problem_solving.debugging_reasoning.fails_on_other_cpu_arch
+    topic: Architecture-specific intermittent failures
+    difficulty: hard
+    text: >-
+      A test fails occasionally, but only on the CI machines that use a different processor architecture.
+      How would you narrow down the cause?
+    expected_concepts:
+      - weaker memory ordering exposing races
+      - floating point or integer size differences
+      - native dependencies built differently per architecture
+      - reproduce on that architecture with many runs
+      - race detectors and stress testing
+    rubric:
+      excellent: Names concrete architecture-sensitive causes (memory ordering, numeric differences, native builds), reproduces on the same hardware with repeated runs and uses race detection to confirm.
+      good: Reproduces on the same architecture and checks native dependencies.
+      weak: Excludes that architecture from CI.
+    followups:
+      - Why could code with a race pass every time on one machine and not on another?
+      - How would you get a reproduction environment if you don't own that hardware?
+    common_errors:
+      - Assuming the build machine is faulty.
+
+  - external_key: problem_solving.debugging_reasoning.balance_drifts_from_bank
+    topic: Reconciliation drift
+    difficulty: hard
+    text: >-
+      An account balance in your system drifts from the bank's figure by a few cents each month, and no
+      single transaction looks obviously wrong. How would you find where the drift comes from?
+    expected_concepts:
+      - reconcile at finer granularity (daily, per transaction)
+      - accumulated rounding across many operations
+      - currency conversions, fees and timing cut-offs
+      - duplicated or missing transactions near period boundaries
+      - narrow the period until a specific transaction or step diverges
+    rubric:
+      excellent: Reconciles at progressively finer time and transaction granularity to locate where totals first diverge, then considers accumulated rounding, conversions and boundary timing with evidence.
+      good: Compares transactions one by one and suspects rounding or fees.
+      weak: Posts a monthly adjustment to match the bank.
+    followups:
+      - How would you reconcile when the bank and your system cut off the day at different times?
+      - How would you represent amounts to avoid accumulated rounding?
+    common_errors:
+      - Comparing only monthly totals, which hides where the drift begins.

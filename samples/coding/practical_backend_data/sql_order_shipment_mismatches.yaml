@@ -1,0 +1,231 @@
+version: 1
+slug: sql_order_shipment_mismatches
+title: Orders vs Shipments Reconciliation (SQL)
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [backend, data, data_analyst, business_analyst]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Orders vs Shipments Reconciliation
+
+  The warehouse team runs a nightly reconciliation between what customers ordered and what actually
+  left the building.
+
+  Table `order_lines`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | order_id | INTEGER | `(order_id, sku)` is the primary key |
+  | sku | VARCHAR(20) | product code |
+  | qty | INTEGER | units ordered, at least 1 |
+
+  Table `shipment_lines`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | order_id | INTEGER | the order this parcel belongs to |
+  | sku | VARCHAR(20) | product code |
+  | qty | INTEGER | units in this parcel, at least 1 |
+
+  One order line can be shipped in **several partial parcels**, and the warehouse sometimes ships a
+  product that is not on the order at all (a picking error).
+
+  For every `(order_id, sku)` pair that appears in **either** table, compare the ordered quantity with
+  the **total** shipped quantity, treating a missing side as `0`. Return the pairs where the two
+  numbers differ, with columns `order_id`, `sku`, `ordered_qty` and `shipped_qty`, ordered by
+  `order_id` ascending and then `sku` ascending.
+
+  The report also runs on engines without `FULL OUTER JOIN`, so do **not** use it. Write standard SQL
+  that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  order_lines                       shipment_lines
+  +----------+------+-----+         +----+----------+------+-----+
+  | order_id | sku  | qty |         | id | order_id | sku  | qty |
+  +----------+------+-----+         +----+----------+------+-----+
+  | 1001     | A100 | 5   |         | 1  | 1001     | A100 | 3   |
+  | 1001     | B200 | 2   |         | 2  | 1001     | A100 | 2   |
+  | 1002     | A100 | 1   |         | 3  | 1001     | B200 | 1   |
+  | 1003     | C300 | 4   |         | 4  | 1002     | D400 | 1   |
+  +----------+------+-----+         | 5  | 1003     | C300 | 6   |
+                                    +----+----------+------+-----+
+
+  Output
+  +----------+------+-------------+-------------+
+  | order_id | sku  | ordered_qty | shipped_qty |
+  +----------+------+-------------+-------------+
+  | 1001     | B200 | 2           | 1           |
+  | 1002     | A100 | 1           | 0           |
+  | 1002     | D400 | 0           | 1           |
+  | 1003     | C300 | 4           | 6           |
+  +----------+------+-------------+-------------+
+  1001/A100 is complete (3 + 2 = 5), so it is not reported.
+  ```
+
+  ### Example 2
+  ```
+  order_lines                       shipment_lines
+  +----------+------+-----+         +----+----------+------+-----+
+  | order_id | sku  | qty |         | id | order_id | sku  | qty |
+  +----------+------+-----+         +----+----------+------+-----+
+  | 7        | A100 | 4   |         | 1  | 7        | A100 | 1   |
+  | 7        | B200 | 1   |         | 2  | 7        | A100 | 3   |
+  +----------+------+-----+         | 3  | 7        | B200 | 1   |
+                                    +----+----------+------+-----+
+
+  Output: no rows (every line reconciles).
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return order_id, sku, ordered_qty and shipped_qty for every line whose totals differ,
+    -- ordered by order_id, then sku.
+    SELECT o.order_id, o.sku, o.qty AS ordered_qty, 0 AS shipped_qty
+    FROM order_lines o
+    ORDER BY o.order_id, o.sku;
+reference_solutions:
+  sql: |
+    WITH shipped AS (
+      SELECT order_id, sku, SUM(qty) AS shipped_qty
+      FROM shipment_lines
+      GROUP BY order_id, sku
+    ),
+    line_keys AS (
+      SELECT order_id, sku FROM order_lines
+      UNION
+      SELECT order_id, sku FROM shipped
+    )
+    SELECT k.order_id,
+           k.sku,
+           COALESCE(o.qty, 0) AS ordered_qty,
+           COALESCE(s.shipped_qty, 0) AS shipped_qty
+    FROM line_keys k
+    LEFT JOIN order_lines o ON o.order_id = k.order_id AND o.sku = k.sku
+    LEFT JOIN shipped s ON s.order_id = k.order_id AND s.sku = k.sku
+    WHERE COALESCE(o.qty, 0) <> COALESCE(s.shipped_qty, 0)
+    ORDER BY k.order_id, k.sku;
+sql_setup: |
+  CREATE TABLE order_lines (
+    order_id INTEGER NOT NULL,
+    sku VARCHAR(20) NOT NULL,
+    qty INTEGER NOT NULL,
+    PRIMARY KEY (order_id, sku)
+  );
+  CREATE TABLE shipment_lines (
+    id INTEGER PRIMARY KEY,
+    order_id INTEGER NOT NULL,
+    sku VARCHAR(20) NOT NULL,
+    qty INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - partial shipments summed, short, unshipped, unexpected and over-shipped lines"
+    setup_sql: |
+      INSERT INTO order_lines (order_id, sku, qty) VALUES
+        (1001, 'A100', 5), (1001, 'B200', 2), (1002, 'A100', 1), (1003, 'C300', 4);
+      INSERT INTO shipment_lines (id, order_id, sku, qty) VALUES
+        (1, 1001, 'A100', 3), (2, 1001, 'A100', 2), (3, 1001, 'B200', 1),
+        (4, 1002, 'D400', 1), (5, 1003, 'C300', 6);
+    expected_rows:
+      - [1001, "B200", 2, 1]
+      - [1002, "A100", 1, 0]
+      - [1002, "D400", 0, 1]
+      - [1003, "C300", 4, 6]
+    ordered: true
+  - id: t2
+    description: "Example 2 - everything reconciles, no rows"
+    setup_sql: |
+      INSERT INTO order_lines (order_id, sku, qty) VALUES (7, 'A100', 4), (7, 'B200', 1);
+      INSERT INTO shipment_lines (id, order_id, sku, qty) VALUES (1, 7, 'A100', 1), (2, 7, 'A100', 3), (3, 7, 'B200', 1);
+    expected_rows: []
+    ordered: true
+  - id: t3
+    hidden: true
+    description: "Empty tables"
+    expected_rows: []
+    ordered: true
+  - id: t4
+    hidden: true
+    description: "No shipments yet - every order line is reported with shipped 0"
+    setup_sql: |
+      INSERT INTO order_lines (order_id, sku, qty) VALUES (2, 'B200', 3), (1, 'A100', 2), (1, 'C300', 1);
+    expected_rows: [[1, "A100", 2, 0], [1, "C300", 1, 0], [2, "B200", 3, 0]]
+    ordered: true
+  - id: t5
+    hidden: true
+    description: "Shipments without any order lines - partials summed, ordered 0"
+    setup_sql: |
+      INSERT INTO shipment_lines (id, order_id, sku, qty) VALUES (1, 5, 'Z900', 1), (2, 5, 'Z900', 4), (3, 4, 'Y800', 2);
+    expected_rows: [[4, "Y800", 0, 2], [5, "Z900", 0, 5]]
+    ordered: true
+  - id: t6
+    hidden: true
+    description: "Join fan-out trap - joining raw shipment rows before aggregating multiplies ordered qty"
+    setup_sql: |
+      INSERT INTO order_lines (order_id, sku, qty) VALUES (10, 'A100', 6), (10, 'B200', 4);
+      INSERT INTO shipment_lines (id, order_id, sku, qty) VALUES
+        (1, 10, 'A100', 2), (2, 10, 'A100', 2), (3, 10, 'A100', 2), (4, 10, 'B200', 1), (5, 10, 'B200', 1);
+    expected_rows: [[10, "B200", 4, 2]]
+    ordered: true
+  - id: t7
+    hidden: true
+    description: "Same sku on different orders must not be mixed; sku typo on one order gives two rows"
+    setup_sql: |
+      INSERT INTO order_lines (order_id, sku, qty) VALUES (1, 'A100', 2), (2, 'A100', 2), (3, 'A100', 1);
+      INSERT INTO shipment_lines (id, order_id, sku, qty) VALUES (1, 1, 'A100', 4), (2, 3, 'A101', 1);
+    expected_rows: [[1, "A100", 2, 4], [2, "A100", 2, 0], [3, "A100", 1, 0], [3, "A101", 0, 1]]
+    ordered: true
+  - id: t8
+    hidden: true
+    description: "Numeric order_id ordering (9 before 10 before 100) and sku order within an order"
+    setup_sql: |
+      INSERT INTO order_lines (order_id, sku, qty) VALUES (100, 'B200', 1), (9, 'C300', 2), (10, 'A100', 3), (9, 'A100', 2);
+      INSERT INTO shipment_lines (id, order_id, sku, qty) VALUES (1, 9, 'A100', 1), (2, 100, 'A100', 1);
+    expected_rows:
+      - [9, "A100", 2, 1]
+      - [9, "C300", 2, 0]
+      - [10, "A100", 3, 0]
+      - [100, "A100", 0, 1]
+      - [100, "B200", 1, 0]
+    ordered: true
+  - id: t9
+    hidden: true
+    description: "Duplicate shipment rows with equal quantities are both counted (UNION ALL / no DISTINCT on qty)"
+    setup_sql: |
+      INSERT INTO order_lines (order_id, sku, qty) VALUES (3, 'A100', 4), (3, 'B200', 2);
+      INSERT INTO shipment_lines (id, order_id, sku, qty) VALUES (1, 3, 'A100', 2), (2, 3, 'A100', 2), (3, 3, 'B200', 2), (4, 3, 'B200', 2);
+    expected_rows: [[3, "B200", 2, 4]]
+    ordered: true
+expected_concepts:
+  - aggregating partial shipments before joining
+  - emulating a full outer join with UNION of keys (or two anti-joins)
+  - COALESCE for a missing side
+  - join fan-out and double counting
+  - deterministic ORDER BY
+optimal_complexity: {time: "O((n + m) log(n + m)) for grouping, union and sort", space: O(n + m)}
+rubric:
+  excellent: Aggregates shipments per (order_id, sku) first, builds the full set of keys with UNION (or LEFT JOIN plus an anti-join branch), uses COALESCE for missing sides, filters with <>, orders deterministically and explains the fan-out risk of joining raw shipment rows.
+  good: Correct result with a hint about lines that exist only in shipments or about aggregating before the join.
+  weak: Uses only a LEFT JOIN from order_lines (missing picking errors), sums ordered qty after joining raw shipment rows, or compares against NULL so unshipped lines vanish.
+  criteria:
+    correctness: All tests pass, including unshipped lines, unexpected shipments, partial parcels and empty tables.
+    efficiency: One aggregation per table and set-based joins; mentions an index on shipment_lines(order_id, sku).
+    code_quality: Named CTEs or subqueries and clear output aliases.
+    edge_cases: Missing sides become 0, duplicate parcels are both counted and the same sku on different orders stays separate.
+    communication: Explains why FULL OUTER JOIN is avoided and how the UNION replaces it.
+hints:
+  - Start by turning shipment_lines into one row per order line with the total shipped; only then compare it with order_lines.
+  - A pair can exist only in order_lines, only in the shipments or in both, so you need the full set of keys from both sides before you compare; a plain left join from either table loses one kind of mismatch.
+  - Put the per-line shipped totals in a subquery, take the UNION of the (order_id, sku) keys from order_lines and from that subquery, left join both sources to those keys, replace a missing quantity with zero via COALESCE, keep rows where the two quantities differ, and order by order_id then sku.
+followups:
+  - How would you report only lines that are short, and by how many units?
+  - Which indexes would make this reconciliation fast on tens of millions of parcels?
+  - How would you rewrite it if your engine did support FULL OUTER JOIN, and is it equivalent?
+  - How would you handle returns that arrive as negative shipment quantities?
+common_errors:
+  - Joining order_lines to raw shipment rows and summing, which multiplies the ordered quantity by the number of parcels.
+  - Starting from order_lines with a LEFT JOIN only, so shipments of unordered products are never reported.
+  - Comparing a NULL total with <>, which drops never-shipped lines unless COALESCE is used.
+  - Using UNION on rows that include quantities, which merges duplicate parcels.

@@ -1,0 +1,611 @@
+# Curated questions: system design for real-time and messaging systems (part 2 of 4).
+# Presence, live collaborative and broadcast features, chat platform extras.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend, platform]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------------------ easy
+  - external_key: system_design.realtime_messaging.last_seen_status
+    competency_key: system_design
+    topic: Online and last-seen status for contacts
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A small messaging app wants to show whether each of your contacts is online right now, or when they were last
+      seen. How would you track that on the server and get it to the people who are looking?
+    expected_concepts:
+      - updating status on connect, disconnect and heartbeat
+      - storing presence in a fast key-value store with expiry
+      - a grace period before marking someone offline
+      - sending changes only to contacts who are currently viewing
+      - respecting a user's choice to hide their last seen time
+    rubric:
+      excellent: Derives presence from connection events plus heartbeats with expiry, adds a grace period, pushes changes only to interested online contacts and handles the privacy setting.
+      good: Tracks connect and disconnect in a cache and pushes changes to contacts.
+      weak: Writes every status change to the main database or polls it from every client.
+    followups:
+      - The server crashes without sending disconnects. How does presence recover?
+      - How would you rate-limit presence updates for someone with a thousand contacts?
+    common_errors:
+      - Relying only on explicit disconnect events, which never arrive when a server dies.
+
+  - external_key: system_design.realtime_messaging.admin_broadcast_banner
+    competency_key: system_design
+    topic: Instant announcement to every open session
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Support staff need to post an urgent banner, like a maintenance warning, that appears in every open browser tab
+      of your web app within a few seconds. How would you build that?
+    expected_concepts:
+      - a broadcast channel that every connected client subscribes to
+      - storing the active banner so newly loaded pages also show it
+      - fan-out through the existing real-time connection layer
+      - expiry and dismissal of the banner
+      - a fallback poll for clients without a live connection
+    rubric:
+      excellent: Combines a stored source of truth for new page loads with a broadcast to connected clients, covers expiry and dismissal, and has a fallback for clients that aren't connected.
+      good: Pushes the banner over a broadcast channel but forgets pages that load afterwards, or vice versa.
+      weak: Requires a redeploy of the front end or relies only on users refreshing.
+    followups:
+      - How would you target the banner at one customer or one region only?
+      - What stops a mistaken banner from going to everyone?
+    common_errors:
+      - Sending the banner only as a live event, so anyone who opens the app a minute later never sees it.
+
+  - external_key: system_design.realtime_messaging.chat_send_rate_limits
+    competency_key: system_design
+    topic: Rate limiting message sending
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A few accounts in your chat product are sending thousands of messages a minute, flooding channels and costing
+      you a lot in fan-out. How would you design rate limits for sending messages?
+    expected_concepts:
+      - per-user and per-channel limits with token buckets or sliding windows
+      - shared limit state across servers such as a fast counter store
+      - different limits for large channels and new accounts
+      - clear feedback to the client when a send is refused
+      - monitoring and escalating repeated offenders
+    rubric:
+      excellent: Picks a concrete algorithm, enforces it consistently across servers, varies limits by risk and channel size, and returns a clear retry signal to the client.
+      good: Proposes per-user limits with a reasonable algorithm but limits are only per server or one-size-fits-all.
+      weak: Relies on manual moderation or blocks users permanently after one spike.
+    followups:
+      - How would you treat an integration bot that legitimately posts often?
+      - Where in the request path would you enforce the limit?
+    common_errors:
+      - Keeping counters in each server's memory so users get several times the intended limit.
+
+  - external_key: system_design.realtime_messaging.courier_live_location
+    competency_key: system_design
+    topic: Live courier location on a map
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      In a food delivery app, the customer watches the courier move on a map while their order is on the way. How
+      would you get location updates from the courier's phone to the customer's screen?
+    expected_concepts:
+      - courier app sending location every few seconds
+      - latest location kept in a fast store, not every point in the main database
+      - pushing updates to the customer over a live connection or short polling
+      - client-side smoothing between points
+      - limiting who can see the location and for how long
+    rubric:
+      excellent: Describes a lightweight ingest, keeps only the latest point hot, pushes updates to the one interested customer, smooths on the client and restricts access to the active delivery.
+      good: Sends locations to the server and pushes them to the customer, with some thought about frequency.
+      weak: Writes every point to a relational table and has the customer poll it every second.
+    followups:
+      - The courier goes through a tunnel. What does the customer see?
+      - How would you reduce battery drain on the courier's phone?
+    common_errors:
+      - Exposing the courier's location after the delivery is complete.
+
+  # ------------------------------------------------------------------------ medium: presence
+  - external_key: system_design.realtime_messaging.presence_at_scale
+    competency_key: distributed_systems
+    topic: Presence for a hundred million users
+    difficulty: medium
+    text: >-
+      Your social app has a hundred million users, each with a few hundred friends, and shows a green dot next to
+      friends who are online. How would you design presence so that the fan-out of status changes stays affordable?
+    expected_concepts:
+      - presence stored in a partitioned in-memory store with expiry
+      - pushing changes only to friends who are online and have the list visible
+      - pull on open plus subscribe while viewing, instead of always-on push
+      - batching and coalescing updates per receiver
+      - estimating update volume from churn and friend counts
+    rubric:
+      excellent: Estimates the fan-out cost, limits pushes to online viewers with active subscriptions, combines snapshot-on-open with incremental updates, and batches changes per receiver.
+      good: Uses an in-memory store and pushes to online friends, without quantifying volume.
+      weak: Pushes every change to every friend regardless of whether they're online or looking.
+    followups:
+      - Roughly how many presence events per second would you expect?
+      - Which parts of this can be eventually consistent?
+    common_errors:
+      - Ignoring that most friends of a user are offline or not looking at the list.
+
+  - external_key: system_design.realtime_messaging.presence_flapping
+    competency_key: system_design
+    topic: Presence flapping on mobile networks
+    difficulty: medium
+    text: >-
+      Users complain that a colleague's status keeps flickering between online and offline, and you see the same
+      people generating hundreds of presence changes an hour on patchy mobile connections. How would you redesign
+      presence to fix this?
+    expected_concepts:
+      - delayed offline transition with a grace period
+      - treating presence as a lease renewed by heartbeats
+      - session aggregation across a user's devices
+      - away or idle states based on activity rather than connection
+      - suppressing rapid repeated transitions
+    rubric:
+      excellent: Turns presence into a lease with a grace period, aggregates across devices, separates activity from connectivity and explains the effect on update volume.
+      good: Adds a debounce before showing offline.
+      weak: Increases heartbeat frequency, which makes flapping worse.
+    followups:
+      - How long should the grace period be, and what's the cost of making it longer?
+      - Should a phone in a pocket count as online?
+    common_errors:
+      - Treating each device's connection as the user's presence instead of aggregating them.
+
+  - external_key: system_design.realtime_messaging.presence_large_channel
+    competency_key: system_design
+    topic: Online member list in very large channels
+    difficulty: medium
+    text: >-
+      A community channel has fifty thousand members, and the sidebar shows who's online. With people joining and
+      leaving constantly, the presence updates alone are swamping clients. How would you design this differently?
+    expected_concepts:
+      - showing counts and a limited sample instead of the full list
+      - fetching the online list on demand with paging
+      - periodic snapshots instead of per-change events
+      - subscribing only clients that have the member list open
+      - prioritising people the viewer interacts with
+    rubric:
+      excellent: Changes the product behaviour for large channels (counts, samples, paging), replaces per-change events with periodic snapshots for viewers who are actually looking, and explains the threshold where this kicks in.
+      good: Throttles or batches updates but still tries to keep the full list live.
+      weak: Keeps sending every join and leave to every member.
+    followups:
+      - At what channel size would you switch approaches?
+      - How would you still make sure someone sees their teammates as online?
+    common_errors:
+      - Treating a fifty-thousand-member channel the same as a five-person team.
+
+  # ------------------------------------------------------------------------ medium: live features
+  - external_key: system_design.realtime_messaging.live_cursors
+    competency_key: system_design
+    topic: Live cursors in a collaborative editor
+    difficulty: medium
+    text: >-
+      In a collaborative document editor, everyone wants to see each other's cursors and selections move in real
+      time. How would you design that part of the system, separately from the document edits themselves?
+    expected_concepts:
+      - ephemeral channel per document with no persistence
+      - client-side throttling to a few updates per second
+      - positions expressed relative to document structure so they survive concurrent edits
+      - interpolation on the receiving side
+      - limiting cursors shown when many people are in the document
+    rubric:
+      excellent: Keeps cursor traffic ephemeral and throttled, anchors positions to the document model so they stay valid during edits, and handles crowded documents.
+      good: Uses a separate lightweight channel and throttling but uses raw character offsets.
+      weak: Stores cursor positions with document revisions or sends every mouse movement.
+    followups:
+      - What happens to a cursor position when someone deletes the paragraph above it?
+      - Two hundred people open the same document. What changes?
+    common_errors:
+      - Sending absolute character offsets that point at the wrong place after other people's edits.
+
+  - external_key: system_design.realtime_messaging.live_reaction_bursts
+    competency_key: distributed_systems
+    topic: Floating reactions during a live broadcast
+    difficulty: medium
+    text: >-
+      During a live video broadcast with a million viewers, people tap hearts and other reactions that float up the
+      screen for everyone. How would you design the reaction pipeline so it feels live without sending a million
+      events to a million screens?
+    expected_concepts:
+      - aggregating reactions server-side per short time window
+      - sending counts or sampled reactions to viewers rather than each event
+      - hierarchical aggregation across ingest nodes
+      - client-side animation driven by aggregates
+      - dropping or degrading reactions first under load
+    rubric:
+      excellent: Aggregates in short windows across a hierarchy of nodes, broadcasts compact summaries the client animates, and treats reactions as lossy and sheddable under pressure.
+      good: Batches reactions before broadcasting but doesn't address the aggregation topology or load shedding.
+      weak: Broadcasts every tap to every viewer.
+    followups:
+      - How would a viewer still see their own reaction immediately?
+      - What would you measure to know the feature is healthy?
+    common_errors:
+      - Persisting every reaction event synchronously.
+
+  - external_key: system_design.realtime_messaging.price_stream_conflation
+    competency_key: distributed_systems
+    topic: Streaming market prices to clients
+    difficulty: medium
+    text: >-
+      A trading app streams live prices for thousands of instruments to its users, and prices for popular stocks
+      change many times a second. How would you design the streaming so every client sees current prices, even
+      the ones on slow connections?
+    expected_concepts:
+      - subscriptions per instrument the client is viewing
+      - conflation that keeps only the latest price per instrument per client
+      - snapshot on subscribe followed by incremental updates
+      - sequence numbers so clients can detect stale or missing data
+      - showing staleness clearly when updates stop
+    rubric:
+      excellent: Uses per-instrument subscriptions with snapshot-then-delta, conflates per client so slow clients get the latest rather than a backlog, and makes staleness visible.
+      good: Streams subscribed instruments and throttles updates, but doesn't handle slow clients or staleness.
+      weak: Queues every tick for every client, so slow clients fall further and further behind.
+    followups:
+      - Which updates must never be conflated?
+      - How would the client know it's showing an old price?
+    common_errors:
+      - Delivering a backlog of old ticks instead of the latest value.
+
+  - external_key: system_design.realtime_messaging.driver_location_ingest
+    competency_key: system_design
+    topic: Ingesting and querying driver locations
+    difficulty: medium
+    text: >-
+      A ride-hailing service has a million active drivers sending their location every four seconds, and the
+      dispatch service needs to find the nearest available drivers for each ride request. How would you design
+      ingest and the nearby-driver lookup?
+    expected_concepts:
+      - ingest load of roughly a quarter million updates a second
+      - geospatial index using geohash, S2 or H3 cells in memory
+      - partitioning by city or region
+      - keeping only latest position and availability hot, history to cheap storage
+      - searching neighbouring cells and expanding the radius
+    rubric:
+      excellent: Estimates write volume, keeps an in-memory cell-based index partitioned by region, handles cell boundaries and radius expansion, and separates hot state from historical trails.
+      good: Uses a geospatial index and partitioning but skips sizing or boundary handling.
+      weak: Stores every update in a relational table and runs distance queries against it.
+    followups:
+      - How do you handle a driver crossing from one partition to another?
+      - What happens to dispatch when one partition's index node restarts?
+    common_errors:
+      - Searching only the cell containing the rider and missing a closer driver just across the boundary.
+
+  - external_key: system_design.realtime_messaging.device_command_delivery
+    competency_key: distributed_systems
+    topic: Commands to intermittently connected devices
+    difficulty: medium
+    text: >-
+      You manage two million smart thermostats that connect over flaky home internet. Users change settings in a
+      mobile app and expect the device to apply them. How would you design command delivery and confirmation?
+    expected_concepts:
+      - publish-subscribe protocol designed for devices such as MQTT
+      - desired state versus reported state stored per device
+      - queued or retained commands applied when the device reconnects
+      - device acknowledgement and showing pending state in the app
+      - expiry or superseding of stale commands
+    rubric:
+      excellent: Models desired and reported state so the latest setting wins after reconnects, uses a device-suitable protocol, confirms application with acknowledgements, and shows pending status to the user.
+      good: Queues commands and confirms them but replays every old command in order after reconnect.
+      weak: Sends the command once and assumes the device received it.
+    followups:
+      - The user changes the temperature five times while the device is offline. What gets sent?
+      - How would you roll out a firmware update through the same channel?
+    common_errors:
+      - Replaying outdated commands so the device ends up in an intermediate state.
+
+  # ------------------------------------------------------------------------ medium: chat platform extras
+  - external_key: system_design.realtime_messaging.chat_push_decision
+    competency_key: system_design
+    topic: Deciding when a chat message triggers a push
+    difficulty: medium
+    text: >-
+      When a new chat message arrives, your system has to decide whether to send a mobile push. The user might have
+      muted the channel, be mentioned, be actively reading on their laptop, or be in do-not-disturb hours. How would
+      you design that decision so it's correct and fast?
+    expected_concepts:
+      - evaluating rules per recipient from settings, mentions and channel type
+      - suppressing push when the user is active on another device
+      - a short delay so reading on desktop cancels the mobile push
+      - caching settings close to the fan-out workers
+      - explainability of why a push was or wasn't sent
+    rubric:
+      excellent: Defines a clear rule order, uses recent activity with a short delay to avoid redundant pushes, keeps evaluation cheap at fan-out time and logs decisions for debugging.
+      good: Covers mutes, mentions and do-not-disturb but not cross-device activity.
+      weak: Pushes every message to every member and lets the phone filter.
+    followups:
+      - A user says they never got pinged when mentioned. How would you investigate?
+      - How do mentions of a whole group interact with muting?
+    common_errors:
+      - Sending a push to a phone while the user is reading the same message on their laptop.
+
+  - external_key: system_design.realtime_messaging.link_unfurling
+    competency_key: security
+    topic: Link previews in chat
+    difficulty: medium
+    text: >-
+      When users paste a link into chat, the product shows a preview card with a title and image. How would you
+      design the service that fetches and renders those previews safely and efficiently?
+    expected_concepts:
+      - asynchronous fetch after the message is sent, then updating the message
+      - protection against server-side request forgery to internal addresses
+      - timeouts, size limits and content type checks
+      - caching previews by URL
+      - proxying images so user addresses aren't leaked to third parties
+    rubric:
+      excellent: Fetches asynchronously, isolates the fetcher from internal networks with strict address checks including redirects, bounds time and size, caches by URL and proxies media.
+      good: Fetches and caches previews and mentions some security limits.
+      weak: Fetches the URL synchronously on the send path from inside the main network with no restrictions.
+    followups:
+      - How would you stop a redirect from reaching an internal metadata address?
+      - Links in private channels may contain secret tokens. Does that change anything?
+    common_errors:
+      - Validating only the first URL and following redirects to internal addresses.
+
+  - external_key: system_design.realtime_messaging.bot_event_platform
+    competency_key: api_design
+    topic: Platform for chat bots and integrations
+    difficulty: medium
+    text: >-
+      Third-party developers want to build bots for your chat product that react to messages and post replies. How
+      would you design the way bots subscribe to events and send messages back, so a badly behaved bot can't hurt
+      the platform?
+    expected_concepts:
+      - scoped permissions per bot and per workspace install
+      - event delivery by webhook or a persistent socket, with retries and signing
+      - subscriptions filtered to event types and channels the bot can see
+      - rate limits and quotas per bot
+      - disabling or backing off unhealthy endpoints
+    rubric:
+      excellent: Designs scoped installs, filtered event subscriptions with signed, retried delivery, per-bot limits, and isolation so slow or failing bots are backed off without affecting others.
+      good: Covers permissions and webhooks with retries but is thin on isolation and limits.
+      weak: Gives bots full workspace access and delivers events synchronously in the message path.
+    followups:
+      - A bot replies to its own messages and loops. How do you contain that?
+      - How do bot developers test without a production workspace?
+    common_errors:
+      - Delivering bot events inline, so a slow bot endpoint delays message sending.
+
+  - external_key: system_design.realtime_messaging.scheduled_messages
+    competency_key: system_design
+    topic: Scheduling a message to send later
+    difficulty: medium
+    text: >-
+      Users want to write a message now and schedule it to post in a channel at nine tomorrow morning in their own
+      time zone. How would you design scheduled sending so messages go out on time, exactly once, even at peak hours?
+    expected_concepts:
+      - storing scheduled messages with a UTC due time and the original time zone
+      - a scheduler that claims due items with leases
+      - idempotent posting using the scheduled message id
+      - re-checking permissions and channel state at send time
+      - spreading load at popular times such as the top of the hour
+    rubric:
+      excellent: Stores due times correctly, claims due work safely across scheduler instances, posts idempotently, re-validates at send time and plans for spikes on round times.
+      good: Stores due items and polls for them with some duplicate protection.
+      weak: Uses an in-memory timer on the web server, which is lost on restart.
+    followups:
+      - The user is removed from the channel before the message is due. What happens?
+      - Thousands of messages are due at exactly nine. How do you keep them on time?
+    common_errors:
+      - Storing local times without zones, which breaks across daylight-saving changes.
+
+  - external_key: system_design.realtime_messaging.support_chat_routing
+    competency_key: system_design
+    topic: Routing live support chats to agents
+    difficulty: medium
+    text: >-
+      Design the live chat system for a customer support team, where customers start chats from a website and they
+      need to be routed to available agents with the right skills, and agents can handle a few chats at once.
+    expected_concepts:
+      - queue of waiting chats per skill or language
+      - agent state and capacity tracked in real time
+      - assignment that avoids two agents claiming the same chat
+      - transfer between agents with full history
+      - wait-time estimates and offline fallback to a ticket
+    rubric:
+      excellent: Designs skill-based queues with atomic assignment against live agent capacity, supports transfers and history, and covers what customers see when no one is available.
+      good: Has queues and assignment but leaves races or transfers vague.
+      weak: Broadcasts every new chat to all agents and lets them race to pick it up.
+    followups:
+      - An agent's browser crashes mid-conversation. What happens to their chats?
+      - How would you estimate the wait time shown to the customer?
+    common_errors:
+      - Not handling an agent disconnecting while holding assigned chats.
+
+  # ------------------------------------------------------------------------ hard
+  - external_key: system_design.realtime_messaging.livestream_chat_scale
+    competency_key: distributed_systems
+    topic: Chat alongside a huge live stream
+    difficulty: hard
+    text: >-
+      Design the chat that runs beside a live stream with half a million concurrent viewers, where thousands of
+      messages a second are posted. Viewers should feel the chat is live, moderators need to remove messages
+      instantly, and the system has to survive sudden spikes when something exciting happens.
+    expected_concepts:
+      - ingest separate from fan-out, with hierarchical relay of messages to edge nodes
+      - sampling or rate limiting what each viewer sees when volume is unreadable
+      - moderation and deletion events propagated through the same path
+      - slow mode and per-user limits during spikes
+      - lossy delivery acceptable, with short history on join
+      - capacity headroom and autoscaling ahead of scheduled events
+    rubric:
+      excellent: Builds a tree of fan-out relays, accepts and designs for lossy, sampled delivery at high volume, makes moderation removals fast through the same path, and plans for spikes with limits and pre-scaling.
+      good: Has a scalable fan-out layer and some rate limiting, but treats delivery as reliable per message or neglects moderation.
+      weak: Stores and broadcasts every message to every viewer with per-message guarantees, like a small group chat.
+    followups:
+      - How would you decide which messages a viewer sees when there are a thousand a second?
+      - How fast does a moderator removal reach every viewer, and how do you measure it?
+    common_errors:
+      - Applying small-group chat guarantees that make the system far more expensive than needed.
+
+  - external_key: system_design.realtime_messaging.live_auction_bidding
+    competency_key: distributed_systems
+    topic: Real-time bidding in online auctions
+    difficulty: hard
+    text: >-
+      An online auction platform runs timed auctions where most bids arrive in the last ten seconds. Every bidder
+      must see the current price live, bids must be accepted in a fair, consistent order, and the end time must be
+      enforced exactly. How would you design it?
+    expected_concepts:
+      - single authority per auction that serialises bids
+      - server-side timestamps and a clear rule for the closing moment
+      - validation of bid against current price atomically
+      - pushing price updates and acceptance results to all watchers
+      - anti-sniping extensions as a product option
+      - durability of accepted bids before acknowledging
+    rubric:
+      excellent: Serialises bids per auction at one durable authority, defines the close by server time, acknowledges only persisted bids, broadcasts state promptly, and discusses network latency fairness and extension rules.
+      good: Uses atomic bid acceptance and live updates but is vague on the close or failover.
+      weak: Accepts bids on many servers independently and resolves conflicts afterwards, or uses client clocks.
+    followups:
+      - A bidder's request leaves their phone before the deadline but arrives after it. What happens?
+      - How does the auction owner fail over without losing or reordering bids?
+    common_errors:
+      - Trusting the client's timestamp for whether a bid was in time.
+
+  - external_key: system_design.realtime_messaging.presence_multi_region
+    competency_key: distributed_systems
+    topic: Presence across regions
+    difficulty: hard
+    text: >-
+      Your users connect to whichever of four regions is nearest, but they chat with people everywhere and expect
+      accurate online status. How would you design presence across regions, and what happens when one region is
+      cut off from the others?
+    expected_concepts:
+      - each region authoritative for users connected to it
+      - replicating presence changes asynchronously between regions
+      - leases with expiry so a partitioned region's users age out to unknown or offline
+      - handling a user connected in two regions at once
+      - limiting cross-region traffic to users with remote watchers
+    rubric:
+      excellent: Makes the connection region authoritative, replicates with leases so stale data expires during partitions, merges multi-region sessions, and limits cross-region chatter to what's being watched.
+      good: Replicates presence between regions but doesn't address partitions or duplicate sessions.
+      weak: Uses a single global presence store that every region writes to synchronously.
+    followups:
+      - During the partition, should users in the cut-off region show as offline or as unknown?
+      - How much cross-region bandwidth would presence take?
+    common_errors:
+      - Leaving users shown as online forever after their region becomes unreachable.
+
+  - external_key: system_design.realtime_messaging.whiteboard_sync
+    competency_key: distributed_systems
+    topic: Conflict handling on a shared whiteboard
+    difficulty: hard
+    text: >-
+      Design the real-time sync for a collaborative whiteboard where dozens of people draw, move and delete shapes at
+      the same time, some of them offline on a plane for an hour. How do concurrent changes converge, and what does
+      the server do?
+    expected_concepts:
+      - operation-based sync with a per-object model rather than whole-board snapshots
+      - conflict-free replicated data types or server-ordered operations
+      - last-writer-wins per property versus richer merge rules
+      - offline queues of operations replayed on reconnect
+      - periodic snapshots plus operation logs for fast loading
+      - undo semantics in a multi-user setting
+    rubric:
+      excellent: Chooses and justifies CRDTs or a server-sequenced operation log, defines per-property merge behaviour, handles long offline edits and snapshotting, and recognises tricky cases like delete versus move.
+      good: Uses operations with a server order and simple last-writer-wins, but offline merges or undo are hand-waved.
+      weak: Sends the whole board state on every change and lets the last save win.
+    followups:
+      - One person moves a shape while another deletes it offline. What should happen?
+      - How do you load a board with a year of history quickly?
+    common_errors:
+      - Using whole-document last-writer-wins, so concurrent work is silently lost.
+
+  - external_key: system_design.realtime_messaging.live_trivia_game
+    competency_key: system_design
+    topic: Live quiz game for a huge audience
+    difficulty: hard
+    text: >-
+      A live trivia show in an app sends a question to two hundred thousand players at once, and they have ten
+      seconds to answer. Results and the remaining player count appear right after. How would you design question
+      delivery, answer collection and scoring?
+    expected_concepts:
+      - pre-distributing content and revealing it with a broadcast signal
+      - judging the deadline by server receive time with a small latency allowance
+      - answer ingestion that absorbs a two-hundred-thousand-request burst
+      - idempotent one-answer-per-player recording
+      - aggregating counts quickly with partitioned counters
+      - cheating risks such as answer leaks before the reveal
+    rubric:
+      excellent: Designs for the synchronised burst (pre-distribution, broadcast reveal, burst-tolerant ingest), defines fair timing rules, aggregates fast, enforces one answer per player and considers leakage.
+      good: Handles broadcast and ingestion at scale but is vague on timing fairness or aggregation.
+      weak: Treats it as an ordinary request-response quiz and ignores the burst.
+    followups:
+      - Players on slow networks say they were unfairly eliminated. How do you handle that?
+      - How would you rehearse the system before the first live show?
+    common_errors:
+      - Sending the answer options in the question payload where a modified client can read the correct one.
+
+  - external_key: system_design.realtime_messaging.spam_wave_containment
+    competency_key: security
+    topic: Containing spam waves in real time
+    difficulty: hard
+    text: >-
+      Attackers create thousands of accounts and blast the same scam links into public chat rooms within a few
+      minutes. How would you design detection and response that acts inside that window, without blocking normal
+      conversation?
+    expected_concepts:
+      - signals such as account age on the platform, send velocity and repeated content fingerprints
+      - streaming detection over message events with short windows
+      - graduated actions such as holding, shadow limiting and bulk removal
+      - retroactive removal across channels when a pattern is confirmed
+      - feedback loops from user reports and measuring false positives
+    rubric:
+      excellent: Combines streaming detection of velocity and duplicate content, applies graduated and reversible actions, can retroactively clean up across channels, and measures false positives.
+      good: Detects bursts with rules and removes messages but is reactive or all-or-nothing.
+      weak: Relies only on users reporting messages or on manual review.
+    followups:
+      - How do you avoid blocking a legitimate announcement copied into many rooms?
+      - How does detection get messages to the right place without slowing down sending?
+    common_errors:
+      - Running heavy classification synchronously in the send path for every message.
+
+  - external_key: system_design.realtime_messaging.cross_org_shared_channels
+    competency_key: distributed_systems
+    topic: Channels shared between two organisations
+    difficulty: hard
+    text: >-
+      Your chat product wants to let two different companies, each with their own workspace and admins, share a
+      channel. Each company wants its own retention rules and control over its data. How would you design shared
+      channels?
+    expected_concepts:
+      - a shared channel object referenced by both workspaces
+      - deciding which organisation hosts or owns the canonical copy
+      - per-organisation policies applied to its own members' messages
+      - membership and permissions managed by each side for its own users
+      - what happens when one side leaves or disconnects the channel
+    rubric:
+      excellent: Defines ownership of data and ordering clearly, applies each organisation's policies to its own content, handles membership authority on both sides and designs the disconnect path.
+      good: Shares the channel between workspaces but skips conflicting policies or the disconnect case.
+      weak: Simply invites the other company's users as guests into one workspace.
+    followups:
+      - One company has a seven-day retention policy and the other keeps everything. What does each side see?
+      - How would search work for each side?
+    common_errors:
+      - Letting one organisation's admin delete the other organisation's members' messages.
+
+  - external_key: system_design.realtime_messaging.delivery_latency_slo
+    competency_key: observability
+    topic: Measuring end-to-end message delivery
+    difficulty: hard
+    text: >-
+      Leadership wants a service level objective that messages reach online recipients within a second. How would
+      you design the measurement of end-to-end delivery latency and loss in a chat system, and what would you alert
+      on?
+    expected_concepts:
+      - timestamps at each hop with a trace or message id
+      - client acknowledgements reported back as telemetry
+      - percentile latency rather than averages
+      - synthetic canary clients sending and receiving continuously
+      - detecting loss by sequence gaps
+      - alerting on burn rate of the error budget
+    rubric:
+      excellent: Measures from send to client receipt with per-hop breakdown, uses both real client telemetry and synthetic canaries, detects loss through sequence gaps and alerts on error-budget burn rather than single spikes.
+      good: Measures server-side latency with percentiles and adds some alerting.
+      weak: Uses server CPU or request latency as a proxy for delivery.
+    followups:
+      - Client clocks are wrong. How do you still measure end-to-end latency?
+      - How would you tell a slow region from a slow client network?
+    common_errors:
+      - Stopping the measurement at the moment the server writes to the socket.

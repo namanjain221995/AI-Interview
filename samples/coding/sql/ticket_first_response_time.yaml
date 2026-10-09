@@ -1,0 +1,248 @@
+version: 1
+slug: ticket_first_response_time
+title: First Agent Response Time
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [support_engineer, data_analyst, backend]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## First Agent Response Time
+
+  A support desk tracks how quickly agents first answer a ticket. Tickets are stored in `tickets`
+  and every message on a ticket in `ticket_messages`:
+
+  Table `tickets`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | opened_ts | BIGINT | Unix time (seconds) when the ticket was opened |
+
+  Table `ticket_messages`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key; **not** guaranteed to follow `sent_ts` order |
+  | ticket_id | INTEGER | references `tickets.id` |
+  | author_role | VARCHAR(20) | exactly one of `'customer'`, `'agent'` or `'bot'` |
+  | sent_ts | BIGINT | Unix time (seconds) when the message was sent |
+
+  When a ticket is split off an older conversation, the earlier messages are copied into it with their
+  original timestamps, so a ticket can contain messages sent **before** it was opened.
+
+  For **every ticket**, `first_response_seconds` is the `sent_ts` of the earliest message with
+  `author_role = 'agent'` sent **at or after** the ticket's `opened_ts`, minus `opened_ts`. Customer
+  and bot messages never count, and neither do agent messages sent before the ticket was opened. A
+  ticket without such an agent message (including a ticket without any messages) still appears, with
+  `first_response_seconds` NULL.
+
+  Return `ticket_id` and `first_response_seconds`, ordered by `ticket_id` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  tickets              ticket_messages
+  +----+-----------+   +----+-----------+-------------+---------+
+  | id | opened_ts |   | id | ticket_id | author_role | sent_ts |
+  +----+-----------+   +----+-----------+-------------+---------+
+  | 1  | 1000      |   | 1  | 1         | customer    | 1000    |
+  | 2  | 2000      |   | 2  | 1         | agent       | 1300    |
+  | 3  | 3000      |   | 3  | 1         | agent       | 1250    |
+  +----+-----------+   | 4  | 2         | customer    | 2000    |
+                       | 5  | 2         | customer    | 2400    |
+                       | 6  | 3         | agent       | 3000    |
+                       +----+-----------+-------------+---------+
+
+  Output
+  +-----------+------------------------+
+  | ticket_id | first_response_seconds |
+  +-----------+------------------------+
+  | 1         | 250                    |
+  | 2         | NULL                   |
+  | 3         | 0                      |
+  +-----------+------------------------+
+  Ticket 1's earliest agent message is id 3 at 1250, even though id 2 was stored first.
+  ```
+
+  ### Example 2
+  ```
+  tickets              ticket_messages
+  +----+-----------+   +----+-----------+-------------+---------+
+  | id | opened_ts |   | id | ticket_id | author_role | sent_ts |
+  +----+-----------+   +----+-----------+-------------+---------+
+  | 7  | 5000      |   | 10 | 7         | agent       | 4900    |
+  | 8  | 6000      |   | 11 | 7         | bot         | 5005    |
+  +----+-----------+   | 12 | 7         | agent       | 5600    |
+                       +----+-----------+-------------+---------+
+
+  Output
+  +-----------+------------------------+
+  | ticket_id | first_response_seconds |
+  +-----------+------------------------+
+  | 7         | 600                    |
+  | 8         | NULL                   |
+  +-----------+------------------------+
+  The agent message at 4900 was copied from an older conversation and the bot reply does not count.
+  ```
+
+  ### Constraints
+  - `0 <= rows in tickets <= 10^5`, `0 <= rows in ticket_messages <= 10^6`
+  - `0 <= opened_ts, sent_ts <= 4 * 10^9`
+  - Every `ticket_messages.ticket_id` exists in `tickets`.
+languages: [sql]
+starter_code:
+  sql: |
+    -- For every ticket: seconds until the first agent message at or after opened_ts (NULL if none).
+    SELECT t.id AS ticket_id, MIN(m.sent_ts) - t.opened_ts AS first_response_seconds
+    FROM tickets t
+    JOIN ticket_messages m ON m.ticket_id = t.id
+    GROUP BY t.id, t.opened_ts
+    ORDER BY t.id;
+reference_solutions:
+  sql: |
+    SELECT
+      t.id AS ticket_id,
+      MIN(m.sent_ts) - t.opened_ts AS first_response_seconds
+    FROM tickets t
+    LEFT JOIN ticket_messages m
+      ON m.ticket_id = t.id
+     AND m.author_role = 'agent'
+     AND m.sent_ts >= t.opened_ts
+    GROUP BY t.id, t.opened_ts
+    ORDER BY t.id;
+sql_setup: |
+  CREATE TABLE tickets (
+    id INTEGER PRIMARY KEY,
+    opened_ts BIGINT NOT NULL
+  );
+  CREATE TABLE ticket_messages (
+    id INTEGER PRIMARY KEY,
+    ticket_id INTEGER NOT NULL REFERENCES tickets (id),
+    author_role VARCHAR(20) NOT NULL,
+    sent_ts BIGINT NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - earliest agent message by time not id, ticket without reply, reply at the opening second"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, opened_ts) VALUES (1, 1000), (2, 2000), (3, 3000);
+      INSERT INTO ticket_messages (id, ticket_id, author_role, sent_ts) VALUES
+        (1, 1, 'customer', 1000), (2, 1, 'agent', 1300), (3, 1, 'agent', 1250),
+        (4, 2, 'customer', 2000), (5, 2, 'customer', 2400), (6, 3, 'agent', 3000);
+    expected_rows: [[1, 250], [2, null], [3, 0]]
+  - id: t2
+    description: "Example 2 - copied agent message before opening and bot reply ignored, ticket without messages kept"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, opened_ts) VALUES (7, 5000), (8, 6000);
+      INSERT INTO ticket_messages (id, ticket_id, author_role, sent_ts) VALUES
+        (10, 7, 'agent', 4900), (11, 7, 'bot', 5005), (12, 7, 'agent', 5600);
+    expected_rows: [[7, 600], [8, null]]
+  - id: t3
+    hidden: true
+    description: "Empty tables"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Tickets but no messages at all - every ticket returned with NULL"
+    ordered: true
+    setup_sql: "INSERT INTO tickets (id, opened_ts) VALUES (3, 30), (1, 10), (2, 20);"
+    expected_rows: [[1, null], [2, null], [3, null]]
+  - id: t5
+    hidden: true
+    description: "Agent filter in WHERE instead of the join condition drops unanswered tickets"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, opened_ts) VALUES (1, 100), (2, 200), (3, 300), (4, 400);
+      INSERT INTO ticket_messages (id, ticket_id, author_role, sent_ts) VALUES
+        (1, 1, 'customer', 100), (2, 1, 'customer', 150), (3, 2, 'customer', 200), (4, 2, 'agent', 260),
+        (5, 3, 'bot', 301), (6, 4, 'customer', 400), (7, 4, 'agent', 1400), (8, 4, 'agent', 1500);
+    expected_rows:
+      - [1, null]
+      - [2, 60]
+      - [3, null]
+      - [4, 1000]
+  - id: t6
+    hidden: true
+    description: "Only copied agent messages from before opening - must be NULL, never negative"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, opened_ts) VALUES (5, 10000), (6, 20000);
+      INSERT INTO ticket_messages (id, ticket_id, author_role, sent_ts) VALUES
+        (1, 5, 'agent', 9000), (2, 5, 'agent', 9999), (3, 5, 'customer', 10000),
+        (4, 6, 'agent', 19000), (5, 6, 'agent', 20001);
+    expected_rows: [[5, null], [6, 1]]
+  - id: t7
+    hidden: true
+    description: "Many messages per ticket with ids out of time order - MIN must be on sent_ts"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, opened_ts) VALUES (11, 500);
+      INSERT INTO ticket_messages (id, ticket_id, author_role, sent_ts) VALUES
+        (1, 11, 'agent', 900), (2, 11, 'customer', 500), (3, 11, 'agent', 880), (4, 11, 'bot', 501),
+        (5, 11, 'agent', 1200), (6, 11, 'customer', 870), (7, 11, 'agent', 870), (8, 11, 'agent', 2000);
+    expected_rows: [[11, 370]]
+  - id: t8
+    hidden: true
+    description: "Realistic timestamps with a multi-day response and numeric ticket id ordering"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, opened_ts) VALUES (100, 1767225600), (20, 1767312000), (3, 1767398400);
+      INSERT INTO ticket_messages (id, ticket_id, author_role, sent_ts) VALUES
+        (1, 100, 'customer', 1767225600), (2, 100, 'agent', 1767484800), (3, 20, 'agent', 1767312045),
+        (4, 3, 'bot', 1767398401), (5, 3, 'customer', 1767398500);
+    expected_rows: [[3, null], [20, 45], [100, 259200]]
+  - id: t9
+    hidden: true
+    description: "Mixed queue of eight tickets - interleaved messages from all roles"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, opened_ts) VALUES (1, 0), (2, 60), (3, 120), (4, 180), (5, 240), (6, 300), (7, 360), (8, 420);
+      INSERT INTO ticket_messages (id, ticket_id, author_role, sent_ts) VALUES
+        (1, 1, 'customer', 0), (2, 2, 'customer', 60), (3, 1, 'bot', 5), (4, 3, 'customer', 120), (5, 2, 'agent', 90),
+        (6, 1, 'agent', 200), (7, 4, 'agent', 170), (8, 5, 'customer', 240), (9, 3, 'agent', 125), (10, 6, 'bot', 301),
+        (11, 4, 'agent', 600), (12, 7, 'agent', 360), (13, 2, 'agent', 75), (14, 5, 'customer', 250), (15, 8, 'customer', 420),
+        (16, 1, 'agent', 100), (17, 6, 'customer', 310), (18, 7, 'agent', 359);
+    expected_rows:
+      - [1, 100]
+      - [2, 15]
+      - [3, 5]
+      - [4, 420]
+      - [5, null]
+      - [6, null]
+      - [7, 0]
+      - [8, null]
+expected_concepts:
+  - LEFT JOIN to keep rows without a match
+  - filter placement in the ON clause versus WHERE
+  - MIN aggregate per group
+  - NULL propagation through arithmetic
+  - deterministic ORDER BY of the final result
+optimal_complexity: {time: "O(n + m log m) with an index on ticket_messages (ticket_id, author_role, sent_ts)", space: O(n)}
+rubric:
+  excellent: Uses a LEFT JOIN with the role and time filters in the ON clause (or a correlated MIN subquery), groups per ticket, returns NULL for unanswered tickets, orders by ticket id and explains why moving the filters to WHERE turns the outer join into an inner join.
+  good: Correct query after a hint about unanswered tickets or about messages copied from before the ticket opened.
+  weak: Uses an inner join or a WHERE filter that drops unanswered tickets, takes the first message by id, or lets copied messages produce negative times.
+  criteria:
+    correctness: All tests pass, including tickets without messages, bot replies and agent messages from before opening.
+    efficiency: One join and one aggregation, or an indexed correlated subquery; mentions the composite index.
+    code_quality: Clear aliases, filters placed deliberately and output aliases that match the contract.
+    edge_cases: Empty tables, tickets with only customer messages, replies at the opening second and ids out of time order.
+    communication: Explains the semantics of filtering an outer join in ON versus WHERE.
+hints:
+  - Every ticket must appear in the result even when nobody answered it; which kind of join keeps rows from one side without a match?
+  - Only agent messages sent at or after the ticket opened are candidates; if you put those conditions in the WHERE clause after an outer join, unanswered tickets disappear again.
+  - LEFT JOIN ticket_messages on the ticket id with author_role = 'agent' and sent_ts >= opened_ts inside the ON clause, group by the ticket id and opened_ts, return MIN(sent_ts) - opened_ts (NULL when nothing matched) and order by ticket id.
+followups:
+  - How would you report the median first response time per day of opening?
+  - How would you exclude time outside business hours from the response time?
+  - How would you also return the id of the agent message that counted as the first response?
+  - Which index makes this query fast on millions of messages?
+common_errors:
+  - Using an inner join, so tickets without any agent reply vanish instead of returning NULL.
+  - Putting author_role = 'agent' in the WHERE clause after a LEFT JOIN, which silently turns it into an inner join.
+  - Taking the message with the smallest id as the first reply, although ids do not follow time order.
+  - Counting agent messages copied from before the ticket opened, which yields negative response times.

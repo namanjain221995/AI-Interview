@@ -1,0 +1,179 @@
+version: 1
+slug: last_touch_campaign_attribution
+title: "Last-Touch Campaign Attribution"
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [data, data_analyst, backend, product_manager]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Last-Touch Campaign Attribution
+
+  Marketing wants to know which campaigns drive revenue. The tracking export has two tables, both
+  exported as text, so numbers arrive as **decimal strings**:
+
+  - `touches[i] = [user, time, campaign]`: the user clicked an ad of `campaign` at second `time`.
+  - `purchases[j] = [user, time, amount_cents]`: the user bought something worth `amount_cents`.
+
+  Use **last-touch attribution** with a lookback window of `lookback` seconds. A purchase at time `p`
+  is credited to the user's **latest** touch with `touch_time <= p` (a touch at the same second
+  counts), provided `p - touch_time <= lookback`. If several of that user's touches share that latest
+  time, the campaign that is smallest in plain character-code order wins. A purchase whose user has no
+  such touch is credited to the campaign `"(direct)"`. Touches of other users never count.
+
+  Implement `attribute_revenue(touches, purchases, lookback)`, which returns one row
+  `[campaign, total_cents, purchase_count]` for every campaign credited with at least one purchase,
+  with both numbers written as decimal strings without leading zeros. Sort rows by `total_cents`
+  **numerically descending**, then by campaign name ascending (character-code order).
+
+  Neither input is sorted.
+
+  ### Example 1
+  ```
+  Input:  touches = [["u1", "100", "spring_sale"], ["u1", "400", "retarget"], ["u2", "100", "spring_sale"], ["u1", "700", "newsletter"]], purchases = [["u1", "500", "2500"], ["u2", "1000", "4000"], ["u3", "50", "1200"]], lookback = 600
+  Output: [["(direct)", "5200", "2"], ["retarget", "2500", "1"]]
+  Explanation: u1's purchase at 500 goes to the latest earlier touch (retarget at 400). u2's
+  purchase at 1000 is 900 s after the touch, beyond the 600 s lookback, so it is direct. u1's
+  touch at 700 happens after the purchase and is ignored. u3 has no touches, so its
+  purchase is direct too.
+  ```
+
+  ### Example 2
+  ```
+  Input:  touches = [["a7", "50", "social"], ["a7", "50", "email"], ["b2", "120", "search"]], purchases = [["a7", "60", "900"], ["b2", "220", "1500"], ["a7", "55", "100"]], lookback = 100
+  Output: [["search", "1500", "1"], ["email", "1000", "2"]]
+  Explanation: both touches at 50 are latest; "email" < "social". The touch at 120 is exactly
+  lookback seconds before the purchase at 220, so it still counts.
+  ```
+
+  ### Constraints
+  - `0 <= touches.length, purchases.length <= 10^5`
+  - users and campaigns are 1 to 40 characters of `a-z`, `0-9`, `_` and `-`
+  - `0 <= time <= 10^12`, `1 <= amount_cents <= 10^9`, all without leading zeros
+  - `0 <= lookback <= 10^9`
+  - every total fits in a 53-bit integer
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: attribute_revenue
+  params:
+    - {name: touches, type: "string[][]"}
+    - {name: purchases, type: "string[][]"}
+    - {name: lookback, type: "int"}
+  return_type: "string[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    from bisect import bisect_right
+
+
+    def attribute_revenue(touches: list[list[str]], purchases: list[list[str]],
+                          lookback: int) -> list[list[str]]:
+        # Per user: touches sorted by time, then campaign, so the winner at a time comes first.
+        by_user: dict[str, list[tuple[int, str]]] = {}
+        for user, time, campaign in touches:
+            by_user.setdefault(user, []).append((int(time), campaign))
+        times_by_user: dict[str, list[int]] = {}
+        for user, items in by_user.items():
+            items.sort()
+            times_by_user[user] = [t for t, _ in items]
+
+        totals: dict[str, list[int]] = {}
+        for user, time, amount in purchases:
+            p = int(time)
+            campaign = "(direct)"
+            if user in by_user:
+                times = times_by_user[user]
+                k = bisect_right(times, p) - 1  # last touch with time <= p
+                if k >= 0 and p - times[k] <= lookback:
+                    first = bisect_right(times, times[k] - 1)  # first touch at that time
+                    campaign = by_user[user][first][1]
+            entry = totals.setdefault(campaign, [0, 0])
+            entry[0] += int(amount)
+            entry[1] += 1
+
+        rows = sorted(totals.items(), key=lambda kv: (-kv[1][0], kv[0]))
+        return [[name, str(total), str(count)] for name, (total, count) in rows]
+  javascript: |
+    function attributeRevenue(touches, purchases, lookback) {
+      const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+      const byUser = new Map();
+      for (const [user, time, campaign] of touches) {
+        if (!byUser.has(user)) byUser.set(user, []);
+        byUser.get(user).push([Number(time), campaign]);
+      }
+      for (const items of byUser.values()) {
+        items.sort((a, b) => a[0] - b[0] || cmp(a[1], b[1]));
+      }
+      // Index of the last touch with time <= p, or -1.
+      const lastAtOrBefore = (items, p) => {
+        let lo = 0;
+        let hi = items.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (items[mid][0] <= p) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo - 1;
+      };
+      const totals = new Map();
+      for (const [user, time, amount] of purchases) {
+        const p = Number(time);
+        let campaign = '(direct)';
+        const items = byUser.get(user);
+        if (items !== undefined) {
+          let k = lastAtOrBefore(items, p);
+          if (k >= 0 && p - items[k][0] <= lookback) {
+            while (k > 0 && items[k - 1][0] === items[k][0]) k -= 1;
+            campaign = items[k][1];
+          }
+        }
+        if (!totals.has(campaign)) totals.set(campaign, [0, 0]);
+        const entry = totals.get(campaign);
+        entry[0] += Number(amount);
+        entry[1] += 1;
+      }
+      const rows = [...totals.entries()];
+      rows.sort((a, b) => b[1][0] - a[1][0] || cmp(a[0], b[0]));
+      return rows.map(([name, [total, count]]) => [name, String(total), String(count)]);
+    }
+tests:
+  - {id: t1, args: [[["u1", "100", "spring_sale"], ["u1", "400", "retarget"], ["u2", "100", "spring_sale"], ["u1", "700", "newsletter"]], [["u1", "500", "2500"], ["u2", "1000", "4000"], ["u3", "50", "1200"]], 600], expected: [["(direct)", "5200", "2"], ["retarget", "2500", "1"]], description: "Example 1 - latest earlier touch wins, lookback expiry and a user with no touches go to direct"}
+  - {id: t2, args: [[["a7", "50", "social"], ["a7", "50", "email"], ["b2", "120", "search"]], [["a7", "60", "900"], ["b2", "220", "1500"], ["a7", "55", "100"]], 100], expected: [["search", "1500", "1"], ["email", "1000", "2"]], description: "Example 2 - tie at the latest touch time and the inclusive lookback boundary"}
+  - {id: t3, hidden: true, args: [[["u1", "10", "promo"]], [], 100], expected: [], description: "No purchases - empty result"}
+  - {id: t4, hidden: true, args: [[], [["u1", "10", "300"], ["u2", "20", "700"]], 50], expected: [["(direct)", "1000", "2"]], description: "No touches - everything is direct and aggregated into one row"}
+  - {id: t5, hidden: true, args: [[["u1", "100", "late"], ["u1", "40", "early"]], [["u1", "100", "50"], ["u1", "99", "70"], ["u1", "141", "10"]], 0], expected: [["(direct)", "80", "2"], ["late", "50", "1"]], description: "lookback 0 - only touches at the same second count; touch after purchase ignored"}
+  - {id: t6, hidden: true, args: [[["u1", "1", "b"], ["u2", "1", "a"], ["u3", "1", "c"]], [["u1", "5", "900"], ["u2", "5", "1200"], ["u3", "5", "900"]], 10], expected: [["a", "1200", "1"], ["b", "900", "1"], ["c", "900", "1"]], description: "Numeric sort of totals (1200 before 900 despite string order) and name tie-break for equal totals"}
+  - {id: t7, hidden: true, args: [[["u1", "1000", "x"], ["u2", "990", "y"]], [["u2", "1000", "5"], ["u1", "1001", "5"], ["u2", "2000", "5"]], 500], expected: [["(direct)", "5", "1"], ["x", "5", "1"], ["y", "5", "1"]], description: "Another user's later touch must not be used; one purchase is outside the window"}
+  - {id: t8, hidden: true, args: [[["u9", "999999999000", "zeta"], ["u9", "999999999000", "alpha"], ["u9", "999999999000", "mid"]], [["u9", "1000000000000", "1000000000"], ["u9", "1000000000000", "999999999"], ["u9", "999999999500", "1000000000"]], 1000], expected: [["alpha", "2999999999", "3"]], description: "Times near 10^12 and amounts near 10^9 - totals exceed 32 bits; three-way campaign tie"}
+  - {id: t9, hidden: true, args: [[["u1", "10", "a"], ["u1", "20", "b"], ["u1", "30", "c"]], [["u1", "25", "100"], ["u1", "35", "100"], ["u1", "15", "100"], ["u1", "5", "100"]], 9], expected: [["(direct)", "100", "1"], ["a", "100", "1"], ["b", "100", "1"], ["c", "100", "1"]], description: "Repeat buyer whose purchases hit different campaigns, one before any touch"}
+  - {id: t10, hidden: true, args: [[["u20", "33481", "newsletter"], ["u26", "90498", "search_brand"], ["u1", "61030", "retarget"], ["u21", "6796", "retarget"], ["u4", "48731", "partner-x"], ["u28", "32318", "partner-x"], ["u18", "13365", "search_brand"], ["u8", "1718", "retarget"], ["u14", "36632", "retarget"], ["u30", "51044", "retarget"], ["u25", "9428", "retarget"], ["u20", "80930", "partner-x"], ["u5", "17333", "spring_sale"], ["u28", "696", "retarget"], ["u25", "28243", "retarget"], ["u28", "21821", "newsletter"], ["u11", "26068", "search_brand"], ["u29", "88844", "retarget"], ["u6", "90523", "retarget"], ["u29", "50229", "newsletter"], ["u1", "47341", "partner-x"], ["u6", "19097", "newsletter"], ["u3", "43496", "newsletter"], ["u27", "79050", "search_brand"], ["u1", "78116", "newsletter"], ["u3", "40626", "newsletter"], ["u27", "40116", "partner-x"], ["u23", "41391", "retarget"], ["u16", "61936", "retarget"], ["u2", "33578", "spring_sale"], ["u24", "46877", "partner-x"], ["u1", "71967", "partner-x"], ["u12", "49330", "search_brand"], ["u27", "1189", "partner-x"], ["u2", "92767", "retarget"], ["u20", "25758", "spring_sale"], ["u25", "32255", "partner-x"], ["u12", "67173", "newsletter"], ["u29", "68773", "newsletter"], ["u25", "60666", "spring_sale"], ["u19", "98094", "newsletter"], ["u28", "38779", "spring_sale"], ["u14", "11951", "retarget"], ["u11", "67224", "search_brand"], ["u12", "19424", "newsletter"], ["u9", "92092", "search_brand"], ["u3", "40953", "newsletter"], ["u10", "23262", "spring_sale"], ["u21", "19512", "newsletter"], ["u16", "21171", "spring_sale"], ["u3", "78728", "search_brand"], ["u30", "53200", "spring_sale"], ["u8", "97066", "search_brand"], ["u12", "32795", "partner-x"], ["u21", "55280", "retarget"], ["u2", "83666", "spring_sale"], ["u26", "64692", "newsletter"], ["u27", "27139", "retarget"], ["u24", "73930", "retarget"], ["u21", "54240", "spring_sale"], ["u6", "56958", "newsletter"], ["u5", "7703", "partner-x"], ["u10", "18507", "partner-x"], ["u30", "81317", "retarget"], ["u17", "59446", "partner-x"], ["u23", "95617", "newsletter"], ["u16", "35918", "newsletter"], ["u16", "52925", "retarget"], ["u4", "49414", "search_brand"], ["u6", "82177", "partner-x"], ["u28", "44365", "retarget"], ["u3", "64469", "newsletter"], ["u17", "71840", "search_brand"], ["u12", "8271", "newsletter"], ["u23", "77002", "spring_sale"], ["u25", "40068", "newsletter"], ["u18", "92336", "newsletter"], ["u27", "63659", "newsletter"], ["u25", "90555", "newsletter"], ["u11", "85156", "retarget"], ["u19", "1517", "partner-x"], ["u18", "32858", "newsletter"], ["u22", "35872", "partner-x"], ["u10", "65581", "newsletter"], ["u12", "35897", "newsletter"], ["u24", "53538", "newsletter"], ["u30", "22606", "partner-x"], ["u12", "43822", "search_brand"], ["u5", "69381", "retarget"], ["u7", "47451", "partner-x"], ["u10", "90626", "spring_sale"], ["u24", "87930", "partner-x"], ["u6", "80842", "search_brand"], ["u17", "87235", "partner-x"], ["u10", "81754", "search_brand"], ["u25", "83475", "newsletter"], ["u24", "3620", "retarget"], ["u6", "76866", "partner-x"], ["u20", "85212", "retarget"], ["u8", "99483", "retarget"], ["u21", "94170", "spring_sale"], ["u16", "29654", "retarget"], ["u2", "17501", "spring_sale"], ["u11", "23795", "partner-x"], ["u7", "71869", "spring_sale"], ["u14", "60991", "newsletter"], ["u13", "86838", "search_brand"], ["u3", "77354", "retarget"], ["u8", "94111", "newsletter"], ["u1", "45943", "partner-x"], ["u9", "53745", "spring_sale"], ["u23", "71728", "newsletter"], ["u2", "72080", "search_brand"], ["u10", "12428", "newsletter"], ["u18", "67193", "newsletter"], ["u19", "38429", "newsletter"], ["u27", "16929", "partner-x"], ["u14", "73914", "search_brand"], ["u12", "61272", "retarget"], ["u6", "78110", "partner-x"], ["u19", "62525", "retarget"], ["u5", "79771", "spring_sale"], ["u12", "86724", "spring_sale"], ["u13", "14145", "newsletter"], ["u19", "80631", "search_brand"], ["u5", "42656", "search_brand"], ["u13", "56256", "partner-x"], ["u8", "64672", "newsletter"], ["u16", "92838", "partner-x"], ["u13", "20844", "search_brand"], ["u20", "34055", "newsletter"], ["u16", "32908", "partner-x"], ["u1", "41831", "newsletter"], ["u16", "37538", "retarget"], ["u16", "3116", "spring_sale"], ["u22", "81485", "partner-x"], ["u8", "38417", "spring_sale"], ["u26", "17883", "partner-x"], ["u1", "62953", "search_brand"], ["u18", "35885", "retarget"], ["u30", "62164", "spring_sale"], ["u8", "64240", "newsletter"], ["u28", "20285", "newsletter"], ["u10", "64522", "search_brand"], ["u16", "67924", "search_brand"], ["u29", "97448", "spring_sale"], ["u1", "99666", "retarget"], ["u10", "37007", "search_brand"], ["u23", "44056", "search_brand"], ["u10", "95849", "search_brand"]], [["u2", "60861", "183477"], ["u24", "89359", "390703"], ["u9", "4774", "1586"], ["u17", "72512", "238972"], ["u7", "90101", "286147"], ["u13", "1908", "225371"], ["u28", "77973", "301902"], ["u31", "50524", "249514"], ["u26", "89434", "446741"], ["u13", "38856", "243938"], ["u5", "39800", "438550"], ["u1", "91045", "408519"], ["u28", "76298", "150235"], ["u31", "40756", "74907"], ["u11", "62706", "364602"], ["u32", "43350", "282137"], ["u10", "55779", "307255"], ["u35", "6364", "35971"], ["u15", "35023", "429803"], ["u6", "8246", "348018"], ["u2", "43653", "378949"], ["u28", "9005", "212572"], ["u32", "6408", "64784"], ["u8", "28735", "322304"], ["u8", "93381", "469257"], ["u9", "38337", "370128"], ["u29", "19625", "96089"], ["u12", "54255", "420608"], ["u11", "8811", "326419"], ["u14", "5709", "291347"], ["u7", "86535", "198909"], ["u5", "36683", "30278"], ["u8", "97299", "209044"], ["u9", "1306", "226419"], ["u6", "41231", "359487"], ["u32", "64170", "185384"], ["u24", "7307", "72573"], ["u19", "19806", "298235"], ["u33", "38041", "477423"], ["u15", "34504", "33227"], ["u16", "33317", "436626"], ["u19", "67763", "70239"], ["u16", "48655", "237779"], ["u25", "23503", "68877"], ["u2", "85853", "179199"], ["u6", "75133", "350299"], ["u3", "11950", "452762"], ["u8", "66383", "311513"], ["u30", "31271", "204494"], ["u30", "62975", "169595"], ["u7", "69560", "15546"], ["u35", "95028", "201751"], ["u4", "19765", "495352"], ["u28", "89274", "416598"], ["u15", "98252", "60958"], ["u6", "87171", "257759"], ["u14", "18319", "367882"], ["u25", "46438", "438308"], ["u16", "37984", "174826"], ["u23", "50560", "198353"], ["u9", "94728", "435836"], ["u23", "84920", "155243"], ["u28", "47476", "271414"], ["u3", "77676", "300652"], ["u14", "97014", "94752"], ["u26", "8294", "50955"], ["u3", "4347", "97796"], ["u13", "25637", "20784"], ["u32", "63044", "346784"], ["u23", "57", "223964"], ["u31", "39393", "466599"], ["u28", "42370", "244194"], ["u30", "13074", "100554"], ["u10", "85637", "83483"], ["u5", "49104", "455741"], ["u25", "61559", "79851"], ["u17", "14448", "145554"], ["u11", "98352", "150598"], ["u16", "4345", "252825"], ["u3", "45127", "484814"], ["u24", "41427", "491851"], ["u4", "90140", "11499"], ["u30", "61830", "445114"], ["u10", "15455", "411849"], ["u21", "38155", "238062"], ["u16", "95590", "85678"], ["u3", "26348", "374864"], ["u2", "75329", "120933"], ["u6", "80947", "210376"], ["u24", "89197", "163593"], ["u12", "61346", "189609"], ["u19", "8765", "384061"], ["u30", "21411", "406864"], ["u16", "23022", "352519"], ["u14", "5756", "338723"], ["u28", "95213", "142030"], ["u1", "60544", "32011"], ["u29", "89302", "215146"], ["u11", "5891", "17542"], ["u34", "74081", "183607"], ["u7", "93917", "37438"], ["u16", "64377", "48306"], ["u31", "7046", "358079"], ["u16", "84442", "26554"], ["u32", "52077", "409856"], ["u4", "6278", "134018"], ["u27", "58441", "160505"], ["u4", "4928", "498244"], ["u13", "23512", "364862"], ["u33", "83958", "211051"], ["u13", "69639", "122638"], ["u6", "41141", "414706"], ["u7", "11379", "284231"], ["u11", "78418", "39616"], ["u14", "81913", "9226"], ["u29", "70730", "187592"], ["u32", "55467", "299689"], ["u25", "68461", "327832"], ["u9", "95110", "6576"], ["u20", "90256", "235527"], ["u15", "72674", "60753"], ["u9", "40857", "253447"], ["u6", "34534", "429721"], ["u26", "41009", "69656"], ["u9", "70354", "43083"], ["u31", "32092", "365619"], ["u6", "56184", "302605"], ["u16", "36153", "32313"], ["u32", "91829", "130530"], ["u4", "92222", "104881"], ["u19", "48989", "464372"], ["u7", "9420", "220603"], ["u21", "49789", "394530"], ["u1", "37474", "343035"], ["u9", "75330", "14947"], ["u29", "18805", "428338"], ["u2", "95423", "24844"], ["u28", "35087", "55956"], ["u25", "73653", "68385"], ["u21", "8641", "160765"], ["u11", "18000", "137773"], ["u32", "88591", "169557"], ["u19", "4461", "33404"], ["u35", "96856", "292246"], ["u2", "3600", "63886"], ["u4", "17054", "433410"], ["u23", "57141", "450881"], ["u17", "80216", "8815"], ["u15", "69132", "224968"], ["u9", "47501", "105578"]], 20000], expected: [["(direct)", "18655661", "76"], ["search_brand", "3851853", "19"], ["newsletter", "3757362", "11"], ["spring_sale", "3212123", "15"], ["retarget", "2801609", "16"], ["partner-x", "2625663", "13"]], description: "Stress - 150 touches and 150 purchases over 35 users with a 20000-second lookback"}
+expected_concepts:
+  - "grouping touches per user and sorting by time"
+  - "binary search for the latest touch at or before the purchase"
+  - "explicit tie-breaking rules"
+  - "aggregation and multi-key sorting with numeric totals"
+  - "parsing numbers from strings and avoiding 32-bit overflow"
+optimal_complexity: {time: "O((T + P) log T + C log C) for T touches, P purchases and C campaigns", space: "O(T + C)"}
+rubric:
+  excellent: "Groups touches by user, sorts them by time and campaign, binary-searches each purchase, applies the inclusive lookback and tie rules, aggregates with 64-bit totals and sorts rows numerically with the name tie-break, explaining O((T + P) log T)."
+  good: "Correct result using a per-user linear scan or after fixing one rule (tie-break, numeric sort or boundary) once tests fail."
+  weak: "Compares times or totals as strings, uses touches after the purchase or from other users, or scans every touch for every purchase without discussing cost."
+  criteria:
+    correctness: "All tests pass, including ties, the inclusive lookback, direct purchases and large totals."
+    efficiency: "Per-user sorted touches with binary search rather than a scan of all touches per purchase."
+    code_quality: "Parsing done once, small helpers for lookup and a single sort key for the output."
+    edge_cases: "No touches, no purchases, lookback 0, same-second touches and purchases, and totals beyond 32 bits."
+    communication: "Explains how the attribution model choice (last touch, lookback) affects what marketing sees."
+hints:
+  - "For each purchase you only care about the same user's touches, so organise touches per user in a form that makes finding the latest one before a given time cheap."
+  - "Sort each user's touches by time and then campaign; the latest touch at or before the purchase time can be found by binary search, and the first entry with that time is the tie-break winner."
+  - "Parse times and amounts to integers, build user -> sorted list of (time, campaign), binary-search each purchase, check purchase time minus touch time against lookback, add the amount to that campaign or to (direct), then sort the rows by total descending and name ascending before converting numbers back to strings."
+followups:
+  - "How would you switch to first-touch or linear multi-touch attribution?"
+  - "How would you compute this incrementally as touches and purchases stream in?"
+  - "How would you write the same attribution in SQL?"
+  - "What should happen when a purchase is refunded later?"
+common_errors:
+  - "Comparing times or totals as strings, so 900 sorts above 1200."
+  - "Crediting a touch that happened after the purchase or a touch of another user."
+  - "Using a strict comparison so a touch exactly lookback seconds old or at the same second is excluded."
+  - "Accumulating totals in 32-bit integers in typed languages."

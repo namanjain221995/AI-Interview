@@ -1,0 +1,128 @@
+version: 1
+slug: error_code_counts_in_windows
+title: "Status Code Counts in Time Windows"
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [sre, backend, support_engineer, data]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Status Code Counts in Time Windows
+
+  An alerting team is replaying a gateway's history to tune a new alert rule. Entry `i` of the history was
+  recorded at second `timestamps[i]` and carries the HTTP status `codes[i]`. Entries are listed in
+  recording order, so `timestamps` is **non-decreasing**, and several entries can share the same second.
+
+  Each query is a triple `[t_from, t_to, code]` and asks how many entries with status `code` were recorded
+  at a second `t` with `t_from <= t <= t_to` (both ends included). Return one count per query, in the
+  order of `queries`; a status that never occurs in the window counts as `0`.
+
+  The history and the query list can each hold up to 10^5 items, so rescanning the history for every
+  query is too slow.
+
+  ### Example 1
+  ```
+  Input:  timestamps = [3, 5, 5, 8, 12, 12, 15], codes = [503, 500, 503, 503, 500, 503, 503], queries = [[5, 12, 503], [0, 4, 500], [12, 12, 503], [9, 20, 500]]
+  Output: [3, 0, 1, 1]
+  Explanation: 503 was recorded at seconds 3, 5, 8, 12 and 15, so three of them fall in [5, 12] and
+               one at exactly 12. 500 was recorded at 5 and 12: none in [0, 4], one in [9, 20].
+  ```
+
+  ### Example 2
+  ```
+  Input:  timestamps = [10, 10, 10], codes = [429, 429, 200], queries = [[10, 10, 429], [11, 30, 429], [0, 100, 404]]
+  Output: [2, 0, 0]
+  ```
+
+  ### Constraints
+  - `0 <= timestamps.length == codes.length <= 10^5`
+  - `0 <= timestamps[i] <= 10^9` and `timestamps[i] <= timestamps[i + 1]`
+  - `100 <= codes[i] <= 599`
+  - `0 <= queries.length <= 10^5`
+  - `queries[j] = [t_from, t_to, code]` with `0 <= t_from <= t_to <= 10^9` and `100 <= code <= 599`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: error_code_counts_in_windows
+  params:
+    - {name: timestamps, type: "int[]"}
+    - {name: codes, type: "int[]"}
+    - {name: queries, type: "int[][]"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    from bisect import bisect_left, bisect_right
+    from collections import defaultdict
+
+
+    def error_code_counts_in_windows(timestamps: list[int], codes: list[int], queries: list[list[int]]) -> list[int]:
+        seconds_by_code: dict[int, list[int]] = defaultdict(list)
+        for t, code in zip(timestamps, codes):
+            seconds_by_code[code].append(t)  # stays sorted: timestamps are non-decreasing
+        result = []
+        for t_from, t_to, code in queries:
+            seconds = seconds_by_code.get(code, [])
+            result.append(bisect_right(seconds, t_to) - bisect_left(seconds, t_from))
+        return result
+  javascript: |
+    function errorCodeCountsInWindows(timestamps, codes, queries) {
+      const secondsByCode = new Map();
+      for (let i = 0; i < timestamps.length; i++) {
+        if (!secondsByCode.has(codes[i])) secondsByCode.set(codes[i], []);
+        secondsByCode.get(codes[i]).push(timestamps[i]);
+      }
+      // first index whose value is >= target (strict=false) or > target (strict=true)
+      const bound = (arr, target, strict) => {
+        let lo = 0;
+        let hi = arr.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (arr[mid] < target || (strict && arr[mid] === target)) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo;
+      };
+      return queries.map(([tFrom, tTo, code]) => {
+        const seconds = secondsByCode.get(code) || [];
+        return bound(seconds, tTo, true) - bound(seconds, tFrom, false);
+      });
+    }
+tests:
+  - {id: t1, args: [[3, 5, 5, 8, 12, 12, 15], [503, 500, 503, 503, 500, 503, 503], [[5, 12, 503], [0, 4, 500], [12, 12, 503], [9, 20, 500]]], expected: [3, 0, 1, 1], description: "Example 1 - inclusive bounds and shared seconds"}
+  - {id: t2, args: [[10, 10, 10], [429, 429, 200], [[10, 10, 429], [11, 30, 429], [0, 100, 404]]], expected: [2, 0, 0], description: "Example 2 - same second, empty window, unknown code"}
+  - {id: t3, hidden: true, args: [[], [], [[0, 1000000000, 500], [5, 5, 404]]], expected: [0, 0], description: "Empty history: every query counts 0"}
+  - {id: t4, hidden: true, args: [[1, 2, 3], [500, 500, 500], []], expected: [], description: "No queries returns an empty array"}
+  - {id: t5, hidden: true, args: [[100, 200, 300], [503, 503, 503], [[0, 99, 503], [301, 1000, 503], [150, 199, 503]]], expected: [0, 0, 0], description: "Windows before, after and between all entries"}
+  - {id: t6, hidden: true, args: [[7, 7, 7, 7, 7, 7], [500, 502, 500, 500, 502, 500], [[7, 7, 500], [6, 7, 502], [7, 8, 500], [0, 6, 500]]], expected: [4, 2, 4, 0], description: "Many entries at one second; both inclusive bounds land on that second"}
+  - {id: t7, hidden: true, args: [[0, 1, 2, 3, 4, 5, 6, 7], [200, 500, 200, 500, 200, 500, 200, 500], [[1, 6, 500], [1, 6, 200], [0, 7, 404], [3, 3, 500], [3, 3, 200]]], expected: [3, 3, 0, 1, 0], description: "Alternating codes; a status absent from the history and single-second windows"}
+  - {id: t8, hidden: true, args: [[0, 999999999, 1000000000], [429, 429, 429], [[0, 1000000000, 429], [999999999, 1000000000, 429], [1, 999999998, 429]]], expected: [3, 2, 0], description: "Timestamps at the 10^9 limit"}
+  - {id: t9, hidden: true, args: [[23, 26, 37, 41, 50, 62, 62, 65, 66, 71, 91, 91, 100, 106, 113, 115, 116, 117, 118, 121, 122, 139, 142, 161, 174, 179, 222, 224, 226, 236, 242, 278, 282, 285, 288, 293, 293, 296, 307, 308, 332, 339, 345, 350, 354, 372, 375, 415, 429, 446, 471, 525, 554, 558, 571, 590, 593, 595, 601, 606, 611, 618, 626, 628, 634, 653, 668, 669, 670, 688, 693, 701, 707, 716, 718, 732, 736, 736, 742, 742, 743, 743, 745, 748, 762, 765, 765, 770, 771, 772, 780, 785, 785, 787, 791, 792, 805, 819, 825, 831, 837, 844, 845, 847, 860, 876, 884, 889, 897, 903, 914, 931, 938, 969, 975, 979, 980, 991, 998, 1009, 1010, 1018, 1018, 1019, 1030, 1042, 1045, 1055, 1067, 1082, 1084, 1090, 1094, 1097, 1103, 1110, 1120, 1120, 1122, 1135, 1153, 1155, 1157, 1157, 1158, 1159, 1161, 1169, 1170, 1215, 1227, 1229, 1255, 1261, 1261, 1262, 1272, 1286, 1289, 1293, 1305, 1307, 1318, 1327, 1328, 1328, 1339, 1339, 1353, 1373, 1382, 1390, 1391, 1395, 1400, 1401, 1410, 1419, 1424, 1432, 1450, 1454, 1467, 1479, 1486, 1487, 1487, 1488, 1504, 1511, 1528, 1528, 1540, 1561, 1605, 1609, 1613, 1614, 1620, 1625, 1625, 1629, 1632, 1642, 1666, 1671, 1675, 1677, 1699, 1700, 1705, 1710, 1711, 1711, 1715, 1733, 1735, 1738, 1757, 1785, 1786, 1787, 1789, 1801, 1803, 1817, 1849, 1857, 1858, 1879, 1880, 1886, 1897, 1903, 1928, 1940, 1957, 1957, 1963, 1968, 1972, 1995, 2005, 2013, 2013, 2026, 2028, 2040, 2040, 2044, 2045, 2059, 2062, 2074, 2079, 2098, 2099, 2116, 2127, 2128, 2146, 2147, 2149, 2155, 2182, 2186, 2187, 2191, 2201, 2204, 2226, 2230, 2231, 2243, 2265, 2270, 2283, 2299, 2301, 2315, 2324, 2324, 2336, 2364, 2379, 2400, 2424, 2426, 2443, 2449, 2475, 2501, 2501, 2502, 2505, 2513, 2518, 2519, 2520, 2525, 2531, 2535, 2547, 2551, 2552, 2553, 2556, 2562, 2595, 2595, 2604, 2620, 2624, 2625, 2641, 2643, 2647, 2652, 2662, 2685, 2706, 2713, 2725, 2743, 2748, 2765, 2777, 2782, 2782, 2782, 2796, 2797, 2809, 2834, 2839, 2840, 2855, 2872, 2876, 2902, 2909, 2909, 2915, 2918, 2922, 2929, 2957, 2971, 2981, 2983, 3001, 3014, 3028, 3032, 3033, 3045, 3069, 3085, 3089, 3103, 3116, 3133, 3134, 3135, 3143, 3165, 3168, 3171, 3174, 3175, 3187, 3204, 3231, 3236, 3236, 3244, 3248, 3257, 3287, 3294, 3300, 3300, 3324, 3334, 3335, 3343, 3343, 3345, 3345, 3345, 3346, 3356, 3360, 3385, 3397, 3405, 3410, 3428, 3434, 3447, 3454, 3460, 3462, 3471, 3480, 3482, 3488, 3490, 3498, 3502, 3514, 3517, 3522, 3526, 3529, 3540, 3551, 3564, 3567, 3579, 3580, 3590, 3601, 3602, 3603, 3609, 3611, 3615, 3616, 3630, 3633, 3642, 3652, 3657, 3661, 3673, 3683, 3690, 3726, 3728, 3734, 3745, 3747, 3750, 3756, 3758, 3765, 3771, 3787, 3806, 3807, 3815, 3819, 3824, 3835, 3845, 3849, 3854, 3859, 3868, 3871, 3895, 3900, 3909, 3922, 3926, 3931, 3932, 3953, 3954, 3963, 3963, 3974, 3975, 3977, 3981, 3983, 3986, 3988, 3988, 3994, 4002, 4002, 4009, 4010, 4015, 4017, 4029, 4047, 4048, 4051, 4060, 4060, 4077, 4103, 4111, 4115, 4116, 4116, 4124, 4143, 4145, 4146, 4151, 4155, 4160, 4163, 4175, 4176, 4179, 4186, 4198, 4209, 4215, 4241, 4253, 4281, 4282, 4287, 4299, 4303, 4306, 4320, 4323, 4332, 4358, 4370, 4375, 4376, 4376, 4377, 4385, 4403, 4428, 4435, 4458, 4461, 4469, 4472, 4482, 4503, 4506, 4511, 4517, 4518, 4518, 4519, 4521, 4527, 4534, 4546, 4549, 4556, 4560, 4562, 4585, 4588, 4594, 4595, 4595, 4596, 4609, 4623, 4629, 4642, 4651, 4658, 4674, 4675, 4678, 4686, 4706, 4709, 4711, 4712, 4719, 4734, 4770, 4791, 4796, 4796, 4797, 4800, 4818, 4821, 4830, 4831, 4840, 4848, 4849, 4853, 4868, 4888, 4915, 4933, 4945, 4952, 4982, 4989, 4990], [500, 503, 500, 500, 429, 200, 502, 503, 500, 502, 404, 500, 500, 200, 404, 503, 429, 503, 502, 404, 429, 200, 200, 500, 502, 404, 503, 200, 200, 429, 200, 500, 500, 503, 200, 502, 500, 503, 502, 404, 503, 503, 503, 429, 502, 200, 502, 502, 404, 500, 503, 404, 500, 503, 502, 500, 502, 503, 502, 429, 429, 200, 200, 404, 200, 503, 503, 503, 500, 200, 500, 429, 200, 503, 404, 200, 404, 502, 500, 200, 404, 500, 404, 502, 404, 404, 503, 200, 503, 502, 429, 502, 429, 500, 404, 503, 503, 404, 503, 404, 404, 404, 500, 200, 404, 500, 503, 502, 429, 500, 500, 502, 502, 503, 500, 502, 429, 503, 429, 500, 502, 200, 503, 503, 429, 404, 200, 429, 429, 200, 200, 502, 500, 404, 500, 503, 502, 429, 200, 500, 404, 429, 502, 502, 404, 500, 502, 404, 200, 200, 200, 502, 429, 429, 500, 429, 502, 502, 200, 404, 200, 503, 404, 502, 429, 500, 404, 404, 500, 404, 502, 404, 429, 404, 503, 503, 200, 429, 429, 503, 200, 200, 429, 404, 502, 429, 429, 500, 429, 200, 500, 404, 429, 503, 502, 404, 503, 502, 502, 500, 429, 503, 502, 404, 429, 200, 429, 200, 200, 200, 429, 503, 404, 429, 404, 502, 503, 502, 502, 500, 429, 404, 503, 503, 503, 500, 500, 404, 404, 429, 404, 200, 500, 429, 500, 503, 404, 502, 502, 404, 404, 503, 503, 429, 404, 500, 404, 429, 404, 500, 503, 503, 502, 502, 502, 502, 429, 404, 502, 500, 503, 503, 429, 500, 404, 500, 503, 502, 404, 200, 503, 200, 503, 503, 429, 503, 503, 502, 500, 200, 429, 502, 429, 503, 200, 503, 404, 503, 429, 500, 404, 429, 429, 200, 503, 404, 500, 502, 502, 503, 429, 404, 503, 502, 503, 503, 500, 404, 200, 502, 404, 200, 404, 404, 500, 200, 502, 503, 404, 200, 503, 502, 500, 404, 500, 500, 503, 503, 502, 500, 200, 500, 502, 404, 429, 500, 429, 429, 500, 500, 200, 404, 429, 502, 404, 500, 502, 200, 502, 404, 200, 502, 500, 429, 429, 503, 503, 429, 503, 503, 500, 404, 500, 503, 200, 503, 502, 500, 503, 503, 503, 429, 404, 503, 404, 429, 503, 503, 503, 404, 404, 503, 429, 500, 200, 200, 200, 200, 503, 503, 404, 500, 404, 503, 429, 200, 502, 500, 200, 502, 404, 502, 200, 503, 500, 404, 429, 200, 502, 503, 404, 500, 503, 500, 429, 404, 429, 502, 500, 503, 503, 429, 429, 429, 404, 503, 404, 502, 429, 429, 429, 500, 502, 429, 404, 429, 429, 404, 502, 502, 502, 200, 404, 429, 502, 404, 404, 429, 404, 200, 404, 503, 502, 502, 429, 502, 200, 429, 200, 404, 500, 500, 429, 502, 503, 502, 500, 200, 429, 503, 200, 429, 502, 500, 429, 503, 502, 404, 500, 429, 200, 429, 503, 200, 503, 502, 502, 502, 500, 500, 503, 502, 429, 404, 404, 500, 404, 404, 503, 503, 500, 503, 200, 200, 503, 200, 503, 200, 404, 500, 404, 404, 503, 429, 500, 503, 429, 200, 500, 503, 502, 500, 502, 200, 404, 429, 500, 404, 404, 200, 503, 502, 429, 429, 404, 503, 429, 200, 429, 500, 503, 200, 502, 503, 500, 404, 500, 404, 404, 503, 200, 429, 502, 429, 200, 404, 500, 502, 404, 200, 404, 500, 503, 200, 502, 429, 503, 429, 502, 429, 404, 429, 200, 404, 404, 200, 200, 429, 502, 200, 404, 200, 429, 500, 200, 502, 200, 503, 500, 503, 429, 429, 503, 200, 502, 404, 503, 429, 502, 404], [[623, 4562, 429], [4724, 4948, 404], [3630, 4955, 404], [2930, 3363, 429], [3786, 4472, 502], [4186, 4242, 500], [1451, 3111, 429], [3920, 4779, 503], [3535, 4001, 429], [2249, 4008, 404], [2927, 3664, 502], [2339, 2395, 502], [726, 1395, 200], [471, 957, 429], [4317, 4847, 500], [2213, 3928, 200], [4051, 4526, 429], [4976, 4977, 200], [3356, 4937, 200], [4029, 4576, 502], [3611, 4329, 200], [4783, 4872, 503], [910, 2737, 200], [3743, 4161, 502], [4494, 4496, 404], [3310, 4081, 404], [3727, 4798, 503], [4737, 4839, 404], [1277, 1693, 429], [1811, 4508, 302], [2063, 4198, 200], [2641, 3337, 404], [2755, 4112, 404], [1611, 2873, 500], [2705, 2723, 502], [4664, 4983, 500], [4159, 4769, 429], [1886, 3004, 502], [4961, 4988, 502], [480, 1100, 503], [0, 5000, 503], [0, 5000, 200], [23, 23, 500], [4990, 4990, 404]]], expected: [85, 2, 31, 6, 14, 1, 31, 21, 19, 36, 11, 0, 14, 6, 7, 25, 8, 0, 33, 7, 14, 2, 28, 12, 0, 18, 22, 1, 12, 0, 34, 11, 28, 22, 1, 2, 13, 21, 0, 16, 114, 88, 1, 1], description: "600 entries and 44 queries including whole-range and single-second windows"}
+expected_concepts:
+  - "group the timestamps by status code"
+  - "each group is already sorted because the history is in time order"
+  - "lower bound for t_from and upper bound for t_to"
+  - "count as the difference of the two positions"
+  - "O((n + q) log n) instead of O(n * q)"
+optimal_complexity: {time: "O(n + q log n)", space: "O(n)"}
+rubric:
+  excellent: "Builds a map from status to its sorted seconds in one pass, answers each query with a lower and an upper bound search, handles inclusive ends and duplicates, and states O(n + q log n) time."
+  good: "Reaches the grouped binary search approach with prompting, possibly with an off-by-one on the inclusive bounds fixed after testing."
+  weak: "Rescans the history for every query, or uses the same bound type on both ends so duplicates at the edges are miscounted."
+  criteria:
+    correctness: "All tests pass, including shared seconds, inclusive bounds, unknown codes and empty inputs."
+    efficiency: "Linear preprocessing plus two logarithmic searches per query."
+    code_quality: "Readable grouping step and a small, reusable bound helper."
+    edge_cases: "Handles an empty history, an empty query list, absent statuses and windows outside the recorded range."
+    communication: "Explains why the per-status lists come out sorted and why the two searches use different bound types."
+hints:
+  - "A query only cares about the entries of one status, so think about keeping each status's entries apart from the others."
+  - "If you had the seconds at which one status occurred in sorted order, counting those inside a closed interval is a matter of finding two positions in that list."
+  - "In one pass build a map from status to the list of its seconds, which is already sorted; for each query, count with the position of the first second greater than the window end minus the position of the first second at or after the window start."
+followups:
+  - "How would you support new entries arriving at the end of the history between queries?"
+  - "If there were only a handful of distinct statuses, could prefix counts per status beat binary search?"
+  - "How would you answer the count for any status in the window, not just one?"
+common_errors:
+  - "Scanning the whole history for every query."
+  - "Using a lower bound for both ends, which drops entries recorded exactly at the window end."
+  - "Searching the whole timestamp list instead of the list for the requested status."
+  - "Re-sorting each per-status list even though the history is already in time order."

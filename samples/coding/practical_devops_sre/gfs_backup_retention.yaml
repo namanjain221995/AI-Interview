@@ -1,0 +1,137 @@
+version: 1
+slug: gfs_backup_retention
+title: Grandfather-Father-Son Backup Pruning
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [devops, dba, sre, platform]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Grandfather-Father-Son Backup Pruning
+
+  A database team stores nightly snapshots and prunes them with a **grandfather-father-son** policy.
+  Each snapshot is identified by the day it was taken, a day number counted from an epoch
+  (`backup_days[i]`). The list is in no particular order and the same day can appear more than once
+  (a retried job); all snapshots of one day count as a single backup day.
+
+  Calendar buckets are simplified: the **week** of day `d` is `d // 7` and its **month** is `d // 30`
+  (integer division).
+
+  A backup day is **kept** when at least one of these rules selects it:
+
+  1. **Daily:** it is one of the `keep_daily` most recent (largest) distinct backup days.
+  2. **Weekly:** take the `keep_weekly` most recent weeks that contain at least one backup day; in each
+     of those weeks, the most recent backup day is kept.
+  3. **Monthly:** the same as the weekly rule, using months and `keep_monthly`.
+
+  If a rule asks for more days, weeks or months than exist, it simply keeps all that exist. A count of
+  `0` disables that rule. Return the kept days **without duplicates in ascending order**; return an
+  empty list when nothing is kept.
+
+  ### Example 1
+  ```
+  Input:  backup_days = [3, 10, 11, 12, 20, 33, 34, 34, 40, 41],
+          keep_daily = 3,
+          keep_weekly = 2,
+          keep_monthly = 2
+  Output: [20, 34, 40, 41]
+  Explanation: the 3 newest days are 41, 40 and 34. The 2 newest weeks with backups are week 5
+  (days 40 and 41, keep 41) and week 4 (days 33 and 34, keep 34). The 2 newest months are month 1
+  (newest day 41) and month 0 (newest day 20). The union is [20, 34, 40, 41].
+  ```
+
+  ### Example 2
+  ```
+  Input:  backup_days = [0, 5, 6, 7, 13, 14], keep_daily = 0, keep_weekly = 3, keep_monthly = 1
+  Output: [6, 13, 14]
+  Explanation: no daily backups are kept. Weeks 2, 1 and 0 keep days 14, 13 and 6; month 0 keeps 14.
+  ```
+
+  ### Constraints
+  - `0 <= backup_days.length <= 10^5`
+  - `0 <= backup_days[i] <= 10^9`
+  - `0 <= keep_daily, keep_weekly, keep_monthly <= 10^5`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: gfs_backup_retention
+  params:
+    - {name: backup_days, type: "int[]"}
+    - {name: keep_daily, type: "int"}
+    - {name: keep_weekly, type: "int"}
+    - {name: keep_monthly, type: "int"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def gfs_backup_retention(backup_days: list[int], keep_daily: int, keep_weekly: int, keep_monthly: int) -> list[int]:
+        days = sorted(set(backup_days), reverse=True)
+        kept = set(days[:keep_daily])
+        for period, limit in ((7, keep_weekly), (30, keep_monthly)):
+            seen: set[int] = set()
+            for day in days:
+                if len(seen) >= limit:
+                    break
+                bucket = day // period
+                if bucket not in seen:
+                    # days are scanned newest first, so this is the newest day of its bucket
+                    seen.add(bucket)
+                    kept.add(day)
+        return sorted(kept)
+  javascript: |
+    function gfsBackupRetention(backupDays, keepDaily, keepWeekly, keepMonthly) {
+      const days = [...new Set(backupDays)].sort((a, b) => b - a);
+      const kept = new Set(days.slice(0, keepDaily));
+      for (const [period, limit] of [[7, keepWeekly], [30, keepMonthly]]) {
+        const seen = new Set();
+        for (const day of days) {
+          if (seen.size >= limit) break;
+          const bucket = Math.floor(day / period);
+          if (!seen.has(bucket)) {
+            seen.add(bucket);
+            kept.add(day);
+          }
+        }
+      }
+      return [...kept].sort((a, b) => a - b);
+    }
+tests:
+  - {id: t1, args: [[3, 10, 11, 12, 20, 33, 34, 34, 40, 41], 3, 2, 2], expected: [20, 34, 40, 41], description: "Example 1"}
+  - {id: t2, args: [[0, 5, 6, 7, 13, 14], 0, 3, 1], expected: [6, 13, 14], description: "Example 2 - daily rule disabled"}
+  - {id: t3, hidden: true, args: [[], 5, 4, 12], expected: [], description: "No backups at all returns an empty list"}
+  - {id: t4, hidden: true, args: [[100, 50, 7], 0, 0, 0], expected: [], description: "All rules disabled keeps nothing"}
+  - {id: t5, hidden: true, args: [[9, 9, 9, 2, 2, 30, 30], 2, 0, 0], expected: [9, 30], description: "Duplicate snapshots of one day count as a single day for the daily rule"}
+  - {id: t6, hidden: true, args: [[6, 7, 13, 14, 29, 30, 59, 60], 0, 10, 10], expected: [6, 13, 14, 29, 30, 59, 60], description: "Days on week and month boundaries; counts larger than the number of buckets"}
+  - {id: t7, hidden: true, args: [[400, 3, 250, 91, 15, 180, 61, 360, 1, 300], 1, 2, 4], expected: [250, 300, 360, 400], description: "Unsorted input spread over many months - sparse weeks and months"}
+  - {id: t8, hidden: true, args: [[1000000000, 999999999, 999999993, 999999970, 5], 1, 2, 2], expected: [999999970, 999999993, 1000000000], description: "Large day numbers near 10^9; weekly and monthly overlap with daily"}
+  - {id: t9, hidden: true, args: [[21, 22, 23, 24, 25, 26, 27], 7, 1, 1], expected: [21, 22, 23, 24, 25, 26, 27], description: "All backups in one week - daily keeps everything and the other rules add nothing"}
+  - {id: t10, hidden: true, args: [[463, 573, 476, 462, 520, 601, 194, 189, 524, 487, 644, 628, 190, 96, 457, 310, 145, 92, 551, 710, 649, 42, 609, 405, 463, 669, 630, 665, 161, 638, 15, 541, 64, 60, 36, 194, 247, 614, 30, 475, 334, 451, 605, 200, 531, 239, 655, 301, 511, 4, 678, 87, 468, 670, 284, 416, 564, 85, 260, 322, 235, 525, 295, 30, 71, 576, 110, 410, 110, 297, 395, 68, 17, 701, 0, 218, 214, 53, 481, 384, 406, 429, 74, 579, 644, 203, 691, 276, 344, 89, 318, 340, 15, 419, 120, 137, 252, 103, 11, 61, 476, 498, 181, 698, 572, 192, 458, 521, 195, 134, 429, 659, 392, 119, 404, 430, 217, 0, 276, 606, 311, 20, 215, 191, 403, 616, 657, 590, 102, 43, 149, 218, 452, 264, 9, 624, 336, 303, 395, 75, 76, 92, 213, 596, 651, 248, 15, 615, 377, 380, 637, 464, 130, 601, 495, 588, 138, 395, 187, 642, 157, 318, 233, 625, 255, 194, 162, 644, 567, 201, 703, 397, 494, 618, 80, 431, 48, 106, 111, 39, 524, 261, 244, 401, 263, 430, 610, 502, 300, 532, 179, 70, 129, 233, 490, 572, 669, 630, 629, 75, 286, 217, 208, 16, 70, 275, 421, 456, 255, 61, 47, 180, 288, 377, 543, 585, 134, 94, 370, 141, 461, 338, 672, 707, 534, 598, 143, 604, 35, 18, 486, 366, 717, 319, 34, 21, 612, 651, 76, 493, 68, 318, 326, 139, 74, 77, 463, 559, 376, 45, 720, 132, 349, 360, 86, 701, 484, 79, 427, 30, 511, 586, 14, 639, 678, 391, 388, 596, 12, 623, 73, 82, 92, 654, 118, 263, 426, 338, 397, 710, 594, 468, 451, 473, 554, 85, 531, 526, 30, 317, 615, 89, 492, 22, 235, 715, 115, 509, 629, 675, 497, 261, 11, 376, 308, 146, 694, 626, 207, 530, 173, 350, 675, 452, 510, 247, 334, 414, 681, 256, 203, 649, 441, 205, 219, 393, 224, 597, 324, 214, 139, 137, 508, 359, 41, 65, 283, 173, 115, 461, 482, 281, 219, 423, 391, 640, 532, 505, 688, 322, 639, 463, 328, 76, 32, 284, 622, 42, 694, 287, 584, 362, 316, 664, 577, 19, 656, 139, 414, 465, 194, 25, 272, 243, 144, 48, 644, 118, 457, 111, 645, 548, 670, 655, 377, 79, 700, 202, 204, 486, 262, 182, 11, 483, 547, 37, 183, 231, 278, 354, 552, 714, 532, 512, 629, 163, 402, 716, 229, 89, 420, 397, 133, 461, 464, 201, 640, 6, 385, 563, 582, 668, 514, 351, 474, 334, 666, 209, 101, 657, 126, 218, 248, 399, 89, 317, 549, 328, 268, 16, 356, 516, 84, 38, 451, 350, 563, 431, 281, 499, 29, 223, 65, 439, 35, 177, 545, 343, 703, 143, 481, 152, 528, 530, 694, 705, 450, 504, 592, 705, 88, 226, 449, 539, 572, 297, 575, 654, 168, 535, 526, 573, 262, 319, 687, 390, 624, 213, 311, 144, 557, 536, 279, 586, 509, 205, 420, 548, 117, 515, 5, 619, 386, 28, 551, 45, 528, 410, 557, 576, 124, 502, 95, 707, 170, 67, 551, 469, 423, 413, 275, 252, 484, 504, 130, 347, 444, 487, 537, 324, 111, 196, 429, 632, 30, 266, 132, 718, 23, 36, 198, 159, 232, 12, 703, 290, 329, 363, 250, 634, 510, 107, 511, 596, 125, 522, 638, 256, 202, 718, 543, 447, 23, 384, 648, 423, 542, 630, 163, 551, 209, 646, 546, 653, 223, 542, 221, 555, 626, 600, 139, 238, 642, 355, 185, 323, 617, 322, 199, 223, 199, 99, 137, 245, 135, 90, 265, 397, 99, 445, 431, 556, 129, 205, 412, 643, 701, 18, 98, 205, 583, 698, 366, 369, 118, 517, 649, 351, 514, 702, 193, 72, 493, 108, 24, 38, 564, 628, 527, 582, 492, 150, 194, 188, 117, 208, 176, 161, 289, 689, 97, 593, 63, 137, 697, 473, 79, 99, 334, 400, 478, 436, 527, 363, 440, 215, 615, 382, 13, 649, 717, 41, 205, 185, 417, 464, 368, 379, 415, 199, 619, 169, 97, 524, 15, 331, 86, 644, 414, 583, 613, 195, 516, 598, 349, 264, 286, 119, 163, 415, 136, 337, 551, 711, 378, 442, 185, 415, 211, 189, 72, 349, 308, 480, 103, 10, 364, 654, 638, 50, 237, 279, 682, 306, 345, 221, 675, 415, 583, 186, 545, 78, 398, 527, 509, 657, 218, 718, 122, 404, 588, 23, 117, 630, 110, 242, 262, 454, 411, 516, 51, 200, 663, 384, 11, 100, 264, 256, 282, 349, 563, 553, 520, 425, 533, 581, 102, 653, 455, 660, 78, 562, 611, 684, 46, 395, 163, 395, 483, 173, 507, 554, 625, 610, 59, 439, 506, 430, 291, 539, 408, 612, 319, 374, 543, 292, 494, 670, 276, 574, 290, 679, 303, 27, 14, 250, 599, 43, 648, 160, 418, 700, 399, 54, 322, 407, 51, 595, 326, 75, 229, 439, 489, 256, 249, 46, 535, 100, 479, 147, 251, 618, 117, 51, 639, 427, 466, 120, 208, 53, 365, 540, 158, 127, 372, 453, 143, 683, 426, 466, 615, 268, 654, 596, 698, 429, 372, 543, 140, 297, 131, 244, 492, 116, 515, 316, 519, 639, 367, 281, 278, 624, 701, 578, 715, 605, 194, 648, 285, 245, 194, 254, 514, 668, 200, 699, 40, 643, 62, 9, 277, 265, 435, 27, 638, 38, 104, 227, 554, 284, 74, 88, 692, 164, 563, 240, 646, 382, 495, 490, 362, 215, 346, 351, 506, 136, 76, 122, 458, 638, 218, 455, 434, 264, 399, 154, 377, 157, 669, 610, 333, 297, 561, 188, 437, 669, 378, 594, 99, 473, 331, 80, 556, 85, 442, 577, 581, 496, 701, 474, 306, 9, 77, 317, 218, 677, 618, 83, 711, 311, 506, 710, 335, 289, 146, 224, 366, 673, 334, 375, 120, 330, 451, 582, 609, 703, 285, 448, 542, 312, 469, 325, 226, 409, 528, 254, 86, 370, 374, 24, 372, 693, 405, 598, 396, 199, 577, 377, 399, 553, 158, 605, 576, 181, 180, 91, 465, 288, 22, 226], 7, 8, 12], expected: [419, 449, 479, 509, 539, 567, 599, 629, 659, 670, 678, 684, 689, 692, 699, 705, 711, 714, 715, 716, 717, 718, 720], description: "Stress - 1000 snapshots over two years with duplicates"}
+expected_concepts:
+  - deduplicating days with a set
+  - sorting newest first
+  - bucketing by integer division
+  - taking the first day seen per bucket while scanning newest first
+  - union of the rule results then ascending sort
+optimal_complexity: {time: O(n log n), space: O(n)}
+rubric:
+  excellent: Deduplicates and sorts newest first once, applies each rule as a single scan that keeps the first day of each new bucket until the limit is reached, unions the results in a set and returns them sorted, with O(n log n) clearly argued.
+  good: Correct result with a less direct structure, for example grouping into maps of bucket to newest day and sorting the buckets, or a small fix after the duplicate test.
+  weak: Counts duplicate snapshots as separate days, keeps the oldest day of a bucket, counts empty weeks toward the limit, or returns duplicates or unsorted output.
+  criteria:
+    correctness: All tests pass, including duplicates, disabled rules and counts larger than available.
+    efficiency: One sort plus linear scans; no rescanning of the whole list per bucket.
+    code_quality: The weekly and monthly rules share one helper or loop parameterised by the period.
+    edge_cases: Empty input, zero counts, boundary days such as 6 and 7 or 29 and 30, very large day numbers.
+    communication: Explains why scanning newest first makes the first day seen in a bucket its newest day.
+hints:
+  - Start by removing duplicate days and ordering them from newest to oldest; every rule is easier on that list.
+  - The weekly and monthly rules are the same rule with a different bucket size, and the newest day of a bucket is the first one you meet when scanning newest first.
+  - Sort the distinct days in descending order, take the first keep_daily of them, then for each bucket size scan the list keeping a set of buckets already used and add a day whenever its bucket is new, stopping once the set reaches the limit; finally return the union sorted ascending.
+followups:
+  - How would you also report which rule kept each backup so operators can audit the policy?
+  - How would you switch to real calendar months and ISO weeks, and what would you test?
+  - If snapshots arrive one per night, how could you prune incrementally instead of recomputing everything?
+  - How would you add a yearly rule without duplicating code?
+common_errors:
+  - Treating two snapshots taken on the same day as two separate backup days.
+  - Keeping the oldest day of a week or month instead of the newest.
+  - Counting calendar weeks that have no backups toward keep_weekly.
+  - Returning the kept days with duplicates or in descending order.

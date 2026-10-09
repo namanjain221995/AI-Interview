@@ -1,0 +1,165 @@
+version: 1
+slug: metric_corrections_min_max
+title: Metric Store with Corrections
+difficulty: medium
+competency_keys: [data_structures, algorithms]
+role_tags: [sre, data, backend]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Metric Store with Corrections
+
+  A time-series store keeps **one value per timestamp** for a single gauge (for example queue depth).
+  Agents send records `[timestamp, value]`, but the network delivers them **out of order**, and an agent
+  that notices a bad reading re-sends the same timestamp with a fixed value. So when a record arrives:
+
+  - if its timestamp is new, the store adds it;
+  - if the timestamp is already stored, the new value **replaces** the stored one (it is a correction,
+    even when the value happens to be the same).
+
+  After applying each record, the dashboard shows the **highest** and the **lowest** value currently
+  stored (across all distinct timestamps, using each timestamp's latest value).
+
+  Given `records` in arrival order, return a list with one pair `[max, min]` per record, in the same
+  order.
+
+  ### Example 1
+  ```
+  Input:  records = [[5, 40], [2, 10], [9, 70], [9, 15], [2, 50]]
+  Output: [[40, 40], [40, 10], [70, 10], [40, 10], [50, 15]]
+  Explanation: after the fourth record timestamp 9 holds 15, so 70 is gone and the stored values are
+  {40, 10, 15}; after the fifth, timestamp 2 holds 50 and the values are {40, 50, 15}.
+  ```
+
+  ### Example 2
+  ```
+  Input:  records = [[1, -3], [1, -3], [1, 8]]
+  Output: [[-3, -3], [-3, -3], [8, 8]]
+  Explanation: every record targets timestamp 1, so only one value is ever stored.
+  ```
+
+  ### Constraints
+  - `1 <= records.length <= 10^5`
+  - `records[i].length == 2`
+  - `0 <= timestamp <= 10^9`
+  - `-10^9 <= value <= 10^9`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: min_max_after_each
+  params:
+    - {name: records, type: "int[][]"}
+  return_type: "int[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import heapq
+
+
+    def min_max_after_each(records: list[list[int]]) -> list[list[int]]:
+        latest: dict[int, int] = {}
+        high: list[tuple[int, int]] = []  # (-value, timestamp): max-heap
+        low: list[tuple[int, int]] = []  # (value, timestamp): min-heap
+        result: list[list[int]] = []
+        for timestamp, value in records:
+            latest[timestamp] = value
+            heapq.heappush(high, (-value, timestamp))
+            heapq.heappush(low, (value, timestamp))
+            # Lazy deletion: an entry is stale when its timestamp now holds another value.
+            while latest[high[0][1]] != -high[0][0]:
+                heapq.heappop(high)
+            while latest[low[0][1]] != low[0][0]:
+                heapq.heappop(low)
+            result.append([-high[0][0], low[0][0]])
+        return result
+  javascript: |
+    class Heap {
+      constructor(less) { this.items = []; this.less = less; }
+      get size() { return this.items.length; }
+      peek() { return this.items[0]; }
+      push(item) {
+        const h = this.items;
+        h.push(item);
+        let i = h.length - 1;
+        while (i > 0) {
+          const p = (i - 1) >> 1;
+          if (!this.less(h[i], h[p])) break;
+          [h[i], h[p]] = [h[p], h[i]];
+          i = p;
+        }
+      }
+      pop() {
+        const h = this.items;
+        const top = h[0];
+        const last = h.pop();
+        if (h.length > 0) {
+          h[0] = last;
+          let i = 0;
+          for (;;) {
+            const l = 2 * i + 1, r = l + 1;
+            let m = i;
+            if (l < h.length && this.less(h[l], h[m])) m = l;
+            if (r < h.length && this.less(h[r], h[m])) m = r;
+            if (m === i) break;
+            [h[i], h[m]] = [h[m], h[i]];
+            i = m;
+          }
+        }
+        return top;
+      }
+    }
+
+    function minMaxAfterEach(records) {
+      const latest = new Map();
+      const high = new Heap((a, b) => a[0] > b[0]);
+      const low = new Heap((a, b) => a[0] < b[0]);
+      const result = [];
+      for (const [timestamp, value] of records) {
+        latest.set(timestamp, value);
+        high.push([value, timestamp]);
+        low.push([value, timestamp]);
+        while (latest.get(high.peek()[1]) !== high.peek()[0]) high.pop();
+        while (latest.get(low.peek()[1]) !== low.peek()[0]) low.pop();
+        result.push([high.peek()[0], low.peek()[0]]);
+      }
+      return result;
+    }
+tests:
+  - {id: t1, args: [[[5, 40], [2, 10], [9, 70], [9, 15], [2, 50]]], expected: [[40, 40], [40, 10], [70, 10], [40, 10], [50, 15]], description: "Example 1"}
+  - {id: t2, args: [[[1, -3], [1, -3], [1, 8]]], expected: [[-3, -3], [-3, -3], [8, 8]], description: "Example 2 - a single timestamp corrected repeatedly"}
+  - {id: t3, hidden: true, args: [[[1000000000, 0]]], expected: [[0, 0]], description: "Single record at the largest timestamp"}
+  - {id: t4, hidden: true, args: [[[1, 5], [2, 5], [1, 3]]], expected: [[5, 5], [5, 5], [5, 3]], description: "Two timestamps share a value; correcting one must keep the other's 5"}
+  - {id: t5, hidden: true, args: [[[3, 1000000000], [1, -1000000000], [2, 0], [3, -1000000000], [1, 1000000000]]], expected: [[1000000000, 1000000000], [1000000000, -1000000000], [1000000000, -1000000000], [0, -1000000000], [1000000000, -1000000000]], description: "Extreme values swap between max and min"}
+  - {id: t6, hidden: true, args: [[[7, 100], [7, 90], [7, 80], [7, 70], [7, 60], [8, 65], [7, 100]]], expected: [[100, 100], [90, 90], [80, 80], [70, 70], [60, 60], [65, 60], [100, 65]], description: "Same timestamp lowered step by step - deep stale entries in the max-heap"}
+  - {id: t7, hidden: true, args: [[[9, 4], [1, 4], [5, 4], [9, 4], [1, 4]]], expected: [[4, 4], [4, 4], [4, 4], [4, 4], [4, 4]], description: "All values equal, including corrections to the same value"}
+  - {id: t8, hidden: true, args: [[[50, -7], [10, -2], [40, -9], [20, -1], [30, -5], [10, -8], [20, -10], [40, 3]]], expected: [[-7, -7], [-2, -7], [-2, -9], [-1, -9], [-1, -9], [-1, -9], [-5, -10], [3, -10]], description: "Negative values out of order with corrections to both ends"}
+  - {id: t9, hidden: true, args: [[[4, 943237], [9, 711688], [38, -319676], [29, -753996], [39, -969832], [6, 622095], [27, -983913], [16, -24164], [21, 134788], [30, -415474], [2, -242112], [13, -418708], [6, 43383], [17, 45815], [29, -599080], [21, 661096], [34, -248080], [31, 963669], [26, -412646], [33, 424230], [1, -418349], [8, -613912], [11, -404864], [39, 574789], [19, 517497], [11, 165261], [23, 872989], [0, -274431], [1, 551577], [18, 417884], [13, 63099], [13, -747869], [1, 902501], [36, 772946], [23, 199366], [20, -718668], [36, -324874], [17, 318689], [3, -912632], [7, 773311], [10, -562870], [17, -615721], [11, 254162], [28, 826248], [3, 889031], [36, -414664], [22, -661490], [20, 333294], [23, 627628], [25, -37118], [27, -513733], [16, 603559], [38, 608630], [10, 127440], [4, 186193], [30, -753040], [16, -514965], [38, -938771], [39, -671420], [15, -976861], [5, 256630], [5, 272527], [14, 486658], [36, 824877], [37, 530328], [23, -738894], [24, 985478], [19, 101947], [8, -949426], [20, -228832], [12, 934869], [37, -621573], [39, -71100], [28, 831721], [20, -909073], [35, 251492], [24, -339042], [38, -544907], [14, -753749], [19, 789626], [4, 454647], [4, -353470], [28, 495962], [22, -717030], [35, 345715], [37, 459983], [13, -361800], [37, -524808], [21, 971468], [17, 364984], [8, 579772], [6, 718361], [18, -303364], [16, 577617], [7, 705852], [18, -131939], [34, -384993], [34, 131687], [24, 948875], [2, 360233], [13, 991521], [30, -562385], [29, -702140], [28, 293154], [3, -725839], [22, 452177], [12, -34129], [25, -703120], [12, -583035], [1, -664039], [31, 433226], [10, 625495], [9, -97827], [23, 415715], [37, -245423], [21, -657227], [24, -491180], [24, 634402], [5, 47711], [35, 860020], [18, -913558], [12, -299582], [17, 552173], [13, 914334], [7, 810302], [11, -322726], [23, 910670], [1, -794988], [39, -75698], [4, 13713], [1, -762041], [8, -400256], [2, 224141], [17, 231961], [30, 718482], [3, 216593], [16, 28148], [33, 750449], [13, -96830], [32, 946421], [17, 323682], [12, -417676], [0, -682654], [32, -890187], [5, 748233], [18, -654954], [13, -926239], [36, -792572], [4, -512632], [35, 880856], [22, -726909], [10, 110808], [14, 177796], [22, -852726], [2, 715546], [11, -959350], [4, -225481], [13, 153807], [16, -253052], [0, 767889], [20, -753499], [31, 645041], [2, 762948], [15, 37544], [39, 801104], [28, -952391], [6, -63995], [34, 86034], [29, -580398], [12, 469524], [14, 600511], [39, -924711], [6, -561093], [23, 92718], [1, -792305], [7, 402664], [10, -337979], [12, 617966], [14, -626007], [11, -460417], [9, 344290], [13, -114649], [39, 63877], [25, 828093], [35, -991841], [9, 329447], [2, -569178], [2, -581927], [16, 527995], [0, 786658], [17, -595324], [15, -402322], [8, 914047], [34, 654696], [11, 672242], [22, -347492], [35, -769076], [39, 798492], [31, -289771], [0, 165258], [34, 3758], [23, -538780], [7, 646749], [22, 232173], [35, 711611], [33, -560813], [9, 739847], [38, 425941], [31, 639226], [15, -255595], [39, -880097], [25, 546038], [38, -530993], [16, -339614], [24, -156888], [16, -496422], [24, -292292], [4, -20340], [35, -49896], [17, -959128], [13, -534718], [3, 158134], [26, 529691], [13, -591122], [29, -849452], [13, -219466], [35, -341604], [13, 879361], [16, -216068], [9, 160351], [32, 127444], [7, -390785], [6, -772982], [33, 903848], [39, -42769], [28, 509909], [39, -365087], [20, -915054], [10, -994779], [13, -660274], [12, -86280], [10, 690145], [16, 796649], [0, -892900], [35, -640227], [19, -890372], [16, -639668], [6, 173122], [37, -960927], [31, -713514], [28, 199001], [32, 447471], [26, 89766], [6, 612357], [34, -905681], [12, -757523], [26, -929213], [31, 869243], [12, -694865], [11, -956006], [5, 968643], [4, 482440], [9, 600431], [6, 464026], [35, -355383], [20, 649224], [0, -879187], [35, 457183], [12, -277538], [7, -180299], [27, 421733], [3, 630594], [32, -301148], [13, 965117], [24, 868860], [23, -352768], [23, -811651], [6, -189746], [1, 256243], [21, -671572], [9, -649909], [25, 982651], [37, -135064], [14, 849800], [23, -986340], [32, -615384], [19, -37940], [35, -969367], [15, 898375], [2, -341323], [13, 87353], [18, -983545], [34, 620063], [23, 5180], [25, -784521], [37, 102301], [8, 485297], [23, 93319], [33, 270504], [26, -50828]]], expected: [[943237, 943237], [943237, 711688], [943237, -319676], [943237, -753996], [943237, -969832], [943237, -969832], [943237, -983913], [943237, -983913], [943237, -983913], [943237, -983913], [943237, -983913], [943237, -983913], [943237, -983913], [943237, -983913], [943237, -983913], [943237, -983913], [943237, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -983913], [963669, -747869], [963669, -747869], [963669, -747869], [963669, -747869], [963669, -747869], [963669, -753040], [963669, -753040], [963669, -938771], [963669, -938771], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [985478, -976861], [985478, -976861], [985478, -976861], [985478, -976861], [985478, -976861], [985478, -976861], [985478, -976861], [985478, -976861], [985478, -976861], [985478, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [963669, -976861], [971468, -976861], [971468, -976861], [971468, -976861], [971468, -976861], [971468, -976861], [971468, -976861], [971468, -976861], [971468, -976861], [971468, -976861], [971468, -976861], [971468, -976861], [971468, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [991521, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [914334, -976861], [910670, -976861], [946421, -976861], [946421, -976861], [946421, -976861], [946421, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -976861], [910670, -959350], [910670, -959350], [910670, -959350], [910670, -959350], [910670, -959350], [910670, -959350], [910670, -959350], [910670, -959350], [910670, -959350], [910670, -959350], [880856, -959350], [880856, -959350], [880856, -959350], [880856, -959350], [880856, -959350], [880856, -959350], [880856, -952391], [880856, -952391], [880856, -952391], [880856, -952391], [880856, -952391], [828093, -991841], [828093, -991841], [828093, -991841], [828093, -991841], [828093, -991841], [828093, -991841], [828093, -991841], [828093, -991841], [914047, -991841], [914047, -991841], [914047, -991841], [914047, -991841], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -952391], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -994779], [914047, -994779], [914047, -994779], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -959128], [914047, -960927], [914047, -960927], [914047, -960927], [914047, -960927], [914047, -960927], [914047, -960927], [914047, -960927], [914047, -960927], [914047, -960927], [914047, -960927], [914047, -960927], [914047, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [968643, -960927], [982651, -960927], [982651, -959128], [982651, -959128], [982651, -986340], [982651, -986340], [982651, -986340], [982651, -986340], [982651, -986340], [982651, -986340], [982651, -986340], [982651, -986340], [982651, -986340], [982651, -983545], [968643, -983545], [968643, -983545], [968643, -983545], [968643, -983545], [968643, -983545], [968643, -983545]], description: "300 records over 40 timestamps - frequent corrections with values in +-10^6"}
+expected_concepts:
+  - max-heap and min-heap over the stored values
+  - lazy deletion by checking entries against the latest value per timestamp
+  - hash map from timestamp to its current value
+  - alternative with an ordered multiset or sorted map of value counts
+  - duplicate values held by different timestamps
+optimal_complexity: {time: O(n log n), space: O(n)}
+rubric:
+  excellent: Keeps a map of the latest value per timestamp plus a max-heap and a min-heap, discards stale heap tops lazily (or uses an ordered multiset with counts), explains why duplicates across timestamps are safe and why the total work is O(n log n).
+  good: Correct solution with heaps or a sorted structure after a hint about stale entries or duplicate values.
+  weak: Recomputes the maximum and minimum by scanning every stored value after each record, or deletes a value from a plain set and loses a duplicate held by another timestamp.
+  criteria:
+    correctness: All tests pass, including corrections to the same value, duplicate values across timestamps and negative values.
+    efficiency: O(log n) amortised per record; no full scan of the stored values per record.
+    code_quality: Clear separation between updating the store and reading the extremes; a small helper or loop for discarding stale tops.
+    edge_cases: Repeated corrections of one timestamp, equal values on different timestamps and extreme values.
+    communication: Explains when a heap entry becomes stale and why each entry is popped at most once.
+hints:
+  - Keep the latest value of every timestamp in a map; the hard part is answering the maximum and minimum quickly after a value is replaced.
+  - Heaps cannot delete arbitrary entries cheaply, but you do not need to delete immediately - an outdated entry can be recognised when it reaches the top.
+  - Push (value, timestamp) into a max-heap and a min-heap on every record; before reading a top, pop entries whose value no longer equals the map's value for that timestamp. Each entry is pushed and popped once, so the total is O(n log n).
+followups:
+  - How would you support deleting a timestamp entirely?
+  - How would you also report the median after each record?
+  - How would an ordered map of value to count compare with lazy deletion in memory use when corrections are rare or frequent?
+  - What changes if only the last W timestamps (by time, not arrival) should be considered?
+common_errors:
+  - Removing the old value from a plain set, which also drops the same value stored for another timestamp.
+  - Keeping stale heap entries and reporting a value that was already corrected away.
+  - Scanning all stored values after every record, which is O(n^2) overall.
+  - Treating a correction as an extra value instead of a replacement.

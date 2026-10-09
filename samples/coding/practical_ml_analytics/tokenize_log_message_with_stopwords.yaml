@@ -1,0 +1,121 @@
+version: 1
+slug: tokenize_log_message_with_stopwords
+title: Tokenise a Log Message for Indexing
+difficulty: easy
+competency_keys: [algorithms, problem_solving, code_quality]
+role_tags: [backend, sre, data, llm]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Tokenise a Log Message for Indexing
+
+  A log search service indexes every log message as a list of terms so that engineers can search for
+  words such as `timeout` or `db`. Given one ASCII log message and a list of stopwords, produce its index
+  terms:
+
+  1. Lowercase the message.
+  2. Split it into **tokens**: maximal runs of the characters `a-z` and `0-9`. Every other character
+     (spaces, punctuation, underscores, tabs, symbols) only separates tokens.
+  3. Drop every token that equals a stopword. Stopwords are compared **case-insensitively** (the list
+     may contain upper-case letters).
+  4. Drop every token made **only of digits** (request ids, counters, ports); tokens that mix letters and
+     digits, such as `v2` or `x86`, are kept.
+
+  Return the remaining tokens in their original order, **keeping duplicates**. Return `[]` when nothing
+  remains.
+
+  ### Example 1
+  ```
+  Input:  message = "ERROR: Connection to db-01 timed out after 3000 ms", stopwords = ["to", "after", "the"]
+  Output: ["error", "connection", "db", "timed", "out", "ms"]
+  Explanation: "to" and "after" are stopwords; "01" and "3000" are digits only
+  ```
+
+  ### Example 2
+  ```
+  Input:  message = "Job 42 retried; RETRY limit=3 hit, retry_count=3", stopwords = ["Hit"]
+  Output: ["job", "retried", "retry", "limit", "retry", "count"]
+  Explanation: the underscore splits retry_count, and the stopword Hit removes hit
+  ```
+
+  ### Example 3
+  ```
+  Input:  message = "  ...  ", stopwords = []
+  Output: []
+  ```
+
+  ### Constraints
+  - `0 <= message.length <= 10^5`, printable ASCII plus tab characters
+  - `0 <= stopwords.length <= 1000`; each stopword is 1-20 ASCII letters or digits
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: tokenize_message
+  params:
+    - {name: message, type: string}
+    - {name: stopwords, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def tokenize_message(message: str, stopwords: list[str]) -> list[str]:
+        stop = {word.lower() for word in stopwords}
+        tokens: list[str] = []
+        current: list[str] = []
+        for ch in message.lower() + " ":
+            if ("a" <= ch <= "z") or ("0" <= ch <= "9"):
+                current.append(ch)
+            elif current:
+                token = "".join(current)
+                current = []
+                if token not in stop and not token.isdigit():
+                    tokens.append(token)
+        return tokens
+  javascript: |
+    function tokenizeMessage(message, stopwords) {
+      const stop = new Set(stopwords.map((w) => w.toLowerCase()));
+      const tokens = message.toLowerCase().match(/[a-z0-9]+/g) || [];
+      return tokens.filter((t) => !stop.has(t) && !/^[0-9]+$/.test(t));
+    }
+tests:
+  - {id: t1, args: ["ERROR: Connection to db-01 timed out after 3000 ms", ["to", "after", "the"]], expected: ["error", "connection", "db", "timed", "out", "ms"], description: "Example 1 - stopwords and numeric tokens removed"}
+  - {id: t2, args: ["Job 42 retried; RETRY limit=3 hit, retry_count=3", ["Hit"]], expected: ["job", "retried", "retry", "limit", "retry", "count"], description: "Example 2 - duplicates kept, underscore splits, upper-case stopword"}
+  - {id: t3, args: ["  ...  ", []], expected: [], description: "Example 3 - only separators"}
+  - {id: t4, hidden: true, args: ["", ["a"]], expected: [], description: "Empty message"}
+  - {id: t5, hidden: true, args: ["the THE The", ["tHe"]], expected: [], description: "Every token is a stopword in mixed case"}
+  - {id: t6, hidden: true, args: ["build x86_64 v2 2024 0x1F", []], expected: ["build", "x86", "v2", "0x1f"], description: "Mixed letter-digit tokens kept; pure digits dropped; 0x1f kept"}
+  - {id: t7, hidden: true, args: ["GET /api/v1/users?id=7&page=2 HTTP/1.1 200", ["get", "http"]], expected: ["api", "v1", "users", "id", "page"], description: "URL-like message with many separators; HTTP version and status code are numeric"}
+  - {id: t8, hidden: true, args: ["disk\tfull\t\ton /var/log", ["on"]], expected: ["disk", "full", "var", "log"], description: "Tabs act as separators like spaces"}
+  - {id: t9, hidden: true, args: ["warn warn WARN warn", ["error"]], expected: ["warn", "warn", "warn", "warn"], description: "Duplicates kept in order; stopword not present in the message"}
+  - {id: t10, hidden: true, args: ["404 500 503", ["404"]], expected: [], description: "Only numeric tokens, one also listed as a stopword - result is empty"}
+  - {id: t11, hidden: true, args: ["Deploy #118 finished in 12s", ["in"]], expected: ["deploy", "finished", "12s"], description: "Last token ends at the end of the string (no trailing separator) and 12s is kept"}
+  - {id: t12, hidden: true, args: ["user_session:8812 eu-west-1 GET status=504 user_session:8812 #3 GET, 30000ms GET, 30000ms cache for GET 30000ms GET 30000ms user_session:8812 eu-west-1 web-7f9c 30000ms timeout for, cache eu-west-1 user_session:8812 for, timeout 30000ms, cache status=504, cache, eu-west-1 web-7f9c eu-west-1 GET eu-west-1 user_session:8812 status=504 web-7f9c, eu-west-1 GET, eu-west-1, timeout 30000ms user_session:8812 for cache eu-west-1, timeout status=504 timeout for timeout status=504 cache, status=504, GET #3 GET for GET for web-7f9c, 30000ms user_session:8812, #3 cache #3 cache, status=504 timeout #3 user_session:8812, for user_session:8812 eu-west-1 user_session:8812 eu-west-1 user_session:8812 for, timeout #3 cache 30000ms timeout #3, web-7f9c #3 timeout, #3 web-7f9c eu-west-1 user_session:8812, eu-west-1 cache #3 web-7f9c 30000ms, user_session:8812 eu-west-1 cache eu-west-1 cache eu-west-1 timeout status=504 user_session:8812 #3 GET, eu-west-1 cache 30000ms GET for cache for GET, status=504 web-7f9c 30000ms timeout 30000ms GET eu-west-1 web-7f9c #3 cache 30000ms GET status=504 cache status=504 GET eu-west-1, user_session:8812 eu-west-1, cache status=504, GET status=504 web-7f9c 30000ms user_session:8812 eu-west-1, user_session:8812, 30000ms web-7f9c for timeout status=504 user_session:8812 30000ms GET 30000ms GET status=504 cache status=504, GET eu-west-1 GET #3 web-7f9c 30000ms timeout #3 user_session:8812, #3 cache, 30000ms user_session:8812 #3 GET status=504 user_session:8812 30000ms web-7f9c eu-west-1 GET #3, GET #3 web-7f9c 30000ms GET status=504 web-7f9c, #3 user_session:8812, #3, cache eu-west-1 cache, status=504 GET #3 user_session:8812 #3 GET eu-west-1 GET, 30000ms, GET status=504 timeout status=504 web-7f9c 30000ms web-7f9c 30000ms GET status=504, GET 30000ms GET #3 GET #3 timeout status=504 GET 30000ms, GET, eu-west-1 user_session:8812 30000ms cache status=504, user_session:8812 eu-west-1, web-7f9c for user_session:8812 for cache status=504 cache status=504 GET 30000ms cache, 30000ms web-7f9c status=504 cache, eu-west-1 GET, status=504 web-7f9c for, user_session:8812, eu-west-1 user_session:8812 30000ms cache, eu-west-1, user_session:8812, #3 GET status=504 GET #3 user_session:8812 status=504 web-7f9c status=504 web-7f9c #3 timeout eu-west-1 web-7f9c #3 cache 30000ms web-7f9c eu-west-1 timeout #3, GET, 30000ms, user_session:8812 #3, web-7f9c for web-7f9c #3, GET 30000ms GET, #3, timeout for cache 30000ms cache #3 web-7f9c for web-7f9c status=504,", ["the", "for", "in", "after", "GET"]], expected: ["user", "session", "eu", "west", "status", "user", "session", "30000ms", "30000ms", "cache", "30000ms", "30000ms", "user", "session", "eu", "west", "web", "7f9c", "30000ms", "timeout", "cache", "eu", "west", "user", "session", "timeout", "30000ms", "cache", "status", "cache", "eu", "west", "web", "7f9c", "eu", "west", "eu", "west", "user", "session", "status", "web", "7f9c", "eu", "west", "eu", "west", "timeout", "30000ms", "user", "session", "cache", "eu", "west", "timeout", "status", "timeout", "timeout", "status", "cache", "status", "web", "7f9c", "30000ms", "user", "session", "cache", "cache", "status", "timeout", "user", "session", "user", "session", "eu", "west", "user", "session", "eu", "west", "user", "session", "timeout", "cache", "30000ms", "timeout", "web", "7f9c", "timeout", "web", "7f9c", "eu", "west", "user", "session", "eu", "west", "cache", "web", "7f9c", "30000ms", "user", "session", "eu", "west", "cache", "eu", "west", "cache", "eu", "west", "timeout", "status", "user", "session", "eu", "west", "cache", "30000ms", "cache", "status", "web", "7f9c", "30000ms", "timeout", "30000ms", "eu", "west", "web", "7f9c", "cache", "30000ms", "status", "cache", "status", "eu", "west", "user", "session", "eu", "west", "cache", "status", "status", "web", "7f9c", "30000ms", "user", "session", "eu", "west", "user", "session", "30000ms", "web", "7f9c", "timeout", "status", "user", "session", "30000ms", "30000ms", "status", "cache", "status", "eu", "west", "web", "7f9c", "30000ms", "timeout", "user", "session", "cache", "30000ms", "user", "session", "status", "user", "session", "30000ms", "web", "7f9c", "eu", "west", "web", "7f9c", "30000ms", "status", "web", "7f9c", "user", "session", "cache", "eu", "west", "cache", "status", "user", "session", "eu", "west", "30000ms", "status", "timeout", "status", "web", "7f9c", "30000ms", "web", "7f9c", "30000ms", "status", "30000ms", "timeout", "status", "30000ms", "eu", "west", "user", "session", "30000ms", "cache", "status", "user", "session", "eu", "west", "web", "7f9c", "user", "session", "cache", "status", "cache", "status", "30000ms", "cache", "30000ms", "web", "7f9c", "status", "cache", "eu", "west", "status", "web", "7f9c", "user", "session", "eu", "west", "user", "session", "30000ms", "cache", "eu", "west", "user", "session", "status", "user", "session", "status", "web", "7f9c", "status", "web", "7f9c", "timeout", "eu", "west", "web", "7f9c", "cache", "30000ms", "web", "7f9c", "eu", "west", "timeout", "30000ms", "user", "session", "web", "7f9c", "web", "7f9c", "30000ms", "timeout", "cache", "30000ms", "cache", "web", "7f9c", "web", "7f9c", "status"], description: "Stress - 300 log words with punctuation, ids and stopwords"}
+expected_concepts:
+  - character-class tokenisation
+  - set lookup for stopwords
+  - case normalisation of both message and stopwords
+  - filtering numeric-only tokens
+  - flushing the last token at the end of the input
+optimal_complexity: {time: O(m + s) for message length m and total stopword length s, space: O(m + s)}
+rubric:
+  excellent: Lowercases the message and the stopwords, scans once (or uses a regex) to extract maximal alphanumeric runs, flushes the final token, filters with a set and a digits-only check, and explains why the set beats scanning the stopword list per token.
+  good: Correct tokens with a small slip such as forgetting to lowercase the stopwords or to flush the last token, fixed after running the tests.
+  weak: Splits only on spaces so punctuation stays inside tokens, removes duplicates, compares stopwords case-sensitively, or drops tokens such as v2 that contain digits.
+  criteria:
+    correctness: All tests pass, including tabs, underscores, URL-like messages and mixed letter-digit tokens.
+    efficiency: One pass over the message with constant-time stopword lookups.
+    code_quality: Tokenising and filtering are separate, readable steps; the character rule is stated once.
+    edge_cases: Empty message, separators only, every token a stopword and numeric stopwords.
+    communication: Explains the tokenisation rule and why numeric ids are excluded from the index.
+hints:
+  - Separate the job into two steps - first cut the message into candidate tokens, then decide which tokens to keep.
+  - A token ends at any character that is not a lowercase letter or a digit, so you can build tokens character by character (or use a pattern that matches runs of those characters); keep the stopwords in a lowercased set.
+  - Lowercase the message, collect every maximal run of a-z and 0-9 (remember the run that ends at the end of the string), lowercase the stopwords into a set, and keep a token only if it is not in the set and contains at least one letter.
+followups:
+  - How would you tokenise identifiers like camelCase or snake_case into separate words for search?
+  - How would you support non-ASCII messages correctly?
+  - How would you build an inverted index from these tokens for many messages?
+common_errors:
+  - Splitting only on spaces, so tokens like db-01 or retry_count stay whole.
+  - Forgetting to emit the final token when the message does not end with a separator.
+  - Comparing stopwords case-sensitively.
+  - Dropping every token that contains a digit instead of only digits-only tokens.
+  - De-duplicating the output.

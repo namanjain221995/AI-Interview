@@ -1,0 +1,596 @@
+# Curated system design questions: frontend and mobile client architecture, part 4.
+# Real-time collaborative editors and real-time clients: presence, autosave, OT versus CRDTs,
+# document models, undo, history, comments, offline edits, permissions, large documents,
+# whiteboards, browser IDEs, server validation, memory growth, encryption and AI co-editing.
+# round_types follow difficulty: easy -> system_design/combined; medium and hard -> system_design/deep_technical/combined.
+version: 1
+defaults:
+  role_tags: [frontend, mobile, fullstack]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.frontend_mobile_architecture.collab_live_cursors
+    competency_key: system_design
+    topic: Showing collaborators and their cursors in a document
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      In a shared document editor, we want to show who else has the document open and where their cursors and
+      selections are. How would you design that feature on the client?
+    expected_concepts:
+      - presence kept separate from document content and not persisted
+      - cursor positions expressed relative to document content rather than pixels
+      - throttling cursor updates
+      - timeouts so people who left disappear
+      - stable colours and names per collaborator
+    rubric:
+      excellent: Keeps presence as ephemeral state separate from the document, anchors cursors to content positions that survive edits, throttles updates and expires stale presence.
+      good: Broadcasts cursor positions over a real-time channel and shows a list of active users.
+      weak: Stores cursor positions in the document itself or sends pixel coordinates on every mouse move.
+    followups:
+      - Someone types above my cursor; how does my cursor stay in the right place on their screen?
+      - How would you handle a user who has the document open in two tabs?
+    common_errors:
+      - Using pixel coordinates that break on different screen sizes.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_autosave
+    competency_key: system_design
+    topic: Autosave in a document editor
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Our document editor has a save button, and people lose work when they forget to press it. How would you
+      design autosave so it's reliable and people trust it?
+    expected_concepts:
+      - saving after short pauses and on blur or page hide
+      - sending changes rather than the whole document where possible
+      - a visible saving or saved or offline status
+      - local backup of unsaved changes if the network fails
+      - handling save conflicts and ordering of requests
+    rubric:
+      excellent: Designs debounced saving with saves on page hide, a clear status indicator, local backup for failures and ordering or conflict handling between overlapping saves.
+      good: Saves periodically or after changes with a status indicator.
+      weak: Saves the whole document on every keystroke or gives no feedback about save state.
+    followups:
+      - Two save requests are in flight and the older one finishes last; what happens?
+      - What should the user see if saving has been failing for five minutes?
+    common_errors:
+      - Overlapping save requests overwriting newer content with older content.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_retro_board
+    competency_key: system_design
+    topic: Simple shared board for team retrospectives
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Let's design a simple shared board for team retrospectives, where people add sticky notes to columns, move
+      them and vote, and everyone sees changes live. How would you approach the client and real-time parts?
+    expected_concepts:
+      - a real-time channel per board for broadcasting changes
+      - modelling changes as small operations rather than sending the whole board
+      - optimistic local updates with server confirmation
+      - loading the current board state on join and after reconnect
+      - simple conflict rules for moves and votes
+    rubric:
+      excellent: Uses per-board real-time updates with small operations, optimistic UI, state resync on join and reconnect, and sensible conflict rules for concurrent moves and votes.
+      good: Broadcasts changes over a real-time connection and loads the board on join.
+      weak: Polls for the whole board frequently or ignores what happens when two people move the same note.
+    followups:
+      - Two people drag the same note to different columns at once; what should happen?
+      - How would votes stay accurate if someone double-clicks?
+    common_errors:
+      - Broadcasting the full board state on every change.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.frontend_mobile_architecture.ot_versus_crdt_choice
+    competency_key: system_design
+    topic: Choosing operational transformation or CRDTs
+    difficulty: medium
+    text: >-
+      We're building a collaborative rich-text editor and the team is split between operational transformation
+      and CRDTs. How would you explain the difference to them and decide which fits our product?
+    expected_concepts:
+      - operational transformation relies on a central server to order and transform operations
+      - CRDTs merge without central ordering and suit offline and peer-to-peer use
+      - metadata and memory overhead of CRDTs
+      - maturity of available libraries and editor integrations
+      - product requirements such as offline editing and server authority
+    rubric:
+      excellent: Explains both approaches accurately, connects the choice to product requirements like offline support and server authority, and weighs overhead and library maturity.
+      good: Describes the core difference and gives a reasoned preference.
+      weak: Cannot explain how either approach resolves concurrent edits.
+    followups:
+      - How does your choice change if users must edit offline for days?
+      - What would a central server still do if you chose CRDTs?
+    common_errors:
+      - Believing CRDTs remove the need for any server.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_rich_text_model
+    competency_key: system_design
+    topic: Document model for a rich-text editor
+    difficulty: medium
+    text: >-
+      Before writing any collaboration code for our rich-text editor, we need a document model. How would you
+      represent a document with paragraphs, headings, lists, tables, images and inline formatting?
+    expected_concepts:
+      - a structured tree of blocks rather than raw HTML
+      - inline text with marks for formatting
+      - a schema that defines valid nesting and normalisation rules
+      - stable ids for blocks to support comments and collaboration
+      - serialisation to and from storage and clipboard formats
+    rubric:
+      excellent: Designs a schema-validated tree of blocks with marked inline text, stable ids and normalisation, and explains how it serialises for storage, clipboard and collaboration.
+      good: Proposes a structured JSON model with blocks and formatting.
+      weak: Stores HTML from a content-editable element as the model.
+    followups:
+      - How would you handle pasting messy HTML from a web page?
+      - Where in your model would a comment attach?
+    common_errors:
+      - Using the browser's content-editable HTML as the source of truth.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_multiuser_undo
+    competency_key: system_design
+    topic: Undo and redo with several editors
+    difficulty: medium
+    text: >-
+      In a collaborative editor, when I press undo, I expect to undo my own last change, not someone else's. How
+      would you design undo and redo in that environment?
+    expected_concepts:
+      - per-user undo stacks of local operations
+      - inverting operations and transforming them against later remote changes
+      - grouping keystrokes into meaningful undo steps
+      - undo implemented as a new forward operation that is broadcast
+      - handling undo of changes that others have since modified
+    rubric:
+      excellent: Uses per-user stacks of grouped operations, applies undo as new transformed operations that are broadcast, and explains edge cases where remote edits overlap the undone change.
+      good: Keeps a per-user history and applies inverse operations.
+      weak: Uses a global undo stack or restores an earlier snapshot of the whole document.
+    followups:
+      - I delete a paragraph and a colleague edits text inside it; what does my undo bring back?
+      - How would you group typing into undo steps?
+    common_errors:
+      - Restoring a snapshot and wiping out other people's changes.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_version_history
+    competency_key: system_design
+    topic: Version history for a collaborative document
+    difficulty: medium
+    text: >-
+      Users of our collaborative editor want to see earlier versions of a document, compare them and restore one.
+      How would you design version history so it's useful and doesn't cost too much storage?
+    expected_concepts:
+      - periodic snapshots combined with the operation log
+      - grouping changes into versions by time and author
+      - named versions created by users
+      - restoring as a new change rather than rewriting history
+      - compaction and retention of old operations
+    rubric:
+      excellent: Combines snapshots with an operation log, groups changes into meaningful versions with authorship, restores as a forward change and plans compaction and retention.
+      good: Stores snapshots at intervals and allows viewing and restoring.
+      weak: Stores a full copy on every keystroke or offers no way to restore safely while others are editing.
+    followups:
+      - How would you show who changed what between two versions?
+      - What happens to people editing the document when someone restores an old version?
+    common_errors:
+      - Restoring by overwriting the document while others are connected.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_comment_anchoring
+    competency_key: system_design
+    topic: Comments anchored to text in a live document
+    difficulty: medium
+    text: >-
+      People leave comments on specific phrases in a shared document, and the text keeps changing around them. How
+      would you design comments so they stay attached to the right text?
+    expected_concepts:
+      - anchoring comments to positions that move with edits, such as relative positions or marks
+      - storing comment threads separately from document content
+      - handling deletion of the anchored text
+      - resolving, replying and notifying
+      - permissions for commenters who cannot edit
+    rubric:
+      excellent: Anchors comments with edit-stable positions, keeps threads separate from content, defines behaviour when anchored text is deleted or split, and covers resolution and commenter permissions.
+      good: Attaches comments to ranges that update as the document changes.
+      weak: Stores character offsets that drift as soon as someone edits above the comment.
+    followups:
+      - The commented sentence is deleted and then restored by undo; where is the comment?
+      - How would comments work for someone viewing an older version?
+    common_errors:
+      - Using absolute character offsets as anchors.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_offline_reconnect
+    competency_key: system_design
+    topic: Offline edits in a collaborative editor
+    difficulty: medium
+    text: >-
+      A user edits a shared document on a train for an hour without connection while colleagues keep editing
+      online. How would you design the client so their work merges cleanly when they reconnect?
+    expected_concepts:
+      - persisting local operations or document state durably on the device
+      - rebasing or merging pending local changes against remote history
+      - sending changes in batches and resuming from the last acknowledged version
+      - clear offline state in the UI
+      - handling a document that was deleted or permissions changed meanwhile
+    rubric:
+      excellent: Persists local changes durably, merges them against remote history through the collaboration algorithm, resumes from acknowledged versions and handles deletion or permission changes on reconnect.
+      good: Queues local changes and merges them on reconnect.
+      weak: Keeps changes in memory only or overwrites the server copy with the local one.
+    followups:
+      - The laptop restarts before reconnecting; is anything lost?
+      - What would the user see if large parts of their edits now conflict semantically?
+    common_errors:
+      - Sending the whole local document and overwriting others' work.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_permission_change_live
+    competency_key: system_design
+    topic: Permissions changing during a live editing session
+    difficulty: medium
+    text: >-
+      In a collaborative editor, an owner downgrades someone from editor to viewer while that person is actively
+      typing. How would you design permissions so the change takes effect correctly and quickly?
+    expected_concepts:
+      - server enforcement of permissions on every operation
+      - pushing permission changes over the live connection
+      - client switching to read-only and handling unsent local operations
+      - revoking access entirely and clearing cached content
+      - auditability of who changed what
+    rubric:
+      excellent: Enforces permissions server-side per operation, pushes changes to the client, defines clear handling of in-flight edits and cached content, and keeps an audit trail.
+      good: Rejects operations from users without edit rights and updates the UI.
+      weak: Only checks permissions when the document is opened.
+    followups:
+      - What happens to the edits the person typed in the last second?
+      - How would revoking access also remove the document from their offline cache?
+    common_errors:
+      - Trusting the client's view of its own permissions.
+
+  - external_key: system_design.frontend_mobile_architecture.realtime_connection_manager
+    competency_key: system_design
+    topic: Client real-time connection layer
+    difficulty: medium
+    text: >-
+      Several features in our app use WebSockets, and each one handles reconnection differently. How would you
+      design a shared client connection layer that every feature can rely on?
+    expected_concepts:
+      - one multiplexed connection with per-topic subscriptions
+      - reconnection with exponential backoff and jitter
+      - heartbeats to detect dead connections
+      - resubscribing and resuming from last known position after reconnect
+      - auth renewal on the connection
+      - exposing connection state to the UI
+    rubric:
+      excellent: Designs a multiplexed connection with backoff, heartbeats, auth renewal and resubscription with resume positions, and exposes a clear status and API to features.
+      good: Centralises the connection with reconnection and subscriptions.
+      weak: Leaves each feature to open its own socket or reconnects immediately in a tight loop.
+    followups:
+      - How does a feature know it might have missed messages while disconnected?
+      - What happens to all clients when the server restarts?
+    common_errors:
+      - Reconnecting without jitter, so every client hits the server at the same moment.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_large_document_perf
+    competency_key: system_design
+    topic: Performance of very large collaborative documents
+    difficulty: medium
+    text: >-
+      Some customers have collaborative documents that are hundreds of pages long, and typing becomes laggy when
+      several people are in them. How would you redesign the editor to stay responsive?
+    expected_concepts:
+      - profiling to find whether rendering, collaboration or layout is the bottleneck
+      - rendering only visible parts of the document
+      - applying remote operations in batches per frame
+      - incremental loading of document sections
+      - moving merge work to a worker where possible
+    rubric:
+      excellent: Starts from profiling, then virtualises rendering, batches remote updates, loads large documents incrementally and moves heavy work off the main thread.
+      good: Identifies rendering cost and suggests virtualisation or batching.
+      weak: Suggests limiting document size or the number of collaborators.
+    followups:
+      - How would virtualisation interact with search within the document?
+      - Ten people paste large chunks at once; what protects the typing experience?
+    common_errors:
+      - Re-rendering the whole document on every remote change.
+
+  - external_key: system_design.frontend_mobile_architecture.kanban_realtime_ordering
+    competency_key: system_design
+    topic: Real-time task board with drag-and-drop ordering
+    difficulty: medium
+    text: >-
+      Let's design a real-time task board like a kanban tool, where many people reorder cards within and between
+      columns at the same time. How would you store the order and keep everyone's view consistent?
+    expected_concepts:
+      - fractional or lexicographic position keys instead of integer indexes
+      - moves as single operations changing one card's position
+      - rebalancing keys when they grow too long
+      - optimistic local moves with server reconciliation
+      - deterministic tie-breaking for concurrent moves
+    rubric:
+      excellent: Uses fractional position keys so moves touch one card, explains rebalancing and deterministic tie-breaks, and pairs optimistic UI with server reconciliation.
+      good: Stores positions so that moves are cheap and syncs changes in real time.
+      weak: Renumbers every card in a column on each move.
+    followups:
+      - Two people drop different cards into the same slot at the same moment; what order results?
+      - How would keyboard users reorder cards?
+    common_errors:
+      - Integer indexes that require rewriting the whole column on every move.
+
+  - external_key: system_design.frontend_mobile_architecture.browser_code_editor
+    competency_key: system_design
+    topic: Code editor and workspace in the browser
+    difficulty: medium
+    text: >-
+      Let's design a browser-based coding workspace with a file tree, an editor with autocomplete and errors, and a
+      terminal connected to a remote container. How would you architect the client?
+    expected_concepts:
+      - an editor component with language features from a language server over a socket
+      - file system abstraction with lazy loading and change notifications
+      - terminal streaming over a dedicated channel
+      - saving and syncing files, including unsaved buffers
+      - lazy loading heavy editor code and language support
+    rubric:
+      excellent: Separates editor, file system, language services and terminal channels, explains how language servers connect remotely, handles unsaved buffers and keeps the initial load small.
+      good: Describes the main components and how they talk to the container.
+      weak: Treats it as a text area plus a run button without considering language services or file sync.
+    followups:
+      - The connection to the container drops; what happens to unsaved files?
+      - How would you keep autocomplete fast with a slow network?
+    common_errors:
+      - Loading every language mode up front.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_mobile_editing
+    competency_key: mobile_development
+    topic: Collaborative editing in a mobile app
+    difficulty: medium
+    text: >-
+      We're bringing our collaborative document editor to native iOS and Android apps. How would you design the
+      mobile client so editing feels native and collaboration works over flaky mobile networks?
+    expected_concepts:
+      - sharing the collaboration engine with web or across platforms
+      - native text input integration and IME handling
+      - pausing and resuming the connection with app lifecycle
+      - local persistence of the document and pending changes
+      - limiting battery and data use for presence and updates
+    rubric:
+      excellent: Decides how to share the collaboration core, integrates with native text input carefully, handles background and foreground transitions with durable local state, and limits battery and data cost.
+      good: Covers connection handling, local storage and native editing concerns.
+      weak: Wraps the web editor in a web view without considering input, lifecycle or network behaviour.
+    followups:
+      - How does the app catch up after being in the background for an hour?
+      - What problems do keyboards with prediction and composition cause for collaborative editing?
+    common_errors:
+      - Keeping the socket open in the background and draining the battery.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_embedded_live_blocks
+    competency_key: system_design
+    topic: Live embedded blocks inside a shared document
+    difficulty: medium
+    text: >-
+      Product wants people to embed live blocks in our collaborative documents, such as a chart from the analytics
+      tool, a task list from the tracker or a poll. How would you design the embedding model so blocks stay live,
+      secure and fast?
+    expected_concepts:
+      - the document stores a reference and configuration, not the live data
+      - each block type registered with a renderer and its own data source
+      - lazy loading and rendering blocks only when visible
+      - permission checks on the embedded data for each viewer
+      - fallbacks for exports, printing and viewers without access
+    rubric:
+      excellent: Stores references rather than data, uses a block registry with lazy loading, checks the embedded source's permissions per viewer and defines fallbacks for export and missing access.
+      good: Describes embedding blocks by reference with separate loading of their data.
+      weak: Copies a static snapshot of the data into the document or loads every block eagerly with the document owner's access.
+    followups:
+      - A viewer can open the document but not the analytics dashboard behind a chart; what do they see?
+      - How would a poll inside the document handle many people voting at once?
+    common_errors:
+      - Rendering embedded data with the document author's permissions instead of the viewer's.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.frontend_mobile_architecture.crdt_text_editor_end_to_end
+    competency_key: system_design
+    topic: Collaborative text editor end to end
+    difficulty: hard
+    text: >-
+      Let's design a collaborative document editor like the ones teams use for specs, from the client editor to the
+      sync service and storage, for documents with up to fifty concurrent editors. How would you architect it?
+    expected_concepts:
+      - client editor model bound to a CRDT or OT engine
+      - a document session service routing all editors of a document to the same place
+      - persistence of operations and periodic snapshots
+      - catch-up for late joiners from snapshot plus recent operations
+      - presence as a separate ephemeral channel
+      - access control and scaling across many documents
+    rubric:
+      excellent: Designs the client model, collaboration algorithm, per-document session routing, snapshot plus log storage, late-joiner catch-up, separate presence and access control, and explains how it scales across documents.
+      good: Covers the client, real-time sync and storage with a chosen merge approach.
+      weak: Describes saving the whole document on a timer and broadcasting it to others.
+    followups:
+      - The server holding a document's session crashes; what happens to connected editors?
+      - How would you load a document with two years of history quickly?
+    common_errors:
+      - Spreading one document's editors across servers with no ordering or shared state.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_whiteboard_canvas
+    competency_key: system_design
+    topic: Multiplayer design canvas at scale
+    difficulty: hard
+    text: >-
+      Let's design a multiplayer design canvas where files can contain tens of thousands of shapes, frames and
+      components, and many people edit at once. How would you design rendering and data sync on the client?
+    expected_concepts:
+      - GPU-accelerated canvas rendering with culling and level of detail
+      - a scene graph or object tree with property-level changes
+      - last writer wins per property with server ordering, or CRDT for structures
+      - spatial indexing for hit testing and selection
+      - loading pages or frames incrementally
+      - throttled presence such as cursors and selections
+    rubric:
+      excellent: Uses GPU rendering with culling, property-level sync with clear conflict rules, spatial indexes, incremental loading and throttled presence, and explains why each choice fits a canvas rather than text.
+      good: Proposes canvas rendering and real-time object-level updates.
+      weak: Renders every shape as a DOM element or syncs the whole file on each change.
+    followups:
+      - Two people change the same rectangle's colour at once; what wins and why is that acceptable?
+      - How would you reparent shapes between frames concurrently without creating cycles?
+    common_errors:
+      - Applying text-editing algorithms to every property where simpler rules would do.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_server_validation
+    competency_key: system_design
+    topic: Validating client operations in collaborative editing
+    difficulty: hard
+    text: >-
+      In our collaborative editor, a buggy or malicious client could send operations that corrupt the document or
+      break its structure. How would you design the system so the server can protect document integrity?
+    expected_concepts:
+      - server applying operations to its own copy and validating against the schema
+      - rejecting or transforming invalid operations and notifying the client
+      - size and rate limits per client and per operation
+      - authorisation checks per operation, such as section-level permissions
+      - recovery tools such as snapshots to roll back corruption
+    rubric:
+      excellent: Has the server apply and validate operations against the schema and permissions, rejects with client resync, enforces size and rate limits, and keeps snapshots to recover from corruption.
+      good: Validates operations on the server and applies limits.
+      weak: Relays operations between clients without server-side checks.
+    followups:
+      - How would validation work if you chose a peer-to-peer CRDT design?
+      - A client sends a ten megabyte paste; what happens?
+    common_errors:
+      - Treating the server as a dumb relay that trusts every client.
+
+  - external_key: system_design.frontend_mobile_architecture.crdt_memory_growth
+    competency_key: system_design
+    topic: Metadata growth in long-lived CRDT documents
+    difficulty: hard
+    text: >-
+      A year after launching CRDT-based collaboration, some documents load slowly and use lots of memory because
+      of accumulated history and deleted content. How would you redesign storage and loading to fix that?
+    expected_concepts:
+      - tombstones and per-character metadata as the cause
+      - snapshotting and compacting state that all replicas have seen
+      - garbage collection constrained by offline clients that may still send old operations
+      - loading a compact snapshot and fetching history only when needed
+      - measuring document size and load time to target the worst cases
+    rubric:
+      excellent: Diagnoses tombstone and metadata growth, designs compaction and garbage collection that is safe with lagging or offline clients, and changes loading to use compact snapshots with history on demand.
+      good: Proposes snapshots and compaction with some awareness of offline clients.
+      weak: Suggests deleting history without considering clients that still depend on it.
+    followups:
+      - A client that has been offline for three months reconnects after you compacted; what happens?
+      - How would version history still work after compaction?
+    common_errors:
+      - Garbage collecting state that an offline replica still references.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_end_to_end_encrypted
+    competency_key: system_design
+    topic: Collaborative editing with end-to-end encryption
+    difficulty: hard
+    text: >-
+      A customer requires that our servers can never read their documents, yet they still want real-time
+      collaboration, sharing and version history. How would you design the editor and sync for that?
+    expected_concepts:
+      - document keys held by clients and shared through per-user key wrapping
+      - encrypting operations or updates before sending
+      - CRDTs that merge on clients since the server cannot transform content
+      - encrypted snapshots for history and fast loading
+      - key rotation when a collaborator is removed
+      - features lost on the server such as search and previews
+    rubric:
+      excellent: Designs client-held document keys with secure sharing, client-side merging of encrypted updates, encrypted snapshots and rotation on removal, and explicitly names the server-side features that are lost.
+      good: Encrypts updates on the client with a shared document key and explains key sharing.
+      weak: Encrypts only in transit or at rest on the server and calls it end to end.
+    followups:
+      - A collaborator is removed; what stops them reading future edits?
+      - How would full-text search work for these documents?
+    common_errors:
+      - Choosing server-side operational transformation, which requires reading content.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_cross_platform_core
+    competency_key: system_design
+    topic: One collaborative editing engine for web and native apps
+    difficulty: hard
+    text: >-
+      Our collaborative editor exists on web, and separate teams are building iOS and Android versions with their own
+      sync code, which keeps producing divergent documents. How would you design a shared engine for all three?
+    expected_concepts:
+      - a shared core for document model and merging in Rust, C++ or WebAssembly
+      - platform-specific editing surfaces bound to the shared model
+      - a shared conformance test suite of concurrent edit scenarios
+      - versioned document schema and wire format
+      - binary size and performance on mobile
+    rubric:
+      excellent: Proposes a single shared core for model and merge with native editing surfaces, backs it with cross-platform conformance tests and versioned formats, and weighs size and performance costs.
+      good: Shares the merge logic across platforms with some testing approach.
+      weak: Lets each platform reimplement the algorithm from a written spec.
+    followups:
+      - How would you roll out a document format change when old app versions are still in use?
+      - What tests would prove the platforms converge on the same document?
+    common_errors:
+      - Independent implementations that differ in edge cases and corrupt shared documents.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_suggestion_mode
+    competency_key: system_design
+    topic: Suggestion mode and tracked changes
+    difficulty: hard
+    text: >-
+      Reviewers want a suggestion mode in our collaborative editor, where their edits appear as proposals the author
+      can accept or reject, while others keep editing normally. How would you design that?
+    expected_concepts:
+      - suggestions as marked insertions and deletions in the document model
+      - attribution of each suggestion to its author
+      - accept and reject as operations that collaborate like any other edit
+      - overlapping suggestions and edits on suggested text
+      - rendering and permissions for suggesters versus editors
+    rubric:
+      excellent: Represents suggestions in the document model with authorship, makes accept and reject ordinary collaborative operations, and handles overlapping suggestions and edits on suggested content.
+      good: Marks suggested insertions and deletions and allows accepting or rejecting them.
+      weak: Keeps suggestions as a separate copy of the document that is merged later.
+    followups:
+      - Someone edits inside text that is a pending suggested deletion; what happens?
+      - How would accept-all behave with thousands of suggestions?
+    common_errors:
+      - Storing suggestions outside the document so they drift from the text.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_thousand_viewers
+    competency_key: system_design
+    topic: A live document watched by thousands
+    difficulty: hard
+    text: >-
+      During a company-wide incident, a single status document has five editors and three thousand people watching
+      it live. How would you design the editor and real-time delivery so this works smoothly?
+    expected_concepts:
+      - separating editors from read-only viewers
+      - fan-out for viewers through a broadcast tier rather than the editing session
+      - batching updates for viewers at a lower frequency
+      - aggregating presence instead of showing every viewer
+      - catch-up from a snapshot for late joiners
+    rubric:
+      excellent: Separates the editing session from a scalable viewer fan-out, batches viewer updates, aggregates presence and handles late joiners and reconnect storms.
+      good: Recognises that viewers and editors need different handling and proposes broadcasting updates.
+      weak: Treats every viewer as a full collaborator with cursors and presence.
+    followups:
+      - The network blips and three thousand viewers reconnect at once; what happens?
+      - How would you show presence without rendering three thousand avatars?
+    common_errors:
+      - Broadcasting every cursor movement to every viewer.
+
+  - external_key: system_design.frontend_mobile_architecture.collab_ai_coediting
+    competency_key: system_design
+    topic: An AI assistant editing a shared document
+    difficulty: hard
+    text: >-
+      We want an AI assistant that can rewrite sections of a collaborative document by streaming its output, while
+      people may still be typing in the same document. How would you design that integration?
+    expected_concepts:
+      - the assistant acting as a collaborator whose edits go through the same operation pipeline
+      - anchoring the target range so it survives concurrent edits
+      - streaming output as a pending suggestion or into a scratch area before committing
+      - accept, reject and undo of the whole AI change as one unit
+      - attribution, permissions and rate limits for AI edits
+    rubric:
+      excellent: Treats the assistant as a collaborator through the normal operation pipeline, anchors ranges robustly, streams into a reviewable suggestion, and makes the change atomic to accept or undo with clear attribution.
+      good: Streams AI output into the document with some handling of concurrent edits.
+      weak: Replaces the section text directly when the response finishes, ignoring concurrent edits.
+    followups:
+      - A colleague deletes the paragraph the assistant is rewriting halfway through; what happens?
+      - How would undo work for a large AI rewrite?
+    common_errors:
+      - Overwriting the section with the AI result and losing edits made while it was generating.

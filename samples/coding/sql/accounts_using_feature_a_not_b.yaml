@@ -1,0 +1,212 @@
+version: 1
+slug: accounts_using_feature_a_not_b
+title: Export Users Without Scheduled Reports
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [product_manager, data_analyst, backend]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Export Users Without Scheduled Reports
+
+  Product analytics records one row in `feature_usage` every time an account uses a feature. The
+  growth team believes that accounts which repeatedly export data by hand would benefit from
+  scheduled reports, and wants a list of upsell candidates.
+
+  Table `feature_usage`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | account_id | INTEGER | the account that used the feature, never NULL |
+  | feature | VARCHAR(60) | feature key, for example `'bulk_export'`, `'scheduled_reports'`, `'dashboards'` |
+  | used_at | TEXT | usage date formatted `'YYYY-MM-DD'` |
+
+  Return the `account_id` of every account that used `'bulk_export'` **at least once** and has
+  **never** used `'scheduled_reports'` (at any time, before or after the export). Feature keys match
+  exactly: `'bulk_export_csv'` is a different feature. Each account appears once.
+
+  Order the result by `account_id` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  feature_usage
+  +----+------------+-------------------+------------+
+  | id | account_id | feature           | used_at    |
+  +----+------------+-------------------+------------+
+  | 1  | 101        | bulk_export       | 2026-08-01 |
+  | 2  | 101        | scheduled_reports | 2026-08-03 |
+  | 3  | 102        | bulk_export       | 2026-08-02 |
+  | 4  | 102        | bulk_export       | 2026-08-05 |
+  | 5  | 103        | dashboards        | 2026-08-02 |
+  | 6  | 104        | scheduled_reports | 2026-08-04 |
+  | 7  | 105        | bulk_export       | 2026-08-06 |
+  +----+------------+-------------------+------------+
+
+  Output
+  +------------+
+  | account_id |
+  +------------+
+  | 102        |
+  | 105        |
+  +------------+
+  101 already uses scheduled reports; 103 and 104 never exported. 102 appears once.
+  ```
+
+  ### Example 2
+  ```
+  feature_usage
+  +----+------------+-------------------+------------+
+  | id | account_id | feature           | used_at    |
+  +----+------------+-------------------+------------+
+  | 1  | 7          | scheduled_reports | 2026-01-01 |
+  | 2  | 7          | bulk_export       | 2026-02-01 |
+  | 3  | 8          | bulk_export       | 2026-02-01 |
+  +----+------------+-------------------+------------+
+
+  Output
+  +------------+
+  | account_id |
+  +------------+
+  | 8          |
+  +------------+
+  Account 7 used scheduled reports before exporting, so it is excluded too.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^6`
+  - `account_id` and `feature` are never NULL; feature keys are lowercase and compared exactly.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return each account_id that used 'bulk_export' but never 'scheduled_reports', ordered by account_id.
+    SELECT account_id
+    FROM feature_usage
+    WHERE feature = 'bulk_export'
+    ORDER BY account_id;
+reference_solutions:
+  sql: |
+    SELECT DISTINCT u.account_id
+    FROM feature_usage u
+    WHERE u.feature = 'bulk_export'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM feature_usage s
+        WHERE s.account_id = u.account_id
+          AND s.feature = 'scheduled_reports'
+      )
+    ORDER BY u.account_id;
+sql_setup: |
+  CREATE TABLE feature_usage (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    feature VARCHAR(60) NOT NULL,
+    used_at TEXT NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - excluded user of both features, repeated exports deduplicated, other features ignored"
+    ordered: true
+    setup_sql: |
+      INSERT INTO feature_usage (id, account_id, feature, used_at) VALUES
+        (1, 101, 'bulk_export', '2026-08-01'), (2, 101, 'scheduled_reports', '2026-08-03'), (3, 102, 'bulk_export', '2026-08-02'),
+        (4, 102, 'bulk_export', '2026-08-05'), (5, 103, 'dashboards', '2026-08-02'), (6, 104, 'scheduled_reports', '2026-08-04'),
+        (7, 105, 'bulk_export', '2026-08-06');
+    expected_rows: [[102], [105]]
+  - id: t2
+    description: "Example 2 - scheduled reports used before the export still excludes the account"
+    ordered: true
+    setup_sql: |
+      INSERT INTO feature_usage (id, account_id, feature, used_at) VALUES
+        (1, 7, 'scheduled_reports', '2026-01-01'), (2, 7, 'bulk_export', '2026-02-01'), (3, 8, 'bulk_export', '2026-02-01');
+    expected_rows: [[8]]
+  - id: t3
+    hidden: true
+    description: "Empty table returns no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Nobody used bulk_export - no rows even though some accounts never used scheduled_reports"
+    ordered: true
+    setup_sql: |
+      INSERT INTO feature_usage (id, account_id, feature, used_at) VALUES
+        (1, 1, 'dashboards', '2026-03-01'), (2, 2, 'scheduled_reports', '2026-03-02'), (3, 3, 'alerts', '2026-03-03');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Many exports by one account - returned once (missing DISTINCT trap)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO feature_usage (id, account_id, feature, used_at) VALUES
+        (1, 50, 'bulk_export', '2026-04-01'), (2, 50, 'bulk_export', '2026-04-02'), (3, 50, 'bulk_export', '2026-04-03'),
+        (4, 50, 'dashboards', '2026-04-03'), (5, 50, 'bulk_export', '2026-04-04');
+    expected_rows: [[50]]
+  - id: t6
+    hidden: true
+    description: "Similar feature keys - bulk_export_csv does not qualify and scheduled_reports_beta does not exclude"
+    ordered: true
+    setup_sql: |
+      INSERT INTO feature_usage (id, account_id, feature, used_at) VALUES
+        (1, 1, 'bulk_export_csv', '2026-05-01'), (2, 2, 'bulk_export', '2026-05-01'), (3, 2, 'scheduled_reports_beta', '2026-05-02'),
+        (4, 3, 'bulk_export', '2026-05-03'), (5, 3, 'scheduled_reports', '2026-05-04');
+    expected_rows: [[2]]
+  - id: t7
+    hidden: true
+    description: "Numeric ordering of account ids (9 before 10 before 100) with interleaved rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO feature_usage (id, account_id, feature, used_at) VALUES
+        (1, 100, 'bulk_export', '2026-06-01'), (2, 9, 'bulk_export', '2026-06-01'), (3, 10, 'bulk_export', '2026-06-02'),
+        (4, 11, 'bulk_export', '2026-06-02'), (5, 11, 'scheduled_reports', '2026-06-03'), (6, 1000, 'scheduled_reports', '2026-06-04');
+    expected_rows: [[9], [10], [100]]
+  - id: t8
+    hidden: true
+    description: "Every exporter already uses scheduled reports - no rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO feature_usage (id, account_id, feature, used_at) VALUES
+        (1, 4, 'bulk_export', '2026-07-01'), (2, 4, 'scheduled_reports', '2026-07-01'), (3, 5, 'scheduled_reports', '2026-06-01'),
+        (4, 5, 'bulk_export', '2026-07-02'), (5, 5, 'bulk_export', '2026-07-03');
+    expected_rows: []
+  - id: t9
+    hidden: true
+    description: "Larger mix of accounts and features"
+    ordered: true
+    setup_sql: |
+      INSERT INTO feature_usage (id, account_id, feature, used_at) VALUES
+        (1, 21, 'bulk_export', '2026-09-01'), (2, 22, 'bulk_export', '2026-09-01'), (3, 23, 'bulk_export', '2026-09-01'),
+        (4, 24, 'dashboards', '2026-09-01'), (5, 25, 'bulk_export', '2026-09-02'), (6, 22, 'scheduled_reports', '2026-09-02'),
+        (7, 26, 'bulk_export', '2026-09-02'), (8, 27, 'alerts', '2026-09-03'), (9, 25, 'bulk_export', '2026-09-03'),
+        (10, 28, 'scheduled_reports', '2026-09-03'), (11, 26, 'scheduled_reports', '2026-09-04'), (12, 29, 'bulk_export', '2026-09-04'),
+        (13, 21, 'dashboards', '2026-09-05'), (14, 30, 'bulk_export', '2026-09-05'), (15, 23, 'alerts', '2026-09-05');
+    expected_rows: [[21], [23], [25], [29], [30]]
+expected_concepts:
+  - "anti-join with NOT EXISTS or LEFT JOIN ... IS NULL"
+  - "set difference (EXCEPT)"
+  - "DISTINCT to remove duplicates from event data"
+  - "conditional aggregation as an alternative"
+optimal_complexity: {time: "O(n) with a hash anti-join or an index on (account_id, feature)", space: "O(a) for a accounts"}
+rubric:
+  excellent: "Writes a correct anti-join (NOT EXISTS, LEFT JOIN ... IS NULL, EXCEPT or conditional aggregation with HAVING), removes duplicates, explains why filtering rows with feature <> 'scheduled_reports' is wrong, and suggests an index on (account_id, feature)."
+  good: "Correct query after a hint about duplicates or about the exclusion applying to the whole account."
+  weak: "Filters individual rows instead of accounts, returns duplicates, or uses NOT IN without thinking about NULLs."
+  criteria:
+    correctness: "All tests pass, including repeated exports, similar feature keys and order-independent exclusion."
+    efficiency: "Set-based anti-join or single grouped pass; no per-row procedural logic."
+    code_quality: "Clear aliases, readable predicate and explicit ORDER BY."
+    edge_cases: "Empty table, no exporters, all exporters excluded and numeric ordering of ids."
+    communication: "Explains row-level versus account-level conditions."
+hints:
+  - "The condition is about accounts, not individual usage rows: an account qualifies based on everything it has ever done."
+  - "Find accounts with an export, then remove those for which a scheduled_reports row exists for the same account; make sure each account is listed once."
+  - "Select DISTINCT account_id from rows where feature = 'bulk_export' AND NOT EXISTS a row for the same account with feature = 'scheduled_reports' (or use EXCEPT, or GROUP BY account_id with conditional counts in HAVING), then ORDER BY account_id."
+followups:
+  - "How would you rewrite this with GROUP BY and HAVING only?"
+  - "How would you limit it to accounts that exported at least three times in the last 30 days?"
+  - "Which index helps most on hundreds of millions of usage events?"
+common_errors:
+  - "Filtering rows with feature <> 'scheduled_reports', which keeps exporters that also use scheduled reports."
+  - "Forgetting DISTINCT, which returns an account once per export."
+  - "Matching feature keys with LIKE 'bulk_export%', which also counts bulk_export_csv."

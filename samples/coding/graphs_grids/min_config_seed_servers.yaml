@@ -1,0 +1,198 @@
+version: 1
+slug: min_config_seed_servers
+title: "Minimum Config Seed Servers"
+difficulty: hard
+competency_keys: [algorithms, problem_solving]
+role_tags: [platform, sre, devops, backend]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Minimum Config Seed Servers
+
+  A platform team distributes a new configuration bundle across `n` servers with ids `0` to `n - 1`.
+  Servers replicate to each other over one-way channels: `links` contains pairs `[from, to]`, meaning
+  that as soon as server `from` holds the bundle it pushes a copy to server `to`. Propagation repeats,
+  so the bundle keeps flowing along chains of channels, and channels may form loops. The same pair
+  can appear more than once.
+
+  The release tool can upload the bundle directly to a chosen set of **seed** servers; everything
+  else must receive it through replication. Return the **minimum number of seed servers** needed so
+  that every server eventually holds the bundle.
+
+  ### Example 1
+  ```
+  Input:  n = 5, links = [[0, 1], [1, 2], [2, 0], [3, 4]]
+  Output: 2
+  Explanation: Seeding any one of 0, 1 or 2 covers that loop; server 3 must be seeded
+               to reach 3 and 4.
+  ```
+
+  ### Example 2
+  ```
+  Input:  n = 4, links = [[0, 1], [1, 2], [2, 3], [3, 1]]
+  Output: 1
+  Explanation: Seeding server 0 reaches 1, then 2 and 3 through the loop.
+  ```
+
+  ### Example 3
+  ```
+  Input:  n = 3, links = []
+  Output: 3
+  ```
+
+  ### Constraints
+  - `1 <= n <= 10^4`
+  - `0 <= links.length <= 3 * 10^4`
+  - `links[i].length == 2`, `0 <= from, to < n` and `from != to`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: min_seed_servers
+  params:
+    - {name: n, type: "int"}
+    - {name: links, type: "int[][]"}
+  return_type: "int"
+  comparison: exact
+reference_solutions:
+  python: |
+    def min_seed_servers(n: int, links: list[list[int]]) -> int:
+        out_edges: list[list[int]] = [[] for _ in range(n)]
+        in_edges: list[list[int]] = [[] for _ in range(n)]
+        for a, b in links:
+            out_edges[a].append(b)
+            in_edges[b].append(a)
+        # pass 1: iterative depth-first search, record servers by finish time
+        visited = [False] * n
+        finished: list[int] = []
+        for start in range(n):
+            if visited[start]:
+                continue
+            visited[start] = True
+            stack = [(start, 0)]
+            while stack:
+                server, index = stack[-1]
+                if index < len(out_edges[server]):
+                    stack[-1] = (server, index + 1)
+                    nxt = out_edges[server][index]
+                    if not visited[nxt]:
+                        visited[nxt] = True
+                        stack.append((nxt, 0))
+                else:
+                    stack.pop()
+                    finished.append(server)
+        # pass 2: on reversed channels, in decreasing finish time, label each loop group (SCC)
+        group = [-1] * n
+        groups = 0
+        for start in reversed(finished):
+            if group[start] != -1:
+                continue
+            group[start] = groups
+            todo = [start]
+            while todo:
+                server = todo.pop()
+                for prev in in_edges[server]:
+                    if group[prev] == -1:
+                        group[prev] = groups
+                        todo.append(prev)
+            groups += 1
+        # a group needs a seed exactly when no channel enters it from another group
+        fed = [False] * groups
+        for a, b in links:
+            if group[a] != group[b]:
+                fed[group[b]] = True
+        return fed.count(False)
+  javascript: |
+    function minSeedServers(n, links) {
+      const outEdges = Array.from({ length: n }, () => []);
+      const inEdges = Array.from({ length: n }, () => []);
+      for (const [a, b] of links) {
+        outEdges[a].push(b);
+        inEdges[b].push(a);
+      }
+      const visited = new Array(n).fill(false);
+      const finished = [];
+      for (let start = 0; start < n; start++) {
+        if (visited[start]) continue;
+        visited[start] = true;
+        const stack = [[start, 0]];
+        while (stack.length > 0) {
+          const top = stack[stack.length - 1];
+          const server = top[0];
+          if (top[1] < outEdges[server].length) {
+            const next = outEdges[server][top[1]++];
+            if (!visited[next]) {
+              visited[next] = true;
+              stack.push([next, 0]);
+            }
+          } else {
+            stack.pop();
+            finished.push(server);
+          }
+        }
+      }
+      const group = new Array(n).fill(-1);
+      let groups = 0;
+      for (let i = finished.length - 1; i >= 0; i--) {
+        const start = finished[i];
+        if (group[start] !== -1) continue;
+        group[start] = groups;
+        const todo = [start];
+        while (todo.length > 0) {
+          const server = todo.pop();
+          for (const prev of inEdges[server]) {
+            if (group[prev] === -1) {
+              group[prev] = groups;
+              todo.push(prev);
+            }
+          }
+        }
+        groups++;
+      }
+      const fed = new Array(groups).fill(false);
+      for (const [a, b] of links) {
+        if (group[a] !== group[b]) fed[group[b]] = true;
+      }
+      return fed.filter((x) => !x).length;
+    }
+tests:
+  - {id: t1, args: [5, [[0, 1], [1, 2], [2, 0], [3, 4]]], expected: 2, description: "Example 1 - an unfed loop and a short chain"}
+  - {id: t2, args: [4, [[0, 1], [1, 2], [2, 3], [3, 1]]], expected: 1, description: "Example 2 - a loop fed from outside needs no extra seed"}
+  - {id: t3, args: [3, []], expected: 3, description: "Example 3 - no channels, every server is its own seed"}
+  - {id: t4, hidden: true, args: [1, []], expected: 1, description: "Single server"}
+  - {id: t5, hidden: true, args: [6, [[0, 1], [1, 2], [2, 0], [3, 4], [4, 5], [5, 3]]], expected: 2, description: "Two isolated loops - in-degree zero count would wrongly give 0"}
+  - {id: t6, hidden: true, args: [6, [[5, 4], [4, 3], [3, 2], [2, 1], [1, 0]]], expected: 1, description: "Chain written from the highest id - only server 5 is needed; id-order greedy seeding over-counts"}
+  - {id: t7, hidden: true, args: [7, [[0, 1], [1, 0], [1, 2], [2, 3], [3, 2], [4, 3], [5, 6], [6, 5]]], expected: 3, description: "Loop feeding a loop, an extra source into the second loop and an independent loop"}
+  - {id: t8, hidden: true, args: [5, [[0, 4], [0, 4], [1, 4], [1, 4], [2, 4], [3, 4]]], expected: 4, description: "Many sources into one sink with duplicate channels"}
+  - {id: t9, hidden: true, args: [5, [[4, 0], [4, 1], [4, 2], [4, 3], [0, 4]]], expected: 1, description: "Hub server 4 sits in a two-server loop with server 0 and reaches everyone"}
+  - {id: t10, hidden: true, args: [8, [[1, 0], [2, 1], [0, 2], [3, 2], [4, 3], [3, 4], [5, 6], [6, 7], [7, 5], [7, 3]]], expected: 1, description: "Three loops chained 5-6-7 into 3-4 into 0-1-2, listed out of order - one seed at the top"}
+  - {id: t11, hidden: true, args: [60, [[1, 0], [2, 1], [3, 2], [4, 3], [5, 4], [6, 5], [7, 6], [8, 7], [9, 8], [10, 9], [11, 10], [12, 11], [13, 12], [14, 13], [15, 14], [16, 15], [17, 16], [18, 17], [19, 18], [20, 19], [21, 20], [22, 21], [23, 22], [24, 23], [25, 24], [26, 25], [27, 26], [28, 27], [29, 28], [30, 29], [31, 30], [32, 31], [33, 32], [34, 33], [35, 34], [36, 35], [37, 36], [38, 37], [39, 38], [40, 39], [41, 40], [42, 41], [43, 42], [44, 43], [45, 44], [46, 45], [47, 46], [48, 47], [49, 48], [50, 49], [51, 50], [52, 51], [53, 52], [54, 53], [55, 54], [56, 55], [57, 56], [58, 57], [59, 58], [0, 59]]], expected: 1, description: "Ring of 60 servers listed backwards - one seed"}
+  - {id: t12, hidden: true, args: [300, [[219, 189], [72, 111], [143, 45], [94, 39], [238, 121], [26, 62], [102, 253], [250, 61], [20, 169], [80, 299], [196, 33], [80, 158], [245, 93], [231, 86], [84, 144], [93, 262], [213, 6], [90, 158], [33, 196], [109, 85], [67, 177], [197, 231], [146, 56], [240, 19], [133, 191], [197, 182], [106, 57], [241, 166], [185, 265], [124, 81], [71, 237], [223, 21], [32, 126], [141, 40], [131, 163], [22, 147], [138, 200], [156, 97], [43, 171], [98, 23], [87, 51], [118, 74], [260, 203], [235, 42], [91, 118], [75, 32], [140, 275], [97, 268], [103, 167], [141, 176], [48, 8], [267, 96], [251, 101], [204, 2], [158, 130], [172, 53], [210, 206], [279, 269], [56, 172], [9, 248], [45, 79], [296, 54], [51, 99], [277, 24], [297, 0], [290, 277], [261, 172], [242, 103], [214, 84], [203, 184], [111, 150], [225, 280], [184, 4], [198, 251], [67, 266], [58, 60], [5, 267], [19, 95], [275, 125], [109, 44], [229, 195], [171, 46], [226, 208], [157, 69], [81, 98], [209, 9], [121, 238], [42, 90], [71, 266], [273, 201], [177, 14], [263, 67], [105, 242], [257, 105], [228, 292], [150, 135], [205, 175], [233, 154], [217, 94], [183, 270], [252, 154], [145, 237], [269, 230], [230, 3], [194, 71], [289, 296], [152, 17], [141, 82], [298, 214], [44, 174], [278, 124], [67, 148], [13, 66], [50, 199], [201, 40], [119, 118], [70, 285], [85, 208], [233, 131], [254, 168], [86, 162], [107, 255], [194, 258], [183, 270], [127, 108], [126, 297], [220, 287], [14, 123], [60, 58], [99, 211], [299, 80], [190, 209], [269, 198], [207, 176], [194, 265], [288, 240], [36, 163], [139, 16], [113, 157], [266, 263], [280, 66], [283, 64], [80, 272], [34, 218], [153, 140], [114, 76], [135, 60], [208, 223], [175, 205], [115, 172], [55, 212], [227, 37], [173, 248], [10, 63], [112, 270], [211, 104], [71, 108], [243, 110], [207, 272], [280, 216], [72, 182], [33, 230], [33, 54], [36, 83], [221, 217], [89, 160], [144, 298], [46, 28], [77, 50], [202, 256], [154, 177], [179, 220], [63, 10], [71, 165], [38, 288], [28, 159], [161, 289], [249, 31], [143, 45], [92, 0], [244, 16], [198, 91], [113, 31], [137, 227], [36, 151], [222, 155], [294, 29], [61, 247], [135, 44], [9, 63], [54, 286], [217, 248], [26, 144], [202, 29], [122, 134], [72, 216], [65, 235], [166, 107], [234, 279], [268, 187], [35, 226], [168, 254], [120, 219], [190, 17], [297, 87], [39, 276], [147, 207], [58, 232], [193, 274], [262, 243], [239, 264], [274, 18], [59, 45], [18, 186], [226, 208], [159, 142], [42, 70], [177, 185], [207, 262], [255, 231], [218, 281], [16, 244], [190, 197], [132, 138], [31, 143], [41, 250], [76, 181], [191, 153], [177, 239], [12, 122], [285, 139], [56, 133], [121, 238], [112, 88], [189, 7], [101, 116], [66, 13], [78, 152], [296, 123], [239, 264], [224, 25], [70, 141], [162, 100], [259, 109], [188, 59], [37, 87], [299, 254], [201, 5], [176, 70], [15, 179], [287, 92], [72, 149], [195, 293], [182, 190], [296, 134], [169, 55], [47, 156], [155, 43], [231, 17], [299, 170], [24, 238], [134, 283], [91, 176], [291, 128], [116, 284], [194, 72], [135, 111], [178, 271], [265, 48], [209, 180], [157, 131], [32, 205], [11, 188], [289, 194], [68, 278], [142, 222], [128, 115], [152, 110], [148, 229], [4, 203], [161, 260], [25, 273], [1, 120], [129, 210], [136, 65], [165, 194], [29, 290], [71, 80], [209, 168], [170, 49], [80, 170], [246, 34], [79, 11], [140, 275], [27, 47], [186, 148], [253, 225], [216, 102], [53, 228], [230, 73], [212, 246], [163, 257], [143, 31], [271, 267], [48, 185], [247, 249], [236, 178], [139, 285], [167, 205], [194, 191], [125, 146], [6, 68], [164, 75], [179, 1], [276, 221], [185, 183], [96, 129], [40, 240], [108, 202], [167, 233], [91, 178], [83, 15], [192, 222], [249, 41], [272, 49], [92, 220], [196, 10], [295, 5], [174, 215], [179, 106], [30, 136], [130, 30], [69, 113], [21, 119], [264, 164], [88, 26], [36, 83], [187, 204], [62, 78], [260, 117], [21, 84], [8, 174], [256, 192], [284, 234], [163, 282], [32, 252], [160, 85], [250, 128], [221, 232], [152, 88], [110, 245], [200, 22], [206, 173], [64, 12], [206, 236], [185, 183], [199, 38], [286, 296], [115, 291], [299, 170], [221, 232], [85, 89], [100, 241], [181, 294], [235, 187], [23, 213], [104, 137], [123, 14], [52, 123], [293, 193], [292, 10], [112, 209], [90, 196], [74, 35], [57, 145], [266, 214], [215, 259], [185, 121], [281, 20], [219, 189], [95, 77], [24, 114], [292, 261], [237, 36], [192, 127], [117, 161], [66, 259], [5, 224], [2, 27], [0, 126], [7, 1], [49, 132], [180, 112], [228, 189]]], expected: 9, description: "Stress: 300 servers in loop clusters joined by forward channels and duplicates"}
+expected_concepts:
+  - "strongly connected components (Kosaraju or Tarjan)"
+  - "condensation of a directed graph into a DAG of components"
+  - "components with no incoming edge from another component must be seeded"
+  - "why counting servers with in-degree zero is wrong when loops exist"
+  - "iterative depth-first search for large graphs"
+optimal_complexity: {time: "O(n + e)", space: "O(n + e)"}
+rubric:
+  excellent: "Shows why counting zero in-degree servers fails for a loop with no outside input, collapses loops into strongly connected components, argues that exactly the components with no incoming channel from another component need one seed each (and that one seed suffices for each), and implements an iterative linear-time SCC algorithm."
+  good: "Reaches the SCC idea and the source-component count with some prompting, or uses a correct but recursive SCC implementation and notes the depth risk."
+  weak: "Counts only servers with in-degree zero, greedily seeds and floods without handling loops, or tries every subset of seeds."
+  criteria:
+    correctness: "All tests pass, including isolated loops, chains of loops and duplicate channels."
+    efficiency: "Linear in servers plus channels; no repeated flooding from every server."
+    code_quality: "SCC labelling and the final counting step are separated and clearly named."
+    edge_cases: "Handles no channels, a single server, duplicate pairs and a loop fed from outside."
+    communication: "Gives both directions of the argument: every source component needs a seed, and seeding one server per source component reaches everything."
+hints:
+  - "A server with no incoming channel clearly must be seeded, but that is not the whole story. What happens with a loop of servers that nothing outside the loop feeds?"
+  - "Inside a group of servers that can all reach each other, one seed is enough for the whole group. Collapse each such group into a single node and look at the resulting graph, which has no loops."
+  - "Compute strongly connected components with an iterative Kosaraju or Tarjan pass, then mark every component that receives a channel from a different component. The answer is the number of unmarked components, because each needs its own seed and seeding one server in each reaches everything downstream."
+followups:
+  - "How would you return an actual set of seed servers, choosing the lowest id in each group?"
+  - "What is the minimum number of new channels needed so that seeding any single server reaches everyone?"
+  - "If each server had an upload cost, how would you pick the cheapest seeds?"
+  - "How would you keep the answer current as channels are added during a rollout?"
+common_errors:
+  - "Returning the number of servers with no incoming channel, which is 0 for an isolated loop that still needs a seed."
+  - "Seeding greedily in id order and flooding, which can seed a downstream server before its upstream source."
+  - "Counting components with no outgoing edge instead of no incoming edge."
+  - "Recursing over a chain of 10^4 servers and exceeding the recursion limit."

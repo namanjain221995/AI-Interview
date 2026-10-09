@@ -1,0 +1,634 @@
+# System design: data platforms (part 1 of 4) — ingestion pipelines, streaming analytics,
+# warehouses and lakehouses, data quality systems and metrics platforms.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [data, data_analyst]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.data_pipelines.product_event_collection
+    competency_key: data_engineering
+    topic: Collecting product events from web and mobile apps
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A product team wants every button click and page view from the website and the mobile app to end up in
+      the warehouse so analysts can query it the next morning. Sketch the pipeline you'd build, from the
+      client all the way to a queryable table.
+    expected_concepts:
+      - client SDK batching events and retrying with a local buffer
+      - collector endpoint that validates and appends to a durable log or queue
+      - raw immutable landing zone in object storage
+      - scheduled load into partitioned warehouse tables
+      - event id and client timestamp versus server receive time
+      - basic schema or event-name validation
+    rubric:
+      excellent: Describes each hop with a reason (buffered client, stateless collector, durable queue, raw landing, partitioned load), handles retries with event ids, and separates client time from server time.
+      good: Produces a sensible client-to-collector-to-storage-to-warehouse flow and mentions at least one reliability concern.
+      weak: Has clients write straight into the warehouse or skips how data survives failures in between.
+    followups:
+      - Mobile clients go offline for hours and then upload a backlog. What does that do to your daily tables?
+      - Where would you catch an event that arrives with a misspelled name?
+    common_errors:
+      - Trusting the device clock as the only timestamp.
+      - Having the browser call the warehouse loading API directly.
+
+  - external_key: system_design.data_pipelines.partner_file_drops
+    competency_key: data_engineering
+    topic: Ingesting partner file drops
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Three partners send us a CSV file every night over SFTP, each with slightly different columns and
+      occasionally late or duplicated. How would you design the ingestion so these files land reliably in
+      one clean table?
+    expected_concepts:
+      - copy files untouched to an archive before processing
+      - per-partner mapping to a common schema
+      - tracking processed files by name and checksum to skip duplicates
+      - validation of row counts, headers and types with a quarantine path
+      - alerting when an expected file has not arrived by a cutoff
+      - reprocessing a single file or day on demand
+    rubric:
+      excellent: Keeps raw files immutable, makes the load idempotent with a file manifest, maps each partner explicitly, quarantines bad files and alerts on missing ones.
+      good: Covers mapping and validation and has some way to avoid loading the same file twice.
+      weak: Loads files straight into the final table with no record of what was processed or how to recover.
+    followups:
+      - A partner resends yesterday's file with corrections. How does your design handle that?
+      - How would you notice that one partner quietly stopped sending a column?
+    common_errors:
+      - Deleting source files after load so nothing can be replayed.
+
+  - external_key: system_design.data_pipelines.first_warehouse_layers
+    competency_key: data_engineering
+    topic: Layering a first analytics warehouse
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      You're the first data hire at a startup that has a Postgres app database, Stripe and a CRM. How would you
+      lay out the warehouse so that raw data, cleaned data and the tables analysts actually use stay
+      understandable as it grows?
+    expected_concepts:
+      - raw or landing layer that mirrors sources
+      - staging layer for renaming, typing and deduplication
+      - modelled marts organised by business area
+      - naming conventions and ownership per layer
+      - transformations kept in version control and tested
+    rubric:
+      excellent: Proposes clear layers with a purpose for each, explains why raw stays untouched, ties marts to business questions and mentions version control, testing and naming.
+      good: Describes raw versus modelled data and a reasonable folder or schema layout.
+      weak: Suggests analysts query source copies directly or builds one giant table with no structure.
+    followups:
+      - Who is allowed to query each layer, and why?
+      - What would make you split a mart into two?
+    common_errors:
+      - Applying business logic during extraction so the original values are lost.
+
+  - external_key: system_design.data_pipelines.nightly_job_freshness_alerts
+    competency_key: data_engineering
+    topic: Detecting a silently broken nightly pipeline
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Last month the nightly sales pipeline finished successfully every day, but for a week it loaded almost no
+      rows and nobody noticed until finance complained. What would you add to the system so that this gets
+      caught on the first day?
+    expected_concepts:
+      - freshness checks on the latest loaded timestamp
+      - row-count or volume checks against recent history
+      - checks owned by the pipeline, not only job success status
+      - alerts routed to an owner with a runbook
+      - blocking downstream publishes when a check fails
+    rubric:
+      excellent: Distinguishes job success from data correctness, adds freshness and volume checks with sensible thresholds, routes alerts to an owner and stops bad data from reaching reports.
+      good: Adds row-count or freshness checks with alerting.
+      weak: Only suggests watching for job failures or asking users to report problems.
+    followups:
+      - How would you set a volume threshold for a table that is much quieter on weekends?
+      - Who should get paged, and who should only get an email?
+    common_errors:
+      - Hard-coding a fixed minimum row count that breaks on holidays.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.data_pipelines.postgres_cdc_to_warehouse
+    competency_key: data_engineering
+    topic: Change data capture from an operational database
+    difficulty: medium
+    text: >-
+      Analysts want the orders and customers tables from our production Postgres in the warehouse within five
+      minutes, and the database team won't allow heavy queries against the primary. How would you design that
+      replication path?
+    expected_concepts:
+      - log-based capture from the write-ahead log via a replication slot
+      - change events published to a durable log keyed by primary key
+      - initial snapshot coordinated with the change stream
+      - applying inserts, updates and deletes with a merge in the warehouse
+      - ordering by log position to resolve multiple changes per key
+      - replication slot lag monitoring so the primary's disk does not fill
+    rubric:
+      excellent: Uses log-based capture with a consistent snapshot, keys and orders changes per row, applies them with a merge including deletes, and calls out replication slot risk on the primary.
+      good: Chooses log-based capture and explains how changes get merged into warehouse tables.
+      weak: Proposes polling every five minutes with full table scans or ignores deletes entirely.
+    followups:
+      - What happens to the primary if your consumer is down for a day?
+      - A column is added to the orders table. Walk me through what breaks and what doesn't.
+    common_errors:
+      - Appending change events without ever collapsing them into current state.
+
+  - external_key: system_design.data_pipelines.live_order_metrics_windows
+    competency_key: data_engineering
+    topic: Windowed real-time order metrics
+    difficulty: medium
+    text: >-
+      The operations team wants a live view of orders per minute and revenue per minute for each region,
+      fed from an order events stream. How would you design the streaming job, including how it decides a
+      minute is finished?
+    expected_concepts:
+      - tumbling windows keyed by region on event time
+      - watermarks and allowed lateness
+      - handling late events with updates or a side output
+      - checkpointed state for recovery
+      - sink that supports upserts per window and key
+    rubric:
+      excellent: Uses event-time windows with watermarks, explains the latency versus completeness trade-off of lateness, handles late records explicitly and writes idempotently to an upsert sink.
+      good: Picks windows keyed by region and knows that late data needs a policy.
+      weak: Aggregates by processing time without discussing late or out-of-order events.
+    followups:
+      - The dashboard shows a dip every minute that later fills in. How would you explain that to the ops team?
+      - How would the job behave if one region's events arrive ten minutes delayed?
+    common_errors:
+      - Treating arrival time as event time.
+
+  - external_key: system_design.data_pipelines.ecommerce_star_schema
+    competency_key: data_engineering
+    topic: Dimensional model for e-commerce sales
+    difficulty: medium
+    text: >-
+      Design the warehouse model for an online shop's sales reporting: people want revenue by product, by
+      category, by customer segment and by promotion, with refunds handled correctly. What tables would you
+      build and at what grain?
+    expected_concepts:
+      - fact table at the order line grain
+      - dimensions for product, customer, date and promotion with surrogate keys
+      - refunds as separate fact rows or a returns fact rather than updates
+      - additive measures and avoiding double counting order-level amounts
+      - conformed dimensions shared with other facts
+    rubric:
+      excellent: States the grain explicitly, places each measure at the right grain, handles order-level discounts and refunds without double counting, and explains surrogate keys and conformed dimensions.
+      good: Proposes a reasonable fact and dimension design with a stated grain.
+      weak: Builds one wide table at order level and cannot say how product-level revenue would be computed.
+    followups:
+      - Shipping is charged per order, not per item. Where does that live?
+      - How would you support reporting by the product category as it was at the time of sale?
+    common_errors:
+      - Repeating order-level totals on every line item and summing them.
+
+  - external_key: system_design.data_pipelines.customer_history_dimension
+    competency_key: data_engineering
+    topic: Tracking dimension history over time
+    difficulty: medium
+    text: >-
+      Sales leadership wants to report revenue by the account manager who owned each customer at the time of
+      the sale, but the CRM only stores the current owner. How would you design the pipeline and tables to make
+      that possible?
+    expected_concepts:
+      - capture snapshots or changes from the CRM regularly
+      - type 2 dimension with valid-from, valid-to and current flag
+      - joining facts on the version valid at the event time
+      - handling multiple changes within one load interval
+      - backfill limitations for history that was never captured
+    rubric:
+      excellent: Designs change capture into a versioned dimension, explains the point-in-time join, deals with gaps and same-day changes, and is clear that past history cannot be recovered retroactively.
+      good: Proposes a type 2 dimension and a correct time-based join.
+      weak: Overwrites the owner in place or stamps the current owner on old sales.
+    followups:
+      - How would you fix a wrong ownership record from three months ago?
+      - What happens to the join if the validity ranges overlap by mistake?
+    common_errors:
+      - Joining facts to the current version instead of the version valid at the time.
+
+  - external_key: system_design.data_pipelines.quality_gates_in_pipeline
+    competency_key: data_engineering
+    topic: Data quality gates inside a pipeline
+    difficulty: medium
+    text: >-
+      You're asked to add data quality checks to a pipeline that feeds an executive dashboard. How would you
+      decide which checks to run where, and which failures should stop the pipeline versus just raise a
+      warning?
+    expected_concepts:
+      - checks at ingestion, after transformation and before publish
+      - schema, uniqueness, not-null and referential checks
+      - business rule and distribution checks
+      - severity levels that block or warn
+      - publishing through a staging table and an atomic swap
+      - recording check results for trend analysis
+    rubric:
+      excellent: Places checks at each stage with a purpose, ties severity to the cost of wrong data versus stale data, and uses a write-audit-publish pattern so failed data never reaches the dashboard.
+      good: Lists sensible checks and distinguishes blocking from warning.
+      weak: Adds checks only at the end or treats every check as a hard failure without considering impact.
+    followups:
+      - When is showing yesterday's numbers better than showing today's slightly wrong ones?
+      - How would you stop a noisy check from training people to ignore alerts?
+    common_errors:
+      - Running checks after the data is already visible to users.
+
+  - external_key: system_design.data_pipelines.event_schema_evolution
+    competency_key: data_engineering
+    topic: Schema evolution for event streams
+    difficulty: medium
+    text: >-
+      Twenty backend teams publish events to a shared Kafka cluster that the data team consumes. Producers
+      keep changing payloads and breaking downstream jobs. How would you design schema management so teams can
+      still evolve their events safely?
+    expected_concepts:
+      - schema registry with versioned schemas per topic
+      - compatibility rules such as backward or full compatibility
+      - checks in producer CI before deploy
+      - additive changes and defaults instead of renames or type changes
+      - new topic or version for breaking changes with a migration window
+    rubric:
+      excellent: Introduces a registry with enforced compatibility, catches violations before deploy, explains which changes are safe and gives a concrete process for breaking changes.
+      good: Proposes a registry or contracts and explains backward compatibility.
+      weak: Relies on consumers parsing loosely or on announcing changes in a chat channel.
+    followups:
+      - A team genuinely needs to change a field from string to integer. Walk me through the rollout.
+      - Which compatibility mode would you choose for an event consumed by twenty jobs, and why?
+    common_errors:
+      - Confusing backward with forward compatibility.
+
+  - external_key: system_design.data_pipelines.orchestrating_hundreds_of_jobs
+    competency_key: data_engineering
+    topic: Orchestrating a large set of dependent jobs
+    difficulty: medium
+    text: >-
+      The data team has about two hundred cron jobs with dependencies that live mostly in people's heads, and
+      failures cascade in confusing ways. How would you design the orchestration layer to replace them?
+    expected_concepts:
+      - explicit dependency graph with data or task dependencies
+      - idempotent tasks parameterised by logical date
+      - retries with backoff and clear failure ownership
+      - SLAs or deadlines on critical outputs
+      - backfill and rerun of a subtree
+      - migration in stages rather than a big bang
+    rubric:
+      excellent: Models dependencies explicitly, makes tasks idempotent per partition, explains retries, alerting and SLAs on outputs, supports partial reruns and plans an incremental migration.
+      good: Proposes a DAG-based orchestrator with retries and dependencies.
+      weak: Suggests adding more cron entries or sleeps between jobs.
+    followups:
+      - How do you express a dependency on a table produced by another team's pipeline?
+      - A task failed at 3am and four downstream jobs are waiting. What should happen automatically?
+    common_errors:
+      - Using wall-clock time inside tasks instead of the run's logical date.
+
+  - external_key: system_design.data_pipelines.streaming_duplicate_events
+    competency_key: distributed_systems
+    topic: Deduplicating an at-least-once event stream
+    difficulty: medium
+    text: >-
+      Our event bus delivers at least once, so the streaming job that counts purchases sometimes counts the same
+      purchase twice after a retry or a consumer restart. How would you design the pipeline so the counts are
+      correct?
+    expected_concepts:
+      - producer-assigned unique event ids
+      - keyed state remembering seen ids with a time-to-live
+      - choosing the dedup window based on how late duplicates can arrive
+      - checkpointing state together with consumer offsets
+      - idempotent or transactional writes to the sink
+    rubric:
+      excellent: Uses stable event ids, deduplicates in keyed state with a bounded window justified by retry behaviour, ties state to checkpoints and makes the sink idempotent.
+      good: Proposes dedup by event id with some bound on state.
+      weak: Relies on the broker never redelivering or deduplicates on payload content alone.
+    followups:
+      - How much state would that need at fifty thousand events per second?
+      - What if a duplicate arrives a day later from a mobile client backlog?
+    common_errors:
+      - Keeping every seen id forever until the job runs out of memory.
+
+  - external_key: system_design.data_pipelines.governed_revenue_metric
+    competency_key: data_analysis
+    topic: One definition of revenue across dashboards
+    difficulty: medium
+    text: >-
+      Finance, sales and product each have a dashboard showing monthly revenue, and all three numbers are
+      different. How would you design a metrics layer so that everyone gets the same answer for the same
+      question?
+    expected_concepts:
+      - metric definitions in code with owners and documentation
+      - semantic layer that generates queries from definitions
+      - explicit dimensions, filters and time grain per metric
+      - certified versus exploratory metrics
+      - reconciliation against the system of record
+      - change process for definitions with versioning
+    rubric:
+      excellent: Centralises definitions in a governed, versioned layer that tools query, assigns owners, reconciles to finance and explains how changes are reviewed and communicated.
+      good: Proposes shared definitions or a semantic layer with an owner.
+      weak: Suggests picking one dashboard as correct without addressing why definitions diverged.
+    followups:
+      - Sales legitimately needs bookings while finance needs recognised revenue. How does your design handle that?
+      - How would analysts still explore without bypassing the governed definitions?
+    common_errors:
+      - Assuming the differences are bugs rather than different definitions.
+
+  - external_key: system_design.data_pipelines.streaming_writes_small_files
+    competency_key: data_engineering
+    topic: Lakehouse tables fed by streaming writes
+    difficulty: medium
+    text: >-
+      A streaming job writes to an open table format in the lake every thirty seconds, and after a few weeks
+      queries on that table have become very slow. How would you redesign the write and maintenance side of
+      this table?
+    expected_concepts:
+      - many tiny files and metadata growth from frequent commits
+      - background compaction to target file sizes
+      - snapshot expiry and orphan file cleanup
+      - partitioning and sort order aligned with query filters
+      - trading commit frequency against freshness
+      - avoiding conflicts between compaction and streaming commits
+    rubric:
+      excellent: Explains how frequent commits create small files and metadata bloat, adds scheduled compaction, snapshot expiry and clustering, and deals with concurrency between writers and maintenance.
+      good: Identifies small files and proposes compaction.
+      weak: Proposes adding more compute to the query engine without addressing the table layout.
+    followups:
+      - How would you decide the right commit interval for this job?
+      - What could go wrong if compaction rewrites files while the stream is committing?
+    common_errors:
+      - Expiring snapshots so aggressively that time travel and slow readers break.
+
+  - external_key: system_design.data_pipelines.pii_in_analytics
+    competency_key: data_engineering
+    topic: Handling personal data in an analytics platform
+    difficulty: medium
+    text: >-
+      Customer emails, phone numbers and addresses are flowing into the analytics platform through several
+      pipelines. How would you design the platform so analysts can still do their work while personal data
+      is properly protected?
+    expected_concepts:
+      - classifying and tagging sensitive columns at ingestion
+      - tokenisation or keyed hashing for join keys
+      - restricted raw zone with separate access
+      - column masking and row policies by role
+      - access audit logging
+      - retention limits for personal fields
+    rubric:
+      excellent: Classifies data at the entry point, separates restricted raw data, pseudonymises join keys, applies role-based masking and auditing, and sets retention, while keeping analytical joins possible.
+      good: Proposes masking or hashing plus restricted access.
+      weak: Relies on asking analysts not to look at certain columns.
+    followups:
+      - Why is a plain unsalted hash of an email address weak protection?
+      - A support analyst occasionally needs to see the real email. How do you allow that?
+    common_errors:
+      - Hashing join keys differently per pipeline so tables can no longer be joined.
+
+  - external_key: system_design.data_pipelines.reverse_etl_to_crm
+    competency_key: data_engineering
+    topic: Syncing warehouse data back into business tools
+    difficulty: medium
+    text: >-
+      The sales team wants a lead score and lifetime value computed in the warehouse to show up on each account
+      in the CRM, updated every hour. How would you design that sync?
+    expected_concepts:
+      - computing only changed records with a diff against the last sync
+      - mapping warehouse keys to CRM record ids
+      - respecting API rate limits with batching and backoff
+      - idempotent upserts and per-record error handling
+      - observability on sync failures and stale fields
+    rubric:
+      excellent: Syncs only diffs, handles id mapping, rate limits and partial failures, makes writes idempotent and gives the business a way to see stale or failed records.
+      good: Proposes a scheduled job that pushes updates through the API with retries.
+      weak: Rewrites every record every hour without considering limits or failures.
+    followups:
+      - A sales rep manually edited the lead score in the CRM. What should the next sync do?
+      - How would you know the sync has been failing for a subset of accounts?
+    common_errors:
+      - Ignoring API rate limits until the sync is throttled.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.data_pipelines.exactly_once_streaming_aggregates
+    competency_key: distributed_systems
+    topic: Exactly-once results from a streaming aggregation
+    difficulty: hard
+    text: >-
+      A streaming job aggregates usage per customer per hour from Kafka and writes the results to a database
+      that drives invoices, so a lost or double-counted event costs real money. How would you design it so the
+      written totals are exactly right through crashes, restarts and redeploys?
+    expected_concepts:
+      - consistent checkpoints of offsets and operator state together
+      - transactional or two-phase commit sink, or idempotent upserts keyed by window and customer
+      - replay from committed offsets after failure
+      - handling late events after a window was emitted
+      - reconciliation job comparing stream totals with a batch recount
+    rubric:
+      excellent: Explains that exactly-once is an end-to-end property, ties offsets and state to checkpoints, makes sink writes transactional or idempotent, defines late-data handling for invoices and adds independent reconciliation.
+      good: Knows to checkpoint offsets with state and make the sink idempotent.
+      weak: Claims the broker guarantees exactly-once by itself or ignores what happens to writes during a crash.
+    followups:
+      - Your sink doesn't support transactions. How do you still get correct totals?
+      - An invoice was already sent when a late event for that hour arrives. What should the system do?
+      - How would you prove to finance that the stream didn't drop anything last month?
+    common_errors:
+      - Committing consumer offsets before the sink write succeeds.
+
+  - external_key: system_design.data_pipelines.ad_attribution_pipeline
+    competency_key: data_engineering
+    topic: Joining impressions and clicks for ad attribution
+    difficulty: hard
+    text: >-
+      Design the pipeline that attributes clicks and conversions to ad impressions for an ad platform handling
+      billions of impressions a day, where a conversion can happen up to seven days after the click. Advertisers
+      want hourly reports.
+    expected_concepts:
+      - stream-stream joins with bounded time windows and large keyed state
+      - impression and click ids propagated for exact joins
+      - provisional hourly results corrected by later restatement
+      - batch recomputation for the seven-day window
+      - attribution model logic kept separate and versioned
+      - invalid traffic filtering before billing
+    rubric:
+      excellent: Combines streaming joins for fresh provisional numbers with batch restatement for the long attribution window, sizes the state, propagates ids for exact joins, and explains how advertisers see corrections.
+      good: Designs a workable join with time windows and acknowledges late conversions.
+      weak: Treats it as a simple daily batch join or ignores the seven-day lag.
+    followups:
+      - How much join state would you be holding, and where would it live?
+      - How do you present numbers to advertisers that are still changing for a week?
+      - What happens if the attribution rule changes mid-month?
+    common_errors:
+      - Holding seven days of impressions in in-memory streaming state without sizing it.
+
+  - external_key: system_design.data_pipelines.erasure_requests_in_lake
+    competency_key: data_engineering
+    topic: Honouring deletion requests in an immutable lake
+    difficulty: hard
+    text: >-
+      Legal says that when a customer asks to be forgotten, their data must be removed from the analytics
+      platform within thirty days, including the raw zone, derived tables and backups. Our lake is built on
+      immutable files. How would you design for that?
+    expected_concepts:
+      - registry of deletion requests keyed by user identifiers
+      - lineage to find every dataset containing the user
+      - row-level deletes via table format merge or rewrite, then snapshot expiry
+      - crypto-shredding with per-user keys as an alternative
+      - backups with expiry shorter than the deadline or re-applied deletions on restore
+      - audit evidence that deletion completed
+    rubric:
+      excellent: Builds a tracked deletion workflow driven by lineage, explains physical removal including old snapshots, considers crypto-shredding, deals with backups and produces audit evidence.
+      good: Proposes rewriting affected partitions or row deletes in table formats and tracking requests.
+      weak: Deletes from curated tables only and forgets raw, snapshots or backups.
+    followups:
+      - Rewriting a hundred-terabyte table weekly is expensive. How would you batch deletions?
+      - How would you handle a user id that appears in free-text fields?
+      - What does restoring from a backup do to your guarantees?
+    common_errors:
+      - Assuming a logical delete is enough while old snapshots still hold the data.
+
+  - external_key: system_design.data_pipelines.experiment_metrics_pipeline
+    competency_key: statistics_experimentation
+    topic: Computing A/B test results at scale
+    difficulty: hard
+    text: >-
+      The company runs about three hundred concurrent A/B tests and every one needs daily results for dozens of
+      metrics. Design the data pipeline that turns assignment logs and product events into trustworthy
+      experiment results.
+    expected_concepts:
+      - assignment or exposure logs as the source of truth for who saw what
+      - joining exposures to metric events from first exposure onward
+      - per-user aggregates computed once and reused across experiments
+      - variance-ready statistics and sample ratio mismatch checks
+      - metric definitions shared with the metrics layer
+      - incremental daily computation instead of full recompute
+    rubric:
+      excellent: Anchors on exposure-based analysis, builds reusable per-user per-day aggregates, computes the statistics needed for variance, runs sample ratio mismatch checks and keeps metric definitions consistent with the rest of the company.
+      good: Joins assignments to events per user and produces per-variant aggregates with some validity checks.
+      weak: Compares raw event totals between variants without per-user analysis or exposure handling.
+    followups:
+      - How would you detect a sample ratio mismatch automatically, and what would you do with the result?
+      - Some metrics are ratios like revenue per session. What does that change in the pipeline?
+    common_errors:
+      - Counting users who were assigned but never exposed.
+
+  - external_key: system_design.data_pipelines.multi_tenant_warehouse_cost
+    competency_key: data_engineering
+    topic: Isolation and cost control in a shared warehouse
+    difficulty: hard
+    text: >-
+      Forty teams share one cloud warehouse; costs have tripled in a year and heavy ad-hoc queries regularly
+      slow down the scheduled pipelines. How would you redesign the platform to give teams isolation and keep
+      spend under control?
+    expected_concepts:
+      - separate compute pools for ingestion, transformation, BI and ad-hoc work
+      - per-team attribution of cost via tags or query labels
+      - quotas, budgets and query timeouts
+      - identifying expensive queries and fixing table layout or materialisation
+      - autoscaling policies and auto-suspend
+      - showback or chargeback to change behaviour
+    rubric:
+      excellent: Separates workloads onto isolated compute, attributes spend per team, adds guardrails and budgets, fixes the biggest cost drivers in data layout and explains how visibility changes team behaviour.
+      good: Proposes workload isolation and some cost guardrails.
+      weak: Only suggests buying a larger warehouse or banning ad-hoc queries.
+    followups:
+      - Which numbers would you look at first to find where the money goes?
+      - How would you stop a single dashboard refreshing every minute from costing a fortune?
+    common_errors:
+      - Cutting costs by shrinking compute for pipelines with hard deadlines.
+
+  - external_key: system_design.data_pipelines.reprocessing_architecture_choice
+    competency_key: data_engineering
+    topic: Reprocessing in batch-plus-stream versus stream-only designs
+    difficulty: hard
+    text: >-
+      We currently run a streaming path for fresh numbers and a separate nightly batch path that recomputes
+      the same metrics, and the two keep disagreeing. Talk me through how you'd decide whether to unify them
+      into one streaming design, and how reprocessing would work if you did.
+    expected_concepts:
+      - duplicated logic in two code paths causing drift
+      - replaying from a retained log or from lake tables
+      - running a new job version in parallel and switching consumers
+      - cost and time of replaying long history
+      - cases where batch remains simpler, such as complex joins over full history
+    rubric:
+      excellent: Diagnoses the root cause as divergent logic, explains how a single code path can reprocess history from a log or lake, describes parallel-run cutover and acknowledges when batch remains the better tool.
+      good: Explains both architectures and how replay works in a stream-only design.
+      weak: Picks one architecture by preference without addressing reprocessing or the disagreement.
+    followups:
+      - How long would a full replay of a year of events take, and is that acceptable?
+      - How would you share logic between batch and streaming if you keep both?
+    common_errors:
+      - Assuming log retention is infinite and free.
+
+  - external_key: system_design.data_pipelines.iot_telemetry_platform
+    competency_key: data_engineering
+    topic: Telemetry ingestion from a large device fleet
+    difficulty: hard
+    text: >-
+      A million industrial sensors each send a reading every ten seconds, sometimes buffering for hours when
+      connectivity drops. Engineers want live alerting on thresholds and also want years of history for
+      analysis. Design the data platform behind that.
+    expected_concepts:
+      - throughput estimate of about a hundred thousand messages per second
+      - durable ingestion log partitioned by device
+      - stream processing for live thresholds with event-time handling of buffered data
+      - hot store for recent data and columnar lake for history
+      - downsampled rollups for long-range queries
+      - device metadata enrichment and clock skew handling
+    rubric:
+      excellent: Sizes the load, separates the live alerting path from historical storage, handles buffered late data without false alerts, uses tiered storage with rollups and accounts for device clock issues.
+      good: Designs a reasonable ingest-stream-store pipeline with a hot and a cold tier.
+      weak: Writes every reading into a single relational table and queries it for alerts.
+    followups:
+      - A device reconnects and dumps six hours of readings. Should that trigger six hours of alerts?
+      - How would you choose the rollup intervals and their retention?
+      - How do you handle a device whose clock is a day off?
+    common_errors:
+      - Alerting on arrival time instead of reading time.
+
+  - external_key: system_design.data_pipelines.usage_billing_pipeline
+    competency_key: data_engineering
+    topic: Auditable usage metering for billing
+    difficulty: hard
+    text: >-
+      A cloud product bills customers on metered usage such as API calls and storage hours. Design the data
+      pipeline from usage events to the numbers on an invoice, keeping in mind that customers will dispute
+      charges and auditors will ask how a number was produced.
+    expected_concepts:
+      - immutable usage ledger with idempotent event ids
+      - deterministic, versioned rating logic
+      - closing periods and handling late usage as adjustments
+      - reconciliation between metered sources and billed totals
+      - lineage from invoice line back to raw events
+      - customer-facing usage views consistent with invoices
+    rubric:
+      excellent: Builds an append-only, deduplicated ledger, versions pricing logic, defines period close and adjustments, reconciles independently and can trace any invoice line to its events.
+      good: Designs aggregation with dedup and some way to explain invoices.
+      weak: Recomputes invoices from mutable tables with no history of how numbers were produced.
+    followups:
+      - A customer disputes last month's bill. Walk me through how you'd answer them.
+      - A bug overcounted storage for two weeks. How does the correction flow through?
+    common_errors:
+      - Silently restating closed invoices instead of issuing adjustments.
+
+  - external_key: system_design.data_pipelines.hadoop_to_cloud_migration
+    competency_key: data_engineering
+    topic: Migrating an on-premises data platform to the cloud
+    difficulty: hard
+    text: >-
+      You're leading the move of a five-petabyte on-premises Hadoop platform with about a thousand jobs to a
+      cloud lakehouse, and the business can't afford reports going dark. How would you plan and design the
+      migration?
+    expected_concepts:
+      - inventory of datasets, jobs, consumers and dependencies
+      - bulk historical transfer plus incremental sync
+      - migrating by domain or dependency layers rather than all at once
+      - parallel runs with automated output comparison
+      - consumer cutover and decommissioning plan
+      - rethinking storage formats, security model and cost along the way
+    rubric:
+      excellent: Plans discovery, data transfer and incremental sync, migrates in dependency-aware waves with parallel runs and automated parity checks, and has explicit cutover, rollback and decommission steps.
+      good: Proposes a phased migration with validation.
+      weak: Proposes copying everything over a weekend and switching.
+    followups:
+      - How would you compare outputs when the new engine rounds floating point differently?
+      - Which jobs would you move first, and why?
+      - How do you stop people creating new on-premises jobs during the migration?
+    common_errors:
+      - Lifting and shifting jobs without fixing obvious design problems, then paying cloud prices for them.

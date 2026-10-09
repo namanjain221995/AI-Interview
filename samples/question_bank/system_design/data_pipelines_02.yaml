@@ -1,0 +1,615 @@
+# System design: data platforms (part 2 of 4) — ingestion pipelines, streaming analytics,
+# warehouses and lakehouses, data quality systems and metrics platforms.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [data, data_analyst]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.data_pipelines.tracking_plan_design
+    competency_key: data_analysis
+    topic: Designing an event tracking plan
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A product team is launching a new checkout flow and asks you what events they should track so that the
+      funnel can be analysed later. How would you design the tracking plan and the event structure?
+    expected_concepts:
+      - starting from the questions the team needs answered
+      - consistent naming convention for events and properties
+      - common context fields such as user id, session id, timestamp and platform
+      - event-specific properties with defined types
+      - documentation and review of the plan before implementation
+      - validating events in a test environment before release
+    rubric:
+      excellent: Derives events from the analysis questions, defines naming and shared context fields, specifies typed properties, and builds in documentation and validation before launch.
+      good: Proposes a sensible set of funnel events with consistent properties.
+      weak: Suggests tracking everything automatically without thinking about the questions or structure.
+    followups:
+      - How would you handle a user who starts checkout on mobile and finishes on desktop?
+      - What would you do when a developer wants to add a new event name that duplicates an existing one?
+    common_errors:
+      - Encoding values into event names, such as one event per product.
+
+  - external_key: system_design.data_pipelines.server_logs_for_analysts
+    competency_key: data_engineering
+    topic: Making application logs queryable for analysts
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Our web servers write access logs to local disk, and the analytics team wants to query them to study
+      traffic patterns. How would you get those logs into a place where analysts can query them with SQL?
+    expected_concepts:
+      - log shipping agent on each host with buffering
+      - central durable storage or queue
+      - parsing into structured fields during or after ingestion
+      - partitioned columnar tables by date
+      - handling malformed lines without dropping the whole batch
+    rubric:
+      excellent: Ships logs with a buffered agent, lands them durably, parses into structured partitioned tables, keeps malformed lines aside and considers retention and personal data such as IP addresses.
+      good: Describes shipping, parsing and loading into a queryable table.
+      weak: Suggests analysts download log files from servers or grep through them.
+    followups:
+      - What happens to logs if a server is terminated before shipping finishes?
+      - Should IP addresses be stored as they are? Why or why not?
+    common_errors:
+      - Parsing logs with brittle patterns and silently discarding lines that do not match.
+
+  - external_key: system_design.data_pipelines.dataset_discovery_catalog
+    competency_key: data_engineering
+    topic: Helping people find and trust datasets
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      The warehouse now has six hundred tables and analysts keep asking which one to use for customers or
+      orders, or build their own duplicates. What would you put in place so people can find the right dataset
+      and know whether to trust it?
+    expected_concepts:
+      - catalog with descriptions, owners and column documentation
+      - documentation generated from transformation code where possible
+      - certified or recommended tables marked clearly
+      - freshness and quality status visible next to the table
+      - deprecating and removing unused duplicates
+    rubric:
+      excellent: Proposes a searchable catalog fed automatically from code and metadata, marks owners and certified tables, surfaces freshness and quality, and has a process to deprecate duplicates.
+      good: Suggests a catalog or documentation with owners.
+      weak: Suggests a shared spreadsheet that someone updates by hand, with no ownership.
+    followups:
+      - How would you keep the documentation from going stale?
+      - How would you find tables nobody uses anymore?
+    common_errors:
+      - Documenting tables once with no owner responsible for keeping them current.
+
+  - external_key: system_design.data_pipelines.daily_subscription_snapshots
+    competency_key: data_engineering
+    topic: Daily snapshots of current-state tables
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      The app database only stores each customer's current subscription plan, but analysts want to know how
+      many customers were on each plan on any past date. How would you design a pipeline that makes that
+      possible?
+    expected_concepts:
+      - daily snapshot of the current-state table with a snapshot date
+      - partitioning snapshots by date
+      - storage growth and when to switch to change-based history
+      - consistent snapshot timing
+      - history only from the day snapshots start
+    rubric:
+      excellent: Proposes dated snapshots partitioned by day, considers storage growth and a change-based alternative, keeps timing consistent and is clear that earlier history cannot be recreated.
+      good: Proposes taking a daily copy keyed by date.
+      weak: Tries to infer past plans from the current table only.
+    followups:
+      - The table has fifty million rows. How would storage look after three years, and what would you change?
+      - The snapshot job failed for two days. What can you do?
+    common_errors:
+      - Overwriting the snapshot each day so history is lost.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.data_pipelines.streaming_sessionization
+    competency_key: data_engineering
+    topic: Building user sessions from a live event stream
+    difficulty: medium
+    text: >-
+      Product wants near-real-time session metrics such as session length and pages per session, built from a
+      stream of page view events. How would you design the streaming job that creates sessions?
+    expected_concepts:
+      - session windows keyed by user with an inactivity gap
+      - event time with watermarks for out-of-order events
+      - merging sessions when a late event bridges two windows
+      - state size for users with very long or bot-like sessions
+      - emitting updates versus final results
+    rubric:
+      excellent: Uses keyed session windows on event time, explains merging when late events arrive, bounds state for abnormal users and chooses between emitting updates or only final sessions.
+      good: Uses an inactivity gap per user and acknowledges out-of-order data.
+      weak: Defines sessions by fixed clock windows or by arrival order.
+    followups:
+      - A bot generates an endless session. How do you protect the job?
+      - How would you reconcile these streaming sessions with the batch sessions analysts already use?
+    common_errors:
+      - Ignoring that a late event can merge two previously separate sessions.
+
+  - external_key: system_design.data_pipelines.stream_enrichment_lookup
+    competency_key: data_engineering
+    topic: Enriching events with reference data in a stream
+    difficulty: medium
+    text: >-
+      Each click event carries only a user id, but downstream consumers want the user's country and plan
+      attached in real time. The user table changes a few thousand times an hour. How would you design the
+      enrichment step?
+    expected_concepts:
+      - stream-table join using a changelog of the user table
+      - local state or cache versus remote lookups per event
+      - handling events for users not yet present
+      - temporal correctness when attributes change
+      - throughput and latency impact of remote calls
+    rubric:
+      excellent: Joins against a locally materialised changelog rather than calling a database per event, addresses missing and changing attributes and explains the latency and correctness trade-offs.
+      good: Proposes a cached lookup or stream-table join with refresh.
+      weak: Queries the production database for every event.
+    followups:
+      - A new user's first click arrives before their row appears in the changelog. What happens?
+      - Should a click be enriched with the plan at click time or the plan now?
+    common_errors:
+      - Caching reference data with no invalidation strategy.
+
+  - external_key: system_design.data_pipelines.lineage_service
+    competency_key: data_engineering
+    topic: Building a data lineage system
+    difficulty: medium
+    text: >-
+      When a source table changes or breaks, nobody knows which dashboards and models are affected. How would
+      you design a lineage system for the data platform?
+    expected_concepts:
+      - collecting lineage from orchestrator runs, query logs and transformation code
+      - graph model of datasets, jobs and consumers
+      - table-level first, column-level where valuable
+      - including BI dashboards and downstream exports
+      - impact analysis and owner notification
+    rubric:
+      excellent: Gathers lineage automatically from several sources, models it as a graph including BI and exports, explains table versus column granularity and uses it for impact analysis and alerting.
+      good: Proposes automated lineage capture and a graph of dependencies.
+      weak: Proposes a hand-maintained diagram.
+    followups:
+      - How would you capture lineage for ad-hoc SQL run in notebooks?
+      - What would you show someone about to drop a column?
+    common_errors:
+      - Relying on manual declarations that drift from reality.
+
+  - external_key: system_design.data_pipelines.offline_online_feature_consistency
+    competency_key: data_engineering
+    topic: Feature pipelines shared by training and serving
+    difficulty: medium
+    text: >-
+      The machine learning team computes features in batch SQL for training, but the serving system computes
+      them separately in application code, and model accuracy drops in production. How would you design the
+      feature pipelines to fix that?
+    expected_concepts:
+      - single feature definition used for both offline and online paths
+      - offline store for training and online store for low-latency reads
+      - point-in-time correct joins to avoid leakage
+      - streaming or batch materialisation to the online store
+      - monitoring skew between offline and online values
+    rubric:
+      excellent: Defines features once, materialises them to offline and online stores, builds point-in-time training sets and monitors training-serving skew.
+      good: Proposes shared definitions or a feature store with two stores.
+      weak: Suggests the ML team simply be more careful when reimplementing features.
+    followups:
+      - How do you build a training set without leaking future information?
+      - How fresh does each feature need to be, and how do you decide?
+    common_errors:
+      - Joining labels to the latest feature values instead of values as of the event time.
+
+  - external_key: system_design.data_pipelines.large_events_table_layout
+    competency_key: data_engineering
+    topic: Physical layout of a very large events table
+    difficulty: medium
+    text: >-
+      You own a fifty-terabyte events table that analysts query mostly by date range, event type and sometimes
+      a single customer. How would you design its partitioning, clustering and file layout?
+    expected_concepts:
+      - partitioning by event date at a sensible granularity
+      - clustering or sorting by event type and customer id
+      - avoiding high-cardinality partitions
+      - target file sizes and compaction
+      - checking real query patterns from logs
+      - aggregated tables for the most common queries
+    rubric:
+      excellent: Bases choices on observed query patterns, partitions by date, clusters on secondary filters, avoids over-partitioning, manages file sizes and adds rollups for hot queries.
+      good: Partitions by date and clusters by a second column with a reason.
+      weak: Partitions by customer id or does not consider how queries filter.
+    followups:
+      - Why not partition by customer id as well?
+      - How would you verify that the new layout actually helped?
+    common_errors:
+      - Creating millions of tiny partitions.
+
+  - external_key: system_design.data_pipelines.backfill_framework
+    competency_key: data_engineering
+    topic: Designing safe backfills as a platform capability
+    difficulty: medium
+    text: >-
+      Backfills on your team are ad hoc scripts that sometimes overwrite good data or overload the warehouse.
+      How would you design backfills as a proper capability of the pipeline platform?
+    expected_concepts:
+      - partition-based idempotent jobs that can rerun any date range
+      - writing to a staging location and swapping partitions atomically
+      - throttling concurrency to protect shared resources
+      - propagating backfills to downstream dependents
+      - dry runs, approvals and audit of what changed
+    rubric:
+      excellent: Makes jobs rerunnable per partition, swaps outputs atomically, throttles, cascades to downstream tables and records what was rewritten and why.
+      good: Proposes parameterised reruns by date with some protection against overwrites.
+      weak: Keeps one-off scripts and suggests being careful.
+    followups:
+      - How would you notify consumers that last quarter's numbers changed?
+      - A backfill fails halfway through. What state is the table in?
+    common_errors:
+      - Forgetting that downstream aggregates also need recomputing.
+
+  - external_key: system_design.data_pipelines.producer_data_contracts
+    competency_key: data_engineering
+    topic: Data contracts with upstream teams
+    difficulty: medium
+    text: >-
+      Application teams keep changing what their database columns mean, like reusing a status value, without
+      telling anyone, and analytics breaks quietly. How would you set up data contracts between those teams and
+      the data platform?
+    expected_concepts:
+      - explicit published interface separate from internal tables
+      - contract covering schema, semantics, freshness and ownership
+      - automated checks in the producer's CI and at ingestion
+      - versioning and deprecation process
+      - escalation path when a contract is violated
+    rubric:
+      excellent: Moves consumers onto a published interface with semantic and freshness guarantees, enforces it automatically on both sides and defines versioning and ownership.
+      good: Proposes documented contracts with some automated validation.
+      weak: Asks the data team to monitor source tables and adapt after each break.
+    followups:
+      - How do you get application teams to agree to this?
+      - Which changes would your checks catch, and which would still slip through?
+    common_errors:
+      - Treating a contract as only a schema, ignoring meaning and freshness.
+
+  - external_key: system_design.data_pipelines.metric_anomaly_detection
+    competency_key: data_engineering
+    topic: Automated anomaly detection on key metrics
+    difficulty: medium
+    text: >-
+      Leadership wants to be alerted automatically when a key business metric like signups or orders behaves
+      unusually, whether that's a real change or a data problem. How would you design that system?
+    expected_concepts:
+      - baselines that account for seasonality and trend
+      - thresholds tuned to balance false alarms and misses
+      - segment-level detection to localise the cause
+      - checking pipeline freshness and volume first to separate data issues
+      - alert routing and feedback to tune sensitivity
+    rubric:
+      excellent: Uses seasonal baselines, drills down by segment, separates data incidents from business changes using pipeline signals, and tunes thresholds with feedback.
+      good: Proposes a statistical baseline with alerts.
+      weak: Uses a fixed percentage threshold on the daily total.
+    followups:
+      - How would you avoid an alert every public holiday?
+      - How would the alert tell someone where to look first?
+    common_errors:
+      - Comparing today only with yesterday and ignoring weekly patterns.
+
+  - external_key: system_design.data_pipelines.saas_connector_framework
+    competency_key: data_engineering
+    topic: A framework for many SaaS source connectors
+    difficulty: medium
+    text: >-
+      Your team maintains forty separate scripts that pull data from SaaS tools like ad platforms, billing and
+      support systems, and each one fails in its own way. How would you design a common connector framework?
+    expected_concepts:
+      - shared interface for auth, pagination, rate limiting and incremental state
+      - per-connector configuration rather than custom code where possible
+      - cursor or state stored per stream for resumable syncs
+      - schema discovery and drift handling
+      - standard metrics, logging and retries
+      - build versus buy decision for common sources
+    rubric:
+      excellent: Extracts shared concerns into a framework with stored sync state, handles schema drift and rate limits uniformly, standardises observability and weighs managed tools for common sources.
+      good: Proposes a shared base with common retry and pagination logic.
+      weak: Suggests rewriting the scripts more carefully.
+    followups:
+      - A source API only returns data from the last thirty days. How does that affect your design?
+      - Which connectors would you buy instead of build, and why?
+    common_errors:
+      - Storing sync cursors in a way that loses data when a run fails midway.
+
+  - external_key: system_design.data_pipelines.warehouse_access_model
+    competency_key: data_engineering
+    topic: Access control model for a growing analytics org
+    difficulty: medium
+    text: >-
+      The analytics team has grown to a hundred people across regional business units, and today everyone has
+      access to everything in the warehouse. How would you design an access model that's safe but doesn't slow
+      people down?
+    expected_concepts:
+      - role-based access mapped to groups from the identity provider
+      - permissions on schemas or domains rather than individual tables
+      - row-level policies for regional restrictions
+      - tag-based policies for sensitive columns
+      - self-service access requests with approval and expiry
+      - audit and periodic access review
+    rubric:
+      excellent: Designs group-based roles on domains, uses row and tag policies where needed, provides self-service requests with expiry and adds auditing and reviews.
+      good: Proposes role-based access by team with some restriction of sensitive data.
+      weak: Grants per-user table permissions by hand.
+    followups:
+      - How would a new analyst get the access they need on day one?
+      - How do you avoid an explosion of roles?
+    common_errors:
+      - Granting access to individuals instead of groups.
+
+  - external_key: system_design.data_pipelines.event_driven_file_ingestion
+    competency_key: data_engineering
+    topic: Event-driven ingestion from object storage
+    difficulty: medium
+    text: >-
+      Upstream systems drop files into an object storage bucket at random times throughout the day, and
+      analysts want them loaded within minutes. How would you design an event-driven ingestion that doesn't
+      miss or double-load files?
+    expected_concepts:
+      - storage notifications into a queue rather than polling
+      - idempotent loading keyed by object path and version or checksum
+      - handling partial uploads and completion markers
+      - dead-letter queue for failures
+      - periodic reconciliation listing to catch missed notifications
+    rubric:
+      excellent: Uses notifications through a durable queue, loads idempotently, deals with partial uploads, routes failures to a dead-letter queue and adds reconciliation for missed events.
+      good: Uses notifications with some idempotency.
+      weak: Polls the whole bucket and loads anything it finds.
+    followups:
+      - Notifications can be delivered twice or not at all. How does your design cope?
+      - A producer overwrites a file with the same name. What should happen?
+    common_errors:
+      - Assuming storage notifications are delivered exactly once.
+
+  - external_key: system_design.data_pipelines.late_dimension_records
+    competency_key: data_engineering
+    topic: Facts that arrive before their dimension rows
+    difficulty: medium
+    text: >-
+      Orders often reach the warehouse before the matching new product record does, so joins drop those orders
+      from reports for a few hours. How would you design the loading process to handle this?
+    expected_concepts:
+      - placeholder or inferred dimension members
+      - updating placeholders when the real record arrives
+      - surrogate keys assigned on first sight
+      - reprocessing windows for affected facts
+      - monitoring the count of unresolved members
+    rubric:
+      excellent: Creates inferred members so facts are never dropped, fills them in later without changing keys, and monitors unresolved records.
+      good: Proposes placeholder rows or deferred reprocessing.
+      weak: Uses inner joins and accepts missing orders.
+    followups:
+      - How would a report show orders for a product with no name yet?
+      - What if the product record never arrives?
+    common_errors:
+      - Silently filtering out facts with no matching dimension.
+
+  - external_key: system_design.data_pipelines.semi_structured_event_payloads
+    competency_key: data_engineering
+    topic: Landing and modelling semi-structured payloads
+    difficulty: medium
+    text: >-
+      Our events arrive as deeply nested JSON with fields that vary by event type and change over time. How
+      would you design the landing and modelling so analysts get usable tables without constant breakage?
+    expected_concepts:
+      - land the raw payload unchanged in a semi-structured column
+      - extract stable, commonly used fields into typed columns
+      - per-event-type models for specific properties
+      - handling new or missing fields without failing loads
+      - performance of querying nested data versus flattened columns
+    rubric:
+      excellent: Keeps the raw payload, promotes common fields to typed columns, builds per-type models, tolerates schema drift and explains query performance trade-offs.
+      good: Lands raw JSON and flattens important fields.
+      weak: Fully flattens every possible field into one wide table that breaks on change.
+    followups:
+      - How do you tell analysts a new property is now available?
+      - What breaks when a field changes from a number to a string?
+    common_errors:
+      - Failing the whole load when an unexpected field appears.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.data_pipelines.realtime_fraud_features
+    competency_key: data_engineering
+    topic: Low-latency streaming features for fraud scoring
+    difficulty: hard
+    text: >-
+      The fraud team needs features like the number of transactions per card in the last ten minutes and the
+      distinct merchants in the last hour, available within a second of a transaction for scoring. Design the
+      pipeline that computes and serves them.
+    expected_concepts:
+      - sliding or hopping windows keyed by card
+      - low-latency key-value online store
+      - handling hot keys and very active cards
+      - consistent definitions with offline training features
+      - fallback behaviour when features are stale or missing
+      - latency budget across ingestion, compute and lookup
+    rubric:
+      excellent: Designs keyed sliding-window aggregation feeding an online store within a stated latency budget, handles hot keys and state size, keeps offline parity and defines behaviour when features are unavailable.
+      good: Proposes a streaming aggregation with an online store and acknowledges latency.
+      weak: Computes features with database queries at scoring time without considering load or latency.
+    followups:
+      - The current transaction should count in its own features or not? How does that affect the design?
+      - What should scoring do if the feature pipeline is ten minutes behind?
+    common_errors:
+      - Computing approximate distinct counts without considering whether the fraud model can tolerate the error.
+
+  - external_key: system_design.data_pipelines.regional_data_boundaries
+    competency_key: distributed_systems
+    topic: Analytics under regional data boundaries
+    difficulty: hard
+    text: >-
+      The company now operates in Europe, the US and Asia, and regulations require that personal data from each
+      region stays stored and processed in that region, but leadership still wants global dashboards. How
+      would you design the data platform?
+    expected_concepts:
+      - regional ingestion and storage for personal data
+      - regional processing jobs producing aggregated or anonymised outputs
+      - only non-personal aggregates moving to a global layer
+      - consistent metric definitions deployed to every region
+      - policy enforcement and audit of data movement
+      - operational cost of running several regional stacks
+    rubric:
+      excellent: Keeps personal data and its processing in-region, ships only aggregated or anonymised data globally, keeps logic consistent across regions and enforces and audits movement, while weighing the operational cost.
+      good: Proposes regional storage with global aggregates.
+      weak: Copies everything to one central warehouse and restricts access.
+    followups:
+      - An analyst needs to investigate an individual European customer's behaviour. How do they do it?
+      - How do you deploy the same transformation code to three regions and keep them in step?
+    common_errors:
+      - Treating pseudonymised data as non-personal.
+
+  - external_key: system_design.data_pipelines.platform_region_outage
+    competency_key: distributed_systems
+    topic: Disaster recovery for a data platform
+    difficulty: hard
+    text: >-
+      Your data platform runs entirely in one cloud region, and the business has decided that losing it for a
+      day is unacceptable because operational reports and customer-facing analytics depend on it. How would you
+      design for disaster recovery?
+    expected_concepts:
+      - recovery time and recovery point objectives per data product
+      - replicating raw and curated storage across regions
+      - replaying ingestion from durable sources or replicated logs
+      - infrastructure and pipeline code deployable to a second region
+      - warm versus cold standby compute and its cost
+      - regular failover drills
+    rubric:
+      excellent: Sets objectives per data product, replicates storage and logs, makes the platform redeployable from code, chooses standby levels by cost and tests failover regularly.
+      good: Proposes cross-region replication and a failover plan.
+      weak: Relies on cloud provider durability without a plan for compute, pipelines or consumers.
+    followups:
+      - Which datasets would you not bother protecting, and why?
+      - How would you know the standby region actually works?
+    common_errors:
+      - Replicating storage but not orchestration state, so pipelines restart from scratch.
+
+  - external_key: system_design.data_pipelines.kpi_serving_store
+    competency_key: data_analysis
+    topic: Serving business KPIs to dashboards and alerts
+    difficulty: hard
+    text: >-
+      Hundreds of dashboards and alert rules query the same business KPIs, sliced by many dimensions like
+      country, channel and plan, and the warehouse can't keep up with the load. Design a KPI serving layer
+      that stays consistent with the warehouse.
+    expected_concepts:
+      - pre-aggregated cubes or rollups for common dimension combinations
+      - OLAP store or cache serving low-latency queries
+      - handling high-cardinality dimensions and non-additive metrics
+      - refresh triggered by upstream data completion
+      - metric definitions shared with the semantic layer
+      - consistency checks between serving layer and warehouse
+    rubric:
+      excellent: Chooses which rollups to precompute from usage, handles non-additive metrics like distinct counts correctly, refreshes on data readiness and keeps the serving layer reconciled with warehouse definitions.
+      good: Proposes pre-aggregation or an OLAP store with scheduled refresh.
+      weak: Adds a cache in front of the warehouse with a time-based expiry and no consistency strategy.
+    followups:
+      - Distinct users cannot be summed across days. How do you serve weekly actives from daily rollups?
+      - How would you decide which dimension combinations to precompute?
+    common_errors:
+      - Averaging pre-computed ratios across segments.
+
+  - external_key: system_design.data_pipelines.month_end_close_reporting
+    competency_key: data_engineering
+    topic: Reproducible numbers for month-end financial close
+    difficulty: hard
+    text: >-
+      Finance closes the books on the fifth business day of each month, and numbers they sign off must never
+      change afterwards, even if late data or bug fixes arrive. Design how the data platform supports that.
+    expected_concepts:
+      - freezing a versioned snapshot of the closed period
+      - table time travel or immutable snapshot tables
+      - late data and corrections posted as adjustments to the current period
+      - sign-off workflow with reconciliation to source systems
+      - reproducing any past report from its snapshot and code version
+    rubric:
+      excellent: Freezes closed periods immutably, routes late changes into adjustments, reconciles before sign-off and can reproduce any closed report exactly from data and code versions.
+      good: Proposes snapshots of closed months and a way to handle late data.
+      weak: Recomputes past months from live tables and hopes numbers do not move.
+    followups:
+      - A bug overstated revenue in a closed month. What happens now?
+      - How long would you keep these snapshots, and where?
+    common_errors:
+      - Relying on time travel retention that expires before audit requirements.
+
+  - external_key: system_design.data_pipelines.cdc_upserts_into_lakehouse
+    competency_key: data_engineering
+    topic: High-volume upserts into lakehouse tables
+    difficulty: hard
+    text: >-
+      You need to apply change data capture from a busy database, about twenty thousand updates per second,
+      into lakehouse tables that analysts query with minutes of delay. How would you design the merge process
+      and table layout?
+    expected_concepts:
+      - copy-on-write versus merge-on-read trade-offs
+      - micro-batched merges with deduplication by key and log position
+      - partitioning and clustering so merges touch few files
+      - compaction of delete files and log files
+      - concurrency between merges, compaction and readers
+      - read latency versus write amplification
+    rubric:
+      excellent: Compares copy-on-write and merge-on-read for this workload, deduplicates per micro-batch, designs layout to limit rewritten files and handles compaction and concurrency.
+      good: Proposes micro-batched merges and understands write amplification.
+      weak: Rewrites entire tables on every batch or appends without ever applying updates.
+    followups:
+      - Updates are spread uniformly across ten years of data. How does that change your layout?
+      - How do analysts see a consistent view while merges are running?
+    common_errors:
+      - Ignoring that random updates across partitions rewrite most files.
+
+  - external_key: system_design.data_pipelines.self_serve_domain_platform
+    competency_key: system_design
+    topic: Self-serve data platform for domain teams
+    difficulty: hard
+    text: >-
+      The central data team has become a bottleneck, so leadership wants product domains to own and publish
+      their own data products. Design the platform and standards that make that work without everything
+      fragmenting.
+    expected_concepts:
+      - self-serve infrastructure templates for ingestion, transformation and publishing
+      - data product standards for ownership, documentation, quality and contracts
+      - federated governance with global policies and automated enforcement
+      - discoverability through a shared catalog
+      - interoperability through shared identifiers and conformed dimensions
+      - measuring adoption and quality across domains
+    rubric:
+      excellent: Defines a paved-road platform, clear data product standards enforced automatically, federated governance, shared identifiers for interoperability and ways to measure success.
+      good: Describes domain ownership with a shared platform and some standards.
+      weak: Lets each domain choose its own tools and conventions with no shared layer.
+    followups:
+      - Two domains publish conflicting definitions of an active customer. Who resolves it, and how?
+      - Which capabilities should stay centralised?
+    common_errors:
+      - Decentralising ownership without giving domains tooling or skills.
+
+  - external_key: system_design.data_pipelines.embedded_customer_analytics
+    competency_key: data_engineering
+    topic: Customer-facing analytics inside a SaaS product
+    difficulty: hard
+    text: >-
+      Our SaaS product needs to show each customer interactive analytics on their own usage, with sub-second
+      charts, filters and data no older than a minute. There are ten thousand customers of very different
+      sizes. Design the backend data system.
+    expected_concepts:
+      - real-time OLAP store with streaming ingestion
+      - tenant isolation enforced in the query layer
+      - partitioning or routing by tenant with special handling for very large tenants
+      - pre-aggregation for common charts
+      - query concurrency, quotas and caching
+      - separation from the internal analytics warehouse
+    rubric:
+      excellent: Picks a real-time analytical store fed by streams, enforces tenant isolation centrally, handles very large tenants differently, pre-aggregates and protects the system with quotas and caching.
+      good: Proposes an OLAP store with tenant filtering and some performance design.
+      weak: Serves customer charts directly from the internal warehouse or the production database.
+    followups:
+      - How do you guarantee one customer can never see another's data?
+      - One tenant is a thousand times bigger than the median. What changes for them?
+    common_errors:
+      - Relying on every query remembering to add a tenant filter.

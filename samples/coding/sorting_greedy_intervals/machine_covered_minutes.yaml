@@ -1,0 +1,295 @@
+version: 1
+slug: machine_covered_minutes
+title: Covered Minutes per Machine
+difficulty: hard
+competency_keys: [sql, databases]
+role_tags: [dba, data, sre]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Covered Minutes per Machine
+
+  A factory's utilisation report needs to know for how many minutes each machine was busy. Several
+  systems write busy ranges into table `machine_busy`: production jobs, maintenance holds and
+  calibration runs. They do not coordinate, so ranges of one machine can **overlap**, **nest** inside
+  each other, **touch** or be **exact duplicates**.
+
+  | column | type | notes |
+  |--------|------|-------|
+  | machine | VARCHAR(40) | machine name |
+  | start_minute | INTEGER | first busy minute |
+  | end_minute | INTEGER | first minute after the range; `start_minute <= end_minute` |
+
+  Each row is the **half-open** range `[start_minute, end_minute)`: it covers the minutes
+  `start_minute, start_minute + 1, ..., end_minute - 1`. A row with `start_minute = end_minute` is a
+  cancelled booking and covers no minute. The table has no primary key.
+
+  For every machine that appears in the table, return:
+
+  - `machine`;
+  - `covered_minutes`: the number of distinct minutes covered by **at least one** of the machine's
+    ranges. A minute covered by several ranges counts **once**. A machine whose ranges are all empty
+    has `covered_minutes = 0`.
+
+  Order the result by `machine` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  machine_busy
+  +---------+--------------+------------+
+  | machine | start_minute | end_minute |
+  +---------+--------------+------------+
+  | cnc-a   | 0            | 10         |
+  | cnc-a   | 5            | 15         |
+  | cnc-a   | 20           | 30         |
+  | cnc-a   | 22           | 25         |
+  | cnc-b   | 3            | 8          |
+  | cnc-b   | 8            | 12         |
+  | cnc-c   | 100          | 160        |
+  | cnc-c   | 110          | 120        |
+  | cnc-c   | 130          | 140        |
+  +---------+--------------+------------+
+
+  Output
+  +---------+-----------------+
+  | machine | covered_minutes |
+  +---------+-----------------+
+  | cnc-a   | 25              |
+  | cnc-b   | 9               |
+  | cnc-c   | 60              |
+  +---------+-----------------+
+  cnc-a is busy during [0, 15) and [20, 30): 15 + 10 = 25 minutes.
+  cnc-b's two ranges touch at minute 8 and cover [3, 12): 9 minutes.
+  cnc-c's range [100, 160) contains both later ranges, so only its 60 minutes count. Note that
+  [130, 140) starts after the previous row ends (120) but is still inside [100, 160).
+  ```
+
+  ### Example 2
+  ```
+  machine_busy
+  +---------+--------------+------------+
+  | machine | start_minute | end_minute |
+  +---------+--------------+------------+
+  | press-2 | 40           | 40         |
+  | press-1 | 50           | 55         |
+  | press-1 | 10           | 20         |
+  | press-1 | 15           | 15         |
+  | press-1 | 0            | 12         |
+  | press-2 | 7            | 7          |
+  +---------+--------------+------------+
+
+  Output
+  +---------+-----------------+
+  | machine | covered_minutes |
+  +---------+-----------------+
+  | press-1 | 25              |
+  | press-2 | 0               |
+  +---------+-----------------+
+  press-1 covers [0, 20) and [50, 55): 20 + 5 = 25 minutes; the empty range at 15 adds nothing.
+  press-2 only has cancelled bookings, so it is returned with 0.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `0 <= start_minute <= end_minute <= 10^9`
+  - Rows are stored in no particular order; several rows of one machine can share a start minute.
+  - Expanding ranges into one row per minute is too slow for ranges of up to `10^9` minutes.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return machine and covered_minutes (overlapping minutes counted once), ordered by machine.
+    SELECT machine, SUM(end_minute - start_minute) AS covered_minutes
+    FROM machine_busy
+    GROUP BY machine
+    ORDER BY machine;
+reference_solutions:
+  sql: |
+    WITH ordered AS (
+      SELECT
+        machine,
+        start_minute,
+        end_minute,
+        MAX(end_minute) OVER (
+          PARTITION BY machine
+          ORDER BY start_minute, end_minute
+          ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        ) AS prev_max_end
+      FROM machine_busy
+    ),
+    flagged AS (
+      SELECT
+        machine,
+        start_minute,
+        end_minute,
+        CASE WHEN prev_max_end IS NULL OR start_minute > prev_max_end THEN 1 ELSE 0 END AS new_block
+      FROM ordered
+    ),
+    numbered AS (
+      SELECT
+        machine,
+        start_minute,
+        end_minute,
+        SUM(new_block) OVER (
+          PARTITION BY machine
+          ORDER BY start_minute, end_minute
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS block_id
+      FROM flagged
+    ),
+    blocks AS (
+      SELECT machine, MAX(end_minute) - MIN(start_minute) AS block_minutes
+      FROM numbered
+      GROUP BY machine, block_id
+    )
+    SELECT machine, SUM(block_minutes) AS covered_minutes
+    FROM blocks
+    GROUP BY machine
+    ORDER BY machine;
+sql_setup: |
+  CREATE TABLE machine_busy (
+    machine VARCHAR(40) NOT NULL,
+    start_minute INTEGER NOT NULL,
+    end_minute INTEGER NOT NULL,
+    CHECK (start_minute <= end_minute)
+  );
+tests:
+  - id: t1
+    description: "Example 1 - overlap, touching ranges and nested ranges"
+    ordered: true
+    setup_sql: |
+      INSERT INTO machine_busy (machine, start_minute, end_minute) VALUES
+        ('cnc-a', 0, 10), ('cnc-a', 5, 15), ('cnc-a', 20, 30), ('cnc-a', 22, 25),
+        ('cnc-b', 3, 8), ('cnc-b', 8, 12),
+        ('cnc-c', 100, 160), ('cnc-c', 110, 120), ('cnc-c', 130, 140);
+    expected_rows: [["cnc-a", 25], ["cnc-b", 9], ["cnc-c", 60]]
+  - id: t2
+    description: "Example 2 - unordered rows, empty ranges, machine with only empty ranges returns 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO machine_busy (machine, start_minute, end_minute) VALUES
+        ('press-2', 40, 40), ('press-1', 50, 55), ('press-1', 10, 20), ('press-1', 15, 15),
+        ('press-1', 0, 12), ('press-2', 7, 7);
+    expected_rows: [["press-1", 25], ["press-2", 0]]
+  - id: t3
+    hidden: true
+    description: "Empty table returns no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "One long range swallows several later short ones - comparing only with the previous row's end (LAG) over-counts"
+    ordered: true
+    setup_sql: |
+      INSERT INTO machine_busy (machine, start_minute, end_minute) VALUES
+        ('lathe-1', 0, 100), ('lathe-1', 10, 20), ('lathe-1', 30, 40), ('lathe-1', 50, 60),
+        ('lathe-1', 70, 130), ('lathe-1', 140, 150);
+    expected_rows: [["lathe-1", 140]]
+  - id: t5
+    hidden: true
+    description: "Exact duplicate rows count once (no primary key)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO machine_busy (machine, start_minute, end_minute) VALUES
+        ('mill-1', 5, 25), ('mill-1', 5, 25), ('mill-1', 5, 25),
+        ('mill-2', 5, 25), ('mill-2', 30, 31), ('mill-2', 30, 31);
+    expected_rows: [["mill-1", 20], ["mill-2", 21]]
+  - id: t6
+    hidden: true
+    description: "Several ranges share a start minute with different ends, inserted out of order"
+    ordered: true
+    setup_sql: |
+      INSERT INTO machine_busy (machine, start_minute, end_minute) VALUES
+        ('oven-1', 60, 70), ('oven-1', 10, 50), ('oven-1', 10, 15), ('oven-1', 10, 30),
+        ('oven-1', 60, 90), ('oven-1', 0, 5);
+    expected_rows: [["oven-1", 75]]
+  - id: t7
+    hidden: true
+    description: "Values near 10^9 - minute expansion is impossible; a 10^9-minute total"
+    ordered: true
+    setup_sql: |
+      INSERT INTO machine_busy (machine, start_minute, end_minute) VALUES
+        ('kiln-1', 999999000, 1000000000), ('kiln-1', 0, 1), ('kiln-1', 500000000, 999999500),
+        ('kiln-2', 0, 1000000000);
+    expected_rows: [["kiln-1", 500000001], ["kiln-2", 1000000000]]
+  - id: t8
+    hidden: true
+    description: "Machines inserted out of order; touching ranges merge; an empty-only machine returns 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO machine_busy (machine, start_minute, end_minute) VALUES
+        ('weld-4', 1, 2), ('weld-1', 0, 9), ('weld-3', 4, 4), ('weld-2', 3, 8), ('weld-1', 9, 10);
+    expected_rows: [["weld-1", 10], ["weld-2", 5], ["weld-3", 0], ["weld-4", 1]]
+  - id: t9
+    hidden: true
+    description: "Staircase of chained overlaps then a gap and a touching chain"
+    ordered: true
+    setup_sql: |
+      INSERT INTO machine_busy (machine, start_minute, end_minute) VALUES
+        ('saw-1', 0, 10), ('saw-1', 8, 18), ('saw-1', 16, 26), ('saw-1', 24, 34),
+        ('saw-1', 40, 45), ('saw-1', 44, 50), ('saw-1', 50, 51);
+    expected_rows: [["saw-1", 45]]
+  - id: t10
+    hidden: true
+    description: "Stress - 150 random ranges on three machines with heavy overlap"
+    ordered: true
+    setup_sql: |
+      INSERT INTO machine_busy (machine, start_minute, end_minute) VALUES
+        ('rig-2', 1941, 1950), ('rig-2', 1333, 1336), ('rig-1', 1681, 1715), ('rig-1', 748, 785), ('rig-1', 1863, 1895), ('rig-1', 76, 81),
+        ('rig-2', 856, 860), ('rig-1', 185, 220), ('rig-2', 121, 173), ('rig-3', 253, 313), ('rig-1', 1291, 1331), ('rig-3', 1940, 1943),
+        ('rig-3', 1199, 1224), ('rig-1', 1999, 2013), ('rig-1', 1140, 1194), ('rig-1', 593, 619), ('rig-1', 1107, 1114), ('rig-3', 631, 666),
+        ('rig-3', 370, 376), ('rig-3', 1169, 1209), ('rig-1', 762, 768), ('rig-3', 1458, 1462), ('rig-3', 122, 161), ('rig-1', 1016, 1059),
+        ('rig-3', 875, 924), ('rig-2', 953, 990), ('rig-2', 740, 759), ('rig-1', 1626, 1637), ('rig-3', 1597, 1612), ('rig-1', 1176, 1195),
+        ('rig-3', 1013, 1069), ('rig-2', 1493, 1521), ('rig-2', 1247, 1251), ('rig-1', 1048, 1074), ('rig-1', 1550, 1571), ('rig-1', 1911, 1942),
+        ('rig-2', 80, 122), ('rig-1', 1565, 1600), ('rig-3', 1616, 1672), ('rig-2', 696, 740), ('rig-2', 1217, 1248), ('rig-3', 1632, 1661),
+        ('rig-1', 1720, 1725), ('rig-2', 970, 1014), ('rig-3', 133, 136), ('rig-3', 1436, 1455), ('rig-3', 1183, 1226), ('rig-2', 582, 627),
+        ('rig-2', 1816, 1858), ('rig-2', 46, 106), ('rig-2', 727, 737), ('rig-3', 239, 270), ('rig-1', 446, 495), ('rig-2', 264, 311),
+        ('rig-1', 814, 839), ('rig-2', 165, 175), ('rig-2', 822, 857), ('rig-2', 1809, 1817), ('rig-2', 1769, 1804), ('rig-2', 1446, 1472),
+        ('rig-2', 1398, 1454), ('rig-2', 1961, 1975), ('rig-1', 169, 180), ('rig-1', 475, 517), ('rig-1', 24, 55), ('rig-3', 373, 389),
+        ('rig-2', 8, 17), ('rig-2', 1094, 1117), ('rig-3', 1159, 1179), ('rig-1', 1414, 1468), ('rig-3', 1946, 1985), ('rig-3', 1384, 1431),
+        ('rig-1', 935, 992), ('rig-3', 1634, 1669), ('rig-2', 815, 840), ('rig-2', 212, 242), ('rig-3', 820, 823), ('rig-1', 137, 150),
+        ('rig-2', 332, 339), ('rig-2', 1230, 1233), ('rig-1', 0, 36), ('rig-1', 1098, 1104), ('rig-2', 1256, 1257), ('rig-1', 1790, 1803),
+        ('rig-3', 770, 779), ('rig-3', 516, 538), ('rig-3', 745, 775), ('rig-1', 236, 290), ('rig-2', 954, 984), ('rig-2', 638, 643),
+        ('rig-1', 209, 256), ('rig-2', 1516, 1532), ('rig-2', 1697, 1741), ('rig-1', 1057, 1058), ('rig-1', 1947, 2007), ('rig-3', 740, 749),
+        ('rig-3', 1112, 1170), ('rig-1', 1552, 1585), ('rig-2', 1316, 1371), ('rig-1', 1425, 1479), ('rig-2', 1061, 1084), ('rig-1', 728, 777),
+        ('rig-1', 1090, 1124), ('rig-3', 675, 715), ('rig-1', 1255, 1306), ('rig-1', 1650, 1665), ('rig-2', 1515, 1566), ('rig-1', 409, 442),
+        ('rig-2', 728, 774), ('rig-1', 57, 107), ('rig-2', 967, 983), ('rig-1', 1418, 1456), ('rig-2', 915, 966), ('rig-3', 715, 738),
+        ('rig-1', 451, 457), ('rig-1', 962, 974), ('rig-2', 418, 448), ('rig-3', 1843, 1882), ('rig-1', 981, 1039), ('rig-3', 704, 755),
+        ('rig-3', 173, 226), ('rig-3', 245, 303), ('rig-2', 1602, 1647), ('rig-1', 979, 1035), ('rig-1', 888, 938), ('rig-3', 680, 685),
+        ('rig-3', 810, 839), ('rig-2', 1522, 1582), ('rig-1', 1484, 1494), ('rig-1', 260, 261), ('rig-1', 1209, 1266), ('rig-2', 1651, 1692),
+        ('rig-1', 1252, 1304), ('rig-3', 971, 1013), ('rig-2', 319, 354), ('rig-3', 268, 269), ('rig-1', 1637, 1683), ('rig-3', 210, 243),
+        ('rig-3', 1912, 1920), ('rig-2', 1785, 1797), ('rig-1', 57, 73), ('rig-1', 599, 631), ('rig-1', 1564, 1601), ('rig-2', 531, 565),
+        ('rig-2', 1708, 1716), ('rig-1', 1863, 1910), ('rig-2', 1838, 1867), ('rig-3', 1194, 1246), ('rig-3', 861, 913), ('rig-3', 267, 301);
+    expected_rows: [["rig-1", 1232], ["rig-2", 1131], ["rig-3", 913]]
+expected_concepts:
+  - merging overlapping intervals after sorting by start
+  - running maximum of end over preceding rows (window frame)
+  - island numbering with a running SUM of block-start flags
+  - half-open ranges, touching and empty ranges
+  - two-level aggregation (per block, then per machine)
+optimal_complexity: {time: "O(n log n) for the per-machine sort", space: O(n)}
+rubric:
+  excellent: Sorts each machine's ranges by start, compares every start with the running maximum end of all earlier ranges, numbers merged blocks with a running SUM of start flags, and sums MAX(end) - MIN(start) per block, explaining why comparing only with the previous row fails for nested ranges.
+  good: Reaches a correct merge after a hint, for example by first using LAG and then switching to a running MAX after the nested case is pointed out.
+  weak: Sums the raw range lengths, compares only with the previous row's end, expands ranges into one row per minute, or drops machines that only have empty ranges.
+  criteria:
+    correctness: All tests pass, including nested ranges, duplicates, touching ranges, empty ranges and very large minute values.
+    efficiency: Set-based window functions over a sort; no per-minute expansion and no quadratic self-join.
+    code_quality: Named CTEs for the running maximum, block numbering and aggregation, with an explicit window frame.
+    edge_cases: Empty table, duplicates, shared start minutes, ranges nested inside an earlier range and machines with zero covered minutes.
+    communication: Explains why the running maximum end, not the previous end, decides whether a new block starts.
+hints:
+  - Think about how you would merge one machine's ranges by hand after sorting them by start, and what you need to remember from the ranges you have already seen.
+  - A range starts a new merged block only when its start is after the largest end among all earlier ranges of the same machine, not just the previous row; a window frame ending at 1 PRECEDING can give you that largest end.
+  - Compute the running MAX(end_minute) over ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING per machine ordered by start and end, flag rows whose start exceeds it (or where it is NULL), turn the flags into block numbers with a running SUM, then sum MAX(end) - MIN(start) per block for each machine and order by machine.
+followups:
+  - How would you return the merged busy blocks themselves (machine, block start, block end) instead of totals?
+  - How would you compute idle minutes for each machine inside a reporting window such as one shift?
+  - Which index supports this query when the table holds a year of ranges for thousands of machines?
+  - How would the answer change if ranges were closed (end minute included) instead of half-open?
+common_errors:
+  - Summing end_minute - start_minute per machine, which counts overlapping minutes several times.
+  - Comparing each start with only the previous row's end (LAG), which splits a block when a short nested range ends early.
+  - Using a default window frame or RANGE frame so the current row's own end is included in the running maximum.
+  - Expanding ranges into one row per minute, which cannot finish for ranges of up to a billion minutes.
+  - Filtering out empty ranges before grouping, which drops machines that only have cancelled bookings.

@@ -1,0 +1,630 @@
+# Curated questions: full-stack engineering (part 2 of 4) — forms, client data, uploads, imports and exports.
+# `defaults` are merged into every question (question keys win). Round types follow difficulty:
+# easy -> technical_screening + combined, medium -> + deep_technical, hard -> deep_technical + combined.
+version: 1
+defaults:
+  role_tags: [fullstack]
+  round_types: [technical_screening, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------- forms and mutations
+  - external_key: technical.fullstack.duplicate_order_submit
+    competency_key: api_design
+    topic: Duplicate records from double submission
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Support notices that some customers end up with two identical orders because they clicked Place order
+      twice on a slow connection. How would you fix that, both in the UI and on the server?
+    expected_concepts:
+      - disabling the button and showing a pending state while the request is in flight
+      - client-generated idempotency key sent with the request
+      - server stores the key and returns the original result on repeats
+      - unique constraint as a database backstop
+      - retries after timeouts must be safe
+    rubric:
+      excellent: Fixes the UI and makes the server idempotent with a client key and a database constraint, explaining why the UI fix alone is not enough because of retries and network timeouts.
+      good: Disables the button and adds some server-side duplicate check.
+      weak: Only disables the button, or deduplicates by comparing order contents after the fact.
+    followups:
+      - The first request timed out but actually succeeded. What does the user see on retry?
+      - How long would you keep idempotency keys?
+    common_errors:
+      - Assuming a disabled button prevents all duplicates.
+
+  - external_key: technical.fullstack.optimistic_update_rollback
+    competency_key: frontend_react
+    topic: Optimistic updates and rollback
+    difficulty: medium
+    kind: technical
+    text: >-
+      Tell me about a feature where you updated the UI before the server confirmed the change. How did you handle
+      the cases where the request failed or the server returned something different?
+    expected_concepts:
+      - snapshot previous state and roll back on error
+      - reconcile with the server response rather than trusting the local guess
+      - clear error feedback and a way to retry
+      - ordering problems when several mutations overlap
+      - choosing which actions are safe to make optimistic
+    rubric:
+      excellent: Describes a real optimistic flow with snapshot and rollback, reconciliation with the server result, overlapping mutation handling and clear user feedback, and explains when they would not use optimism.
+      good: Rolls back on failure and shows an error.
+      weak: Updates the UI optimistically with no rollback, leaving it out of sync on failure.
+    followups:
+      - The user makes three quick edits and the second one fails. What should the screen show?
+      - Which actions would you never make optimistic?
+    common_errors:
+      - Rolling back to a stale snapshot that discards a later successful change.
+
+  - external_key: technical.fullstack.stale_list_after_save
+    competency_key: frontend_react
+    topic: Stale data after a mutation
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A user edits a customer's name, saves, goes back to the customer list, and still sees the old name until
+      they refresh the page. What's going on, and how would you fix it properly?
+    expected_concepts:
+      - client-side cache or store still holding the old list
+      - invalidating or refetching related queries after the mutation
+      - updating the cache from the mutation response
+      - HTTP or CDN caching of the list endpoint
+      - stale-while-revalidate behaviour of data-fetching libraries
+    rubric:
+      excellent: Identifies client cache staleness, fixes it through targeted invalidation or cache updates after the mutation, and checks whether HTTP caching of the list response is also involved.
+      good: Proposes refetching the list after save and explains why it was stale.
+      weak: Suggests forcing a full page reload or disabling caching everywhere.
+    followups:
+      - How would you avoid refetching every list in the app after each save?
+      - What if the list response is cached by the browser itself?
+    common_errors:
+      - Turning off caching globally instead of invalidating the right data.
+
+  - external_key: technical.fullstack.typeahead_out_of_order
+    competency_key: javascript
+    topic: Out-of-order search responses
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A search box calls the API as the user types. Sometimes the results shown don't match what's in the box,
+      as if an older search won. Why does that happen, and how would you fix it?
+    expected_concepts:
+      - responses can arrive out of order
+      - cancelling previous requests with AbortController
+      - ignoring responses that are not for the latest query
+      - debouncing to reduce request volume
+      - server-side limits and indexing for search endpoints
+    rubric:
+      excellent: Explains the race clearly, fixes it by cancelling or discarding stale responses, adds debouncing for load, and notes that debouncing alone does not fix the ordering.
+      good: Identifies the race and proposes cancellation or a latest-request check.
+      weak: Only adds a debounce, or blames the backend for being slow.
+    followups:
+      - Does cancelling in the browser stop the work on the server?
+      - How would you test this race reliably?
+    common_errors:
+      - Believing debouncing alone guarantees the right result is shown.
+
+  - external_key: technical.fullstack.filters_in_url
+    competency_key: frontend_react
+    topic: Table filters and URL state
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      For a table with filters, sorting and pagination backed by an API, where would you keep that state, and
+      what difference does that choice make to users?
+    expected_concepts:
+      - query string as the source of truth for shareable views
+      - back button, refresh and bookmarking keep working
+      - mapping URL parameters to API query parameters with validation
+      - resetting pagination when filters change
+      - default values not cluttering the URL
+    rubric:
+      excellent: Keeps view state in the URL, explains the user benefits, validates and maps parameters to the API, and handles edge cases such as invalid values and resetting the page on filter change.
+      good: Puts state in the URL with a clear reason.
+      weak: Keeps everything in component state so refresh and links lose the view.
+    followups:
+      - A user pastes a link with a filter value that no longer exists. What happens?
+      - What state would you deliberately keep out of the URL?
+    common_errors:
+      - Forgetting to reset to page one when the filter changes.
+
+  - external_key: technical.fullstack.lost_update_two_editors
+    competency_key: api_design
+    topic: Concurrent edits and lost updates
+    difficulty: medium
+    kind: scenario
+    text: >-
+      Two admins open the same product record, both edit it, and whoever saves last silently overwrites the
+      other's changes. How would you prevent that across the API and the UI?
+    expected_concepts:
+      - optimistic concurrency with a version number or ETag
+      - If-Match or version check on update, returning 409 or 412 on conflict
+      - UI shows the conflict and lets the user compare or merge
+      - PATCH of changed fields to reduce conflicts
+      - pessimistic locking or edit indicators as alternatives
+    rubric:
+      excellent: Implements version-checked updates with a clear conflict status, designs a usable conflict UI, and weighs field-level patches and locking against each other.
+      good: Adds a version check and returns an error on conflict.
+      weak: Accepts last-write-wins or suggests locking the whole table.
+    followups:
+      - What would the conflict screen actually show the second admin?
+      - When would you choose locking instead?
+    common_errors:
+      - Comparing timestamps with coarse precision so near-simultaneous saves slip through.
+
+  - external_key: technical.fullstack.multi_step_form_drafts
+    competency_key: api_design
+    topic: Multi-step forms with saved progress
+    difficulty: medium
+    kind: technical
+    text: >-
+      How would you build a multi-step onboarding form where users can leave halfway and come back later on
+      another device? Talk me through the data model, the API and the UI.
+    expected_concepts:
+      - server-side draft record with a status
+      - per-step validation versus final submission validation
+      - partial updates and autosave with debouncing
+      - resuming at the right step and handling schema changes to drafts
+      - expiring abandoned drafts
+    rubric:
+      excellent: Designs a server-side draft with status, partial updates, step and final validation, a resume path across devices and a cleanup policy, and considers what happens when the form changes.
+      good: Stores drafts server-side and resumes the user on return.
+      weak: Keeps progress only in the browser, losing it across devices.
+    followups:
+      - A new required field is added while drafts are in flight. What happens to them?
+      - Where does final validation happen, and what if it fails?
+    common_errors:
+      - Running full validation on every partial save, so incomplete drafts cannot be stored.
+
+  # ------------------------------------------------------------- uploads
+  - external_key: technical.fullstack.profile_photo_upload
+    competency_key: api_design
+    topic: Basic file upload end to end
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Walk me through how you'd implement a profile photo upload end to end, from the file picker in the
+      browser to the image appearing on the page.
+    expected_concepts:
+      - multipart upload or upload directly to object storage
+      - size and type checks on both client and server
+      - storing the file outside the database with a reference
+      - resizing or generating thumbnails
+      - serving through a URL with caching and cache busting on change
+    rubric:
+      excellent: Covers selection and preview, validated upload, storage outside the database, resizing, and how the new image is served and cache-busted, with server-side checks treated as authoritative.
+      good: Gives a working flow with storage and basic validation.
+      weak: Stores raw files in the database without thought, or trusts the browser's file type.
+    followups:
+      - The user uploads a 40 megabyte phone photo. What happens?
+      - How do you make the new photo show up immediately everywhere?
+    common_errors:
+      - Trusting the file extension or the Content-Type sent by the browser.
+
+  - external_key: technical.fullstack.resumable_large_uploads
+    competency_key: system_design
+    topic: Resumable uploads over unreliable networks
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Users upload video files of a couple of gigabytes, often from unreliable connections, and they keep failing
+      near the end. How would you make uploads resumable and show accurate progress?
+    expected_concepts:
+      - chunked or multipart uploads with per-part retry
+      - upload session id and server tracking of received parts
+      - uploading directly to storage with signed URLs instead of through the API
+      - progress from bytes acknowledged, not bytes sent
+      - integrity checks and final assembly
+      - cleanup of abandoned uploads
+    rubric:
+      excellent: Designs a chunked, resumable protocol with an upload session, signed direct-to-storage parts, per-part retry and resume after reload, accurate progress, integrity checks and cleanup.
+      good: Proposes chunking with retry and direct upload to storage.
+      weak: Raises timeouts and request size limits on the API server and hopes for the best.
+    followups:
+      - The user closes the tab at ninety percent. How do they resume?
+      - How do you stop someone abusing your signed upload URLs?
+    common_errors:
+      - Streaming large files through application servers that time out or exhaust memory.
+
+  - external_key: technical.fullstack.upload_attack_surface
+    competency_key: security
+    topic: Security risks of user uploads
+    difficulty: medium
+    kind: technical
+    text: >-
+      Your app lets users upload documents that other users can later download. What can go wrong security-wise,
+      and what would you put in place?
+    expected_concepts:
+      - content sniffing on type, not the extension or client header
+      - SVG or HTML files executing script when served from the app's origin
+      - serving downloads from a separate domain with Content-Disposition attachment
+      - path traversal and randomised storage names
+      - size limits, decompression bombs and malware scanning
+      - access checks on every download URL
+    rubric:
+      excellent: Names several distinct risks including stored XSS via served files, spoofed types, traversal, resource exhaustion and malware, and pairs each with a concrete control, including access-controlled download links.
+      good: Covers type and size validation plus one serving-related risk.
+      weak: Only checks the file extension.
+    followups:
+      - Why serve user files from a different domain?
+      - How would you make download links expire?
+    common_errors:
+      - Serving uploaded files inline from the main application origin.
+
+  - external_key: technical.fullstack.async_processing_status
+    competency_key: system_design
+    topic: Showing processing status after upload
+    difficulty: medium
+    kind: scenario
+    text: >-
+      After a user uploads a document, it goes through a background step for virus scanning and preview
+      generation that can take up to a minute. How would you model that and show it in the UI?
+    expected_concepts:
+      - explicit status field such as uploaded, processing, ready, failed
+      - background job queue with retries
+      - UI learns about changes by polling, SSE or websockets
+      - failure states with a reason and a retry path
+      - not exposing the file until it is scanned
+    rubric:
+      excellent: Models a clear state machine, processes it in retried background jobs, pushes or polls status to the UI with sensible intervals, and blocks access to unscanned files while handling failures visibly.
+      good: Adds a status field and polls for completion.
+      weak: Processes synchronously in the upload request or gives users no feedback.
+    followups:
+      - A job crashes halfway. What does the user see, and what retries it?
+      - How often would you poll, and when would you stop?
+    common_errors:
+      - Leaving items stuck in processing forever with no timeout or failure state.
+
+  - external_key: technical.fullstack.uploads_fail_in_production
+    competency_key: debugging
+    topic: Uploads failing only in production
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Uploads work fine on your machine, but in production any file over about ten megabytes fails, sometimes
+      with a 413 and sometimes with the connection just being reset. How would you work through it?
+    expected_concepts:
+      - every hop has its own limits (CDN, load balancer, reverse proxy, app server, framework)
+      - 413 points to a body size limit such as client_max_body_size
+      - resets point to idle or read timeouts on slow uploads
+      - reproducing with a large file and timing from outside
+      - logs at each layer to find which hop rejected it
+      - moving large uploads off the request path
+    rubric:
+      excellent: Maps the request path, relates each symptom to a size limit or timeout at a specific hop, reproduces it, checks logs layer by layer, and proposes both a config fix and a structural fix.
+      good: Suspects proxy body size limits and checks proxy configuration.
+      weak: Changes the application's limit only and stops there.
+    followups:
+      - How would you tell which layer closed the connection?
+      - Why would it work locally?
+    common_errors:
+      - Raising one limit without realising another layer has a lower one.
+
+  # ------------------------------------------------------------- imports, exports and lists
+  - external_key: technical.fullstack.export_times_out
+    competency_key: system_design
+    topic: Large exports that time out
+    difficulty: medium
+    kind: scenario
+    text: >-
+      The Export to CSV button works for small customers but times out for your largest accounts. How would you
+      redesign it?
+    expected_concepts:
+      - asynchronous export job instead of a request-bound one
+      - streaming rows from the database instead of loading everything into memory
+      - progress or status endpoint and notification when ready
+      - expiring, access-controlled download link
+      - limits and deduplicating repeated export requests
+    rubric:
+      excellent: Moves export to a background job that streams data, tells the user when it is ready via an access-controlled link, and covers concurrency limits, retries and cleanup.
+      good: Moves the export to a background job with a download link.
+      weak: Just raises the request timeout.
+    followups:
+      - A user clicks Export five times. What happens?
+      - How do you keep the exported data consistent while rows are changing?
+    common_errors:
+      - Loading the full result set into memory before writing the file.
+
+  - external_key: technical.fullstack.bulk_csv_import
+    competency_key: api_design
+    topic: Bulk CSV import with row-level errors
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Customers need to import around fifty thousand contacts from a spreadsheet. How would you design the import
+      so that users understand which rows failed and why, and nothing ends up half done?
+    expected_concepts:
+      - upload, then validate in a background job with a preview or dry run
+      - per-row errors reported with row numbers and reasons
+      - decision between all-or-nothing and partial import, made explicit to the user
+      - batching inserts and idempotency so re-running is safe
+      - handling encodings, delimiters and header mapping
+      - downloadable error report
+    rubric:
+      excellent: Designs a staged import with validation preview, explicit atomicity semantics, row-level error reporting, batched idempotent writes and handling of messy file formats.
+      good: Validates rows and reports errors per row in a background job.
+      weak: Imports synchronously in one request and returns a generic failure.
+    followups:
+      - The job dies after thirty thousand rows. What happens on retry?
+      - How would you let users map their columns to your fields?
+    common_errors:
+      - Failing the whole import on the first bad row with no indication of which one.
+
+  - external_key: technical.fullstack.infinite_scroll_duplicates
+    competency_key: debugging
+    topic: Duplicates in an infinite-scroll feed
+    difficulty: medium
+    kind: scenario
+    text: >-
+      In an infinite-scroll activity feed, users sometimes see the same item twice or miss items while new
+      activity is coming in. What's causing it, and how would you fix it across the API and the UI?
+    expected_concepts:
+      - offset pagination shifts when rows are inserted
+      - cursor or keyset pagination on a stable, unique sort key
+      - deduplicating by id on the client
+      - separate path for new items arriving at the top
+      - tie-breaking when timestamps collide
+    rubric:
+      excellent: Diagnoses offset shifting, moves to keyset pagination with a unique tie-breaker, deduplicates on the client and handles new arrivals separately from older pages.
+      good: Identifies the offset problem and proposes cursor pagination.
+      weak: Only deduplicates in the UI, hiding missed items.
+    followups:
+      - Two items have the same timestamp. How does your cursor handle that?
+      - How would you show a new items available banner?
+    common_errors:
+      - Using a non-unique sort key for the cursor.
+
+  - external_key: technical.fullstack.loading_empty_error_states
+    competency_key: frontend_react
+    topic: Loading, empty and error states
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      For a typical data-driven page, how do you structure the loading, empty and error states? Tell me how you
+      handled them in something you built.
+    expected_concepts:
+      - distinct states rather than one boolean flag
+      - skeletons or placeholders that avoid layout shift
+      - empty state that explains what to do next
+      - error message with a retry and no raw error dumps
+      - distinguishing first load from background refresh
+    rubric:
+      excellent: Treats each state deliberately with a real example, avoids layout shift, separates initial load from refetch, and gives actionable empty and error states.
+      good: Handles all three states sensibly.
+      weak: Shows a spinner forever on errors, or treats empty and error as the same thing.
+    followups:
+      - How do you show that data is refreshing without hiding what is already there?
+      - What does the user see if only part of the page fails?
+    common_errors:
+      - Rendering an empty state while the request is still in flight.
+
+  - external_key: technical.fullstack.server_state_library
+    competency_key: frontend_react
+    topic: Managing server state on the client
+    difficulty: medium
+    kind: technical
+    text: >-
+      How do you decide between putting API data in a global store and using a server-state library like React
+      Query or SWR? Tell me about the trade-offs you've run into.
+    expected_concepts:
+      - server state is a cache with staleness, not app-owned state
+      - deduplication, background refetch and retries handled by the library
+      - query keys and targeted invalidation after mutations
+      - global store still useful for genuinely client-owned state
+      - stale time settings and refetch-on-focus behaviour
+    rubric:
+      excellent: Distinguishes server and client state clearly, explains caching, deduplication and invalidation with real examples, and is specific about tuning staleness and where a store still fits.
+      good: Explains why a server-state library reduces hand-written fetching code.
+      weak: Copies every response into a global store and keeps it in sync by hand without seeing the cost.
+    followups:
+      - How do you choose query keys so invalidation stays targeted?
+      - When has refetch-on-focus caused you trouble?
+    common_errors:
+      - Duplicating the same server data in both a store and a query cache.
+
+  - external_key: technical.fullstack.rich_text_stored_xss
+    competency_key: security
+    topic: Stored XSS through rich text
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A security researcher shows that a comment containing crafted HTML runs script for anyone who views it.
+      Your app supports rich-text comments. How would you respond and fix it properly?
+    expected_concepts:
+      - contain first by disabling or escaping rendering of affected content
+      - allowlist sanitisation with a maintained library, not regex
+      - deciding whether to sanitise on input, on output, or both
+      - avoiding dangerouslySetInnerHTML or innerHTML with untrusted data
+      - Content Security Policy as defence in depth
+      - cleaning existing stored content and checking for exploitation
+    rubric:
+      excellent: Contains the issue quickly, sanitises with an allowlist library at the right layer, considers storing a safer format, adds CSP, cleans existing data and checks whether sessions or data were stolen.
+      good: Adds proper sanitisation and mentions CSP.
+      weak: Blocks the string script with a regex or a blacklist.
+    followups:
+      - Why not just escape everything?
+      - What would a CSP for this app look like?
+    common_errors:
+      - Blacklisting tags, which misses event handler attributes and javascript URLs.
+
+  - external_key: technical.fullstack.date_off_by_one_day
+    competency_key: debugging
+    topic: Dates shifting by a day
+    difficulty: medium
+    kind: scenario
+    text: >-
+      Some users see appointment dates one day earlier than they entered them, but only for certain time zones.
+      Walk me through how you'd track down where the date is going wrong.
+    expected_concepts:
+      - date-only values parsed as midnight UTC and shown in local time
+      - instants stored in UTC versus calendar dates stored as dates
+      - checking the value at each hop (input, request payload, database, response, rendering)
+      - user's time zone captured explicitly where it matters
+      - tests that run under several time zones
+    rubric:
+      excellent: Traces the value hop by hop, explains the date-only versus instant confusion, chooses correct types in the database and API, and adds tests across time zones.
+      good: Suspects UTC conversion of a date-only value and checks the payloads.
+      weak: Adds or subtracts hours to compensate.
+    followups:
+      - How would you represent a recurring meeting at nine in the morning local time?
+      - How do you reproduce this on your own machine?
+    common_errors:
+      - Patching the offset in the UI rather than fixing the data type.
+
+  - external_key: technical.fullstack.money_representation
+    competency_key: code_quality
+    topic: Handling money values across layers
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you represent money amounts as they move between the database, the API's JSON and the browser? What
+      problems have you seen when that's done carelessly?
+    expected_concepts:
+      - floating point rounding errors
+      - integer minor units or decimal types in the database
+      - amounts sent as strings or integers with an explicit currency code
+      - formatting only at display time with locale-aware formatting
+      - rounding rules defined in one place on the server
+    rubric:
+      excellent: Uses exact representations end to end, always carries the currency, formats only at display, and keeps calculation and rounding on the server with a concrete bug example.
+      good: Avoids floats and uses integer cents or decimals.
+      weak: Uses JavaScript numbers and floats for amounts without concern.
+    followups:
+      - Where should tax or discount rounding happen?
+      - How do you handle currencies with no minor unit?
+    common_errors:
+      - Calculating totals in the browser and trusting them on the server.
+
+  - external_key: technical.fullstack.locale_formatting_split
+    competency_key: frontend_react
+    topic: Localisation across API and UI
+    difficulty: medium
+    kind: technical
+    text: >-
+      If your product had to support several languages and regions, how would you split the work between the
+      API and the frontend for text, numbers, dates and error messages?
+    expected_concepts:
+      - API returns raw values and codes, the UI formats
+      - translation keys and message catalogues with plurals and interpolation
+      - Intl APIs for numbers, dates and currency
+      - server-generated content such as emails also localised
+      - locale negotiation and storing the user's preference
+    rubric:
+      excellent: Keeps the API locale-neutral where possible, formats with Intl on the client, handles plurals and interpolation, and covers server-rendered content and user preference storage.
+      good: Uses translation keys and locale-aware formatting.
+      weak: Concatenates translated fragments or formats dates as strings on the server for one region.
+    followups:
+      - Where do validation error messages get translated?
+      - How do you keep translations from falling behind new features?
+    common_errors:
+      - Building sentences by concatenating translated words.
+
+  - external_key: technical.fullstack.offline_mutation_queue
+    competency_key: system_design
+    topic: Intermittent connectivity and syncing
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Field staff use your web app on tablets with patchy connectivity, and they need to keep recording work
+      while offline. How would you design that across the client and the server?
+    expected_concepts:
+      - local persistence such as IndexedDB and a service worker for the app shell
+      - queue of pending mutations with client-generated ids
+      - idempotent server endpoints so replays are safe
+      - conflict detection and resolution policy when syncing
+      - clear UI for pending, synced and failed items
+    rubric:
+      excellent: Designs local storage, a durable mutation queue with client ids, idempotent sync endpoints, an explicit conflict policy and clear sync state in the UI, and discusses auth expiry while offline.
+      good: Queues changes locally and syncs when back online with some conflict handling.
+      weak: Assumes the browser will simply retry requests later.
+    followups:
+      - Two people edited the same record offline. What wins?
+      - The session expires while they are offline. What happens on reconnect?
+    common_errors:
+      - Using server-generated ids, so offline records cannot be referenced before sync.
+
+  - external_key: technical.fullstack.undo_delete
+    competency_key: api_design
+    topic: Undo for destructive actions
+    difficulty: medium
+    kind: technical
+    text: >-
+      Product wants an Undo option for a few seconds after a user deletes something, instead of a confirmation
+      dialog. How would you implement that across the backend and the frontend?
+    expected_concepts:
+      - soft delete with a deleted-at marker
+      - queries excluding soft-deleted rows by default
+      - restore endpoint and later permanent purge job
+      - delaying the request on the client versus deleting immediately and restoring
+      - side effects such as notifications and related records
+    rubric:
+      excellent: Compares delaying the call against soft delete with restore, handles side effects and related data, excludes deleted rows consistently and plans a purge.
+      good: Uses soft delete with a restore endpoint.
+      weak: Delays the request in the browser only, losing the delete if the tab closes.
+    followups:
+      - What happens to child records and notifications on undo?
+      - How do unique constraints behave with soft-deleted rows?
+    common_errors:
+      - Forgetting to filter soft-deleted rows from some queries and reports.
+
+  - external_key: technical.fullstack.bulk_action_partial_failure
+    competency_key: api_design
+    topic: Bulk actions with partial failure
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Users can select five hundred items in a table and apply an action such as archive or reassign. How would
+      you design the API and the UI so it's fast and handles some items failing?
+    expected_concepts:
+      - one bulk endpoint rather than five hundred requests
+      - synchronous for small batches, background job for large ones
+      - per-item results reported back to the UI
+      - permission checks per item
+      - idempotency and safe retry of failed items
+      - selecting all matching a filter versus explicit ids
+    rubric:
+      excellent: Designs a bulk endpoint or job with per-item results and authorization, defines partial-success semantics, supports retrying only failures and handles select-all-by-filter.
+      good: Uses a bulk endpoint and reports which items failed.
+      weak: Loops over single-item requests from the browser with no failure reporting.
+    followups:
+      - The user selected all results of a filter, not specific ids. What changes?
+      - How do you show progress for a long-running bulk action?
+    common_errors:
+      - Wrapping everything in one transaction so one bad item fails the whole batch without explanation.
+
+  - external_key: technical.fullstack.per_row_request_list
+    competency_key: api_design
+    topic: Per-row requests from the UI
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You notice an orders page fires one request to load the list and then one more request per row to fetch
+      each customer's name. Why is that a problem, and how would you fix it?
+    expected_concepts:
+      - N+1 requests over the network multiply latency and load
+      - including needed fields in the list response
+      - batch lookup endpoint by a set of ids
+      - avoiding the same N+1 problem in the database layer behind the endpoint
+      - measuring before and after in the network tab
+    rubric:
+      excellent: Explains the cost in round trips and server load, fixes it by shaping the list response or batching, and checks that the server does not just move the N+1 into the database.
+      good: Proposes returning the names with the list or a batch endpoint.
+      weak: Suggests caching each per-row request in the browser.
+    followups:
+      - How would you avoid an N+1 query inside the new endpoint?
+      - When is a separate batch endpoint better than embedding?
+    common_errors:
+      - Moving the loop to the server but running one query per row there.

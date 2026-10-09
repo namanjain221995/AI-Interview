@@ -1,0 +1,163 @@
+version: 1
+slug: merge_asset_records_by_identifier
+title: "Merge Scanner Records into Assets"
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [backend, security, devops, data]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Merge Scanner Records into Assets
+
+  The asset inventory is fed by several network scanners. Each scanner emits **records**; a record is
+  a list of identifiers it observed for one machine, written as `kind:value` strings such as
+  `"host:web-01"`, `"mac:0a:1b:2c"` or `"ip:10.0.0.5"`. Identifiers are compared as exact,
+  case-sensitive strings, and the same identifier may be listed twice in one record.
+
+  Two records describe the **same asset** when they share at least one identifier, either directly or
+  through a chain of records (if record A shares an identifier with B, and B shares one with C, then
+  A, B and C are one asset even if A and C share nothing).
+
+  Implement `merge_asset_records(records)`, which returns the assets as groups of record **indices**:
+
+  - every record index appears in exactly one group;
+  - indices inside a group are sorted ascending;
+  - groups are ordered by their smallest index;
+  - a record with no identifiers shares nothing, so it forms a group on its own.
+
+  ### Example 1
+  ```
+  Input:  records = [["host:web-01", "ip:10.0.0.4"], ["mac:0a:1b:2c"], ["ip:10.0.0.5", "host:web-01"], ["ip:10.0.0.5"]]
+  Output: [[0, 2, 3], [1]]
+  Explanation: records 0 and 2 share host:web-01, and record 3 joins them through
+  ip:10.0.0.5. Record 1 shares nothing.
+  ```
+
+  ### Example 2
+  ```
+  Input:  records = [["host:db"], [], ["HOST:db", "mac:ff:01"], ["mac:ff:01", "mac:ff:01"], ["host:db", "ip:192.168.1.9"]]
+  Output: [[0, 4], [1], [2, 3]]
+  Explanation: the empty record 1 is its own asset; HOST:db and host:db differ.
+  ```
+
+  ### Constraints
+  - `0 <= records.length <= 10^4`
+  - `0 <= records[i].length <= 20`
+  - every identifier has length 1 to 60
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: merge_asset_records
+  params:
+    - {name: records, type: "string[][]"}
+  return_type: "int[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def merge_asset_records(records: list[list[str]]) -> list[list[int]]:
+        parent = list(range(len(records)))
+
+        def find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        owner: dict[str, int] = {}
+        for i, identifiers in enumerate(records):
+            for ident in identifiers:
+                if ident in owner:
+                    a, b = find(owner[ident]), find(i)
+                    if a != b:
+                        # Keep the smaller index as the root.
+                        if a < b:
+                            parent[b] = a
+                        else:
+                            parent[a] = b
+                else:
+                    owner[ident] = i
+        groups: dict[int, list[int]] = {}
+        order: list[int] = []
+        for i in range(len(records)):
+            root = find(i)
+            if root not in groups:
+                groups[root] = []
+                order.append(root)
+            groups[root].append(i)
+        return [groups[r] for r in order]
+  javascript: |
+    function mergeAssetRecords(records) {
+      const parent = records.map((_, i) => i);
+      const find = (x) => {
+        while (parent[x] !== x) {
+          parent[x] = parent[parent[x]];
+          x = parent[x];
+        }
+        return x;
+      };
+      const owner = new Map();
+      records.forEach((identifiers, i) => {
+        for (const ident of identifiers) {
+          if (owner.has(ident)) {
+            const a = find(owner.get(ident));
+            const b = find(i);
+            if (a !== b) {
+              if (a < b) parent[b] = a;
+              else parent[a] = b;
+            }
+          } else {
+            owner.set(ident, i);
+          }
+        }
+      });
+      const groups = new Map();
+      const order = [];
+      for (let i = 0; i < records.length; i++) {
+        const root = find(i);
+        if (!groups.has(root)) {
+          groups.set(root, []);
+          order.push(root);
+        }
+        groups.get(root).push(i);
+      }
+      return order.map((r) => groups.get(r));
+    }
+tests:
+  - {id: t1, args: [[["host:web-01", "ip:10.0.0.4"], ["mac:0a:1b:2c"], ["ip:10.0.0.5", "host:web-01"], ["ip:10.0.0.5"]]], expected: [[0, 2, 3], [1]], description: "Example 1 - transitive merge through a shared ip"}
+  - {id: t2, args: [[["host:db"], [], ["HOST:db", "mac:ff:01"], ["mac:ff:01", "mac:ff:01"], ["host:db", "ip:192.168.1.9"]]], expected: [[0, 4], [1], [2, 3]], description: "Example 2 - empty record, case-sensitive identifiers, identifier repeated in one record"}
+  - {id: t3, hidden: true, args: [[]], expected: [], description: "No records at all"}
+  - {id: t4, hidden: true, args: [[[]]], expected: [[0]], description: "A single empty record forms one group"}
+  - {id: t5, hidden: true, args: [[["ip:1"], ["ip:2"], ["ip:3"]]], expected: [[0], [1], [2]], description: "All records disjoint - one group each"}
+  - {id: t6, hidden: true, args: [[["a:1", "a:2"], ["a:3", "a:4"], ["a:5", "a:6"], ["a:6", "a:7"], ["a:4", "a:5"], ["a:2", "a:3"]]], expected: [[0, 1, 2, 3, 4, 5]], description: "Long chain discovered out of order - merging must join already formed groups"}
+  - {id: t7, hidden: true, args: [[["x:9"], ["y:1"], ["y:1", "z:5"], ["x:9", "z:5"], [], ["w:0"], ["w:0"]]], expected: [[0, 1, 2, 3], [4], [5, 6]], description: "Late record bridges two existing groups; group order follows smallest index"}
+  - {id: t8, hidden: true, args: [[["mac:01"], ["mac:01"], ["mac:01"], ["mac:01"]]], expected: [[0, 1, 2, 3]], description: "Every record has the same single identifier"}
+  - {id: t9, hidden: true, args: [[["k:a"], [], [], ["k:a"], []]], expected: [[0, 3], [1], [2], [4]], description: "Several empty records interleaved - each is its own group"}
+  - {id: t10, hidden: true, args: [[["ip:10.0.0.1", "host:n0", "mac:aa:0"], ["ip:10.1.1.1", "host:n0"], ["ip:10.2.2.1", "host:n0"], ["ip:10.3.3.1", "host:n0"], ["ip:10.4.4.1"], ["ip:10.5.5.1", "host:n1"], ["ip:10.6.6.1", "host:n1"], ["ip:10.0.7.1", "host:n1"], ["ip:10.1.8.1", "host:n1"], ["ip:10.2.9.1"], ["ip:10.3.10.1", "host:n2"], ["ip:10.4.11.1", "host:n2"], ["ip:10.5.12.1", "host:n2"], ["ip:10.6.13.1", "host:n2"], ["ip:10.0.14.1"], ["ip:10.1.15.1", "host:n3"], ["ip:10.2.16.1", "host:n3"], ["ip:10.3.17.1", "host:n3"], ["ip:10.4.18.1", "host:n3"], ["ip:10.5.19.1"], ["ip:10.6.20.1", "host:n4"], ["ip:10.0.21.1", "host:n4"], ["ip:10.1.22.1", "host:n4"], ["ip:10.2.23.1", "host:n4"], ["ip:10.3.24.1"], ["ip:10.4.25.1", "host:n5"], ["ip:10.5.26.1", "host:n5"], ["ip:10.6.27.1", "host:n5"], ["ip:10.0.28.1", "host:n5"], ["ip:10.1.29.1"], ["ip:10.2.30.1", "host:n6"], ["ip:10.3.31.1", "host:n6"], ["ip:10.4.32.1", "host:n6"], ["ip:10.5.33.1", "host:n6"], ["ip:10.6.34.1"], ["ip:10.0.35.1", "host:n7"], ["ip:10.1.36.1", "host:n7"], ["ip:10.2.37.1", "host:n7"], ["ip:10.3.38.1", "host:n7"], ["ip:10.4.39.1"], ["ip:10.5.40.1", "host:n8"], ["ip:10.6.41.1", "host:n8"], ["ip:10.0.42.1", "host:n8"], ["ip:10.1.43.1", "host:n8"], ["ip:10.2.44.1"], ["ip:10.3.45.1", "host:n9"], ["ip:10.4.46.1", "host:n9"], ["ip:10.5.47.1", "host:n9"], ["ip:10.6.48.1", "host:n9"], ["ip:10.0.49.1"], ["ip:10.1.50.1", "host:n10", "mac:aa:0"], ["ip:10.2.51.1", "host:n10"], ["ip:10.3.52.1", "host:n10"], ["ip:10.4.53.1", "host:n10"], ["ip:10.5.54.1"], ["ip:10.6.55.1", "host:n11"], ["ip:10.0.56.1", "host:n11"], ["ip:10.1.57.1", "host:n11"], ["ip:10.2.58.1", "host:n11"], ["ip:10.3.59.1"], ["ip:10.4.60.1", "host:n12"], ["ip:10.5.61.1", "host:n12"], ["ip:10.6.62.1", "host:n12"], ["ip:10.0.63.1", "host:n12"], ["ip:10.1.64.1"], ["ip:10.2.65.1", "host:n13"], ["ip:10.3.66.1", "host:n13"], ["ip:10.4.67.1", "host:n13"], ["ip:10.5.68.1", "host:n13"], ["ip:10.6.69.1"], ["ip:10.0.70.1", "host:n14"], ["ip:10.1.71.1", "host:n14"], ["ip:10.2.72.1", "host:n14"], ["ip:10.3.73.1", "host:n14"], ["ip:10.4.74.1"], ["ip:10.5.75.1", "host:n15"], ["ip:10.6.76.1", "host:n15"], ["ip:10.0.77.1", "host:n15"], ["ip:10.1.78.1", "host:n15"], ["ip:10.2.79.1"], ["ip:10.3.80.1", "host:n16"], ["ip:10.4.81.1", "host:n16"], ["ip:10.5.82.1", "host:n16"], ["ip:10.6.83.1", "host:n16"], ["ip:10.0.84.1"], ["ip:10.1.85.1", "host:n17"], ["ip:10.2.86.1", "host:n17"], ["ip:10.3.87.1", "host:n17"], ["ip:10.4.88.1", "host:n17"], ["ip:10.5.89.1"], ["ip:10.6.90.1", "host:n18"], ["ip:10.0.91.1", "host:n18"], ["ip:10.1.92.1", "host:n18"], ["ip:10.2.93.1", "host:n18"], ["ip:10.3.94.1"], ["ip:10.4.95.1", "host:n19"], ["ip:10.5.96.1", "host:n19"], ["ip:10.6.97.1", "host:n19"], ["ip:10.0.98.1", "host:n19"], ["ip:10.1.99.1"], ["ip:10.2.100.1", "host:n20", "mac:aa:1"], ["ip:10.3.101.1", "host:n20"], ["ip:10.4.102.1", "host:n20"], ["ip:10.5.103.1", "host:n20"], ["ip:10.6.104.1"], ["ip:10.0.105.1", "host:n21"], ["ip:10.1.106.1", "host:n21"], ["ip:10.2.107.1", "host:n21"], ["ip:10.3.108.1", "host:n21"], ["ip:10.4.109.1"], ["ip:10.5.110.1", "host:n22"], ["ip:10.6.111.1", "host:n22"], ["ip:10.0.112.1", "host:n22"], ["ip:10.1.113.1", "host:n22"], ["ip:10.2.114.1"], ["ip:10.3.115.1", "host:n23"], ["ip:10.4.116.1", "host:n23"], ["ip:10.5.117.1", "host:n23"], ["ip:10.6.118.1", "host:n23"], ["ip:10.0.119.1"], ["ip:10.1.120.1", "host:n24"], ["ip:10.2.121.1", "host:n24"], ["ip:10.3.122.1", "host:n24"], [], ["ip:10.5.124.1"], ["ip:10.6.125.1", "host:n25"], ["ip:10.0.126.1", "host:n25"], ["ip:10.1.127.1", "host:n25"], ["ip:10.2.128.1", "host:n25"], ["ip:10.3.129.1"], ["ip:10.4.130.1", "host:n26"], ["ip:10.5.131.1", "host:n26"], ["ip:10.6.132.1", "host:n26"], ["ip:10.0.133.1", "host:n26"], ["ip:10.1.134.1"], ["ip:10.2.135.1", "host:n27"], ["ip:10.3.136.1", "host:n27"], ["ip:10.4.137.1", "host:n27"], ["ip:10.5.138.1", "host:n27"], ["ip:10.6.139.1"], ["ip:10.0.140.1", "host:n28"], ["ip:10.1.141.1", "host:n28"], ["ip:10.2.142.1", "host:n28"], ["ip:10.3.143.1", "host:n28"], ["ip:10.4.144.1"], ["ip:10.5.145.1", "host:n29"], ["ip:10.6.146.1", "host:n29"], ["ip:10.0.147.1", "host:n29"], ["ip:10.1.148.1", "host:n29"], ["ip:10.2.149.1"], ["ip:10.3.150.1", "host:n30", "mac:aa:1"], ["ip:10.4.151.1", "host:n30"], ["ip:10.5.152.1", "host:n30"], ["ip:10.6.153.1", "host:n30"], ["ip:10.0.154.1"], ["ip:10.1.155.1", "host:n31"], ["ip:10.2.156.1", "host:n31"], ["ip:10.3.157.1", "host:n31"], ["ip:10.4.158.1", "host:n31"], ["ip:10.5.159.1"], ["ip:10.6.160.1", "host:n32"], ["ip:10.0.161.1", "host:n32"], ["ip:10.1.162.1", "host:n32"], ["ip:10.2.163.1", "host:n32"], ["ip:10.3.164.1"], ["ip:10.4.165.1", "host:n33"], ["ip:10.5.166.1", "host:n33"], ["ip:10.6.167.1", "host:n33"], ["ip:10.0.168.1", "host:n33"], ["ip:10.1.169.1"], ["ip:10.2.170.1", "host:n34"], ["ip:10.3.171.1", "host:n34"], ["ip:10.4.172.1", "host:n34"], ["ip:10.5.173.1", "host:n34"], ["ip:10.6.174.1"], ["ip:10.0.175.1", "host:n35"], ["ip:10.1.176.1", "host:n35"], ["ip:10.2.177.1", "host:n35"], ["ip:10.3.178.1", "host:n35"], ["ip:10.4.179.1"], ["ip:10.5.180.1", "host:n36"], ["ip:10.6.181.1", "host:n36"], ["ip:10.0.182.1", "host:n36"], ["ip:10.1.183.1", "host:n36"], ["ip:10.2.184.1"], ["ip:10.3.185.1", "host:n37"], ["ip:10.4.186.1", "host:n37"], ["ip:10.5.187.1", "host:n37"], ["ip:10.6.188.1", "host:n37"], ["ip:10.0.189.1"], ["ip:10.1.190.1", "host:n38"], ["ip:10.2.191.1", "host:n38"], ["ip:10.3.192.1", "host:n38"], ["ip:10.4.193.1", "host:n38"], ["ip:10.5.194.1"], ["ip:10.6.195.1", "host:n39"], ["ip:10.0.196.1", "host:n39"], ["ip:10.1.197.1", "host:n39"], ["ip:10.2.198.1", "host:n39"], ["ip:10.3.199.1"], ["ip:10.4.200.1", "host:n40", "mac:aa:2"], ["ip:10.5.201.1", "host:n40"], ["ip:10.6.202.1", "host:n40"], ["ip:10.0.203.1", "host:n40"], ["ip:10.1.204.1"], ["ip:10.2.205.1", "host:n41"], ["ip:10.3.206.1", "host:n41"], ["ip:10.4.207.1", "host:n41"], ["ip:10.5.208.1", "host:n41"], ["ip:10.6.209.1"], ["ip:10.0.210.1", "host:n42"], ["ip:10.1.211.1", "host:n42"], ["ip:10.2.212.1", "host:n42"], ["ip:10.3.213.1", "host:n42"], ["ip:10.4.214.1"], ["ip:10.5.215.1", "host:n43"], ["ip:10.6.216.1", "host:n43"], ["ip:10.0.217.1", "host:n43"], ["ip:10.1.218.1", "host:n43"], ["ip:10.2.219.1"], ["ip:10.3.220.1", "host:n44"], ["ip:10.4.221.1", "host:n44"], ["ip:10.5.222.1", "host:n44"], ["ip:10.6.223.1", "host:n44"], ["ip:10.0.224.1"], ["ip:10.1.225.1", "host:n45"], ["ip:10.2.226.1", "host:n45"], ["ip:10.3.227.1", "host:n45"], ["ip:10.4.228.1", "host:n45"], ["ip:10.5.229.1"], ["ip:10.6.230.1", "host:n46"], ["ip:10.0.231.1", "host:n46"], ["ip:10.1.232.1", "host:n46"], ["ip:10.2.233.1", "host:n46"], ["ip:10.3.234.1"], ["ip:10.4.235.1", "host:n47"], ["ip:10.5.236.1", "host:n47"], ["ip:10.6.237.1", "host:n47"], ["ip:10.0.238.1", "host:n47"], ["ip:10.1.239.1"], ["ip:10.2.240.1", "host:n48"], ["ip:10.3.241.1", "host:n48"], ["ip:10.4.242.1", "host:n48"], ["ip:10.5.243.1", "host:n48"], ["ip:10.6.244.1"], ["ip:10.0.245.1", "host:n49"], ["ip:10.1.246.1", "host:n49"], ["ip:10.2.247.1", "host:n49"], ["ip:10.3.248.1", "host:n49"], ["ip:10.4.249.1"], ["ip:10.5.250.1", "host:n50", "mac:aa:2"], ["ip:10.6.251.1", "host:n50"], ["ip:10.0.252.1", "host:n50"], ["ip:10.1.253.1", "host:n50"], ["ip:10.2.254.1"], ["ip:10.3.255.1", "host:n51"], ["ip:10.4.256.1", "host:n51"], ["ip:10.5.257.1", "host:n51"], ["ip:10.6.258.1", "host:n51"], ["ip:10.0.259.1"], ["ip:10.1.260.1", "host:n52"], ["ip:10.2.261.1", "host:n52"], ["ip:10.3.262.1", "host:n52"], ["ip:10.4.263.1", "host:n52"], ["ip:10.5.264.1"], ["ip:10.6.265.1", "host:n53"], ["ip:10.0.266.1", "host:n53"], ["ip:10.1.267.1", "host:n53"], ["ip:10.2.268.1", "host:n53"], ["ip:10.3.269.1"], ["ip:10.4.270.1", "host:n54"], ["ip:10.5.271.1", "host:n54"], ["ip:10.6.272.1", "host:n54"], ["ip:10.0.273.1", "host:n54"], ["ip:10.1.274.1"], ["ip:10.2.275.1", "host:n55"], ["ip:10.3.276.1", "host:n55"], ["ip:10.4.277.1", "host:n55"], ["ip:10.5.278.1", "host:n55"], ["ip:10.6.279.1"], ["ip:10.0.280.1", "host:n56"], ["ip:10.1.281.1", "host:n56"], ["ip:10.2.282.1", "host:n56"], ["ip:10.3.283.1", "host:n56"], ["ip:10.4.284.1"], ["ip:10.5.285.1", "host:n57"], ["ip:10.6.286.1", "host:n57"], ["ip:10.0.287.1", "host:n57"], ["ip:10.1.288.1", "host:n57"], ["ip:10.2.289.1"], ["ip:10.3.290.1", "host:n58"], ["ip:10.4.291.1", "host:n58"], ["ip:10.5.292.1", "host:n58"], ["ip:10.6.293.1", "host:n58"], ["ip:10.0.294.1"], ["ip:10.1.295.1", "host:n59"], ["ip:10.2.296.1", "host:n59"], ["ip:10.3.297.1", "host:n59"], ["ip:10.4.298.1", "host:n59"], ["ip:10.5.299.1"]]], expected: [[0, 1, 2, 3, 50, 51, 52, 53], [4], [5, 6, 7, 8], [9], [10, 11, 12, 13], [14], [15, 16, 17, 18], [19], [20, 21, 22, 23], [24], [25, 26, 27, 28], [29], [30, 31, 32, 33], [34], [35, 36, 37, 38], [39], [40, 41, 42, 43], [44], [45, 46, 47, 48], [49], [54], [55, 56, 57, 58], [59], [60, 61, 62, 63], [64], [65, 66, 67, 68], [69], [70, 71, 72, 73], [74], [75, 76, 77, 78], [79], [80, 81, 82, 83], [84], [85, 86, 87, 88], [89], [90, 91, 92, 93], [94], [95, 96, 97, 98], [99], [100, 101, 102, 103, 150, 151, 152, 153], [104], [105, 106, 107, 108], [109], [110, 111, 112, 113], [114], [115, 116, 117, 118], [119], [120, 121, 122], [123], [124], [125, 126, 127, 128], [129], [130, 131, 132, 133], [134], [135, 136, 137, 138], [139], [140, 141, 142, 143], [144], [145, 146, 147, 148], [149], [154], [155, 156, 157, 158], [159], [160, 161, 162, 163], [164], [165, 166, 167, 168], [169], [170, 171, 172, 173], [174], [175, 176, 177, 178], [179], [180, 181, 182, 183], [184], [185, 186, 187, 188], [189], [190, 191, 192, 193], [194], [195, 196, 197, 198], [199], [200, 201, 202, 203, 250, 251, 252, 253], [204], [205, 206, 207, 208], [209], [210, 211, 212, 213], [214], [215, 216, 217, 218], [219], [220, 221, 222, 223], [224], [225, 226, 227, 228], [229], [230, 231, 232, 233], [234], [235, 236, 237, 238], [239], [240, 241, 242, 243], [244], [245, 246, 247, 248], [249], [254], [255, 256, 257, 258], [259], [260, 261, 262, 263], [264], [265, 266, 267, 268], [269], [270, 271, 272, 273], [274], [275, 276, 277, 278], [279], [280, 281, 282, 283], [284], [285, 286, 287, 288], [289], [290, 291, 292, 293], [294], [295, 296, 297, 298], [299]], description: "Stress - 300 records with host and mac links forming mid-sized clusters and one empty record"}
+expected_concepts:
+  - "union-find (disjoint set union) with path compression"
+  - "hash map from identifier to the first record that used it"
+  - "graph connected components as an alternative (BFS or DFS)"
+  - "deterministic output ordering"
+optimal_complexity: {time: "O(L * alpha(n)) plus output construction, where L is the total number of identifiers", space: "O(n + L)"}
+rubric:
+  excellent: "Maps each identifier to a record, unions records with union-find (or builds a graph and runs BFS), handles transitive links, empty records and duplicates, produces the required ordering and states near-linear complexity."
+  good: "Correct graph or union-find solution with minor ordering or edge-case fixes after running tests."
+  weak: "Compares every pair of records with set intersection only once without transitivity, or uses quadratic pairwise comparisons without discussing cost."
+  criteria:
+    correctness: "All tests pass, including chains that are discovered out of order and records that bridge two groups."
+    efficiency: "Near-linear in the total number of identifiers; no all-pairs comparison of records."
+    code_quality: "Small find and union helpers, clear names for the identifier owner map and the groups."
+    edge_cases: "Empty input, empty records, repeated identifiers and case-sensitive matching."
+    communication: "Explains why a record that shares identifiers with two groups must merge those groups."
+hints:
+  - "Think of the records as nodes in a graph, connected when they share an identifier; each asset is a connected piece of that graph."
+  - "You do not need an edge between every pair of records sharing an identifier: linking each record to the first record that used the identifier is enough to keep everything connected."
+  - "Keep a map from identifier to the first record index that used it and a union-find over indices; union each record with that first owner, then collect the indices by root in ascending index order so the groups come out sorted and ordered by their smallest index."
+followups:
+  - "How would you support adding new scanner records incrementally without recomputing everything?"
+  - "What if some identifiers, such as a shared NAT ip, should not be allowed to merge assets?"
+  - "How would you explain to an operator why two records were merged (which chain linked them)?"
+  - "How does union by rank or size change the complexity guarantees?"
+common_errors:
+  - "Merging only records that share an identifier directly and missing transitive chains."
+  - "Comparing all pairs of records, which is quadratic for large inventories."
+  - "Dropping records with no identifiers instead of returning them as their own group."
+  - "Returning groups in hash-map order rather than ordered by smallest index."

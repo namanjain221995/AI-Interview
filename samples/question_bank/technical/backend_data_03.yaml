@@ -1,0 +1,633 @@
+# Technical bank: backend data layer, part 3 (caching strategies, queues and asynchronous processing).
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend]
+questions:
+  # ------------------------------------------------------------ caching
+  - external_key: technical.backend_data.worth_caching
+    competency_key: system_design
+    topic: Deciding whether something is worth caching
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Before you add a cache to an endpoint, how do you decide it's actually worth it, and what would you
+      measure afterwards to know it helped?
+    expected_concepts:
+      - read-to-write ratio and repeated access to the same keys
+      - cost of computing or fetching the value
+      - how stale the data is allowed to be
+      - fixing the slow query first where possible
+      - hit ratio, latency and backend load before and after
+    rubric:
+      excellent: Weighs access pattern, cost, tolerated staleness and alternatives such as fixing the query, and defines hit ratio, latency and backend load metrics to confirm the benefit.
+      good: Considers read frequency and staleness and checks hit rate afterwards.
+      weak: Adds a cache by default whenever something is slow.
+    followups:
+      - What would you do if the hit ratio came out at ten percent?
+      - When would you fix the underlying query instead?
+    common_errors:
+      - Caching data that is rarely read twice.
+
+  - external_key: technical.backend_data.cache_key_design
+    competency_key: system_design
+    topic: Designing cache keys
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you design cache keys for API responses that can differ by user, tenant, language and query
+      parameters?
+    expected_concepts:
+      - every input that changes the output belongs in the key
+      - tenant and user scoping to prevent data leaking between users
+      - normalizing parameter order and defaults
+      - a version or schema prefix for cheap mass invalidation
+      - key length and cardinality limits
+    rubric:
+      excellent: Includes every output-affecting input, scopes keys by tenant or user for safety, normalizes parameters, versions keys so a deploy can invalidate them, and watches key cardinality.
+      good: Builds keys from the main inputs and remembers user or tenant scoping.
+      weak: Keys only on the URL path and risks serving one user's data to another.
+    followups:
+      - How would you invalidate every cached response after changing the response format?
+      - What happens to your cache when a parameter has millions of possible values?
+    common_errors:
+      - Leaving out the tenant or user from a personalized response key.
+
+  - external_key: technical.backend_data.low_hit_ratio
+    competency_key: system_design
+    topic: Investigating a poor cache hit ratio
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You added a cache in front of a slow lookup, but the hit ratio is stuck around twenty percent. How would
+      you figure out why?
+    expected_concepts:
+      - keys that vary on irrelevant inputs such as timestamps
+      - TTL shorter than the time between repeat reads
+      - evictions because the cache is too small
+      - long-tail access patterns with few repeats
+      - invalidation that is too aggressive
+    rubric:
+      excellent: Checks key composition, TTLs against access intervals, eviction counts and the access distribution, and decides whether to fix the cache or accept that the workload does not cache well.
+      good: Looks at TTLs, evictions and key design.
+      weak: Increases the cache size without looking at anything else.
+    followups:
+      - How would you find out whether evictions are the problem?
+      - What would convince you to remove the cache entirely?
+    common_errors:
+      - Including a request id or timestamp in the cache key by accident.
+
+  - external_key: technical.backend_data.local_vs_shared_cache
+    competency_key: system_design
+    topic: In-process versus shared caches
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When would you cache data in the memory of each service instance, and when would you use a shared cache
+      like Redis or Memcached instead?
+    expected_concepts:
+      - in-process caches are fastest with no network hop
+      - each instance holds its own copy and invalidation is harder
+      - shared caches give one view across instances
+      - memory limits and per-instance warm-up after deploys
+      - using both as two layers
+    rubric:
+      excellent: Compares latency, consistency across instances, invalidation, memory and warm-up, and describes a sensible two-level setup with short local TTLs.
+      good: Knows the main trade-off between speed and consistency across instances.
+      weak: Thinks the two are interchangeable or ignores multiple instances entirely.
+    followups:
+      - How would you invalidate an in-process cache on twenty instances?
+      - What kind of data is safe to cache locally for a long time?
+    common_errors:
+      - Unbounded in-memory dictionaries that grow until the process runs out of memory.
+
+  - external_key: technical.backend_data.http_caching_apis
+    competency_key: api_design
+    topic: HTTP caching for API responses
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How can you use HTTP caching for an API rather than only caching inside your own service, and what would
+      you be careful about?
+    expected_concepts:
+      - Cache-Control directives such as max-age, private and no-store
+      - ETag and conditional requests returning 304
+      - CDN or reverse proxy caching for public data
+      - Vary headers for responses that differ by header
+      - never letting authenticated responses be stored by shared caches
+    rubric:
+      excellent: Uses Cache-Control, validators and conditional requests appropriately, places public data on a CDN with correct Vary headers and explicitly protects personalized responses from shared caches.
+      good: Knows Cache-Control and ETags and when they help.
+      weak: Unaware of HTTP caching or would cache authenticated responses at a CDN.
+    followups:
+      - How does an ETag save work for both the client and the server?
+      - What could happen if a CDN caches a response that includes a user's name?
+    common_errors:
+      - Missing private or no-store on personalized responses.
+
+  - external_key: technical.backend_data.redis_memory_pressure
+    competency_key: system_design
+    topic: A cache server running out of memory
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your Redis cache has hit its memory limit, evictions have spiked and some requests are slower than
+      before. How would you investigate and decide what to change?
+    expected_concepts:
+      - eviction policy such as allkeys-lru versus volatile policies
+      - finding large keys and fast-growing key patterns
+      - keys without TTLs accumulating
+      - serialization size and compression
+      - deciding between more memory, sharding and caching less
+    rubric:
+      excellent: Inspects memory by key pattern and size, checks eviction policy and keys without TTLs, finds the growth source and chooses between trimming, compression, sharding or capacity with evidence.
+      good: Checks eviction policy and large keys and adds TTLs where missing.
+      weak: Doubles the memory and moves on.
+    followups:
+      - Which eviction policy would you use for a pure cache, and why?
+      - How would you find the biggest keys without slowing the server down?
+    common_errors:
+      - Using the cache server as a store for data that must never be evicted.
+
+  - external_key: technical.backend_data.missing_key_flood
+    competency_key: system_design
+    topic: Lookups for data that does not exist
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A scraper is requesting product ids that don't exist, so every request misses the cache and hits the
+      database. How would you protect the system?
+    expected_concepts:
+      - caching negative results with a short TTL
+      - bloom filters for existence checks
+      - rate limiting per client
+      - validating id formats before any lookup
+      - making sure a newly created item is not hidden by a cached miss
+    rubric:
+      excellent: Combines short-lived negative caching, cheap existence checks and rate limiting, and handles the case where an item is created after its miss was cached.
+      good: Caches misses or rate limits the client.
+      weak: Scales up the database or blocks one IP address and assumes the problem is gone.
+    followups:
+      - How long would you cache a not-found result?
+      - What happens if a product is created a second after its miss was cached?
+    common_errors:
+      - Caching negative results with the same long TTL as real data.
+
+  - external_key: technical.backend_data.invalidation_race
+    competency_key: system_design
+    topic: Races between cache invalidation and reads
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      You use cache-aside and delete the cache key after updating the database, but now and then a stale value
+      sticks in the cache until it expires. Walk me through how that can happen and how you'd prevent it.
+    expected_concepts:
+      - a slow reader repopulating with a value read before the update
+      - deleting before versus after the commit
+      - versioned values or compare-and-set on write-back
+      - delayed second invalidation
+      - change-data-capture driven invalidation and TTL as a safety net
+    rubric:
+      excellent: Lays out the exact interleaving where a reader caches a pre-update value, compares delete timing, versioned writes and delayed double deletes, and keeps a bounded TTL as a backstop.
+      good: Recognises the race between reader and writer and proposes one credible mitigation.
+      weak: Assumes deleting the key after every update makes the cache always consistent.
+    followups:
+      - Why does invalidating before the transaction commits make it worse?
+      - How would invalidation from the database change log help?
+    common_errors:
+      - Invalidating inside the transaction before the commit is durable.
+
+  - external_key: technical.backend_data.cross_user_cache_leak
+    competency_key: debugging
+    topic: Users seeing someone else's data
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A customer reports that their dashboard briefly showed another company's numbers. You suspect caching.
+      How would you investigate and contain this?
+    expected_concepts:
+      - treating it as a security incident with containment first
+      - disabling or flushing the suspect cache layer
+      - cache keys missing tenant or user scope
+      - shared caches storing personalized HTTP responses
+      - determining exposure scope from logs and notifying as required
+    rubric:
+      excellent: Contains first by disabling or flushing the cache, finds the unscoped key or misconfigured shared cache, establishes who was exposed, and adds tests or key-builder safeguards so it cannot recur.
+      good: Suspects missing tenant scoping in keys, flushes the cache and fixes the key.
+      weak: Treats it as a display glitch or waits for it to happen again.
+    followups:
+      - How would you work out which customers were affected?
+      - What safeguard in code would make this mistake hard to repeat?
+    common_errors:
+      - Fixing the key without assessing which data was already exposed.
+
+  - external_key: technical.backend_data.cache_outage_dependency
+    competency_key: system_design
+    topic: Surviving the loss of the cache
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your Redis cluster went down for ten minutes, and the database fell over under the sudden load, taking
+      the whole product with it. How would you redesign so a cache outage doesn't become a full outage?
+    expected_concepts:
+      - the database was silently sized for cache-hit traffic
+      - timeouts and circuit breakers on cache calls
+      - load shedding or rate limiting to protect the database
+      - request coalescing and serving stale data
+      - gradual warm-up and capacity planning for cache misses
+    rubric:
+      excellent: Recognises the hidden dependency, adds fast cache timeouts, coalescing, stale serving and load shedding to protect the database, and plans warm-up and capacity for a cold cache.
+      good: Adds timeouts and some protection for the database.
+      weak: Only makes the cache more highly available and ignores what happens when it fails anyway.
+    followups:
+      - How would you test this without waiting for a real outage?
+      - Which requests would you shed first?
+    common_errors:
+      - Blocking requests on a hanging cache call with no timeout.
+
+  - external_key: technical.backend_data.redis_beyond_get_set
+    competency_key: system_design
+    topic: Using Redis data structures well
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Beyond simple get and set, which Redis data structures or features have you used in a backend, for what
+      problem, and what limits did you run into?
+    expected_concepts:
+      - sorted sets for leaderboards or time-ordered data
+      - hashes, sets and atomic increments
+      - expiry and atomic scripts
+      - streams or lists for lightweight queues
+      - memory growth, single-threaded command cost and persistence limits
+    rubric:
+      excellent: Describes real uses of specific structures, explains why each fitted, and is clear about limits such as expensive commands blocking the server, memory growth and durability guarantees.
+      good: Gives one or two real uses beyond key-value caching.
+      weak: Lists features without any real use or treats Redis as a durable primary database by default.
+    followups:
+      - Which Redis commands would you avoid on a large production instance, and why?
+      - Would you trust Redis as the only copy of that data?
+    common_errors:
+      - Running whole-keyspace scans or huge range reads on a busy instance.
+
+  # ------------------------------------------------------------- queues
+  - external_key: technical.backend_data.what_goes_async
+    competency_key: distributed_systems
+    topic: Moving work out of the request path
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Which kinds of work would you move out of the request path into a background queue, and how does that
+      change what the user experiences?
+    expected_concepts:
+      - slow or unreliable work such as emails, exports and third-party calls
+      - work the user does not need to wait for
+      - accepted versus completed responses
+      - showing status and handling eventual failures
+      - added operational complexity of queues and workers
+    rubric:
+      excellent: Chooses work by latency, reliability and whether the user needs the result now, explains accepted-then-processed responses with status updates, and acknowledges the operational cost.
+      good: Gives sensible examples and knows the response changes to an acknowledgement.
+      weak: Puts everything on a queue or nothing, without reasoning about the user.
+    followups:
+      - How do you tell the user that a background task failed?
+      - When does moving work to a queue make the product worse?
+    common_errors:
+      - Queueing work whose result the very next screen needs.
+
+  - external_key: technical.backend_data.queue_backlog_growing
+    competency_key: distributed_systems
+    topic: A queue backlog that keeps growing
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Every weekday afternoon the backlog in one of your job queues grows to tens of thousands of messages and
+      takes hours to drain. How would you approach this?
+    expected_concepts:
+      - measuring arrival rate versus processing rate
+      - per-message processing time and where it goes
+      - scaling consumers and the downstream limits that caps that
+      - batching or making handlers cheaper
+      - queue age as the alerting signal
+    rubric:
+      excellent: Compares arrival and processing rates, profiles handler time, scales consumers only as far as downstream dependencies allow, considers batching and alerts on message age rather than count.
+      good: Measures throughput and adds consumers while watching dependencies.
+      weak: Adds consumers without checking whether the bottleneck is downstream.
+    followups:
+      - Why is the age of the oldest message a better alert than the queue length?
+      - Adding consumers made it slower. Why might that be?
+    common_errors:
+      - Scaling consumers until the shared database falls over.
+
+  - external_key: technical.backend_data.job_payload_contents
+    competency_key: distributed_systems
+    topic: What a background job message should contain
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you enqueue a background job, how do you decide what goes into the message, for example just an id
+      versus a full copy of the data?
+    expected_concepts:
+      - ids keep messages small and data fresh at processing time
+      - snapshots capture the state at the moment of the event
+      - the row may change or disappear before processing
+      - message size limits and sensitive data in queues
+      - versioning the payload format
+    rubric:
+      excellent: Chooses between reference and snapshot based on whether the job needs current or point-in-time data, handles missing rows, keeps sensitive data out and versions the payload.
+      good: Knows the trade-off between ids and full data.
+      weak: Serializes whole ORM objects into the message by default.
+    followups:
+      - The record is deleted before the job runs. What should happen?
+      - How would you change the payload format without breaking messages already queued?
+    common_errors:
+      - Putting personal data or secrets into messages that sit in queues and logs.
+
+  - external_key: technical.backend_data.long_task_status
+    competency_key: api_design
+    topic: Reporting progress of a long-running task
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Users upload a spreadsheet that takes a minute or two to process. How would you design the flow so they
+      know what's happening and can see the result?
+    expected_concepts:
+      - accept the upload and return a job id quickly
+      - a status resource with states and progress
+      - polling, server-sent events or websockets for updates
+      - partial failures and row-level error reports
+      - retrying or resuming safely
+    rubric:
+      excellent: Returns a job id immediately, exposes a status resource with clear states and progress, picks a reasonable update mechanism and reports row-level errors in a usable way.
+      good: Processes asynchronously with a pollable status.
+      weak: Keeps the HTTP request open for two minutes and hopes it does not time out.
+    followups:
+      - How would you report that fifty rows out of ten thousand failed?
+      - What happens if the user uploads the same file twice?
+    common_errors:
+      - Long synchronous requests that hit proxy or load balancer timeouts.
+
+  - external_key: technical.backend_data.log_vs_queue_broker
+    competency_key: distributed_systems
+    topic: Log-based streams versus traditional queues
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you choose between a log-based system like Kafka and a traditional queue like RabbitMQ or SQS
+      for a new piece of asynchronous work?
+    expected_concepts:
+      - retained log with consumer offsets and replay
+      - per-message acknowledgement and deletion in queues
+      - ordering per partition versus per queue
+      - multiple independent consumer groups
+      - operational cost and team familiarity
+    rubric:
+      excellent: Compares retention and replay, ordering, fan-out to many consumers, per-message retries and operational burden, and ties the choice to the concrete workload.
+      good: Knows the core difference between a retained log and a work queue.
+      weak: Treats them as the same thing or chooses purely by popularity.
+    followups:
+      - How would you retry one failed message in a log-based consumer without blocking the partition?
+      - When would replaying old messages be valuable to you?
+    common_errors:
+      - Expecting per-message retry and delay features from a plain log.
+
+  - external_key: technical.backend_data.visibility_timeout_duplicates
+    competency_key: distributed_systems
+    topic: Jobs processed twice because of a short lease
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Some report-generation jobs take longer than usual, and you notice the same job is being processed by
+      two workers at once. What's happening, and how would you fix it?
+    expected_concepts:
+      - visibility timeout or lease shorter than processing time
+      - the message becomes visible and another worker claims it
+      - extending the lease with heartbeats while working
+      - idempotent processing so duplicates are harmless
+      - splitting long jobs into smaller steps
+    rubric:
+      excellent: Explains how the lease expired mid-work, adds heartbeats or a suitable timeout, makes the job idempotent and considers breaking it into smaller resumable steps.
+      good: Identifies the timeout and lengthens it or extends the lease.
+      weak: Thinks the queue is broken or adds a global lock around all jobs.
+    followups:
+      - Why not just set the timeout to several hours?
+      - How would you make the second run harmless if it still happens?
+    common_errors:
+      - Relying only on a longer timeout with no idempotency.
+
+  - external_key: technical.backend_data.backpressure_producers
+    competency_key: distributed_systems
+    topic: Backpressure when producers outpace consumers
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What do you do when producers can generate work much faster than your consumers or downstream systems
+      can handle it?
+    expected_concepts:
+      - bounded queues instead of unbounded buffers
+      - rejecting or slowing producers with clear signals
+      - rate limiting and load shedding by priority
+      - autoscaling consumers within downstream limits
+      - monitoring lag and queue age
+    rubric:
+      excellent: Designs explicit backpressure with bounded buffers, producer throttling or rejection, prioritized shedding and capacity-aware scaling, and explains what clients see when pushed back.
+      good: Knows unbounded queues are dangerous and proposes rate limits or scaling.
+      weak: Lets the queue grow forever and assumes it will catch up.
+    followups:
+      - What should an API return when it is shedding load?
+      - How would you decide which work is dropped or delayed first?
+    common_errors:
+      - In-memory unbounded queues that end in an out-of-memory crash.
+
+  - external_key: technical.backend_data.job_before_commit
+    competency_key: distributed_systems
+    topic: A job that runs before its data is committed
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your code creates an order and enqueues a job to send the confirmation. Occasionally the job fails with
+      order not found, and occasionally a confirmation goes out for an order that was rolled back. Explain both
+      problems and how you'd fix them.
+    expected_concepts:
+      - enqueuing inside the transaction before commit
+      - the worker reading before the commit is visible
+      - rollbacks leaving already published jobs behind
+      - enqueue after commit hooks and their own failure gap
+      - a transactional outbox or a database-backed queue in the same transaction
+    rubric:
+      excellent: Explains both timing problems, shows why enqueue-after-commit still risks losing the job, and uses an outbox or same-database queue so the job exists if and only if the order commits.
+      good: Moves the enqueue after commit and notices the remaining crash gap.
+      weak: Adds a delay or a retry when the order is not found.
+    followups:
+      - What happens with the after-commit approach if the process crashes right after commit?
+      - How would the outbox relay avoid sending the same message twice?
+    common_errors:
+      - Fixing the race with a sleep before processing.
+
+  - external_key: technical.backend_data.dead_letter_operations
+    competency_key: distributed_systems
+    topic: Operating a dead-letter queue
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Messages that keep failing end up in a dead-letter queue. What does a good process for handling those
+      messages look like in practice, from alerting to redriving them?
+    expected_concepts:
+      - separating transient from permanent failures before dead-lettering
+      - keeping the error reason and attempt history with the message
+      - alerting on dead-letter arrivals and age
+      - triage, fix, then redrive in a controlled way
+      - idempotent handlers so redrives are safe
+    rubric:
+      excellent: Classifies errors before giving up, stores failure context, alerts on arrivals, and describes a deliberate triage, fix and rate-limited redrive process that relies on idempotent handlers.
+      good: Alerts on the dead-letter queue and replays messages after fixing the bug.
+      weak: Lets the dead-letter queue fill up unnoticed or deletes its contents.
+    followups:
+      - How would you redrive ten thousand messages without overloading the downstream service?
+      - Which errors should never be retried at all?
+    common_errors:
+      - Retrying validation errors that will fail the same way every time.
+
+  - external_key: technical.backend_data.partition_key_choice
+    competency_key: distributed_systems
+    topic: Choosing partition keys and counts
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      For a partitioned stream like Kafka, how do you choose the partition key and the number of partitions,
+      and what problems have you seen when those choices were wrong?
+    expected_concepts:
+      - ordering only within a partition
+      - keys that keep related events together
+      - hot partitions from skewed keys
+      - partition count limits consumer parallelism
+      - changing partition count remaps keys and breaks ordering
+    rubric:
+      excellent: Picks a key from the ordering requirement, anticipates skew and hot partitions, sizes partitions for future parallelism and explains why increasing the count later breaks key-to-partition mapping.
+      good: Knows ordering is per partition and that the count limits parallelism.
+      weak: Uses random keys or a single partition without understanding the consequences.
+    followups:
+      - One customer produces forty percent of all events. What do you do?
+      - How would you add partitions to a topic that relies on per-key ordering?
+    common_errors:
+      - Expecting global ordering across a multi-partition topic.
+
+  - external_key: technical.backend_data.replay_after_consumer_bug
+    competency_key: distributed_systems
+    topic: Reprocessing events after a consumer bug
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A consumer bug corrupted derived data for a week before anyone noticed. The events are still retained.
+      How would you reprocess them to repair the data without repeating side effects like emails or charges?
+    expected_concepts:
+      - separating pure state rebuilds from external side effects
+      - replaying into a new projection and swapping when verified
+      - idempotency keys and records of side effects already performed
+      - throttling the replay to protect live traffic
+      - verification against a sample or source of truth
+    rubric:
+      excellent: Separates rebuildable state from side effects, rebuilds into a fresh projection and swaps after verification, suppresses or de-duplicates side effects, and throttles the replay alongside live traffic.
+      good: Resets offsets and replays with idempotent handlers.
+      weak: Rewinds the consumer and lets it reprocess everything, including emails and charges.
+    followups:
+      - How do you handle new events arriving while the replay is running?
+      - How would you verify the repaired data before switching over?
+    common_errors:
+      - Replaying through handlers that trigger external actions again.
+
+  - external_key: technical.backend_data.event_schema_evolution
+    competency_key: distributed_systems
+    topic: Evolving message and event schemas
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Several teams consume an event your service publishes, and you need to change its structure. How do you
+      evolve event schemas without breaking consumers or losing the ability to replay old events?
+    expected_concepts:
+      - backward and forward compatible changes
+      - additive fields and never reusing removed fields
+      - schema registry or contract tests
+      - version fields or new event types for breaking changes
+      - old events in retention must still be readable
+    rubric:
+      excellent: Distinguishes compatible from breaking changes, enforces compatibility with a registry or contract tests, introduces new versions or types for breaking changes and keeps old events readable for replay.
+      good: Makes additive changes and coordinates breaking ones with consumers.
+      weak: Changes the payload and tells consumers to update at the same time.
+    followups:
+      - How would you know which consumers still depend on a field you want to remove?
+      - Would you transform old events on read or rewrite them?
+    common_errors:
+      - Renaming a field in place and breaking every consumer that is still deployed.
+
+  - external_key: technical.backend_data.fan_out_completion
+    competency_key: distributed_systems
+    topic: Tracking completion of fanned-out work
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A nightly job splits into ten thousand sub-tasks across workers, and something must happen only when all
+      of them have finished. How would you track completion and deal with the ones that fail?
+    expected_concepts:
+      - a parent record with expected and completed counts
+      - atomic completion updates or per-task status rows
+      - idempotent completion so retries do not double count
+      - timeouts for sub-tasks that never report back
+      - a policy for partial failure, such as retry, skip or fail the whole batch
+    rubric:
+      excellent: Tracks per-task status with atomic, idempotent completion, detects stuck tasks with timeouts, triggers the final step exactly once and defines a clear partial-failure policy.
+      good: Uses a counter or status table and handles retries.
+      weak: Waits for a fixed time and assumes everything is done.
+    followups:
+      - How do you make sure the final step runs once even if two workers finish at the same moment?
+      - Five sub-tasks keep failing. What happens to the batch?
+    common_errors:
+      - Incrementing a completion counter on every retry, so it overshoots.
+
+  - external_key: technical.backend_data.tenant_fair_queueing
+    competency_key: distributed_systems
+    topic: One tenant flooding a shared queue
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      One large customer just enqueued half a million export jobs, and every other customer's jobs are now
+      stuck behind them for hours. How would you redesign the queueing so this doesn't happen?
+    expected_concepts:
+      - per-tenant queues or partitions with fair scheduling
+      - per-tenant concurrency and rate limits
+      - priority lanes for interactive versus bulk work
+      - admission control when work is enqueued
+      - visibility into per-tenant backlog
+    rubric:
+      excellent: Introduces fair scheduling across tenants with per-tenant limits, separates interactive and bulk lanes, adds admission control and per-tenant metrics, and discusses the cost of many queues.
+      good: Adds per-tenant limits or separate queues for large tenants.
+      weak: Adds more workers so the backlog clears faster this time.
+    followups:
+      - How would you schedule fairly across thousands of tenants without thousands of queues?
+      - What would you tell the large customer about their export time?
+    common_errors:
+      - A single FIFO queue for all tenants and all job types.

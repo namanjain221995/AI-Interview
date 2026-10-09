@@ -1,0 +1,181 @@
+version: 1
+slug: url_query_param_values
+title: URL Query Parameter Values
+difficulty: medium
+competency_keys: [problem_solving, code_quality]
+role_tags: [backend, frontend, fullstack, security]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## URL Query Parameter Values
+
+  An API gateway logs raw request URLs, and an audit tool needs every value a client sent for one query
+  parameter (a parameter may legitimately repeat, as in `?tag=a&tag=b`). Write
+  `query_param_values(url, name)` that returns all decoded values of the parameter `name`, **in the order
+  they appear** in the URL.
+
+  Parse the URL exactly like this:
+
+  1. **Fragment:** everything from the first `#` onward is the fragment and is ignored.
+  2. **Query:** in what remains, the query is everything after the **first** `?`. If there is no `?`,
+     there are no parameters.
+  3. **Pairs:** split the query on `&`; skip empty pieces. Split each piece at its **first** `=` into a key
+     and a value; a piece without `=` is a key whose value is the empty string.
+  4. **Decoding:** decode the key and the value separately, scanning left to right once: `+` becomes a
+     space, and `%` followed by **two hexadecimal digits** (upper or lower case) becomes the character with
+     that code. A `%` that is not followed by two hexadecimal digits is kept as a literal `%`. Decoded text
+     is never decoded again, so `%2B` becomes a literal `+` (not a space).
+  5. **Matching:** a pair belongs to the parameter when its **decoded** key equals `name` exactly (case
+     sensitive).
+
+  Return an empty list `[]` when the parameter does not occur.
+
+  ### Example 1
+  ```
+  Input:  url = "https://shop.example.com/search?q=red+shoes&page=2&q=size%2B10", name = "q"
+  Output: ["red shoes", "size+10"]
+  ```
+
+  ### Example 2
+  ```
+  Input:  url = "/api/items?tag=a&tag&tag=&x=1#tag=frag", name = "tag"
+  Output: ["a", "", ""]
+  Explanation: "tag" without "=" and "tag=" both have an empty value; the fragment is ignored.
+  ```
+
+  ### Example 3
+  ```
+  Input:  url = "https://status.example.com/health", name = "verbose"
+  Output: []
+  ```
+
+  ### Constraints
+  - `0 <= url.length <= 4000`
+  - `1 <= name.length <= 50`; `name` is plain text (it is not encoded).
+  - `url` and `name` contain printable ASCII characters only, and every valid `%XX` escape encodes a
+    printable ASCII character (`20` to `7E`).
+
+  **Follow-up:** how would you change the function to return every parameter at once as a map from key to
+  list of values?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: query_param_values
+  params:
+    - {name: url, type: "string"}
+    - {name: name, type: "string"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    HEX_DIGITS = "0123456789abcdefABCDEF"
+
+
+    def _decode(text: str) -> str:
+        out: list[str] = []
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if ch == "+":
+                out.append(" ")
+                i += 1
+            elif ch == "%" and i + 2 < len(text) and text[i + 1] in HEX_DIGITS and text[i + 2] in HEX_DIGITS:
+                out.append(chr(int(text[i + 1:i + 3], 16)))
+                i += 3
+            else:
+                out.append(ch)
+                i += 1
+        return "".join(out)
+
+
+    def query_param_values(url: str, name: str) -> list[str]:
+        url = url.split("#", 1)[0]
+        q = url.find("?")
+        if q < 0:
+            return []
+        values: list[str] = []
+        for piece in url[q + 1:].split("&"):
+            if not piece:
+                continue
+            key, _, value = piece.partition("=")
+            if _decode(key) == name:
+                values.append(_decode(value))
+        return values
+  javascript: |
+    function decodeComponent(text) {
+      const isHex = (c) => c !== undefined && /^[0-9a-fA-F]$/.test(c);
+      let out = '';
+      let i = 0;
+      while (i < text.length) {
+        const ch = text[i];
+        if (ch === '+') {
+          out += ' ';
+          i++;
+        } else if (ch === '%' && i + 2 < text.length && isHex(text[i + 1]) && isHex(text[i + 2])) {
+          out += String.fromCharCode(parseInt(text.slice(i + 1, i + 3), 16));
+          i += 3;
+        } else {
+          out += ch;
+          i++;
+        }
+      }
+      return out;
+    }
+
+    function queryParamValues(url, name) {
+      const hash = url.indexOf('#');
+      if (hash >= 0) url = url.slice(0, hash);
+      const q = url.indexOf('?');
+      if (q < 0) return [];
+      const values = [];
+      for (const piece of url.slice(q + 1).split('&')) {
+        if (piece === '') continue;
+        const eq = piece.indexOf('=');
+        const key = eq < 0 ? piece : piece.slice(0, eq);
+        const value = eq < 0 ? '' : piece.slice(eq + 1);
+        if (decodeComponent(key) === name) values.push(decodeComponent(value));
+      }
+      return values;
+    }
+tests:
+  - {id: t1, args: ["https://shop.example.com/search?q=red+shoes&page=2&q=size%2B10", "q"], expected: ["red shoes", "size+10"], description: "Example 1 - plus as space and an encoded plus"}
+  - {id: t2, args: ["/api/items?tag=a&tag&tag=&x=1#tag=frag", "tag"], expected: ["a", "", ""], description: "Example 2 - missing and empty values, fragment ignored"}
+  - {id: t3, args: ["https://status.example.com/health", "verbose"], expected: [], description: "Example 3 - no query at all"}
+  - {id: t4, hidden: true, args: ["/u?user%5Fid=7&user_id=8&USER_ID=9", "user_id"], expected: ["7", "8"], description: "Encoded key matches after decoding; keys are case sensitive"}
+  - {id: t5, hidden: true, args: ["/auth?token=abc==&redirect=%2Fhome%3Fa%3D1%26b%3d2", "redirect"], expected: ["/home?a=1&b=2"], description: "Equals signs and an encoded ampersand inside the value (lower-case hex)"}
+  - {id: t6, hidden: true, args: ["/q?&&a=1&&&a=2&", "a"], expected: ["1", "2"], description: "Empty pieces are skipped"}
+  - {id: t7, hidden: true, args: ["/m?msg=100%25+done%2c%zz%4", "msg"], expected: ["100% done,%zz%4"], description: "Literal percent signs for invalid or truncated escapes"}
+  - {id: t8, hidden: true, args: ["/p?p=%2541&p=%2B+", "p"], expected: ["%41", "+ "], description: "Single-pass decoding - no double decoding, encoded plus stays a plus"}
+  - {id: t9, hidden: true, args: ["/docs#intro?a=1", "a"], expected: [], description: "Question mark inside the fragment does not start a query"}
+  - {id: t10, hidden: true, args: ["/r?next=/a?b=2&b=3&=5&b", "b"], expected: ["3", ""], description: "Second question mark belongs to a value; empty key and bare key"}
+  - {id: t11, hidden: true, args: ["https://api.example.com/v2/batch?id=0&k1=x+1&k2=x+2&i%64=v%23&k4=x+4&&k6=x+6&id=7&k8=x+8&k9=x+9&i%64=v%20&k11=x+11&&k13=x+13&id=14&k15=x+15&k16=x+16&i%64=v%27&k18=x+18&&k20=x+20&id=21&k22=x+22&k23=x+23&i%64=v%24&k25=x+25&&k27=x+27&id=28&k29=x+29&k30=x+30&i%64=v%21&k32=x+32&&k34=x+34&id=35&k36=x+36&k37=x+37&i%64=v%28&k39=x+39&&k41=x+41&id=42&k43=x+43&k44=x+44&i%64=v%25&k46=x+46&&k48=x+48&id=49&k50=x+50&k51=x+51&i%64=v%22&k53=x+53&&k55=x+55&id=56&k57=x+57&k58=x+58&i%64=v%29&k60=x+60&&k62=x+62&id=63&k64=x+64&k65=x+65&i%64=v%26&k67=x+67&&k69=x+69&id=70&k71=x+71&k72=x+72&i%64=v%23&k74=x+74&&k76=x+76&id=77&k78=x+78&k79=x+79&i%64=v%20&k81=x+81&&k83=x+83&id=84&k85=x+85&k86=x+86&i%64=v%27&k88=x+88&&k90=x+90&id=91&k92=x+92&k93=x+93&i%64=v%24&k95=x+95&&k97=x+97&id=98&k99=x+99&k100=x+100&i%64=v%21&k102=x+102&&k104=x+104&id=105&k106=x+106&k107=x+107&i%64=v%28&k109=x+109&&k111=x+111&id=112&k113=x+113&k114=x+114&i%64=v%25&k116=x+116&&k118=x+118&id=119&k120=x+120&k121=x+121&i%64=v%22&k123=x+123&&k125=x+125&id=126&k127=x+127&k128=x+128&i%64=v%29&k130=x+130&&k132=x+132&id=133&k134=x+134&k135=x+135&i%64=v%26&k137=x+137&&k139=x+139#id=last", "id"], expected: ["0", "v#", "7", "v ", "14", "v'", "21", "v$", "28", "v!", "35", "v(", "42", "v%", "49", "v\"", "56", "v)", "63", "v&", "70", "v#", "77", "v ", "84", "v'", "91", "v$", "98", "v!", "105", "v(", "112", "v%", "119", "v\"", "126", "v)", "133", "v&"], description: "Stress - 140 pairs with encoded keys and a fragment"}
+expected_concepts:
+  - processing the URL in a fixed order (fragment, query, pairs, decoding)
+  - splitting a pair only at the first equals sign
+  - single-pass percent-decoding with validation of the two hex digits
+  - decoding keys before comparing them
+  - preserving order and duplicates of repeated parameters
+optimal_complexity: {time: O(n), space: O(n)}
+rubric:
+  excellent: Follows the parsing steps in order, splits only at the first '=', decodes keys and values in one left-to-right pass that leaves invalid escapes literal and never double-decodes, keeps repeated values in order, and explains the security relevance of consistent decoding.
+  good: Correct for typical URLs, with one or two edge cases (encoded keys, invalid escapes, empty pieces) fixed after running the tests.
+  weak: Uses a built-in URL parser without matching the stated rules, decodes before splitting, splits on every '=', or returns only the first value.
+  criteria:
+    correctness: All tests pass, including encoded keys, '=' inside values, invalid escapes and fragments.
+    efficiency: Linear in the URL length; each character is decoded once.
+    code_quality: A separate decode helper and a clear sequence of parsing steps.
+    edge_cases: No query, empty query, empty pieces, pieces without '=', a '#' before the '?', a second '?' inside the query.
+    communication: Explains why decoding must happen after splitting and why decoded text is not decoded again.
+hints:
+  - Handle the URL in stages - first cut off the fragment, then find the query, then split it into pairs - and only decode at the very end.
+  - Decoding before splitting is a trap, because an encoded ampersand or equals sign would then look like a separator; split first, then decode the key and the value of each piece separately.
+  - Cut the URL at the first '#', take what follows the first '?', split on '&' and skip empty pieces, split each piece at its first '=' (no '=' means an empty value), then decode both halves with one left-to-right scan that turns '+' into a space and a percent sign followed by two hex digits into that character while leaving any other percent sign untouched, and collect the values whose decoded key equals the name.
+followups:
+  - Why can decoding the whole query string before splitting it lead to parameter-injection bugs?
+  - How would you support multi-byte UTF-8 sequences such as %C3%A9?
+  - How should a gateway behave when two layers disagree on how to decode the same URL?
+  - How would you rebuild a canonical query string (sorted, consistently encoded) for signing requests?
+common_errors:
+  - Decoding the whole query before splitting, so an encoded '&' or '=' acts as a separator.
+  - Splitting each piece on every '=' and losing the rest of a value such as a base64 token.
+  - Comparing the raw key instead of the decoded key.
+  - Decoding twice, so '%2541' becomes 'A' instead of '%41', or turning a decoded '+' into a space.
+  - Including the fragment in the query or splitting on a '?' that appears after the '#'.

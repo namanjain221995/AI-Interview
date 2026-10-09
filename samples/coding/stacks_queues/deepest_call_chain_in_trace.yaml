@@ -1,0 +1,136 @@
+version: 1
+slug: deepest_call_chain_in_trace
+title: Deepest Call Chain in a Trace
+difficulty: easy
+competency_keys: [data_structures, algorithms, debugging]
+role_tags: [backend, sre, general]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Deepest Call Chain in a Trace
+
+  A lightweight tracer instruments a service and writes one event each time a function starts or
+  finishes: `"enter <name>"` when a call begins and `"exit <name>"` when it returns. Calls are properly
+  nested, so every `exit` closes the most recently entered call that is still open.
+
+  While debugging a stack overflow, you want the **deepest call chain** the service reached. Return the
+  list of functions that were open at the **first moment** the trace reached its maximum nesting depth,
+  ordered from the outermost call to the innermost one.
+
+  - If several moments reach the same maximum depth, use the earliest one.
+  - The same function name may appear several times in a chain (recursion).
+  - The trace may stop while some calls are still open (the service was killed); those calls count as
+    open from their `enter` event onwards.
+  - For an empty trace, return an empty list.
+
+  ### Example 1
+  ```
+  Input:  trace = ["enter main", "enter load_config", "exit load_config", "enter handle", "enter query", "enter retry", "exit retry", "exit query", "exit handle", "exit main"]
+  Output: ["main", "handle", "query", "retry"]
+  Explanation: the depth peaks at 4 when retry is entered inside query, handle and main
+  ```
+
+  ### Example 2
+  ```
+  Input:  trace = ["enter api", "enter auth", "exit auth", "exit api", "enter worker", "enter encode", "exit encode", "exit worker"]
+  Output: ["api", "auth"]
+  Explanation: depth 2 is reached twice; the chain api -> auth comes first
+  ```
+
+  ### Example 3
+  ```
+  Input:  trace = []
+  Output: []
+  ```
+
+  ### Constraints
+  - `0 <= trace.length <= 10^4`
+  - Each event is `"enter <name>"` or `"exit <name>"`, where `<name>` is 1 to 30 characters of lowercase
+    letters, digits and underscores.
+  - Every `exit` names the innermost open call; the trace may end with calls still open.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: deepest_call_chain
+  params:
+    - {name: trace, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def deepest_call_chain(trace: list[str]) -> list[str]:
+        # Pass 1: find the maximum depth.
+        depth = 0
+        max_depth = 0
+        for event in trace:
+            depth += 1 if event.startswith("enter ") else -1
+            max_depth = max(max_depth, depth)
+        if max_depth == 0:
+            return []
+        # Pass 2: replay with a real stack and stop the first time that depth is reached.
+        stack: list[str] = []
+        for event in trace:
+            kind, name = event.split(" ", 1)
+            if kind == "enter":
+                stack.append(name)
+                if len(stack) == max_depth:
+                    return stack
+            else:
+                stack.pop()
+        return stack
+  javascript: |
+    function deepestCallChain(trace) {
+      // Single pass: snapshot the stack whenever a new strict maximum depth is reached.
+      const stack = [];
+      let best = [];
+      for (const event of trace) {
+        const space = event.indexOf(" ");
+        const kind = event.slice(0, space);
+        const name = event.slice(space + 1);
+        if (kind === "enter") {
+          stack.push(name);
+          if (stack.length > best.length) best = stack.slice();
+        } else {
+          stack.pop();
+        }
+      }
+      return best;
+    }
+tests:
+  - {id: t1, args: [["enter main", "enter load_config", "exit load_config", "enter handle", "enter query", "enter retry", "exit retry", "exit query", "exit handle", "exit main"]], expected: ["main", "handle", "query", "retry"], description: "Example 1 - deepest chain is in the second branch"}
+  - {id: t2, args: [["enter api", "enter auth", "exit auth", "exit api", "enter worker", "enter encode", "exit encode", "exit worker"]], expected: ["api", "auth"], description: "Example 2 - tie on depth, earliest chain wins"}
+  - {id: t3, args: [[]], expected: [], description: "Example 3 - empty trace"}
+  - {id: t4, hidden: true, args: [["enter boot"]], expected: ["boot"], description: "Single enter with no exit (truncated trace)"}
+  - {id: t5, hidden: true, args: [["enter a", "exit a", "enter b", "exit b", "enter c", "exit c"]], expected: ["a"], description: "Flat sequence of depth-1 calls; first call wins the tie"}
+  - {id: t6, hidden: true, args: [["enter walk", "enter walk", "enter walk", "exit walk", "exit walk", "exit walk"]], expected: ["walk", "walk", "walk"], description: "Recursion: the same name repeated in the chain"}
+  - {id: t7, hidden: true, args: [["enter main", "enter x", "enter y", "exit y", "exit x", "enter z", "enter y", "exit y", "exit z", "enter p", "enter q", "enter r"]], expected: ["main", "p", "q", "r"], description: "Later truncated branch goes deeper than the earlier closed one"}
+  - {id: t8, hidden: true, args: [["enter main", "enter a", "enter b", "exit b", "enter c", "exit c", "exit a", "exit main"]], expected: ["main", "a", "b"], description: "Sibling at the same max depth after a pop; stack must reflect the first one"}
+  - {id: t9, hidden: true, args: [["enter s", "enter t", "exit t", "enter u", "enter v", "exit v", "enter w", "enter x9", "exit x9", "exit w", "exit u"]], expected: ["s", "u", "w", "x9"], description: "Max depth reached deep inside after the stack shrank and regrew; trace ends with s still open"}
+  - {id: t10, hidden: true, args: [["enter auth", "enter retry", "enter render", "enter auth", "enter db_read", "exit db_read", "exit auth", "enter parse", "enter fetch", "enter parse", "exit parse", "enter auth", "exit auth", "exit fetch", "enter cache_get", "enter db_read", "enter retry", "exit retry", "enter cache_get", "exit cache_get", "exit db_read", "enter parse", "enter auth", "exit auth", "enter render", "exit render", "enter render", "enter render", "exit render", "enter db_read", "enter serialize", "exit serialize", "exit db_read", "enter parse", "exit parse", "exit render", "enter parse", "exit parse", "enter db_read", "exit db_read", "enter serialize", "enter fetch", "enter db_read", "exit db_read", "exit fetch", "enter auth", "enter serialize", "exit serialize", "exit auth", "enter cache_get", "exit cache_get", "exit serialize", "exit parse", "enter serialize", "exit serialize", "enter render", "exit render", "enter auth", "exit auth", "exit cache_get", "enter parse", "enter retry", "exit retry", "enter fetch", "enter db_read", "exit db_read", "enter retry", "exit retry", "enter fetch", "enter parse", "exit parse", "enter cache_get", "enter render", "enter serialize", "exit serialize", "exit render", "exit cache_get", "enter fetch", "exit fetch", "exit fetch", "enter parse", "exit parse", "exit fetch", "exit parse", "enter fetch", "enter serialize", "exit serialize", "exit fetch", "exit parse", "enter cache_get", "enter render", "enter cache_get", "exit cache_get", "enter cache_get", "enter retry", "exit retry", "enter render", "exit render", "enter auth", "enter auth", "enter parse", "enter cache_get", "enter fetch", "exit fetch", "enter fetch", "exit fetch", "enter auth", "enter render", "enter fetch", "exit fetch", "exit render", "exit auth", "enter fetch", "exit fetch", "exit cache_get", "exit parse", "enter db_read", "exit db_read", "enter fetch", "enter fetch", "exit fetch", "exit fetch", "enter db_read", "exit db_read", "enter serialize", "exit serialize", "enter db_read", "enter cache_get", "enter retry", "enter parse", "exit parse", "exit retry", "enter cache_get", "enter auth", "enter fetch", "enter serialize", "exit serialize", "enter auth", "exit auth", "enter db_read", "enter retry", "exit retry", "enter db_read", "enter fetch", "exit fetch", "enter cache_get", "enter serialize", "enter serialize", "exit serialize", "enter cache_get", "enter auth", "exit auth", "enter auth", "exit auth", "exit cache_get", "exit serialize", "exit cache_get", "enter render", "exit render", "enter retry", "exit retry", "exit db_read", "enter fetch", "exit fetch", "exit db_read", "enter serialize", "exit serialize", "enter auth", "enter auth", "exit auth", "exit auth", "enter serialize", "enter render", "enter parse", "enter cache_get", "enter render", "enter render", "exit render", "enter db_read", "exit db_read", "exit render", "exit cache_get", "exit parse", "enter fetch", "exit fetch", "exit render", "enter cache_get", "exit cache_get", "enter parse", "exit parse", "exit serialize", "enter render", "enter parse", "exit parse", "exit render", "exit fetch", "exit auth", "exit cache_get", "exit cache_get", "exit db_read", "enter auth", "enter render", "enter db_read", "enter render", "enter cache_get", "exit cache_get", "exit render", "exit db_read", "exit render", "exit auth", "enter fetch", "enter fetch", "exit fetch", "enter fetch", "enter parse", "enter retry", "enter fetch", "enter db_read", "exit db_read", "enter render", "enter fetch", "enter render", "exit render", "enter fetch", "enter db_read", "enter parse", "exit parse", "enter retry", "exit retry", "enter retry", "exit retry", "exit db_read", "exit fetch", "exit fetch", "enter serialize", "enter parse", "enter auth", "enter parse", "exit parse", "enter fetch", "exit fetch", "exit auth", "enter retry", "enter parse", "enter retry", "exit retry", "enter retry", "enter parse", "exit parse", "enter cache_get", "enter retry", "exit retry", "enter retry", "exit retry", "exit cache_get", "exit retry", "enter retry", "enter auth", "exit auth", "enter fetch", "exit fetch", "enter parse", "enter parse", "enter parse", "exit parse", "exit parse", "enter cache_get", "enter db_read", "exit db_read", "exit cache_get", "exit parse", "exit retry", "exit parse", "enter retry", "enter fetch", "exit fetch", "enter retry", "enter db_read", "enter render", "enter fetch", "exit fetch", "exit render", "enter cache_get", "enter serialize", "exit serialize", "exit cache_get", "enter render", "enter render", "exit render", "enter retry", "enter fetch", "enter cache_get", "enter retry", "exit retry", "enter db_read", "enter cache_get", "exit cache_get", "enter serialize", "enter auth", "enter auth", "exit auth", "enter render", "enter auth", "exit auth", "enter auth", "exit auth", "enter cache_get", "exit cache_get", "enter cache_get", "exit cache_get", "enter serialize", "exit serialize", "enter auth", "exit auth", "enter auth", "exit auth", "exit render", "enter auth", "enter cache_get", "enter auth", "enter db_read", "exit db_read", "enter render", "exit render", "exit auth", "enter auth", "exit auth", "enter cache_get", "enter serialize", "enter db_read", "enter parse", "enter auth", "enter auth", "exit auth", "exit auth", "enter db_read", "enter retry", "exit retry", "enter serialize", "enter db_read", "enter retry", "exit retry", "exit db_read", "exit serialize", "enter parse", "exit parse", "exit db_read", "enter retry", "enter serialize", "enter fetch", "enter retry", "enter auth", "enter db_read", "enter parse", "exit parse", "exit db_read", "enter db_read", "enter serialize", "exit serialize", "exit db_read", "exit auth", "exit retry", "enter cache_get", "exit cache_get", "exit fetch", "enter render", "exit render", "enter render", "enter fetch", "exit fetch", "enter serialize", "enter auth", "enter retry", "exit retry", "exit auth", "exit serialize", "enter retry", "exit retry", "enter render", "enter cache_get", "enter retry", "enter retry", "enter cache_get", "enter parse", "enter auth", "exit auth", "enter db_read", "exit db_read", "enter retry", "exit retry", "exit parse", "enter fetch", "enter parse", "exit parse", "enter retry", "exit retry", "enter db_read", "enter fetch", "exit fetch", "exit db_read", "exit fetch", "exit cache_get", "enter db_read", "exit db_read", "enter parse", "exit parse", "enter cache_get", "exit cache_get", "exit retry", "enter render", "enter cache_get", "enter parse", "enter fetch", "exit fetch", "enter cache_get", "exit cache_get", "enter retry", "enter render", "enter db_read", "exit db_read", "enter parse", "enter parse", "enter fetch", "exit fetch", "exit parse", "exit parse", "enter retry", "enter db_read", "enter fetch", "enter retry", "enter db_read", "enter serialize", "enter serialize", "exit serialize", "exit serialize", "exit db_read", "enter serialize", "enter cache_get", "exit cache_get", "enter retry", "enter retry", "enter serialize", "exit serialize", "enter cache_get", "enter parse", "exit parse", "enter fetch", "enter render", "enter db_read", "exit db_read", "exit render", "enter cache_get", "exit cache_get", "enter cache_get", "enter cache_get", "enter auth", "enter db_read", "enter render", "exit render", "exit db_read", "enter db_read", "enter cache_get", "enter parse", "enter auth", "enter serialize", "enter auth", "enter parse", "enter parse", "enter auth", "exit auth", "enter auth", "enter db_read", "exit db_read", "enter render", "exit render", "exit auth", "exit parse", "exit parse", "exit auth", "exit serialize", "enter render", "exit render", "enter render", "exit render", "enter render", "enter auth", "exit auth", "enter serialize", "exit serialize", "enter auth", "enter auth", "enter retry", "exit retry", "exit auth", "enter retry", "exit retry", "exit auth", "enter db_read", "enter render", "exit render", "exit db_read", "exit render", "enter parse", "enter cache_get", "enter auth", "exit auth", "exit cache_get", "enter parse", "exit parse", "enter retry", "enter serialize", "enter parse", "exit parse", "exit serialize", "exit retry", "exit parse", "enter serialize", "enter fetch", "enter fetch", "enter auth", "exit auth", "exit fetch", "exit fetch", "enter serialize", "enter auth", "exit auth", "enter retry", "exit retry", "exit serialize", "enter serialize", "exit serialize", "enter parse", "enter render", "enter parse", "enter parse", "enter auth", "exit auth", "enter auth", "enter retry", "exit retry", "enter auth", "enter retry", "exit retry", "exit auth", "exit auth", "enter parse", "exit parse", "exit parse", "exit parse", "exit render", "enter fetch", "enter cache_get", "exit cache_get", "enter retry", "exit retry", "exit fetch", "exit parse", "exit serialize", "exit auth", "exit parse", "exit cache_get", "enter db_read", "enter parse", "exit parse", "exit db_read", "enter fetch", "exit fetch", "exit db_read", "enter retry", "enter serialize", "enter render", "exit render", "exit serialize", "exit retry", "enter render", "exit render", "enter render", "enter db_read", "exit db_read", "enter cache_get", "exit cache_get", "enter cache_get", "enter serialize", "exit serialize", "enter fetch", "enter fetch", "enter auth", "exit auth", "enter fetch", "enter db_read", "enter render", "enter fetch", "exit fetch", "exit render", "exit db_read", "exit fetch", "exit fetch", "exit fetch", "enter parse", "exit parse", "enter render", "exit render", "enter parse", "enter parse", "exit parse", "enter retry", "exit retry", "enter cache_get", "enter cache_get", "enter auth", "enter parse", "enter fetch", "enter cache_get", "enter auth", "exit auth", "exit cache_get", "enter parse", "exit parse", "enter auth", "exit auth", "enter auth", "exit auth", "enter cache_get", "exit cache_get", "enter cache_get", "exit cache_get", "exit fetch", "enter serialize", "exit serialize", "exit parse", "exit auth", "exit cache_get", "enter retry", "enter render", "enter parse", "enter parse", "enter fetch", "enter parse", "exit parse", "enter db_read", "exit db_read", "enter serialize", "enter serialize", "exit serialize", "exit serialize", "enter fetch", "enter render", "enter auth", "exit auth", "exit render", "exit fetch", "enter render", "enter cache_get", "enter render", "exit render", "exit cache_get", "exit render", "exit fetch", "exit parse", "enter serialize", "enter db_read", "enter serialize", "enter auth", "exit auth", "enter fetch", "enter render", "enter cache_get", "enter db_read", "enter retry", "enter render", "enter auth", "exit auth", "exit render", "enter auth", "enter auth", "enter fetch", "exit fetch", "exit auth", "enter db_read", "exit db_read", "enter parse", "exit parse", "enter fetch", "enter auth", "exit auth", "enter parse", "exit parse", "enter fetch", "enter fetch", "enter render", "exit render", "enter serialize", "exit serialize", "exit fetch", "exit fetch", "exit fetch", "exit auth", "exit retry", "enter cache_get", "exit cache_get", "enter auth", "exit auth", "enter fetch", "enter db_read", "enter parse", "exit parse", "exit db_read", "enter db_read", "enter render", "enter db_read", "exit db_read", "exit render", "exit db_read", "enter serialize", "enter parse", "exit parse", "enter retry", "enter serialize", "exit serialize", "exit retry", "exit serialize", "enter serialize", "exit serialize", "enter render", "enter db_read", "exit db_read", "exit render", "enter auth", "exit auth", "exit fetch", "enter cache_get", "enter auth", "enter fetch", "exit fetch", "enter fetch", "enter cache_get", "enter parse", "enter render", "enter fetch", "enter serialize", "exit serialize", "exit fetch", "enter retry", "enter render", "exit render", "enter cache_get", "exit cache_get", "enter cache_get", "exit cache_get", "enter db_read", "enter parse", "enter fetch", "exit fetch", "enter auth", "exit auth", "enter auth", "exit auth", "enter parse", "enter fetch", "exit fetch", "exit parse", "exit parse", "enter parse", "exit parse", "enter auth", "enter db_read", "exit db_read", "enter fetch", "exit fetch", "enter auth", "exit auth", "exit auth", "exit db_read", "exit retry", "enter retry", "exit retry", "enter cache_get", "enter retry", "enter db_read", "enter auth", "enter fetch", "enter cache_get", "enter retry", "exit retry", "exit cache_get", "exit fetch", "enter parse", "enter parse", "exit parse", "exit parse", "enter serialize", "exit serialize", "enter db_read", "exit db_read", "exit auth", "enter cache_get", "enter retry", "enter cache_get", "exit cache_get", "enter fetch", "exit fetch", "enter render", "enter render", "exit render", "enter fetch", "exit fetch", "enter serialize", "exit serialize", "exit render", "exit retry", "enter parse", "exit parse", "enter serialize", "enter auth", "exit auth", "enter render", "enter fetch", "enter serialize", "exit serialize", "enter render", "enter auth", "enter render", "exit render", "enter retry", "exit retry", "exit auth", "exit render", "exit fetch", "enter fetch", "enter render", "enter cache_get", "enter cache_get", "enter render", "enter cache_get", "enter retry", "enter serialize", "exit serialize", "exit retry", "exit cache_get", "enter retry", "exit retry", "enter serialize", "exit serialize", "enter retry", "enter serialize", "enter render", "exit render", "exit serialize", "enter fetch", "enter retry", "enter cache_get", "exit cache_get", "exit retry", "exit fetch", "exit retry", "exit render", "enter cache_get", "exit cache_get", "enter retry", "exit retry", "enter parse", "exit parse", "enter serialize", "enter auth", "enter serialize", "enter auth", "enter parse", "enter serialize", "enter serialize", "enter retry", "enter retry", "exit retry", "exit retry", "exit serialize", "enter parse", "enter render", "enter serialize", "enter fetch", "exit fetch", "enter auth", "enter cache_get", "exit cache_get", "enter render", "exit render", "enter db_read", "enter retry", "enter parse", "exit parse", "enter auth", "enter db_read", "exit db_read", "exit auth", "enter render", "enter fetch", "enter serialize", "exit serialize", "exit fetch", "enter auth", "exit auth", "enter db_read", "exit db_read", "exit render", "exit retry", "exit db_read", "exit auth", "exit serialize", "exit render", "exit parse", "exit serialize", "exit parse", "exit auth", "exit serialize", "exit auth", "exit serialize", "exit cache_get", "exit cache_get", "exit render", "exit fetch", "exit render", "exit serialize", "exit cache_get", "exit db_read", "exit retry", "exit cache_get", "exit render", "exit parse", "exit cache_get", "exit fetch", "exit auth", "exit cache_get", "exit db_read", "exit cache_get", "exit render", "exit fetch", "exit serialize", "exit db_read", "exit serialize", "exit parse", "exit render", "exit retry", "exit cache_get", "exit parse", "exit cache_get", "exit render", "exit auth", "exit cache_get", "exit cache_get", "exit fetch", "exit cache_get", "exit retry", "exit retry", "exit serialize", "exit retry", "exit fetch", "exit db_read", "exit retry", "exit render", "exit retry", "exit parse", "exit cache_get", "exit render", "exit retry", "exit cache_get", "exit render", "exit render", "exit serialize", "exit retry", "exit parse", "exit db_read", "exit serialize", "exit cache_get", "exit cache_get", "exit auth", "exit auth", "exit serialize", "exit db_read", "exit cache_get", "exit fetch", "exit retry", "exit render", "exit db_read", "exit retry", "exit retry", "exit retry", "exit parse", "exit serialize", "exit render", "exit fetch", "exit retry", "exit parse", "exit fetch", "exit fetch", "exit auth", "exit auth", "exit cache_get", "exit render", "exit cache_get", "exit render", "exit retry", "exit auth"]], expected: ["auth", "retry", "render", "cache_get", "render", "cache_get", "auth", "auth", "fetch", "fetch", "parse", "retry", "fetch", "render", "serialize", "parse", "retry", "retry", "retry", "db_read", "render", "retry", "fetch", "cache_get", "db_read", "serialize", "auth", "auth", "cache_get", "cache_get", "serialize", "db_read", "parse", "retry", "serialize", "render", "render", "cache_get", "retry", "render", "cache_get", "parse", "retry", "render", "retry", "db_read", "fetch", "retry", "serialize", "retry", "retry", "cache_get", "fetch", "cache_get", "cache_get", "auth", "render", "cache_get", "parse", "cache_get", "retry", "render", "parse", "serialize", "db_read", "serialize", "fetch", "render", "cache_get", "db_read", "cache_get", "auth", "fetch", "cache_get", "parse", "render", "cache_get", "retry", "db_read", "cache_get", "serialize", "render", "fetch", "render", "cache_get", "cache_get", "serialize", "auth", "serialize", "auth", "parse", "serialize", "parse", "render", "serialize", "auth", "db_read", "retry", "render", "fetch", "serialize"], description: "Stress: 1000 events forming a random well-nested trace over 8 names"}
+expected_concepts:
+  - stack of currently open calls
+  - push on enter, pop on exit
+  - capture the chain only when a strictly greater depth is reached (earliest tie)
+  - avoiding repeated full copies, for example with a first pass that finds the maximum depth
+optimal_complexity: {time: O(n), space: O(n)}
+rubric:
+  excellent: "Simulates the call stack, captures the chain at the first strict new maximum, handles truncated traces and empty input, and notes that copying at every new maximum can cost O(n^2) on a steadily deepening trace, fixing it with a two-pass replay or equivalent."
+  good: "Correct stack simulation that snapshots on each new maximum, with the right tie rule and edge cases after a hint or two."
+  weak: "Returns only the depth, records the stack at the last maximum instead of the first, or returns a reference to the live stack that keeps changing."
+  criteria:
+    correctness: "All tests pass, including ties, recursion, truncated traces and the empty trace."
+    efficiency: "Linear time; the chain is copied once (or the cost of repeated copies is discussed)."
+    code_quality: "Event parsing is separated from the stack logic and names are clear."
+    edge_cases: "Empty trace, a single open call, ties on the maximum depth and recursive names."
+    communication: "Explains the strict comparison used for the earliest tie and why the stack mirrors the open calls."
+hints:
+  - "At any moment, which functions are open, and in what order were they entered?"
+  - "Replay the events with a stack of open calls; the depth is the stack size, and you only care about moments when an enter makes the stack deeper than ever before."
+  - "Push the name on every enter and pop on every exit; when the stack size becomes strictly larger than the best depth seen so far, record a copy of the stack, or find the maximum depth in a first pass and return the stack the first time a replay reaches it; an empty trace gives an empty list."
+followups:
+  - "How would you also return the event index at which the deepest chain was reached?"
+  - "How would you validate the trace and report the first exit that does not match the innermost open call?"
+  - "How would you compute the total time spent in each function if every event carried a timestamp?"
+common_errors:
+  - "Using a non-strict comparison, which reports the last chain that reaches the maximum instead of the first."
+  - "Returning the live stack object after more events have modified it."
+  - "Assuming every call is closed, which breaks on truncated traces."
+  - "Copying the full stack on every enter event, which is quadratic on deep traces."

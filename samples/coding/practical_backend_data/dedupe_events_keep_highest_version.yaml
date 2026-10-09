@@ -1,0 +1,121 @@
+version: 1
+slug: dedupe_events_keep_highest_version
+title: "Keep the Latest Version of Each Entity"
+difficulty: easy
+competency_keys: [data_structures, problem_solving, code_quality]
+role_tags: [backend, data, platform, general]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Keep the Latest Version of Each Entity
+
+  A change-data pipeline publishes one record every time an entity (an order, a product, a customer
+  account) is saved. Delivery is **at least once** and **not ordered**: a record can arrive twice, and an
+  old version can arrive after a newer one. Before loading a batch into the warehouse, the consumer keeps
+  only the newest state of every entity.
+
+  Each record is `[entity_id, version, payload]`, all strings. `version` is a non-negative integer written
+  in decimal, and versions must be compared **as numbers**: `"10"` is newer than `"9"`, and `"007"` is the
+  same version as `"7"`.
+
+  Write `latest_versions(events)` that keeps exactly one record per `entity_id`:
+
+  - the record with the **highest version**;
+  - if several records share that highest version, the one that appears **last** in `events` (the most
+    recent delivery wins).
+
+  Return the kept records unchanged (exactly as they appear in the input), sorted by `entity_id` in
+  ascending string order (character code order). Return `[]` for an empty batch.
+
+  ### Example 1
+  ```
+  Input:  events = [["order-7", "2", "status=paid"], ["order-3", "1", "status=new"], ["order-7", "3", "status=shipped"], ["order-3", "1", "status=new"]]
+  Output: [["order-3", "1", "status=new"], ["order-7", "3", "status=shipped"]]
+  Explanation: order-7 keeps version 3; order-3 arrived twice with version 1
+  ```
+
+  ### Example 2
+  ```
+  Input:  events = [["acct-1", "10", "plan=pro"], ["acct-1", "9", "plan=team"], ["acct-1", "010", "plan=enterprise"]]
+  Output: [["acct-1", "010", "plan=enterprise"]]
+  Explanation: 10 > 9 numerically; "010" equals 10 and arrives later, so it replaces the first record
+  ```
+
+  ### Constraints
+  - `0 <= events.length <= 10^5`
+  - `events[i].length == 3`
+  - `entity_id` is 1 to 40 characters of ASCII letters, digits, `-` and `_`
+  - `version` is 1 to 15 decimal digits and may have leading zeros
+  - `payload` is 0 to 200 printable ASCII characters
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: latest_versions
+  params:
+    - {name: events, type: "string[][]"}
+  return_type: "string[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def latest_versions(events: list[list[str]]) -> list[list[str]]:
+        kept: dict[str, tuple[int, list[str]]] = {}
+        for record in events:
+            entity_id, version = record[0], int(record[1])
+            current = kept.get(entity_id)
+            # >= so that a later delivery of the same highest version replaces the earlier one
+            if current is None or version >= current[0]:
+                kept[entity_id] = (version, record)
+        return [kept[entity_id][1] for entity_id in sorted(kept)]
+  javascript: |
+    function latestVersions(events) {
+      const kept = new Map();
+      for (const record of events) {
+        const entityId = record[0];
+        const version = Number(record[1]);
+        const current = kept.get(entityId);
+        if (current === undefined || version >= current.version) {
+          kept.set(entityId, { version, record });
+        }
+      }
+      const keys = [...kept.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      return keys.map((key) => kept.get(key).record);
+    }
+tests:
+  - {id: t1, args: [[["order-7", "2", "status=paid"], ["order-3", "1", "status=new"], ["order-7", "3", "status=shipped"], ["order-3", "1", "status=new"]]], expected: [["order-3", "1", "status=new"], ["order-7", "3", "status=shipped"]], description: "Example 1 - newer version wins and an exact duplicate collapses to one record"}
+  - {id: t2, args: [[["acct-1", "10", "plan=pro"], ["acct-1", "9", "plan=team"], ["acct-1", "010", "plan=enterprise"]]], expected: [["acct-1", "010", "plan=enterprise"]], description: "Example 2 - numeric comparison (10 beats 9) and a tie on 10 vs 010 resolved by the later delivery"}
+  - {id: t3, hidden: true, args: [[]], expected: [], description: "Empty batch returns []"}
+  - {id: t4, hidden: true, args: [[["p", "0", ""]]], expected: [["p", "0", ""]], description: "Single record with version 0 and an empty payload"}
+  - {id: t5, hidden: true, args: [[["inv-2", "5", "a"], ["inv-1", "5", "b"], ["inv-2", "5", "c"], ["inv-2", "4", "d"], ["inv-1", "5", "e"]]], expected: [["inv-1", "5", "e"], ["inv-2", "5", "c"]], description: "Several ties on the highest version; the last delivery of that version wins and a later lower version is ignored"}
+  - {id: t6, hidden: true, args: [[["Z", "1", "x"], ["a", "1", "y"], ["B", "1", "z"], ["_k", "1", "w"], ["9", "1", "v"]]], expected: [["9", "1", "v"], ["B", "1", "z"], ["Z", "1", "x"], ["_k", "1", "w"], ["a", "1", "y"]], description: "Sorting uses character codes - digits before upper case before underscore before lower case"}
+  - {id: t7, hidden: true, args: [[["e", "999999999999999", "max"], ["e", "1000000000", "mid"], ["e", "99999999999999", "lower"]]], expected: [["e", "999999999999999", "max"]], description: "15-digit versions that do not fit in 32 bits; string comparison would pick the wrong one"}
+  - {id: t8, hidden: true, args: [[["cfg", "2", "old"], ["cfg", "100", "new"], ["cfg", "20", "mid"], ["cfg", "0100", "replay"]]], expected: [["cfg", "0100", "replay"]], description: "String comparison of versions would pick 20; leading zeros tie with 100 and the later replay wins"}
+  - {id: t9, hidden: true, args: [[["x", "3", "same"], ["x", "3", "same"], ["x", "3", "same"]]], expected: [["x", "3", "same"]], description: "The same record three times collapses to one"}
+  - {id: t10, hidden: true, args: [[["sku-28", "8", "qty=99"], ["sku-29", "7", "qty=65"], ["sku-37", "3", "qty=23"], ["sku-32", "7", "qty=80"], ["sku-39", "2", "qty=12"], ["sku-28", "4", "qty=18"], ["sku-05", "8", "qty=88"], ["sku-02", "9", "qty=50"], ["sku-28", "10", "qty=94"], ["sku-39", "10", "qty=20"], ["sku-39", "0", "qty=67"], ["sku-04", "0", "qty=4"], ["sku-12", "3", "qty=76"], ["sku-01", "7", "qty=41"], ["sku-28", "9", "qty=25"], ["sku-33", "3", "qty=81"], ["sku-18", "7", "qty=0"], ["sku-05", "7", "qty=83"], ["sku-17", "6", "qty=70"], ["sku-05", "11", "qty=32"], ["sku-20", "3", "qty=65"], ["sku-18", "0", "qty=8"], ["sku-36", "1", "qty=51"], ["sku-06", "4", "qty=49"], ["sku-04", "0", "qty=87"], ["sku-00", "3", "qty=26"], ["sku-03", "7", "qty=48"], ["sku-25", "6", "qty=9"], ["sku-36", "10", "qty=25"], ["sku-17", "5", "qty=11"], ["sku-19", "5", "qty=1"], ["sku-26", "1", "qty=17"], ["sku-15", "11", "qty=12"], ["sku-00", "0", "qty=59"], ["sku-31", "2", "qty=87"], ["sku-35", "3", "qty=57"], ["sku-32", "3", "qty=93"], ["sku-08", "6", "qty=82"], ["sku-24", "1", "qty=50"], ["sku-26", "3", "qty=0"], ["sku-17", "9", "qty=38"], ["sku-01", "3", "qty=23"], ["sku-25", "9", "qty=82"], ["sku-36", "1", "qty=5"], ["sku-09", "3", "qty=56"], ["sku-16", "0", "qty=98"], ["sku-39", "5", "qty=37"], ["sku-24", "1", "qty=9"], ["sku-05", "3", "qty=74"], ["sku-15", "0", "qty=76"], ["sku-23", "5", "qty=79"], ["sku-29", "2", "qty=75"], ["sku-30", "9", "qty=17"], ["sku-24", "2", "qty=80"], ["sku-09", "4", "qty=29"], ["sku-39", "3", "qty=92"], ["sku-12", "2", "qty=94"], ["sku-35", "3", "qty=87"], ["sku-24", "7", "qty=77"], ["sku-05", "6", "qty=6"], ["sku-06", "1", "qty=4"], ["sku-32", "4", "qty=30"], ["sku-25", "4", "qty=53"], ["sku-38", "7", "qty=37"], ["sku-33", "2", "qty=92"], ["sku-04", "2", "qty=29"], ["sku-30", "8", "qty=83"], ["sku-39", "9", "qty=9"], ["sku-17", "3", "qty=26"], ["sku-01", "1", "qty=34"], ["sku-26", "7", "qty=31"], ["sku-03", "0", "qty=22"], ["sku-18", "5", "qty=67"], ["sku-36", "2", "qty=11"], ["sku-23", "2", "qty=57"], ["sku-21", "10", "qty=93"], ["sku-33", "9", "qty=17"], ["sku-37", "0", "qty=2"], ["sku-30", "5", "qty=89"], ["sku-19", "0", "qty=2"], ["sku-38", "10", "qty=9"], ["sku-30", "1", "qty=93"], ["sku-19", "5", "qty=17"], ["sku-04", "1", "qty=57"], ["sku-34", "5", "qty=94"], ["sku-02", "11", "qty=94"], ["sku-08", "5", "qty=45"], ["sku-05", "10", "qty=60"], ["sku-04", "6", "qty=3"], ["sku-31", "9", "qty=1"], ["sku-39", "10", "qty=48"], ["sku-24", "9", "qty=1"], ["sku-38", "1", "qty=10"], ["sku-05", "10", "qty=14"], ["sku-16", "6", "qty=93"], ["sku-21", "6", "qty=94"], ["sku-37", "7", "qty=56"], ["sku-29", "8", "qty=10"], ["sku-33", "8", "qty=3"], ["sku-19", "9", "qty=11"], ["sku-30", "0", "qty=29"], ["sku-07", "7", "qty=99"], ["sku-39", "10", "qty=62"], ["sku-16", "0", "qty=47"], ["sku-19", "2", "qty=86"], ["sku-39", "3", "qty=66"], ["sku-10", "5", "qty=84"], ["sku-28", "7", "qty=30"], ["sku-20", "6", "qty=85"], ["sku-16", "3", "qty=81"], ["sku-27", "3", "qty=27"], ["sku-24", "3", "qty=74"], ["sku-20", "3", "qty=17"], ["sku-08", "7", "qty=44"], ["sku-02", "11", "qty=8"], ["sku-17", "2", "qty=14"], ["sku-28", "7", "qty=35"], ["sku-13", "6", "qty=48"], ["sku-33", "7", "qty=86"], ["sku-20", "11", "qty=79"], ["sku-28", "5", "qty=9"], ["sku-02", "4", "qty=77"], ["sku-02", "10", "qty=90"], ["sku-17", "9", "qty=45"], ["sku-19", "10", "qty=72"], ["sku-01", "10", "qty=17"], ["sku-25", "7", "qty=24"], ["sku-01", "4", "qty=30"], ["sku-09", "0", "qty=80"], ["sku-07", "7", "qty=13"], ["sku-34", "10", "qty=81"], ["sku-23", "1", "qty=87"], ["sku-12", "3", "qty=60"], ["sku-16", "2", "qty=91"], ["sku-00", "7", "qty=68"], ["sku-02", "2", "qty=28"], ["sku-17", "5", "qty=69"], ["sku-33", "8", "qty=78"], ["sku-10", "6", "qty=89"], ["sku-14", "1", "qty=52"], ["sku-24", "2", "qty=57"], ["sku-29", "3", "qty=80"], ["sku-00", "6", "qty=70"], ["sku-36", "10", "qty=64"], ["sku-21", "7", "qty=41"], ["sku-13", "1", "qty=92"], ["sku-07", "3", "qty=31"], ["sku-24", "1", "qty=39"], ["sku-34", "5", "qty=33"], ["sku-01", "5", "qty=64"], ["sku-05", "0", "qty=56"], ["sku-21", "8", "qty=53"], ["sku-17", "7", "qty=3"], ["sku-13", "1", "qty=54"], ["sku-02", "2", "qty=68"], ["sku-21", "10", "qty=17"], ["sku-30", "2", "qty=66"], ["sku-33", "10", "qty=88"], ["sku-28", "7", "qty=74"], ["sku-05", "3", "qty=56"], ["sku-33", "8", "qty=37"], ["sku-35", "10", "qty=21"], ["sku-33", "8", "qty=71"], ["sku-16", "4", "qty=85"], ["sku-24", "9", "qty=26"], ["sku-19", "2", "qty=69"], ["sku-33", "4", "qty=73"], ["sku-31", "3", "qty=52"], ["sku-34", "1", "qty=64"], ["sku-00", "9", "qty=48"], ["sku-01", "8", "qty=5"], ["sku-33", "6", "qty=69"], ["sku-36", "1", "qty=62"], ["sku-05", "11", "qty=21"], ["sku-04", "8", "qty=58"], ["sku-26", "6", "qty=34"], ["sku-15", "7", "qty=63"], ["sku-08", "5", "qty=55"], ["sku-30", "8", "qty=40"], ["sku-06", "3", "qty=53"], ["sku-39", "0", "qty=33"], ["sku-08", "11", "qty=99"], ["sku-01", "0", "qty=24"], ["sku-09", "3", "qty=1"], ["sku-18", "5", "qty=92"], ["sku-22", "3", "qty=79"], ["sku-31", "1", "qty=63"], ["sku-37", "1", "qty=65"], ["sku-39", "4", "qty=91"], ["sku-12", "11", "qty=67"], ["sku-27", "0", "qty=48"], ["sku-26", "8", "qty=78"], ["sku-10", "8", "qty=26"], ["sku-34", "10", "qty=27"], ["sku-33", "3", "qty=69"], ["sku-39", "9", "qty=17"], ["sku-14", "11", "qty=80"], ["sku-22", "2", "qty=40"], ["sku-38", "5", "qty=24"], ["sku-13", "3", "qty=12"]]], expected: [["sku-00", "9", "qty=48"], ["sku-01", "10", "qty=17"], ["sku-02", "11", "qty=8"], ["sku-03", "7", "qty=48"], ["sku-04", "8", "qty=58"], ["sku-05", "11", "qty=21"], ["sku-06", "4", "qty=49"], ["sku-07", "7", "qty=13"], ["sku-08", "11", "qty=99"], ["sku-09", "4", "qty=29"], ["sku-10", "8", "qty=26"], ["sku-12", "11", "qty=67"], ["sku-13", "6", "qty=48"], ["sku-14", "11", "qty=80"], ["sku-15", "11", "qty=12"], ["sku-16", "6", "qty=93"], ["sku-17", "9", "qty=45"], ["sku-18", "7", "qty=0"], ["sku-19", "10", "qty=72"], ["sku-20", "11", "qty=79"], ["sku-21", "10", "qty=17"], ["sku-22", "3", "qty=79"], ["sku-23", "5", "qty=79"], ["sku-24", "9", "qty=26"], ["sku-25", "9", "qty=82"], ["sku-26", "8", "qty=78"], ["sku-27", "3", "qty=27"], ["sku-28", "10", "qty=94"], ["sku-29", "8", "qty=10"], ["sku-30", "9", "qty=17"], ["sku-31", "9", "qty=1"], ["sku-32", "7", "qty=80"], ["sku-33", "10", "qty=88"], ["sku-34", "10", "qty=27"], ["sku-35", "10", "qty=21"], ["sku-36", "10", "qty=64"], ["sku-37", "7", "qty=56"], ["sku-38", "10", "qty=9"], ["sku-39", "10", "qty=62"]], description: "200 random records over 40 entities with many duplicate and tied versions"}
+expected_concepts:
+  - "hash map from key to the best record seen so far"
+  - "numeric rather than lexicographic version comparison"
+  - "deterministic tie-breaking by delivery order"
+  - "sorting the final keys for a stable output order"
+  - "idempotent processing of at-least-once delivery"
+optimal_complexity: {time: "O(n + k log k)", space: "O(k)"}
+rubric:
+  excellent: "Uses one pass with a map keyed by entity_id, compares versions numerically, replaces on equal versions so the last delivery wins, returns the original records sorted by entity_id and explains why this makes the consumer idempotent."
+  good: "Correct map-based solution that needs a nudge on one detail such as numeric comparison, the tie rule or the final sort."
+  weak: "Compares versions as strings, keeps the first copy on ties, returns one record per input record or sorts by version instead of entity_id."
+  criteria:
+    correctness: "All tests pass, including leading zeros, ties on the highest version and long versions."
+    efficiency: "Linear pass plus one sort of the distinct entity ids; no nested scans over the batch."
+    code_quality: "The replace condition is a single clear comparison and the kept record is returned unchanged."
+    edge_cases: "Empty batch, a single record, repeated identical records, out-of-order arrival and versions beyond 32 bits."
+    communication: "States the tie rule explicitly and explains why string comparison of versions is wrong."
+hints:
+  - "You only ever need to remember one record per entity: the best one seen so far."
+  - "Walk the batch once with a map from entity_id to the kept record and its version as a number; decide carefully whether an equal version should replace what you kept."
+  - "Convert each version to an integer, replace the kept record when the new version is greater than or equal to the kept one so the latest delivery wins ties, and at the end sort the map's keys and output their kept records in that order."
+followups:
+  - "How would you handle versions longer than 18 digits without converting them to integers?"
+  - "If the batch were too large for memory, how would you deduplicate it across several machines?"
+  - "How would you make the warehouse load itself idempotent so replays never overwrite newer data?"
+common_errors:
+  - "Comparing versions as strings, so 9 beats 10 and 010 differs from 10."
+  - "Using a strict comparison, which keeps the first delivery when the highest version repeats."
+  - "Returning records in input order instead of sorting by entity_id."
+  - "Rebuilding or reformatting the record (for example normalising the version) instead of returning it unchanged."

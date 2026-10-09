@@ -1,0 +1,595 @@
+# Curated questions: system design, distributed data (2 of 4): replication, consistency models and
+# consistency trade-offs. `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend, dba, data]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------- easy
+  - external_key: system_design.distributed_data.eventual_consistency_fit
+    competency_key: distributed_systems
+    topic: Where eventual consistency is acceptable
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Think of a product you've worked on. Which parts of its data could safely be eventually consistent,
+      which parts could not, and how did you or would you tell the difference?
+    expected_concepts:
+      - business impact of a stale or conflicting read decides the requirement
+      - examples that tolerate staleness (likes, view counts, recommendations)
+      - examples that do not (payments, inventory reservation, permissions)
+      - how long the staleness window is and whether users notice
+      - mixing consistency levels within one system
+    rubric:
+      excellent: Gives concrete examples from their own work on both sides, reasons from the cost of a stale or conflicting read, and quantifies or bounds the acceptable staleness window.
+      good: Classifies a few data types sensibly with brief reasons.
+      weak: Says everything must be strongly consistent, or everything can be eventual, without reasoning about impact.
+    followups:
+      - How would you explain that decision to a product manager?
+      - Revoking a user's access is one example. Which side does it fall on, and why?
+    common_errors:
+      - Treating consistency as one setting for the whole system rather than per data type.
+
+  - external_key: system_design.distributed_data.replica_count_tradeoffs
+    competency_key: distributed_systems
+    topic: How many replicas to run
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      You're deciding between two and three replicas for a new database cluster. Walk me through how that
+      number affects availability, durability and cost.
+    expected_concepts:
+      - majority quorum needs three nodes to tolerate one failure
+      - two nodes cannot safely elect a leader on their own (split-brain risk)
+      - placement across failure domains such as availability zones
+      - storage and write-amplification cost of each copy
+      - witness or arbiter nodes as a cheaper tie-breaker
+    rubric:
+      excellent: Explains majority quorums and why two nodes cannot tolerate a failure safely, ties replicas to failure domains, and weighs cost including witness options.
+      good: Says three allows one failure with a majority and spreads replicas across zones.
+      weak: Thinks more replicas are always better without discussing quorums, placement or cost.
+    followups:
+      - Why do many systems recommend five replicas for critical metadata?
+      - What changes if all three replicas sit in the same rack?
+    common_errors:
+      - Placing every replica in a single availability zone.
+
+  - external_key: system_design.distributed_data.explaining_stale_profile
+    competency_key: system_design
+    topic: Explaining replication lag to a product team
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A product manager asks why a user's profile change didn't show up on their other device for a few
+      seconds. How would you explain what's going on, and what options would you offer the team?
+    expected_concepts:
+      - writes go to one place and spread to copies asynchronously (replicas, caches)
+      - plain-language explanation without jargon
+      - options such as reading from the primary after a write or session stickiness
+      - client-side optimistic display of the user's own change
+      - cost or latency of each option
+    rubric:
+      excellent: Explains the cause in plain language, offers several options with their costs (primary reads after writes, sticky sessions, optimistic UI, cache invalidation) and recommends one based on how much it matters.
+      good: Explains replication or caching delay and proposes at least one fix.
+      weak: Gives a jargon-heavy answer or dismisses it as expected behaviour without options.
+    followups:
+      - Which option would you recommend for a banking app versus a social app?
+      - How would you measure how often users actually hit this?
+    common_errors:
+      - Proposing to make every read go to the primary, ignoring the load impact.
+
+  - external_key: system_design.distributed_data.replicas_are_not_backups
+    competency_key: database_administration
+    topic: Replication versus backups
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A team tells you they don't need backups because their data is replicated three times across zones.
+      How would you respond, and what would you put in place?
+    expected_concepts:
+      - replication copies mistakes and deletions instantly
+      - backups and point-in-time recovery protect against logical errors and corruption
+      - isolated or off-site copies against account-level incidents
+      - delayed replicas as a partial safety net
+      - regular restore testing
+    rubric:
+      excellent: Explains that replication protects against hardware loss but not bad writes, corruption or malicious deletion, proposes point-in-time backups stored in isolation, and insists on tested restores.
+      good: Notes that a dropped table is replicated too and recommends backups.
+      weak: Agrees that replication is enough or cannot describe a failure it does not cover.
+    followups:
+      - How would you decide how far back you need to be able to restore?
+      - How would you know a backup is actually usable?
+    common_errors:
+      - Keeping backups in the same account and region as the primary data.
+
+  # ------------------------------------------------------------- medium
+  - external_key: system_design.distributed_data.quorum_tuning
+    competency_key: distributed_systems
+    topic: Tuning read and write quorums
+    difficulty: medium
+    text: >-
+      In a leaderless store with three replicas, you can choose how many replicas must acknowledge each
+      write and each read. How would you pick those numbers for a read-heavy product catalog versus a
+      write-heavy event log?
+    expected_concepts:
+      - R plus W greater than N for overlapping quorums
+      - latency follows the slowest replica in the quorum
+      - read-heavy favours small R and larger W, write-heavy the opposite
+      - availability under node loss for each setting
+      - quorums alone do not guarantee linearizability (sloppy quorums, concurrent writes)
+    rubric:
+      excellent: Uses the overlap rule correctly, chooses different settings for each workload with latency and availability reasoning, and notes the limits of quorums such as sloppy quorums and concurrent writes.
+      good: Explains the R plus W greater than N rule and applies it to both workloads.
+      weak: Picks numbers without reasoning or believes a quorum read always returns the latest value.
+    followups:
+      - What does a sloppy quorum with hinted handoff do to your guarantee?
+      - How would you set these values for a multi-region deployment?
+    common_errors:
+      - Assuming quorum reads and writes make the system linearizable.
+
+  - external_key: system_design.distributed_data.replica_convergence
+    competency_key: distributed_systems
+    topic: How replicas catch up after an outage
+    difficulty: medium
+    text: >-
+      One replica in a leaderless cluster was offline for six hours and missed many writes. Describe the
+      mechanisms that bring it back in sync and the trade-offs of each.
+    expected_concepts:
+      - hinted handoff for short outages
+      - read repair on reads that detect divergence
+      - anti-entropy repair comparing Merkle trees
+      - tombstone expiry and resurrected deletes if repair runs too late
+      - repair scheduling and its I/O cost
+    rubric:
+      excellent: Explains hinted handoff, read repair and Merkle-tree anti-entropy with when each applies, and warns about deleted data reappearing if repair does not run within the tombstone grace period.
+      good: Describes at least two mechanisms correctly.
+      weak: Assumes the replica copies everything again or does not know how divergence is detected.
+    followups:
+      - Why would rarely read keys stay inconsistent without anti-entropy?
+      - How would you schedule repairs to limit production impact?
+    common_errors:
+      - Not knowing that deletes can come back if a replica misses the tombstone.
+
+  - external_key: system_design.distributed_data.offline_edit_conflicts
+    competency_key: distributed_systems
+    topic: Merging offline edits from several devices
+    difficulty: medium
+    text: >-
+      Users of a task-list app edit their lists offline on a phone and a laptop, then both sync later. How
+      would you design the sync so that edits from both devices are merged sensibly?
+    expected_concepts:
+      - per-field or per-operation changes rather than whole-document overwrite
+      - version vectors or causal metadata to detect concurrency
+      - last-writer-wins and its silent data loss
+      - CRDT-style merge for lists and sets, or surfacing conflicts to users
+      - deletes versus concurrent edits (tombstones)
+    rubric:
+      excellent: Syncs fine-grained operations, detects true concurrency with causal metadata, chooses merge rules per data type (CRDTs, last-writer-wins on fields, user resolution) and handles delete-versus-edit.
+      good: Tracks versions and merges at field level, noting the risk of last-writer-wins.
+      weak: Uses wall-clock last-writer-wins on whole lists without noticing lost edits.
+    followups:
+      - One device renamed a task while the other deleted it. What should happen?
+      - How would reordering items in a list be merged?
+    common_errors:
+      - Relying on device clocks to order edits.
+
+  - external_key: system_design.distributed_data.monotonic_reads
+    competency_key: distributed_systems
+    topic: Data that appears and then disappears
+    difficulty: medium
+    text: >-
+      A user sees a new comment, refreshes the page, and the comment has vanished, then it comes back a few
+      seconds later. Explain what's likely happening and how you'd design reads to prevent it.
+    expected_concepts:
+      - successive reads served by replicas with different lag
+      - monotonic reads session guarantee
+      - routing a session to the same replica or tracking a minimum position
+      - passing a replication position or version token with requests
+      - failover behaviour when the pinned replica goes away
+    rubric:
+      excellent: Diagnoses reads bouncing between replicas at different positions, names the monotonic-reads guarantee, and designs a fix with a session position token or replica affinity that survives replica failures.
+      good: Identifies replica lag across load-balanced reads and proposes sticky routing.
+      weak: Blames caching vaguely or suggests reading everything from the primary without considering cost.
+    followups:
+      - How would the token work if the user is served by several backend services?
+      - What would you do if no replica has caught up to the user's token yet?
+    common_errors:
+      - Fixing it by sending all reads to the primary and overloading it.
+
+  - external_key: system_design.distributed_data.causal_ordering_replies
+    competency_key: distributed_systems
+    topic: Causality across regions
+    difficulty: medium
+    text: >-
+      In a multi-region discussion forum, users in one region sometimes see a reply before the post it
+      answers. Why does that happen, and how would you design the system so effects never appear before causes?
+    expected_concepts:
+      - independent asynchronous replication streams per region or partition
+      - causal consistency and happens-before relationships
+      - dependency tracking (attach the parent's version and wait for it)
+      - routing related data to the same partition or region when possible
+      - cost of causal metadata and delayed visibility
+    rubric:
+      excellent: Explains how independent replication paths reorder related writes, designs causal dependency tracking so a reply is shown only after its parent is visible, and weighs metadata and delay costs.
+      good: Recognises the ordering problem and proposes holding replies until the parent arrives.
+      weak: Suggests synchronising clocks or sorting by timestamp, which does not fix causal ordering.
+    followups:
+      - How much metadata would each write need to carry?
+      - What should the UI do while a reply is waiting for its parent?
+    common_errors:
+      - Assuming timestamps sort out causality across regions.
+
+  - external_key: system_design.distributed_data.when_linearizability_is_needed
+    competency_key: distributed_systems
+    topic: Choosing strong consistency deliberately
+    difficulty: medium
+    text: >-
+      You're designing seat booking for concerts that sell out in seconds, with servers in several regions.
+      Which parts need strong consistency, and how would you provide it without making everything slow?
+    expected_concepts:
+      - the seat claim must be linearizable (one winner per seat)
+      - single leader or consensus group per event or seat range
+      - reads of seat maps can be stale with a final check at claim time
+      - temporary holds with expiry
+      - cross-region write latency and where to place the leader
+    rubric:
+      excellent: Isolates the seat claim as the only operation needing linearizability, routes it to one leader or consensus group per event, serves seat maps from stale copies with a final check, and uses expiring holds.
+      good: Identifies the claim as needing strong consistency and suggests a single authority per event.
+      weak: Makes every read strongly consistent globally, or relies on eventual consistency and later cleanup for double bookings.
+    followups:
+      - Where would you place the leader for an event that attracts buyers worldwide?
+      - What happens to a hold if the user's payment takes five minutes?
+    common_errors:
+      - Paying for global strong consistency on read paths that tolerate staleness.
+
+  - external_key: system_design.distributed_data.per_operation_consistency
+    competency_key: system_design
+    topic: Consistency choices across one product
+    difficulty: medium
+    text: >-
+      Take an online store with a product catalog, shopping cart, checkout, inventory and product reviews.
+      Walk me through the consistency and availability choice you'd make for each, and why.
+    expected_concepts:
+      - catalog and reviews favour availability and caching
+      - cart favours availability with merge on conflict
+      - inventory reservation and payment need stronger guarantees
+      - checkout as the point where stale data is revalidated
+      - different stores or settings per domain
+    rubric:
+      excellent: Gives a reasoned choice per domain tied to business cost, shows that checkout revalidates prices and stock, and explains how the domains interact when they disagree.
+      good: Classifies the domains sensibly with a short reason each.
+      weak: Applies one consistency level everywhere or cannot justify the choices.
+    followups:
+      - The cart says the item is in stock but checkout finds none. How should that be handled?
+      - Which of these would you be willing to show as stale during a regional outage?
+    common_errors:
+      - Ignoring that prices in the cart can be stale by checkout time.
+
+  - external_key: system_design.distributed_data.consensus_metadata_store
+    competency_key: distributed_systems
+    topic: Consensus-backed metadata stores
+    difficulty: medium
+    text: >-
+      Many systems keep their configuration and cluster metadata in a consensus-based store like etcd or
+      ZooKeeper. Why is consensus used there, and what happens to clients when the leader gets cut off from
+      the rest of the cluster?
+    expected_concepts:
+      - majority agreement gives a single ordered history of changes
+      - small, low-throughput data suits consensus
+      - isolated leader loses its lease and a new leader is elected
+      - stale reads from a deposed leader unless reads go through quorum or leases
+      - client timeouts, retries and watches re-established after failover
+    rubric:
+      excellent: Explains why ordered, linearizable updates matter for metadata, walks through leader isolation and election, and identifies the stale-read risk with quorum reads or leases as the fix.
+      good: Describes leader election after the partition and why majority matters.
+      weak: Treats the store like any database and does not understand what happens on the minority side.
+    followups:
+      - Why shouldn't you store large or high-churn application data in etcd?
+      - How do clients avoid acting on a lock they think they still hold?
+    common_errors:
+      - Assuming any node of the cluster can always serve up-to-date reads.
+
+  - external_key: system_design.distributed_data.bounded_staleness_reads
+    competency_key: distributed_systems
+    topic: Reads with a staleness bound
+    difficulty: medium
+    text: >-
+      An operations dashboard queries a globally replicated database. It's fine if the data is a little old,
+      but never more than ten seconds. How would you design reads to guarantee that bound?
+    expected_concepts:
+      - follower or nearest-replica reads for low latency
+      - replicas know how current they are (closed timestamps or applied positions)
+      - rejecting or redirecting reads when a replica falls behind the bound
+      - measuring lag with heartbeats rather than guesses
+      - behaviour when no nearby replica meets the bound
+    rubric:
+      excellent: Serves reads locally only when the replica can prove its freshness against the bound, redirects or waits otherwise, measures lag reliably and defines fallback behaviour.
+      good: Uses local replicas with lag monitoring and falls back to the leader when lag is high.
+      weak: Reads from any replica and hopes lag stays under ten seconds.
+    followups:
+      - How does a replica know how fresh it is if no writes have happened recently?
+      - What would the dashboard show during a long replication outage?
+    common_errors:
+      - Measuring lag only by comparing wall clocks between servers.
+
+  - external_key: system_design.distributed_data.write_acknowledgement_durability
+    competency_key: databases
+    topic: What an acknowledged write really means
+    difficulty: medium
+    text: >-
+      When a database tells your application that a write succeeded, what could that actually mean in a
+      replicated setup, and how would you choose the right acknowledgement level for different data?
+    expected_concepts:
+      - acknowledged after memory, local disk flush, one replica or a majority
+      - fsync and group commit costs
+      - data loss windows on leader failure for each level
+      - per-write durability settings for critical versus disposable data
+      - client retries and duplicates when an acknowledgement is lost
+    rubric:
+      excellent: Distinguishes the acknowledgement levels and their loss windows, explains fsync and replication costs, chooses per data type, and addresses the uncertain outcome when the acknowledgement itself is lost.
+      good: Explains local versus replicated acknowledgement and when each is appropriate.
+      weak: Assumes an acknowledged write can never be lost.
+    followups:
+      - The client times out waiting for the acknowledgement. Was the write applied?
+      - How would you measure the latency cost of majority acknowledgement?
+    common_errors:
+      - Not considering that a timed-out write may still have succeeded.
+
+  - external_key: system_design.distributed_data.verifying_consistency_claims
+    competency_key: distributed_systems
+    topic: Testing a datastore's guarantees
+    difficulty: medium
+    text: >-
+      A vendor claims their database is strongly consistent and survives network partitions. How would you
+      test that claim yourself before trusting it with important data?
+    expected_concepts:
+      - concurrent client histories recorded and checked (for example Jepsen-style)
+      - fault injection such as partitions, clock skew, process pauses and crashes
+      - checking for lost writes, stale reads and dirty reads
+      - testing at the client settings you actually plan to use
+      - reading published analyses and known issues
+    rubric:
+      excellent: Designs fault-injection tests with recorded concurrent histories checked against the claimed model, covers partitions, pauses and clock problems, and tests the exact configuration planned for production.
+      good: Proposes injecting failures and checking for lost or stale data.
+      weak: Relies on documentation or a happy-path load test.
+    followups:
+      - Which anomaly would worry you most for a payments use case?
+      - How would you test behaviour during a leader election?
+    common_errors:
+      - Testing with default settings that differ from what production will use.
+
+  - external_key: system_design.distributed_data.replacing_consensus_member
+    competency_key: distributed_systems
+    topic: Replacing a node in a consensus cluster
+    difficulty: medium
+    text: >-
+      One node in a three-node consensus cluster has a failed disk and must be replaced. Walk me through how
+      you'd do that safely, and what mistakes could cost you the whole cluster.
+    expected_concepts:
+      - remove the dead member before or while adding the new one, one change at a time
+      - keep a majority available throughout
+      - new member catches up from a snapshot before it counts toward quorum (learner)
+      - never restore a node from an old disk image with stale state
+      - verify cluster health between steps
+    rubric:
+      excellent: Gives an ordered procedure that preserves a majority at every step, uses learner or catch-up before voting, avoids stale-state rejoins, and checks health between changes.
+      good: Describes removing the failed member and adding a replacement while watching quorum.
+      weak: Adds two members at once or wipes nodes without regard for quorum.
+    followups:
+      - Why is going from three to four members temporarily less fault tolerant than it looks?
+      - What would you do if a second node failed during the replacement?
+    common_errors:
+      - Adding the new member as a voter before it has caught up.
+
+  - external_key: system_design.distributed_data.proxy_vs_client_routing
+    competency_key: system_design
+    topic: Routing proxy versus smart client library
+    difficulty: medium
+    text: >-
+      Applications need to send each query to the right shard. Would you put that logic in a client library,
+      or in a routing proxy layer in front of the databases? Talk me through how you'd decide.
+    expected_concepts:
+      - client library has no extra hop but must exist for every language
+      - proxy centralises routing, pooling and resharding awareness
+      - extra latency and availability concerns of a proxy tier
+      - rolling out routing changes across many services
+      - examples such as Vitess, ProxySQL or Citus coordinators
+    rubric:
+      excellent: Weighs latency and simplicity against centralised control, language coverage and resharding agility, considers the proxy's availability and connection pooling benefits, and decides based on the organisation's service landscape.
+      good: Names the main pros and cons of both and picks one with a reason.
+      weak: Chooses without considering polyglot clients, rollout of routing changes or the extra failure point.
+    followups:
+      - How would you keep the proxy tier from becoming a bottleneck?
+      - How do cross-shard queries change under each approach?
+    common_errors:
+      - Overlooking the cost of upgrading a routing library in dozens of services during a reshard.
+
+  # ------------------------------------------------------------- hard
+  - external_key: system_design.distributed_data.distant_writer_latency
+    competency_key: distributed_systems
+    topic: Write latency for users far from the leader
+    difficulty: hard
+    text: >-
+      Your database has a single write leader in Europe, and users in Asia and the Americas complain that
+      saving anything is slow. How would you redesign the data layer to cut their write latency, and what
+      would you give up?
+    expected_concepts:
+      - homing data near its main writer (per-user or per-tenant leaders)
+      - multi-leader with conflict handling for data that can merge
+      - asynchronous acknowledgement with local durable queue
+      - consensus groups spread across regions and their latency floor
+      - which data must still go through one global leader
+    rubric:
+      excellent: Partitions leadership so each piece of data is led near its writers, reserves global coordination for truly global invariants, and analyses the latency, conflict and failure implications of each option.
+      good: Proposes regional leaders or multi-leader replication and names the conflict trade-off.
+      weak: Adds read replicas in each region, which does not help writes.
+    followups:
+      - A user travels and writes from a different region for a week. What happens?
+      - Which of your data could never be homed per user, and why?
+    common_errors:
+      - Adding regional read replicas to solve a write latency problem.
+
+  - external_key: system_design.distributed_data.ordering_without_synced_clocks
+    competency_key: distributed_systems
+    topic: Ordering transactions without perfect clocks
+    difficulty: hard
+    text: >-
+      A globally distributed database needs to give every transaction a timestamp so that snapshot reads are
+      consistent, but server clocks drift. How would you design that timestamping?
+    expected_concepts:
+      - hybrid logical clocks combining physical time and a logical counter
+      - bounded clock uncertainty and commit wait (TrueTime-style)
+      - uncertainty intervals causing read restarts
+      - a central timestamp oracle and its latency and availability cost
+      - monitoring clock offset and fencing nodes that drift too far
+    rubric:
+      excellent: Compares a timestamp oracle, hybrid logical clocks with uncertainty windows, and commit-wait designs, explains how each preserves snapshot correctness and what it costs, and covers clock monitoring.
+      good: Describes hybrid logical clocks or a central oracle with the main trade-off.
+      weak: Uses raw wall-clock time and assumes NTP keeps it correct.
+    followups:
+      - What should a node do if its clock is far outside the allowed offset?
+      - Why might a read be restarted under an uncertainty-interval design?
+    common_errors:
+      - Ignoring that clock skew can make a later transaction appear earlier.
+
+  - external_key: system_design.distributed_data.crdt_shopping_cart
+    competency_key: distributed_systems
+    topic: Conflict-free merging for a cart
+    difficulty: hard
+    text: >-
+      Your shopping cart is written in several regions at once and must never block. Design a data structure
+      for the cart that merges concurrent changes automatically, including removals and quantity changes.
+    expected_concepts:
+      - observed-remove set with unique tags so removals are not undone
+      - counters for quantities (PN-counter) or per-item registers
+      - merge must be commutative, associative and idempotent
+      - metadata growth and garbage collection of tombstones
+      - semantics the business accepts for concurrent add and remove
+    rubric:
+      excellent: Designs an observed-remove set with per-item quantity handling, shows merges are commutative and idempotent, chooses add-wins or remove-wins semantics deliberately, and plans metadata cleanup.
+      good: Proposes a CRDT-based set and explains how removes are tracked.
+      weak: Uses last-writer-wins on the whole cart, losing concurrent additions.
+    followups:
+      - How do you garbage-collect tombstones without breaking merges?
+      - Should a concurrent remove and quantity increase keep or drop the item?
+    common_errors:
+      - Using a simple grow-only set where removed items reappear after merging.
+
+  - external_key: system_design.distributed_data.partition_mode_behaviour
+    competency_key: system_design
+    topic: Designed behaviour during a network split
+    difficulty: hard
+    text: >-
+      Suppose the link between your two data centres fails for twenty minutes while both stay up and keep
+      serving users. Design what each part of a marketplace app should do during that split, and how you'd
+      reconcile afterwards.
+    expected_concepts:
+      - explicit per-feature choice to keep serving or refuse writes
+      - ownership so only one side accepts writes for some data
+      - recording operations during the split for later merge
+      - reconciliation and compensations (refunds, apologies) for violated invariants
+      - detecting the partition and switching modes deliberately
+    rubric:
+      excellent: Defines feature-by-feature partition behaviour with clear ownership rules, logs operations for reconciliation, designs compensations for violated invariants, and explains how partition mode is entered and exited.
+      good: Distinguishes features that stay available from ones that must stop, with some reconciliation plan.
+      weak: Lets both sides accept all writes with no reconciliation plan, or shuts everything down.
+    followups:
+      - The same item was sold on both sides. What happens next?
+      - How would you test this behaviour before it happens for real?
+    common_errors:
+      - Treating reconciliation as an afterthought instead of a designed process.
+
+  - external_key: system_design.distributed_data.consistent_kv_store_design
+    competency_key: distributed_systems
+    topic: Strongly consistent key-value store design
+    difficulty: hard
+    text: >-
+      Design a horizontally scalable key-value store that offers linearizable reads and writes on every key.
+      How would you keep reads fast without sacrificing correctness?
+    expected_concepts:
+      - key ranges each replicated by their own consensus group
+      - leader or leaseholder serving reads locally under a lease
+      - lease safety depends on bounded clock drift
+      - read-index or quorum reads as alternatives to leases
+      - range splitting and leader placement for load balance
+    rubric:
+      excellent: Designs per-range consensus groups, serves reads from the lease holder while explaining why leases need bounded clock drift, compares read-index and quorum reads, and covers balancing ranges and leaders.
+      good: Uses consensus per partition and explains why reads must go through the leader.
+      weak: Serves reads from any replica or uses one consensus group for all data.
+    followups:
+      - What happens to reads during a leader change?
+      - How would you support a transaction across two ranges?
+    common_errors:
+      - Letting a former leader serve reads after its lease may have expired.
+
+  - external_key: system_design.distributed_data.read_your_writes_across_services
+    competency_key: distributed_systems
+    topic: Read-your-writes across service boundaries
+    difficulty: hard
+    text: >-
+      A user updates their address through the account service, and the order service, which has its own
+      replicated copy of addresses, immediately shows the old one at checkout. Design a way to guarantee the
+      user sees their own change across services.
+    expected_concepts:
+      - version or position token returned by the writer and passed along
+      - reader waits for its copy to reach the token or falls back to the source
+      - timeouts and fallback behaviour when the copy is far behind
+      - propagating tokens through clients and service calls
+      - scope limited to the user's own writes to keep cost down
+    rubric:
+      excellent: Designs a causality token flowing from writer to reader, with the reading service waiting briefly or falling back to the source of truth, and handles propagation, timeouts and scoping.
+      good: Proposes reading from the owning service after a recent write or a version check.
+      weak: Adds a fixed sleep or shortens cache TTLs everywhere.
+    followups:
+      - Where would the token live in a web or mobile client?
+      - How would this work if the order service reads addresses through an event stream?
+    common_errors:
+      - Relying on arbitrary delays rather than a verifiable version.
+
+  - external_key: system_design.distributed_data.escrow_quota_partitioning
+    competency_key: distributed_systems
+    topic: Splitting a shared limit across nodes
+    difficulty: hard
+    text: >-
+      Customers buy API credits, and every request across twenty regions must deduct from their balance.
+      A single strongly consistent counter is too slow. How would you enforce the balance without overspending much?
+    expected_concepts:
+      - allocating portions of the balance to regions (escrow or token buckets)
+      - regions spend locally and request more allocation when low
+      - rebalancing unused allocation and handling region failure
+      - bounding the maximum overspend and making it explicit
+      - asynchronous ledger reconciliation of actual usage
+    rubric:
+      excellent: Designs local allocations drawn from a central balance with refill and reclamation, quantifies the worst-case overspend, handles region loss and reconciles against a durable usage ledger.
+      good: Proposes per-region budgets with periodic syncing to a central balance.
+      weak: Uses eventually consistent counters without bounding overspend, or insists on a global lock per request.
+    followups:
+      - A region holding a large allocation becomes unreachable. What happens to that balance?
+      - How would you handle a customer with a tiny balance using many regions at once?
+    common_errors:
+      - Not stating or bounding the worst-case overspend.
+
+  - external_key: system_design.distributed_data.slow_replica_tail_latency
+    competency_key: distributed_systems
+    topic: Slow replicas and tail latency
+    difficulty: hard
+    text: >-
+      One replica in your storage cluster isn't down, just intermittently slow because of a bad disk, and
+      your p99 latency has tripled. How would you design the data layer so that a partially failing node
+      doesn't hurt everyone?
+    expected_concepts:
+      - quorum waits only for the fastest acknowledgements
+      - hedged or backup requests after a percentile delay
+      - latency-aware replica selection and outlier detection
+      - automatic ejection or deprioritising of slow nodes with safeguards
+      - gray failures that health checks miss
+    rubric:
+      excellent: Explains why gray failures evade health checks, uses quorum and hedged requests with load safeguards, adds latency-aware selection and outlier ejection, and limits how many nodes can be ejected at once.
+      good: Suggests hedged requests or removing the slow node based on latency metrics.
+      weak: Waits for the health check to fail or only raises timeouts.
+    followups:
+      - How do you stop hedged requests from doubling load during an overload?
+      - What safeguards prevent outlier ejection from removing too many nodes?
+    common_errors:
+      - Relying on binary up-or-down health checks to catch slow nodes.

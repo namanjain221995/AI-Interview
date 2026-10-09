@@ -1,0 +1,142 @@
+version: 1
+slug: upload_path_traversal_guard
+title: "Upload Path Traversal Guard"
+difficulty: easy
+competency_keys: [algorithms, problem_solving, code_quality]
+role_tags: [security, backend, fullstack]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Upload Path Traversal Guard
+
+  The file-download endpoint of a document portal takes a user-supplied relative path, for example
+  `invoices/2024/march.pdf`, and serves the file stored under a fixed base directory. A security review
+  found that requests like `../../etc/passwd` escaped the base directory. Write the function that
+  resolves the requested path safely, purely as string processing (no file system access).
+
+  `base` is an absolute, already normalised directory path such as `/srv/uploads` (it starts with `/`,
+  has at least one segment and no trailing slash). Resolve `requested` as follows:
+
+  1. **Reject** (return `""`) if `requested` starts with `/`, contains a backslash `\`, or contains
+     any of the percent-encoded sequences `%2e`, `%2f` or `%5c` in any letter case (encoded `.`, `/` and
+     `\` are a common way to smuggle traversal past a filter).
+  2. Split `requested` on `/`. Ignore empty segments and `.` segments. A `..` segment removes the
+     most recently kept segment; if there is no kept segment to remove, the path would climb above
+     `base`, so **reject** (return `""`), even if later segments would come back down.
+  3. Every other segment (including names like `...` or `..hidden`) is kept as is.
+
+  Return `base + "/" + kept segments joined with "/"`, or `base` itself when no segment is kept.
+
+  ### Example 1
+  ```
+  Input:  base = "/srv/uploads", requested = "invoices/2024/./march.pdf"
+  Output: "/srv/uploads/invoices/2024/march.pdf"
+  ```
+
+  ### Example 2
+  ```
+  Input:  base = "/srv/uploads", requested = "reports/q1/../../q2//summary.txt"
+  Output: "/srv/uploads/q2/summary.txt"
+  Explanation: q1 is removed by the first '..', reports by the second; the empty segment between q2 and
+  summary.txt is ignored.
+  ```
+
+  ### Example 3
+  ```
+  Input:  base = "/srv/uploads", requested = "avatars/../../etc/passwd"
+  Output: ""
+  Explanation: avatars is removed by the first '..'; the second '..' has nothing left to remove.
+  ```
+
+  ### Constraints
+  - `2 <= base.length <= 200`, `0 <= requested.length <= 2000`
+  - Both strings contain printable ASCII characters only
+  - Expected time `O(n)` in the length of the input
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: resolve_upload_path
+  params:
+    - {name: base, type: "string"}
+    - {name: requested, type: "string"}
+  return_type: "string"
+  comparison: exact
+reference_solutions:
+  python: |
+    def resolve_upload_path(base: str, requested: str) -> str:
+        lowered = requested.lower()
+        if requested.startswith("/") or "\\" in requested:
+            return ""
+        if any(code in lowered for code in ("%2e", "%2f", "%5c")):
+            return ""
+        kept: list[str] = []
+        for segment in requested.split("/"):
+            if segment in ("", "."):
+                continue
+            if segment == "..":
+                if not kept:
+                    return ""
+                kept.pop()
+            else:
+                kept.append(segment)
+        return base + "/" + "/".join(kept) if kept else base
+  javascript: |
+    function resolveUploadPath(base, requested) {
+      const lowered = requested.toLowerCase();
+      if (requested.startsWith('/') || requested.includes('\\')) return '';
+      if (['%2e', '%2f', '%5c'].some((code) => lowered.includes(code))) return '';
+      const kept = [];
+      for (const segment of requested.split('/')) {
+        if (segment === '' || segment === '.') continue;
+        if (segment === '..') {
+          if (kept.length === 0) return '';
+          kept.pop();
+        } else {
+          kept.push(segment);
+        }
+      }
+      return kept.length ? base + '/' + kept.join('/') : base;
+    }
+tests:
+  - {id: t1, args: ["/srv/uploads", "invoices/2024/./march.pdf"], expected: "/srv/uploads/invoices/2024/march.pdf", description: "Example 1 - normal path with a dot segment"}
+  - {id: t2, args: ["/srv/uploads", "reports/q1/../../q2//summary.txt"], expected: "/srv/uploads/q2/summary.txt", description: "Example 2 - '..' pops kept segments, empty segment ignored"}
+  - {id: t3, args: ["/srv/uploads", "avatars/../../etc/passwd"], expected: "", description: "Example 3 - climbing above base is rejected"}
+  - {id: t4, hidden: true, args: ["/data", ""], expected: "/data", description: "Empty request resolves to base itself"}
+  - {id: t5, hidden: true, args: ["/data", "./././"], expected: "/data", description: "Only dot segments and slashes resolve to base"}
+  - {id: t6, hidden: true, args: ["/data", "/etc/passwd"], expected: "", description: "Absolute path rejected"}
+  - {id: t7, hidden: true, args: ["/var/app/files", "docs\\..\\..\\secret"], expected: "", description: "Backslash separators rejected"}
+  - {id: t8, hidden: true, args: ["/var/app/files", "docs/%2E%2E/%2e%2e/secret"], expected: "", description: "Percent-encoded dots in mixed case rejected"}
+  - {id: t9, hidden: true, args: ["/var/app/files", "a%2Fb%5cc"], expected: "", description: "Encoded slash and backslash rejected"}
+  - {id: t10, hidden: true, args: ["/srv/uploads", "../uploads/x.txt"], expected: "", description: "Leading '..' rejected even though it would come back into base"}
+  - {id: t11, hidden: true, args: ["/srv/uploads", ".../..hidden/a..b/%20file%41.txt"], expected: "/srv/uploads/.../..hidden/a..b/%20file%41.txt", description: "Names that only look like dots are kept; harmless percent codes kept"}
+  - {id: t12, hidden: true, args: ["/srv/uploads", "d0/d1/d2/d3/d4/d5/d6/d7/d8/d9/d10/d11/d12/d13/d14/d15/d16/d17/d18/d19/d20/d21/d22/d23/d24/d25/d26/d27/d28/d29/d30/d31/d32/d33/d34/d35/d36/d37/d38/d39/d40/d41/d42/d43/d44/d45/d46/d47/d48/d49/d50/d51/d52/d53/d54/d55/d56/d57/d58/d59/d60/d61/d62/d63/d64/d65/d66/d67/d68/d69/d70/d71/d72/d73/d74/d75/d76/d77/d78/d79/d80/d81/d82/d83/d84/d85/d86/d87/d88/d89/d90/d91/d92/d93/d94/d95/d96/d97/d98/d99/d100/d101/d102/d103/d104/d105/d106/d107/d108/d109/d110/d111/d112/d113/d114/d115/d116/d117/d118/d119/d120/d121/d122/d123/d124/d125/d126/d127/d128/d129/d130/d131/d132/d133/d134/d135/d136/d137/d138/d139/d140/d141/d142/d143/d144/d145/d146/d147/d148/d149/d150/d151/d152/d153/d154/d155/d156/d157/d158/d159/d160/d161/d162/d163/d164/d165/d166/d167/d168/d169/d170/d171/d172/d173/d174/d175/d176/d177/d178/d179/d180/d181/d182/d183/d184/d185/d186/d187/d188/d189/d190/d191/d192/d193/d194/d195/d196/d197/d198/d199/d200/d201/d202/d203/d204/d205/d206/d207/d208/d209/d210/d211/d212/d213/d214/d215/d216/d217/d218/d219/d220/d221/d222/d223/d224/d225/d226/d227/d228/d229/d230/d231/d232/d233/d234/d235/d236/d237/d238/d239/d240/d241/d242/d243/d244/d245/d246/d247/d248/d249/../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../../report.csv"], expected: "/srv/uploads/d0/report.csv", description: "Stress - 250 deep directories then 249 '..' segments"}
+expected_concepts:
+  - "path normalisation with a stack of segments"
+  - "rejecting traversal above the root"
+  - "deny-list checks before parsing (absolute paths, backslashes, encoded separators)"
+  - "case-insensitive matching of percent encodings"
+  - "fail closed by returning an explicit rejection value"
+optimal_complexity: {time: "O(n)", space: "O(n)"}
+rubric:
+  excellent: "Runs the rejection checks first, normalises with a stack, rejects as soon as '..' would leave base, handles empty and dot segments and explains why checking a prefix of the joined string or decoding afterwards is unsafe."
+  good: "Correct stack-based normalisation with one missed rejection rule (for example uppercase %2E) found by testing."
+  weak: "Uses string replacement of '../' (which can be bypassed), checks only startswith(base) on a naive join, or ignores encoded separators."
+  criteria:
+    correctness: "All tests pass, including encoded sequences, backslashes and paths that climb above base before coming back."
+    efficiency: "Single split and pass over the segments."
+    code_quality: "Rejection checks are grouped and named; the normalisation loop is a few clear lines."
+    edge_cases: "Empty request, only dots, '...' names, leading '..' and very deep paths."
+    communication: "Explains defence in depth: also resolving symlinks and checking the real path on the file system in production."
+hints:
+  - "Do not try to clean the string by replacing '../'; think about what the directory structure looks like as you walk the path one piece at a time."
+  - "First reject the inputs the rules forbid outright. Then split on '/', keep a stack of directory names and decide what each kind of segment does to the stack."
+  - "Ignore '' and '.', pop on '..' and reject when the stack is already empty, push everything else; finally join the stack onto base, or return base when the stack is empty."
+followups:
+  - "Why is removing every '../' substring not a safe fix? Give an input that defeats it."
+  - "What else must a real server check once the path is resolved (symlinks, case-insensitive file systems)?"
+  - "How would you handle URL decoding: before or after this check, and how many times?"
+  - "Would you rather map user-visible names to opaque file ids instead of paths? What changes?"
+common_errors:
+  - "Matching only lowercase '%2e' and missing '%2E'."
+  - "Popping from an empty stack silently instead of rejecting."
+  - "Treating '...' or '..hidden' as traversal."
+  - "Returning base with a trailing slash when nothing remains."
+  - "Checking the rejection rules after normalisation, when the evidence is gone."

@@ -1,0 +1,187 @@
+version: 1
+slug: nested_transaction_kv_store
+title: Nested Transaction Key-Value Store
+difficulty: medium
+competency_keys: [data_structures, problem_solving, code_quality]
+role_tags: [backend, dba, fullstack]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Nested Transaction Key-Value Store
+
+  You are building the in-memory settings store behind an internal admin console. Operators send
+  commands one at a time, and changes can be grouped into **nested transactions** that are kept or
+  thrown away as a unit. Simulate the store and collect its responses.
+
+  | Command | Effect | Output |
+  |---------|--------|--------|
+  | `"SET <key> <value>"` | Sets `key` to `value` (overwriting any old value). | none |
+  | `"GET <key>"` | Reads the current value of `key`. | the value, or `"NULL"` if the key is not set |
+  | `"DELETE <key>"` | Removes `key`; deleting a key that is not set does nothing. | none |
+  | `"BEGIN"` | Opens a new transaction inside the current one (if any). | none |
+  | `"ROLLBACK"` | Discards every change made inside the innermost open transaction and closes it. | `"NO TRANSACTION"` if none is open |
+  | `"COMMIT"` | Closes the innermost open transaction and keeps its changes: they become part of the enclosing transaction (which can still roll them back) or, if it was the outermost one, they are written to the permanent store. | `"NO TRANSACTION"` if none is open |
+
+  `GET` always sees the latest state, including changes made in transactions that are still open.
+  Transactions left open at the end are simply never closed.
+
+  Return the list of outputs in the order they were produced.
+
+  ### Example 1
+  ```
+  Input:  commands = ["SET region eu", "BEGIN", "SET region us", "GET region", "ROLLBACK", "GET region", "COMMIT"]
+  Output: ["us", "eu", "NO TRANSACTION"]
+  ```
+
+  ### Example 2
+  ```
+  Input:  commands = ["BEGIN", "SET a 1", "BEGIN", "DELETE a", "SET b 2", "COMMIT", "GET a", "GET b", "ROLLBACK", "GET b"]
+  Output: ["NULL", "2", "NULL"]
+  Explanation: the inner commit hands its changes to the outer transaction, so the outer rollback still discards both the delete and the new key b
+  ```
+
+  ### Example 3
+  ```
+  Input:  commands = ["BEGIN", "SET mode blue", "BEGIN", "SET mode green", "COMMIT", "COMMIT", "ROLLBACK", "GET mode"]
+  Output: ["NO TRANSACTION", "green"]
+  ```
+
+  ### Constraints
+  - `0 <= commands.length <= 10^4`
+  - Commands are exactly in the forms above, with single spaces
+  - Keys and values are `1` to `20` letters or digits
+  - At most `10^3` transactions are open at the same time
+
+  **Follow-up:** can you make `GET` run in constant time no matter how deeply transactions are nested?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: run_transactional_store
+  params:
+    - {name: commands, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def run_transactional_store(commands: list[str]) -> list[str]:
+        current: dict[str, str] = {}
+        # One undo log per open transaction: key -> value before the transaction first touched it
+        # (None means the key was not set).
+        logs: list[dict[str, str | None]] = []
+        out: list[str] = []
+
+        def remember(key: str) -> None:
+            if logs and key not in logs[-1]:
+                logs[-1][key] = current.get(key)
+
+        for command in commands:
+            parts = command.split(" ")
+            op = parts[0]
+            if op == "SET":
+                remember(parts[1])
+                current[parts[1]] = parts[2]
+            elif op == "GET":
+                out.append(current.get(parts[1], "NULL"))
+            elif op == "DELETE":
+                if parts[1] in current:
+                    remember(parts[1])
+                    del current[parts[1]]
+            elif op == "BEGIN":
+                logs.append({})
+            elif not logs:
+                out.append("NO TRANSACTION")
+            elif op == "ROLLBACK":
+                for key, old in logs.pop().items():
+                    if old is None:
+                        current.pop(key, None)
+                    else:
+                        current[key] = old
+            else:  # COMMIT
+                child = logs.pop()
+                if logs:
+                    parent = logs[-1]
+                    for key, old in child.items():
+                        if key not in parent:
+                            parent[key] = old
+        return out
+  javascript: |
+    function runTransactionalStore(commands) {
+      const current = new Map();
+      const logs = []; // per open transaction: key -> value before first touch (undefined = unset)
+      const out = [];
+      const remember = (key) => {
+        if (logs.length > 0 && !logs[logs.length - 1].has(key)) {
+          logs[logs.length - 1].set(key, current.get(key));
+        }
+      };
+      for (const command of commands) {
+        const [op, key, value] = command.split(" ");
+        if (op === "SET") {
+          remember(key);
+          current.set(key, value);
+        } else if (op === "GET") {
+          out.push(current.has(key) ? current.get(key) : "NULL");
+        } else if (op === "DELETE") {
+          if (current.has(key)) {
+            remember(key);
+            current.delete(key);
+          }
+        } else if (op === "BEGIN") {
+          logs.push(new Map());
+        } else if (logs.length === 0) {
+          out.push("NO TRANSACTION");
+        } else if (op === "ROLLBACK") {
+          for (const [k, old] of logs.pop()) {
+            if (old === undefined) current.delete(k);
+            else current.set(k, old);
+          }
+        } else {
+          const child = logs.pop();
+          if (logs.length > 0) {
+            const parent = logs[logs.length - 1];
+            for (const [k, old] of child) if (!parent.has(k)) parent.set(k, old);
+          }
+        }
+      }
+      return out;
+    }
+tests:
+  - {id: t1, args: [["SET region eu", "BEGIN", "SET region us", "GET region", "ROLLBACK", "GET region", "COMMIT"]], expected: ["us", "eu", "NO TRANSACTION"], description: "Example 1"}
+  - {id: t2, args: [["BEGIN", "SET a 1", "BEGIN", "DELETE a", "SET b 2", "COMMIT", "GET a", "GET b", "ROLLBACK", "GET b"]], expected: ["NULL", "2", "NULL"], description: "Example 2 - inner commit is still undone by the outer rollback"}
+  - {id: t3, args: [["BEGIN", "SET mode blue", "BEGIN", "SET mode green", "COMMIT", "COMMIT", "ROLLBACK", "GET mode"]], expected: ["NO TRANSACTION", "green"], description: "Example 3 - outermost commit makes changes permanent"}
+  - {id: t4, hidden: true, args: [[]], expected: [], description: "No commands: no output"}
+  - {id: t5, hidden: true, args: [["GET ghost", "DELETE ghost", "ROLLBACK", "COMMIT", "GET ghost"]], expected: ["NULL", "NO TRANSACTION", "NO TRANSACTION", "NULL"], description: "Missing key, delete of a missing key and closing with nothing open"}
+  - {id: t6, hidden: true, args: [["SET k v1", "BEGIN", "DELETE k", "GET k", "ROLLBACK", "GET k"]], expected: ["NULL", "v1"], description: "Delete of a permanent key inside a transaction is restored by rollback"}
+  - {id: t7, hidden: true, args: [["SET k v1", "BEGIN", "DELETE k", "SET k v2", "DELETE k", "COMMIT", "GET k", "BEGIN", "SET k v3", "ROLLBACK", "GET k"]], expected: ["NULL", "NULL"], description: "Delete-set-delete in one transaction then commit removes the key permanently"}
+  - {id: t8, hidden: true, args: [["SET x 0", "BEGIN", "SET x 1", "BEGIN", "SET x 2", "BEGIN", "SET x 3", "BEGIN", "SET x 4", "BEGIN", "SET x 5", "GET x", "ROLLBACK", "GET x", "COMMIT", "GET x", "ROLLBACK", "GET x", "COMMIT", "COMMIT", "GET x", "ROLLBACK"]], expected: ["5", "4", "4", "2", "2", "NO TRANSACTION"], description: "Five nested levels with alternating rollback and commit"}
+  - {id: t9, hidden: true, args: [["BEGIN", "SET a 1", "BEGIN", "SET a 2", "SET a 3", "BEGIN", "BEGIN", "COMMIT", "COMMIT", "COMMIT", "GET a", "ROLLBACK", "GET a"]], expected: ["3", "NULL"], description: "Empty inner transactions and repeated overwrites; parent's saved value must survive the merge"}
+  - {id: t10, hidden: true, args: [["SET p 9", "BEGIN", "SET q 1", "BEGIN", "SET p 8", "GET p", "GET q"]], expected: ["8", "1"], description: "Transactions left open at the end produce no output"}
+  - {id: t11, hidden: true, args: [["ROLLBACK", "GET a", "DELETE d", "GET b", "GET a", "ROLLBACK", "SET d 1", "SET b 2", "GET b", "BEGIN", "ROLLBACK", "DELETE b", "COMMIT", "SET c 3", "SET b 3", "BEGIN", "DELETE d", "GET c", "BEGIN", "GET d", "SET a x", "SET b 3", "GET a", "ROLLBACK", "BEGIN", "ROLLBACK", "BEGIN", "GET b", "GET a", "DELETE d", "GET d", "SET b 3", "BEGIN", "GET a", "COMMIT", "ROLLBACK", "SET b 1", "GET a", "BEGIN", "GET b", "BEGIN", "SET d x", "COMMIT", "COMMIT", "GET b", "ROLLBACK", "ROLLBACK", "ROLLBACK", "COMMIT", "GET d", "DELETE d", "ROLLBACK", "DELETE d", "GET c", "SET b 1", "SET b 1", "GET b", "SET c 3", "ROLLBACK", "GET b", "GET a", "COMMIT", "COMMIT", "SET c 1", "ROLLBACK", "SET b 2", "BEGIN", "SET c 1", "SET d 2", "SET b 2", "SET d x", "SET d 1", "ROLLBACK", "ROLLBACK", "COMMIT", "SET d 1", "BEGIN", "ROLLBACK", "DELETE d", "SET c 2", "SET d 1", "GET d", "DELETE b", "ROLLBACK", "COMMIT", "GET d", "COMMIT", "SET b 3", "GET c", "GET b", "BEGIN", "SET c 3", "SET b x", "ROLLBACK", "GET b", "BEGIN", "SET a 2", "BEGIN", "SET b 1", "GET d", "SET d 2", "BEGIN", "ROLLBACK", "GET c", "GET d", "BEGIN", "GET a", "SET b x", "SET c 3", "SET d x", "GET a", "SET d 1", "DELETE d", "SET a 3", "SET c x", "GET c", "GET d", "GET b", "SET a 3", "DELETE c", "GET a", "SET a x", "SET c 2", "DELETE b", "SET a 2", "SET c 1", "BEGIN", "SET d x", "SET a 2", "SET b x", "COMMIT", "SET c 1", "GET a", "COMMIT", "SET b 2", "BEGIN", "SET c 1", "DELETE b", "SET d 2", "GET c", "SET b 1", "GET d", "SET a 3", "GET a", "GET c", "ROLLBACK", "ROLLBACK", "ROLLBACK", "COMMIT", "GET b", "GET a", "DELETE b", "GET d", "GET c", "BEGIN", "BEGIN", "GET a", "BEGIN", "BEGIN", "ROLLBACK", "COMMIT", "ROLLBACK", "COMMIT", "BEGIN", "BEGIN", "GET c", "COMMIT", "ROLLBACK", "GET a", "ROLLBACK", "GET d", "ROLLBACK", "BEGIN", "GET d", "GET a", "BEGIN", "SET c x", "COMMIT", "COMMIT", "SET c 3", "COMMIT", "GET b", "BEGIN", "GET a", "ROLLBACK", "SET a 1", "BEGIN", "SET b 3", "SET d 1", "SET a 2", "GET c", "ROLLBACK", "GET a", "SET b x", "SET a 2", "DELETE c", "COMMIT", "SET a 1", "GET c", "COMMIT", "SET a 1", "COMMIT", "GET b", "BEGIN", "SET d 3", "SET a 2", "ROLLBACK", "COMMIT", "BEGIN", "GET a", "ROLLBACK", "GET d", "COMMIT", "ROLLBACK", "COMMIT", "SET d 3", "SET c 2", "SET c x", "BEGIN", "BEGIN", "DELETE c", "DELETE a", "DELETE a", "SET a 3", "SET b 1", "GET b", "SET a x", "COMMIT", "BEGIN", "ROLLBACK", "GET a", "GET b", "GET c", "SET c x", "ROLLBACK", "GET b", "SET c 1", "SET b 3", "SET d x", "BEGIN", "BEGIN", "SET d 1", "BEGIN", "BEGIN", "GET d", "SET a 3", "BEGIN", "GET d", "BEGIN", "SET d 3", "BEGIN", "GET a", "GET d", "ROLLBACK", "SET a 2", "ROLLBACK", "COMMIT", "BEGIN", "SET c 1", "SET b 1", "SET c 1", "SET b 3", "GET d", "BEGIN", "BEGIN", "ROLLBACK", "SET c 1", "SET c 3", "BEGIN", "SET c 3", "COMMIT", "COMMIT", "GET c", "COMMIT", "BEGIN", "BEGIN", "GET c", "DELETE d", "GET c", "DELETE d", "GET d", "GET c", "BEGIN", "SET a 1", "DELETE b", "DELETE a", "GET a", "SET a x", "SET b 1", "BEGIN", "GET b", "GET d", "SET d 2", "SET c x", "BEGIN", "COMMIT", "ROLLBACK", "SET c x", "DELETE b", "SET c 1", "GET b", "DELETE d", "SET d 2", "DELETE a", "SET c 2", "SET b 1", "ROLLBACK", "BEGIN", "DELETE c", "DELETE b", "SET a 2", "DELETE a", "BEGIN", "GET c", "ROLLBACK", "SET a 3", "SET a 2", "ROLLBACK", "ROLLBACK", "SET a 3", "DELETE a", "COMMIT", "SET a 1", "GET b", "COMMIT", "GET c", "SET b 3", "SET b 3", "BEGIN", "COMMIT", "SET d 2", "DELETE c", "GET c", "SET d x", "BEGIN", "GET d", "SET d x", "BEGIN", "BEGIN", "DELETE d", "SET b 1", "DELETE b", "ROLLBACK", "SET b 1", "DELETE b", "GET c", "GET a", "SET a x", "GET a", "GET c", "SET b 1", "SET c 2", "GET b", "SET d 1", "DELETE c", "DELETE c", "SET c 1", "SET c 3", "GET b", "BEGIN", "GET a", "SET c 3", "GET d", "DELETE d", "DELETE d", "COMMIT", "GET a", "SET c 3", "DELETE b", "BEGIN", "ROLLBACK", "DELETE c", "ROLLBACK", "SET b 3", "GET b", "SET a 1", "SET a 3", "SET c 3", "GET d", "BEGIN", "DELETE a", "COMMIT", "SET d x", "ROLLBACK", "GET c", "DELETE c", "SET a 3", "SET d 2", "BEGIN", "SET c 3", "DELETE a", "BEGIN", "SET c x", "GET c", "DELETE b", "SET c 1", "BEGIN", "GET d", "SET a 1", "BEGIN"]], expected: ["NO TRANSACTION", "NULL", "NULL", "NULL", "NO TRANSACTION", "2", "NO TRANSACTION", "3", "NULL", "x", "3", "NULL", "NULL", "NULL", "NULL", "1", "1", "NO TRANSACTION", "NO TRANSACTION", "NO TRANSACTION", "1", "NO TRANSACTION", "3", "1", "NO TRANSACTION", "1", "NULL", "NO TRANSACTION", "NO TRANSACTION", "NO TRANSACTION", "NO TRANSACTION", "NO TRANSACTION", "1", "NO TRANSACTION", "NO TRANSACTION", "1", "NO TRANSACTION", "2", "3", "3", "1", "2", "2", "2", "2", "x", "NULL", "x", "3", "2", "1", "2", "3", "1", "NO TRANSACTION", "3", "NULL", "1", "2", "NULL", "2", "NULL", "NO TRANSACTION", "1", "NO TRANSACTION", "1", "NULL", "NO TRANSACTION", "NULL", "NULL", "3", "1", "NO TRANSACTION", "NULL", "NO TRANSACTION", "NO TRANSACTION", "x", "NO TRANSACTION", "1", "1", "NO TRANSACTION", "NO TRANSACTION", "NO TRANSACTION", "1", "x", "1", "NULL", "x", "1", "1", "3", "3", "1", "3", "3", "3", "NULL", "3", "NULL", "1", "NULL", "NULL", "NULL", "3", "3", "NULL", "x", "NULL", "1", "x", "NULL", "1", "1", "x", "1", "x", "3", "x", "NULL", "x", "2"], description: "Stress: 400 random commands over 4 keys with frequent nesting"}
+expected_concepts:
+  - stack of transactions, one entry per nesting level
+  - undo log or change layer per transaction
+  - distinguishing a deleted key from an untouched key (tombstone or None marker)
+  - commit merges the inner transaction into its parent instead of the permanent store
+  - error output for ROLLBACK or COMMIT without an open transaction
+optimal_complexity: {time: "O(1) per SET, GET, DELETE and BEGIN; O(m) per COMMIT or ROLLBACK for m keys changed in that transaction", space: O(k + total logged changes)}
+rubric:
+  excellent: "Uses a stack of per-transaction undo logs (or change layers) with an explicit marker for deleted keys, merges an inner commit into its parent, keeps GET constant time and explains the cost of COMMIT and ROLLBACK."
+  good: "Reaches a correct stack-based solution, perhaps with GET scanning layers top-down or copying the whole map at BEGIN, and fixes the delete-versus-unset case after a failing test."
+  weak: "Writes inner commits straight to the permanent store, cannot undo a delete, or forgets the NO TRANSACTION outputs."
+  criteria:
+    correctness: "All tests pass, including nested commit followed by outer rollback and deletes inside transactions."
+    efficiency: "No full copy of the store per BEGIN; work per command is proportional to the keys it touches."
+    code_quality: "Command parsing separated from state changes, with a small helper that records the previous value of a key."
+    edge_cases: "Empty command list, GET of a missing key, DELETE of a missing key, repeated COMMIT or ROLLBACK with nothing open, open transactions at the end."
+    communication: "Explains why a deleted key needs its own marker and what COMMIT means for nested levels."
+hints:
+  - "Each BEGIN starts a level that must be undoable on its own; think about what a rollback needs to know to put every key back exactly as it was."
+  - "Keep a stack with one record per open transaction. Either store the changes made at that level, or store the value each key had before the level first touched it, and remember that 'was not set' is a value you must record too."
+  - "With an undo log per level: before the first change to a key in the innermost level, save its previous value or an unset marker. ROLLBACK restores the saved values and pops the level. COMMIT pops the level and copies into the parent only the keys the parent has not saved yet, because the parent's older saved value is the one to restore."
+followups:
+  - "How would you add a COUNT command that returns how many keys currently hold a given value, in constant time?"
+  - "How would the design change if the store had to survive a process restart?"
+  - "What would you change to support several clients, each with its own open transactions, on the same store?"
+common_errors:
+  - "Applying an inner COMMIT directly to the permanent store, so the outer ROLLBACK cannot undo it."
+  - "Representing a deleted key as missing in the layer, so GET falls through to an older value."
+  - "Overwriting the parent's saved value during COMMIT and restoring the wrong value on a later rollback."
+  - "Forgetting the NO TRANSACTION output or emitting output for SET and DELETE."

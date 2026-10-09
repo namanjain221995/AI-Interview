@@ -1,0 +1,191 @@
+version: 1
+slug: sensor_pair_xor_band
+title: Sensor Pair XOR Band
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [backend, network, data, general]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Sensor Pair XOR Band
+
+  A warehouse runs a mesh of battery-powered radio sensors. Each sensor is assigned a 15-bit
+  **channel id**, and the radio firmware derives its hopping pattern from that id. Field testing showed
+  that two sensors disturb each other exactly when the bitwise **XOR** of their channel ids falls inside
+  a known interference band `[low, high]` (both ends inclusive).
+
+  Before a new channel plan is rolled out, the planning tool must report how many sensor pairs would
+  interfere. Given the planned `ids` (one entry per sensor, so the same id may appear more than once),
+  return the number of index pairs `(i, j)` with `i < j` such that
+
+  ```
+  low <= ids[i] XOR ids[j] <= high
+  ```
+
+  Each unordered pair of sensors is counted once. Two sensors with the same id have XOR `0`, so they
+  are counted only when `low` is `0`. Return `0` when no pair qualifies (including when there is only
+  one sensor).
+
+  ### Example 1
+  ```
+  Input:  ids = [3, 8, 2, 10], low = 2, high = 9
+  Output: 3
+  Explanation: 3 XOR 10 = 9, 8 XOR 10 = 2 and 2 XOR 10 = 8 are inside the band;
+  3 XOR 8 = 11, 3 XOR 2 = 1 and 8 XOR 2 = 10 are not.
+  ```
+
+  ### Example 2
+  ```
+  Input:  ids = [5, 5, 1, 4], low = 0, high = 1
+  Output: 3
+  Explanation: the two sensors with id 5 give XOR 0, and each id 5 paired with id 4 gives XOR 1.
+  ```
+
+  ### Constraints
+  - `1 <= ids.length <= 2 * 10^4`
+  - `0 <= ids[i] <= 32767` (15 bits)
+  - `0 <= low <= high <= 32767`
+  - The answer can be as large as `n * (n - 1) / 2`; return it as a 64-bit integer.
+
+  **Follow-up:** checking every pair is `O(n^2)`. Can you count the pairs in roughly `O(n * 15)`?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: count_pairs_in_xor_band
+  params:
+    - {name: ids, type: "int[]"}
+    - {name: low, type: int}
+    - {name: high, type: int}
+  return_type: long
+  comparison: exact
+reference_solutions:
+  python: |
+    def count_pairs_in_xor_band(ids: list[int], low: int, high: int) -> int:
+        BITS = 15
+        # Flat binary trie: node 0 is the root, child index 0 means "no child".
+        children = [[0, 0]]
+        count = [0]
+
+        def insert(value: int) -> None:
+            node = 0
+            count[0] += 1
+            for b in range(BITS - 1, -1, -1):
+                bit = (value >> b) & 1
+                if children[node][bit] == 0:
+                    children.append([0, 0])
+                    count.append(0)
+                    children[node][bit] = len(children) - 1
+                node = children[node][bit]
+                count[node] += 1
+
+        def count_below(value: int, bound: int) -> int:
+            # How many stored ids y satisfy (value XOR y) < bound.
+            if bound >= 1 << BITS:
+                return count[0]
+            total = 0
+            node = 0
+            for b in range(BITS - 1, -1, -1):
+                v = (value >> b) & 1
+                if (bound >> b) & 1:
+                    # Every y matching v at this bit makes the XOR bit 0 < 1, so all of them count.
+                    same = children[node][v]
+                    if same:
+                        total += count[same]
+                    node = children[node][v ^ 1]
+                else:
+                    node = children[node][v]
+                if node == 0:
+                    break
+            return total
+
+        pairs = 0
+        for value in ids:
+            pairs += count_below(value, high + 1) - count_below(value, low)
+            insert(value)
+        return pairs
+  javascript: |
+    function countPairsInXorBand(ids, low, high) {
+      const BITS = 15;
+      const maxNodes = ids.length * BITS + 1;
+      const zero = new Int32Array(maxNodes);
+      const one = new Int32Array(maxNodes);
+      const count = new Int32Array(maxNodes);
+      let used = 1;
+
+      function insert(value) {
+        let node = 0;
+        count[0]++;
+        for (let b = BITS - 1; b >= 0; b--) {
+          const kids = ((value >> b) & 1) ? one : zero;
+          if (kids[node] === 0) kids[node] = used++;
+          node = kids[node];
+          count[node]++;
+        }
+      }
+
+      function countBelow(value, bound) {
+        if (bound >= 1 << BITS) return count[0];
+        let total = 0;
+        let node = 0;
+        for (let b = BITS - 1; b >= 0; b--) {
+          const v = (value >> b) & 1;
+          const same = v ? one : zero;
+          const other = v ? zero : one;
+          if ((bound >> b) & 1) {
+            if (same[node] !== 0) total += count[same[node]];
+            node = other[node];
+          } else {
+            node = same[node];
+          }
+          if (node === 0) break;
+        }
+        return total;
+      }
+
+      let pairs = 0;
+      for (const value of ids) {
+        pairs += countBelow(value, high + 1) - countBelow(value, low);
+        insert(value);
+      }
+      return pairs;
+    }
+tests:
+  - {id: t1, args: [[3, 8, 2, 10], 2, 9], expected: 3, description: Example 1}
+  - {id: t2, args: [[5, 5, 1, 4], 0, 1], expected: 3, description: "Example 2 - duplicate ids give XOR 0, counted because low is 0"}
+  - {id: t3, hidden: true, args: [[12], 0, 32767], expected: 0, description: "Single sensor - no pairs even with the widest band"}
+  - {id: t4, hidden: true, args: [[7, 7, 7, 7, 7, 7], 0, 0], expected: 15, description: "All ids equal and band [0, 0] - every pair counts (n*(n-1)/2)"}
+  - {id: t5, hidden: true, args: [[7, 7, 7, 7, 7, 7], 1, 32767], expected: 0, description: "All ids equal but low is 1 - duplicates must not be counted"}
+  - {id: t6, hidden: true, args: [[0, 32767, 16384, 16383], 32767, 32767], expected: 2, description: "Extreme ids and band at the 15-bit maximum (high + 1 overflows 15 bits)"}
+  - {id: t7, hidden: true, args: [[1, 2, 4, 8, 16, 32, 64, 128], 3, 48], expected: 15, description: Powers of two - band boundaries split pairs by their highest bit}
+  - {id: t8, hidden: true, args: [[9, 14, 9, 3, 0, 14, 6, 11, 9, 2], 0, 32767], expected: 45, description: "Full band with duplicates - answer equals all pairs"}
+  - {id: t9, hidden: true, args: [[100, 200, 300, 400, 500, 600, 700, 800, 900, 1000], 256, 511], expected: 12, description: Band aligned to one bit block; tests the prefix-bound walk}
+  - {id: t10, hidden: true, args: [[7744, 17410, 0, 14347, 25939, 20360, 2682, 6170, 18751, 14333, 30067, 3577, 11658, 32524, 17806, 16652, 7846, 32601, 18227, 14820, 2691, 16588, 1940, 6555, 13910, 31871, 11101, 29675, 15128, 9890, 23126, 9839, 26272, 31708, 16674, 30000, 20531, 5067, 7557, 355, 27884, 29835, 30993, 12986, 22739, 32003, 21107, 6595, 18757, 25323, 8188, 29610, 8174, 5759, 1264, 6636, 27391, 27103, 25345, 21750, 24695, 15544, 12416, 15719, 10291, 17697, 746, 10180, 31795, 14867, 10527, 6195, 15387, 22574, 24501, 31043, 889, 15216, 23684, 30269, 15202, 18739, 28039, 4310, 9420, 14361, 5096, 13533, 15122, 30346, 29276, 6110, 8955, 28044, 5127, 4964, 7764, 4899, 10151, 14058, 4417, 25328, 1723, 25247, 22311, 1789, 14826, 17975, 16961, 23721, 30093, 6112, 1476, 8054, 3240, 10476, 30584, 9675, 1743, 25350, 24423, 5933, 7917, 21708, 12576, 23248, 29945, 22509, 4067, 31327, 25675, 31547, 12018, 15365, 19895, 7469, 26135, 2649, 16891, 21686, 17658, 13795, 6496, 19589, 9785, 14844, 22972, 14687, 20979, 31687, 25617, 1023, 21802, 11119, 24230, 16113, 11842, 11907, 3405, 5266, 14683, 11890, 26148, 28579, 8893, 5563, 29292, 4627, 27051, 4472, 32563, 9144, 13409, 24070, 10703, 29878, 7295, 8528, 27605, 27175, 24403, 5126, 14788, 25245, 26326, 25886, 18033, 16158, 4753, 14812, 31710, 6221, 7842, 23812, 18298, 25856, 4974, 13173, 12631, 12246, 12453, 31644, 32006, 6799, 13849, 16485, 22211, 17385, 27031, 25099, 1266, 2475, 26931, 2111, 26596, 11123, 8862, 26322, 27922, 31310, 21157, 12136, 6460, 20859, 6301, 28252, 12235, 8779, 6313, 25928, 3926, 13403, 7582, 12105, 23034, 20420, 21549, 1115, 28031, 4364, 19408, 20267, 231, 17293, 2560, 14621, 26626, 30524, 29361, 15662, 921, 30837, 15328, 10098, 1075, 18957, 13185, 18416, 30514, 10383, 20436, 9587, 10107, 4884, 29323, 16111, 12682, 17032, 26564, 16159, 20056, 1468, 7842, 3518, 21224, 8755, 6853, 22862, 25944, 9124, 25150, 9808, 15939, 18404, 15944, 29736, 22245, 31318, 22825, 21739, 26312, 2621, 7463, 18962, 16526, 1443, 3723, 15280, 20193, 9310, 28745, 22129, 32059, 13102, 9038, 28229, 26291, 7851, 19049, 5531, 23991, 25165, 30401, 11751, 29666, 16525, 9094, 31877, 14417, 31202, 192, 18490, 32418, 32618, 8233, 3617, 23533, 3946, 10420, 17993, 3775, 8863, 23664, 11090, 4652, 26143, 21518, 6906, 6385, 24448, 16549, 20692, 2786, 25721, 32587, 22118, 16388, 17356, 1534, 12445, 19280, 21566, 22274, 12927, 7, 6061, 15988, 27760, 20176, 24294, 17370, 24581, 6779, 9362, 6804, 9002, 19939, 11700, 4328, 10342, 24450, 19583, 15876, 29874, 18723, 2323, 14002, 13817, 3724, 16168, 14985, 32279, 8217, 10978, 16806, 7892, 19583, 15790, 4814, 15370, 15086, 22056, 2497, 19319, 21989, 4041, 20236, 15829, 7746, 13309, 8748, 24579, 2217, 25881, 4830, 11091, 32251, 23693, 18021, 4090, 19676, 13858, 8223, 28187, 28929, 26050, 18011, 5841, 18465, 14158, 24942, 15840, 8531, 25157, 29603, 17858, 647, 15579, 16022, 20577, 15505, 9687, 21890, 12971, 21982, 6885, 19923, 20647, 26228, 15936, 10769, 2198, 3521, 5141, 14211, 15371, 28224, 6318, 26541, 3852, 9385, 21723, 1602, 8113, 23514, 14306, 10274, 1797, 4830, 10369, 9581, 19324, 16544, 28059, 17985, 978, 24951, 12739, 32696, 29844, 2302, 21217, 27636, 2766, 10116, 13172, 10448, 31350, 3649, 12275, 4706, 1659, 5520, 10650, 25835, 14898, 9756, 20657, 10516, 27819, 10672, 11019, 14144, 26161, 13851, 684, 6019, 27476, 22645, 10635, 13006, 14989, 4462, 2604, 4549, 13154, 12851, 19671, 18717, 4598, 13924, 17399, 12512, 2062, 19674, 8785, 16913, 19730, 27306, 29258, 23804, 17288, 8480, 19974, 25449, 24085, 29252, 13351, 24088, 28856, 21835, 19898, 27187, 8116, 10692, 371, 20782, 10208, 31085, 20894, 6592, 10348, 7687, 15260, 13860, 10382, 3514, 23103, 14421, 5526, 4556, 13905, 21182, 2185, 16202, 24587, 8768, 10003, 20103, 23185, 14194, 29173, 9125, 32149, 22399, 12111, 25364, 3542, 27563, 26777, 11955, 6480, 606, 26433, 26527, 4091, 27347, 17888, 15059, 23100, 20319, 18982, 26755, 27337, 26915, 17960, 4371, 16744, 1329, 3237, 6624, 21694, 1522, 17848, 15590, 21984, 16074, 16721, 1265, 23583, 28582, 26891, 18338, 17808, 30809, 25984, 32608, 30997, 2113, 8672, 7068, 23506, 31078, 17151, 24911, 19459, 493, 7921, 30137, 30777, 2750, 24373, 14086, 394, 12687, 16573, 8681, 15082, 4580, 10518, 17755, 21709, 17925, 5673, 31223, 17670, 5244, 4218, 17903, 17951, 190, 27286, 24709, 32595, 17637, 2395, 20860, 12250, 2434, 3110, 24996, 31221, 7415, 13705, 30608, 16625, 27619, 25932, 17088, 26505, 30768, 10055, 26642, 18306, 30972, 18756, 14432, 11991, 27673, 13842, 28207, 7397, 13012, 17658, 24887, 5488, 14416, 31759, 22095, 1852, 25681, 11283, 1169, 11770, 23657, 1870, 17613, 3358, 206, 1651, 2915, 17249, 13300, 14992, 5864, 12241, 18160, 13088, 15553, 10205, 9882, 8430, 18354, 25038, 12798, 28225, 7830, 3613, 27347, 18239, 4092, 26375, 5159, 1109, 23290, 4991, 104, 17426, 27691, 14314, 29466, 31780, 846, 26888, 23023, 28102, 14140, 12344, 8726, 8074, 1129, 24675, 25713, 28518, 13231, 22166, 29768, 32268, 27536, 388, 14164, 12020, 25922, 11224, 8374, 28762, 18424, 23502, 9126, 25893, 3269, 20433, 15229, 13170, 27090, 23200, 28344, 15780, 7149, 6220, 15588, 13223, 12178, 2262, 16142, 19760, 28303, 13435, 8989, 25165, 30025, 4746, 32035, 23415, 5413, 24856, 31233, 32369, 13562, 27676, 20051, 13542, 10575, 31352, 15552, 20361, 13866, 23652, 28411, 1130, 7162, 18461, 22486, 4943, 14135, 14257, 7152, 7024, 30694, 31576, 18150, 17663, 9474, 5072, 12085, 934, 10487, 19305, 9392, 32002, 10752, 1943, 32529, 13669, 31830, 16950, 17526, 18599, 20028, 15949, 20238, 29456, 21222, 28989, 23332, 4734, 31676, 4131, 22439, 20592, 30873, 16022, 31794, 28877, 4294, 32567, 2645, 10, 21258, 8291, 20603, 7349, 23192, 22019, 8356, 15923, 21560, 20183, 1871, 6394, 9026, 375, 17899, 1405, 5040, 14964, 8144, 11895, 18762, 7986, 7814, 953, 19061, 32064, 18722, 25755, 3448, 11720, 20388, 463, 5363, 13767, 16360, 24777, 9483, 25177, 21719, 429, 19545, 26444, 32132, 269, 2317, 5308, 31002, 9894, 17926, 20427, 10731, 3520, 23776, 16213, 13066, 10177, 2613, 24896, 18638, 27489, 28967, 2358, 11825, 24082, 11474, 8863, 19267, 32438, 3436, 27923, 25214, 4192, 5402, 11048, 15448, 31573, 4265, 7405, 13611, 28631, 18092, 13520, 8484, 13326, 17720, 3868, 4848, 27147, 26776, 6987, 16510, 3655, 3808, 4099, 27482, 17279, 19538, 17138, 20819, 12148, 14598, 22871, 25934, 21243, 1704, 8312, 4566, 25412, 14427, 21857, 24256, 26422, 23760, 8174, 30136, 18146, 18468, 18557, 28128, 12511, 16263, 14668, 10089, 25548, 1106, 1691, 25830, 28196, 20520, 31768, 5372, 26055, 815, 25644, 32080, 10729, 363, 23663, 3851, 9459, 10215, 22940, 3301, 31707, 1136, 20963, 13383, 26638, 20926, 20082, 3405, 27881, 21015, 12741, 8558, 6684, 32411, 22910, 10754, 211, 2726, 30162], 1234, 20000], expected: 286048, description: "Stress - 1000 random 15-bit ids; quadratic in a slow language is borderline, trie is fast"}
+expected_concepts:
+  - counting pairs in a range as count(< high + 1) minus count(< low)
+  - binary trie over fixed-width bit representations with subtree counts
+  - walking the trie against a bound bit by bit to count XOR values below it
+  - processing ids left to right so each unordered pair is counted once
+  - 64-bit result for up to n * (n - 1) / 2 pairs
+optimal_complexity: {time: O(n * B) with B = 15 bits, space: O(n * B)}
+rubric:
+  excellent: Reduces the band to two "XOR below a bound" counts, builds a binary trie with subtree counts, explains why a set bound bit lets the whole matching subtree be added at once, inserts after querying so pairs are counted once, and states O(n * 15) time and space.
+  good: Reaches the trie idea with some prompting or implements a correct but less tidy variant (for example a counting map over prefixes); minor off-by-one on the bounds fixed after testing.
+  weak: Stops at the O(n^2) double loop without a path to something faster, counts ordered pairs or self-pairs, or mishandles duplicates when low is 0.
+  criteria:
+    correctness: All tests pass, including duplicates with low 0, single-element input and a band that reaches 32767.
+    efficiency: Near-linear in n times the bit width instead of comparing every pair.
+    code_quality: A small insert routine and a separate count-below routine; no duplicated bit-walking logic for low and high.
+    edge_cases: Bound of high + 1 = 32768 exceeding 15 bits, equal ids, and a single sensor.
+    communication: Explains the prefix-bound argument and why querying before inserting avoids double counting.
+hints:
+  - Counting values inside a band is often easier as two simpler counts. How many pairs have an XOR strictly below some bound, and how do you combine two such counts?
+  - Store the ids you have already seen in a binary trie keyed by their bits from most significant to least, and keep in each node how many ids pass through it. Then count, for the current id, how many stored ids give an XOR below a bound.
+  - Walk the trie from the top bit with the current id and the bound side by side. Where the bound bit is 1, every stored id that matches the current id at this bit produces an XOR bit of 0, so add that whole child's count and continue down the opposite child; where the bound bit is 0 you must follow the matching child. Query with high + 1 and with low, subtract, then insert the current id.
+followups:
+  - How would you answer many different bands for the same set of ids without rebuilding the trie?
+  - How would the approach change if ids were 64-bit values?
+  - How would you support removing a sensor from the plan and recounting quickly?
+  - How would you find the single pair with the largest XOR instead of counting pairs?
+common_errors:
+  - Counting ordered pairs or pairing an id with itself, which doubles the result or adds n.
+  - Using count(<= high) minus count(<= low), which drops pairs whose XOR equals low.
+  - Forgetting that high + 1 can be 32768 and needs one more bit than the ids.
+  - Inserting the current id before querying, which pairs it with itself and counts it whenever low is 0.

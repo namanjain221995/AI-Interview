@@ -1,0 +1,592 @@
+# Curated questions: system design, distributed data (3 of 4): caching layers and search indexes.
+# `defaults` are merged into every question (question keys win). Easy questions override round_types.
+version: 1
+defaults:
+  role_tags: [backend, dba, data]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------- easy
+  - external_key: system_design.distributed_data.edge_caching_choices
+    competency_key: system_design
+    topic: What belongs in a CDN
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      An online shop serves product images, product detail pages, prices and each shopper's cart. Which of
+      these would you cache at a CDN edge, which not, and why?
+    expected_concepts:
+      - static assets with long lifetimes and versioned file names
+      - shared pages cached briefly or with stale-while-revalidate
+      - frequently changing prices cached carefully or fetched separately
+      - per-user data such as carts never cached as shared content
+      - cache keys, Vary headers and purging on change
+    rubric:
+      excellent: Sorts each item by how often it changes and whether it is shared or personal, uses versioned assets, short or revalidated page caching and purges, and keeps personal data out of shared caches.
+      good: Caches images and pages at the edge and keeps carts out, with brief reasons.
+      weak: Caches everything at the edge, risking one user's data being shown to another, or caches nothing.
+    followups:
+      - How would you update a price on a cached product page within a minute?
+      - What could go wrong if a personalised response is cached at the edge by mistake?
+    common_errors:
+      - Caching responses that contain user-specific data under a shared key.
+
+  - external_key: system_design.distributed_data.choosing_ttls
+    competency_key: system_design
+    topic: Choosing expiry times per kind of data
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      You're caching exchange rates, user profile details and remaining stock for flash-sale items. How would
+      you choose how long each stays in the cache?
+    expected_concepts:
+      - TTL driven by how stale the data may be for its use
+      - explicit invalidation when the source changes versus relying on expiry
+      - very short TTL or no caching for rapidly changing, high-stakes data
+      - jitter to avoid synchronised expiry
+      - business owners agreeing the staleness tolerance
+    rubric:
+      excellent: Derives each TTL from the acceptable staleness and consequence of being wrong, pairs TTLs with invalidation where possible, treats flash-sale stock as needing an authoritative check, and adds jitter.
+      good: Gives sensible different TTLs with reasons for each.
+      weak: Uses one TTL for everything or picks numbers without reasoning.
+    followups:
+      - What would you do if the exchange-rate provider goes down and your cached rate expires?
+      - How would you know whether a TTL is too long or too short in production?
+    common_errors:
+      - Caching stock levels for flash sales and selling items that are gone.
+
+  - external_key: system_design.distributed_data.when_to_add_search_engine
+    competency_key: databases
+    topic: When a dedicated search engine is worth it
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your app's search is a database query with a wildcard match on the title column, and users say it's
+      slow and returns poor results. How would you decide whether to add a dedicated search engine, and what
+      would it change?
+    expected_concepts:
+      - leading wildcards cannot use ordinary indexes
+      - inverted indexes, tokenisation, stemming and relevance scoring
+      - built-in full-text search in the database as an intermediate step
+      - a separate engine is a second copy of data to keep in sync
+      - operational cost of running a search cluster
+    rubric:
+      excellent: Explains why the current query is slow and weak at relevance, considers built-in full-text search first, and weighs a dedicated engine's relevance features against syncing and operating a second store.
+      good: Recommends full-text search with a reason and mentions keeping the index in sync.
+      weak: Jumps to a search engine without understanding why the current query fails or what it costs to run.
+    followups:
+      - How would results be ranked differently with full-text search?
+      - What would make you stay with the database's built-in search?
+    common_errors:
+      - Forgetting the search index becomes another copy of the data with its own lag.
+
+  - external_key: system_design.distributed_data.search_document_design
+    competency_key: data_engineering
+    topic: Designing a search document
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      You're building search for a job board. Candidates search by keywords, filter by location, pay
+      range offered and remote options, and sort by date. How would you design the documents in the search index?
+    expected_concepts:
+      - analysed text fields for title and description
+      - exact-match keyword fields for filters and facets
+      - numeric and date fields for ranges and sorting
+      - denormalising company data into each job document
+      - only indexing fields that are searched, filtered or displayed
+    rubric:
+      excellent: Chooses field types per use (analysed text, keywords, numbers, dates, geo), denormalises related data deliberately, and keeps the document lean with a reason for each field.
+      good: Separates full-text fields from filter fields and includes the needed attributes.
+      weak: Dumps the database row as-is without distinguishing searchable from filterable fields.
+    followups:
+      - How would you support searching for remote jobs or jobs within fifty kilometres?
+      - The company changes its name. Which documents need to change?
+    common_errors:
+      - Indexing filter fields as analysed text, so exact filters behave unexpectedly.
+
+  # ------------------------------------------------------------- medium
+  - external_key: system_design.distributed_data.cache_stampede
+    competency_key: system_design
+    topic: Many requests rebuilding one expired entry
+    difficulty: medium
+    text: >-
+      The home page's cached recommendation block takes two seconds to compute. Every time it expires,
+      thousands of requests try to rebuild it at once and the database spikes. How would you fix this?
+    expected_concepts:
+      - request coalescing or a rebuild lock so one caller recomputes
+      - serving the stale value while refreshing in the background
+      - probabilistic or early refresh before expiry
+      - TTL jitter across keys
+      - precomputing the value on a schedule
+    rubric:
+      excellent: Combines single-flight recomputation with serving stale data, considers early or scheduled refresh, handles the case where the rebuilder fails, and adds jitter.
+      good: Proposes a lock or coalescing so only one request rebuilds.
+      weak: Only lengthens the TTL or adds database capacity.
+    followups:
+      - What happens if the request holding the rebuild lock crashes?
+      - When would you precompute instead of caching on demand?
+    common_errors:
+      - A rebuild lock without a timeout that blocks every reader when the holder dies.
+
+  - external_key: system_design.distributed_data.multi_tier_cache_consistency
+    competency_key: system_design
+    topic: Keeping several cache tiers in step
+    difficulty: medium
+    text: >-
+      Prices are cached in each application server's memory, in a shared Redis tier and at the CDN. A price
+      changes. How would you make sure customers see the new price everywhere within a minute?
+    expected_concepts:
+      - invalidation fan-out to each tier (pub/sub or change events)
+      - short TTL on the in-process tier as a safety net
+      - order of invalidation from the innermost source outward
+      - CDN purge APIs and their delays
+      - checking the price authoritatively at checkout
+    rubric:
+      excellent: Designs an invalidation path through all tiers in the right order, uses bounded TTLs as a backstop, accounts for CDN purge delay, and protects the transaction by revalidating at checkout.
+      good: Proposes publishing an invalidation event to every tier with TTLs as a fallback.
+      weak: Invalidates only the shared cache and forgets the in-process or edge copies.
+    followups:
+      - An application server misses the invalidation message. What limits the damage?
+      - Why does the order of invalidating tiers matter?
+    common_errors:
+      - Purging the CDN before the shared cache, so the edge re-fetches the old value.
+
+  - external_key: system_design.distributed_data.scaling_cache_cluster
+    competency_key: distributed_systems
+    topic: Scaling a shared cache cluster
+    difficulty: medium
+    text: >-
+      A single Redis instance caching session and product data is close to its memory and network limits.
+      How would you scale it out, and what changes for the application?
+    expected_concepts:
+      - partitioning keys across nodes (cluster mode or client-side hashing)
+      - multi-key operations restricted to one slot (hash tags)
+      - replicas for failover and read scaling
+      - resharding impact on latency and in-flight requests
+      - separating workloads with different durability needs
+    rubric:
+      excellent: Chooses a partitioning approach and explains its effect on multi-key operations, adds replicas for failover, plans resharding, and separates session data from disposable cache data.
+      good: Describes clustering with sharding and replicas and notes some application impact.
+      weak: Only proposes a bigger instance or does not see that multi-key commands break across nodes.
+    followups:
+      - How would you handle one key that is much hotter than the rest?
+      - Should sessions and product cache live in the same cluster?
+    common_errors:
+      - Assuming transactions and multi-key commands still work across any keys after sharding.
+
+  - external_key: system_design.distributed_data.write_behind_counters
+    competency_key: system_design
+    topic: Buffering high-volume counter writes
+    difficulty: medium
+    text: >-
+      Article view counts are updated on every page view, at fifty thousand views per second at peak. How
+      would you design the write path so the database isn't overwhelmed, and what would you risk?
+    expected_concepts:
+      - increment in a fast store or in memory and flush in batches
+      - aggregation per key per interval before writing
+      - data loss window if the buffer is lost
+      - idempotent or replayable flushes via a log
+      - acceptable accuracy for this kind of metric
+    rubric:
+      excellent: Aggregates increments in a buffer or log and flushes batched deltas, quantifies the loss window, makes flushes safe to retry and states the accuracy the business accepts.
+      good: Proposes buffering and batching counts with periodic writes.
+      weak: Writes each view to the database or does not consider losing buffered counts.
+    followups:
+      - How would you avoid double-counting if a flush is retried?
+      - What changes if these counts drive creator payouts?
+    common_errors:
+      - Flushing absolute values from several buffers and overwriting each other's counts.
+
+  - external_key: system_design.distributed_data.caching_list_results
+    competency_key: system_design
+    topic: Caching lists and query results
+    difficulty: medium
+    text: >-
+      Category pages show paginated, filtered product lists and are expensive to query. How would you cache
+      them, given that a single product change can affect many different lists?
+    expected_concepts:
+      - caching lists of ids separately from item details
+      - tag or dependency-based invalidation, or short TTLs
+      - generational keys or version numbers per category
+      - only caching the first pages that get most traffic
+      - consistency between the list and item caches
+    rubric:
+      excellent: Caches id lists and item details separately, chooses between tag-based invalidation, version bumps or short TTLs with reasons, and focuses caching on the most visited pages.
+      good: Caches query results with sensible keys and a TTL, noting invalidation difficulty.
+      weak: Caches full pages under ad-hoc keys with no plan for invalidation.
+    followups:
+      - How would a price change propagate into the cached lists?
+      - What would you do about deep pages that are rarely requested?
+    common_errors:
+      - Trying to find and delete every list a product appears in on each change.
+
+  - external_key: system_design.distributed_data.partial_personalised_caching
+    competency_key: system_design
+    topic: Caching mostly shared, partly personal pages
+    difficulty: medium
+    text: >-
+      A news home page is ninety percent identical for everyone, but has a personalised sidebar and a signed-in
+      header. How would you cache it effectively?
+    expected_concepts:
+      - splitting the page into shared and personal fragments
+      - edge-side includes or client-side fetch for personal parts
+      - shared fragment cached widely, personal parts per user or uncached
+      - avoiding cache keys that include cookies
+      - measuring hit rates per fragment
+    rubric:
+      excellent: Splits shared and personal fragments, caches the shared part at the edge, loads personal parts separately with suitable caching, and avoids per-user keys polluting the shared cache.
+      good: Separates personal content from the shared page in some way.
+      weak: Caches per user, destroying the hit rate, or caches the whole page and leaks personal content.
+    followups:
+      - What does this do to page load time, and how would you mitigate it?
+      - How would you handle a breaking news update to the shared fragment?
+    common_errors:
+      - Including session cookies in the cache key so nothing is shared.
+
+  - external_key: system_design.distributed_data.cache_warming_new_region
+    competency_key: system_design
+    topic: Avoiding a cold cache at launch
+    difficulty: medium
+    text: >-
+      You're bringing up a new region whose caches start empty, and the databases there were sized assuming
+      a ninety-five percent hit rate. How would you get traffic onto it safely?
+    expected_concepts:
+      - pre-warming from access logs or another region's hot key set
+      - gradual traffic shift while watching hit rate and database load
+      - request coalescing and rate limiting during warm-up
+      - serving from the remote region's cache as a fallback
+      - abort criteria and rollback of the traffic shift
+    rubric:
+      excellent: Warms caches from real access patterns, ramps traffic gradually with hit-rate and load gates, protects the database with coalescing and limits, and defines rollback criteria.
+      good: Proposes pre-warming and a gradual ramp.
+      weak: Switches traffic over at once and expects the cache to fill.
+    followups:
+      - How would you choose which keys to pre-warm?
+      - The same problem happens after a full cache flush. How would you prevent an outage then?
+    common_errors:
+      - Sizing the database for steady-state hit rate with no plan for a cold start.
+
+  - external_key: system_design.distributed_data.search_index_sync
+    competency_key: data_engineering
+    topic: Keeping a search index in step with the database
+    difficulty: medium
+    text: >-
+      Products live in PostgreSQL and are searched through Elasticsearch. The current code writes to both,
+      and the two drift apart over time. How would you redesign the sync?
+    expected_concepts:
+      - dual writes fail independently and can reorder
+      - change data capture or an outbox as the single source of changes
+      - idempotent, versioned updates so stale events cannot overwrite newer data
+      - reindexing from the source on demand to repair drift
+      - monitoring lag and comparing counts or checksums
+    rubric:
+      excellent: Explains why dual writes drift, replaces them with CDC or an outbox, applies updates with version checks, and adds lag monitoring and a repair or reindex path.
+      good: Proposes CDC or an outbox-driven indexer.
+      weak: Adds retries to the dual write or wraps both in a try block.
+    followups:
+      - Two updates to one product arrive out of order at the indexer. What prevents the wrong one winning?
+      - How would you find products that are missing from the index?
+    common_errors:
+      - Retrying failed index writes without version checks, overwriting newer data.
+
+  - external_key: system_design.distributed_data.zero_downtime_reindex
+    competency_key: data_engineering
+    topic: Rebuilding a search index without downtime
+    difficulty: medium
+    text: >-
+      You need to change how a field is analysed in a large search index, which requires reindexing everything.
+      How would you do it without interrupting search or losing updates made during the rebuild?
+    expected_concepts:
+      - build a new index alongside the old one
+      - alias swap for atomic cutover
+      - capturing writes during the rebuild (dual indexing or replaying changes)
+      - validating the new index (counts, sample queries, relevance checks)
+      - keeping the old index for rollback
+    rubric:
+      excellent: Builds a parallel index, keeps it current with changes during the backfill, validates it with counts and query comparisons, swaps an alias atomically and keeps the old index for rollback.
+      good: Builds a new index and switches an alias, with some handling of concurrent updates.
+      weak: Deletes and recreates the index in place or ignores writes during the rebuild.
+    followups:
+      - How would you compare relevance between the old and new index before switching?
+      - How long would you keep the old index, and what does it cost?
+    common_errors:
+      - Forgetting updates made while the new index was being built.
+
+  - external_key: system_design.distributed_data.denormalised_doc_updates
+    competency_key: data_engineering
+    topic: Fan-out updates to denormalised documents
+    difficulty: medium
+    text: >-
+      Each product document in your search index includes its seller's name and rating. A large seller with a
+      million products changes their name. How would you handle that update, and would you design the index
+      differently?
+    expected_concepts:
+      - fan-out reindex job batched and throttled
+      - impact on indexing throughput and freshness of other updates
+      - keeping only rarely changing or searchable fields denormalised
+      - query-time joins or lookups for volatile attributes
+      - prioritising small updates over bulk fan-out
+    rubric:
+      excellent: Plans a throttled fan-out that does not starve normal updates, and reconsiders which seller attributes belong in the document based on whether they are searched on and how often they change.
+      good: Describes a batched update job and recognises the cost of denormalisation.
+      weak: Updates a million documents synchronously in the request path or does not see the cost.
+    followups:
+      - Would you denormalise the seller rating if it changes several times a day?
+      - How would you keep the bulk job from delaying new product listings?
+    common_errors:
+      - Denormalising fast-changing fields that trigger constant mass reindexing.
+
+  - external_key: system_design.distributed_data.search_cluster_shard_sizing
+    competency_key: data_engineering
+    topic: Sizing shards in a search cluster
+    difficulty: medium
+    text: >-
+      Your search index is two terabytes and growing by fifty percent a year. How would you decide the number
+      of primary shards and replicas, and how would you plan for growth?
+    expected_concepts:
+      - target shard size range and why very large or very small shards hurt
+      - primary shard count is hard to change later (split or reindex)
+      - replicas for availability and query throughput
+      - time-based or rollover indices for growing data
+      - testing with real queries to find per-shard capacity
+    rubric:
+      excellent: Derives shard count from a target shard size and growth, explains why over-sharding and huge shards both hurt, uses replicas for throughput and availability, and plans rollover or splits based on measured capacity.
+      good: Gives a reasoned shard count and replica setting with some growth plan.
+      weak: Uses defaults or picks a large number of shards without reasoning.
+    followups:
+      - Queries are slow but the cluster is mostly idle. What would you look at?
+      - When would you use one index per time period instead of one big index?
+    common_errors:
+      - Creating hundreds of tiny shards that waste memory and slow queries.
+
+  - external_key: system_design.distributed_data.multi_tenant_search_layout
+    competency_key: system_design
+    topic: Search index layout for many tenants
+    difficulty: medium
+    text: >-
+      A SaaS product gives each of its ten thousand customers full-text search over their own documents. Would
+      you use one index per customer, one shared index, or something in between? Walk me through your reasoning.
+    expected_concepts:
+      - per-tenant indices give isolation but too many small indices overload the cluster
+      - shared index with a tenant filter and routing by tenant id
+      - mandatory tenant filtering to avoid data leaks
+      - dedicated indices for very large tenants
+      - per-tenant relevance or schema differences
+    rubric:
+      excellent: Compares overhead, isolation and noisy-neighbour effects, chooses a shared routed index with dedicated indices for large tenants, and enforces tenant filtering centrally so it cannot be forgotten.
+      good: Picks a shared index with tenant filtering and acknowledges large tenants.
+      weak: Picks index-per-tenant without considering cluster overhead, or forgets tenant isolation.
+    followups:
+      - How would you guarantee a query never returns another customer's documents?
+      - One tenant's heavy indexing slows everyone's search. What do you do?
+    common_errors:
+      - Relying on every query author to remember the tenant filter.
+
+  # ------------------------------------------------------------- hard
+  - external_key: system_design.distributed_data.cdc_cache_invalidation
+    competency_key: distributed_systems
+    topic: Invalidation driven by change data capture
+    difficulty: hard
+    text: >-
+      Design a cache invalidation system that reads the database's change stream and invalidates caches in
+      three regions. How do you make sure a stale value can never be left behind in the cache indefinitely?
+    expected_concepts:
+      - race between a slow reader filling the cache and a later invalidation
+      - versioned cache entries or leases that reject stale fills
+      - ordered per-key processing and replay from a log position
+      - regional delivery delays and retries until acknowledged
+      - TTL as a final bound and monitoring of invalidation lag
+    rubric:
+      excellent: Identifies the fill-after-invalidate race and fixes it with versions or leases, processes changes in order per key with replayable positions, handles cross-region delivery and bounds residual staleness with TTLs and lag monitoring.
+      good: Uses CDC events to delete keys in each region and notes some race or delivery issue.
+      weak: Assumes deleting the key once on every change is enough.
+    followups:
+      - A region's invalidation consumer is down for ten minutes. What happens and how do you recover?
+      - Why might deleting a key be safer than updating it with the new value?
+    common_errors:
+      - Ignoring that an old read can repopulate the cache after the invalidation ran.
+
+  - external_key: system_design.distributed_data.large_cache_fleet
+    competency_key: distributed_systems
+    topic: Operating a very large cache fleet
+    difficulty: hard
+    text: >-
+      Design a caching tier serving around ten million reads per second for a social product, across thousands
+      of cache servers. How would you deal with server failures, hot keys and the load those put on the databases?
+    expected_concepts:
+      - client-side routing with consistent hashing and connection pooling
+      - a standby pool for failed servers rather than rehashing everything
+      - hot key replication or local caching of the hottest items
+      - leases or tokens to limit concurrent misses and stale sets
+      - regional replicas and invalidation across them
+    rubric:
+      excellent: Designs routing, failure handling that avoids rehashing storms, hot key mitigation, miss throttling with leases, and cross-region consistency, and explains how each protects the database.
+      good: Covers sharding, replication and some protection against misses during failures.
+      weak: Treats it as a bigger Redis cluster without considering failure-induced miss storms or hot keys.
+    followups:
+      - A rack of cache servers dies. What load does the database see under your design?
+      - How would you roll out a change to the cache key format safely?
+    common_errors:
+      - Letting a failed cache server's keys fall through to the database all at once.
+
+  - external_key: system_design.distributed_data.caching_balances_safely
+    competency_key: system_design
+    topic: Caching data that must be accurate
+    difficulty: hard
+    text: >-
+      Account balance reads are crushing the ledger database, and the team wants to cache them. Balances must
+      never be shown wrong when a user is about to make a payment. How would you approach this?
+    expected_concepts:
+      - separating display reads from decision reads
+      - cache entries tagged with ledger version and validated cheaply
+      - write-through or event-driven updates from the ledger
+      - authoritative check inside the payment transaction
+      - materialised balance tables or read replicas as alternatives
+    rubric:
+      excellent: Distinguishes display from decision paths, keeps decisions on authoritative data, designs versioned cache updates driven by ledger events, and considers alternatives such as materialised balances.
+      good: Caches for display only and checks the database before payments.
+      weak: Caches balances with a TTL and uses the cached value for payment decisions.
+    followups:
+      - How would the user see their balance immediately after a payment?
+      - What would you monitor to detect cache and ledger disagreeing?
+    common_errors:
+      - Using a cached balance to approve a payment.
+
+  - external_key: system_design.distributed_data.near_real_time_search
+    competency_key: data_engineering
+    topic: New items searchable within seconds
+    difficulty: hard
+    text: >-
+      A marketplace wants new listings to appear in search within two seconds, while also absorbing thirty
+      thousand listing updates per second at peak. How would you design the indexing path?
+    expected_concepts:
+      - refresh interval and segment creation cost
+      - bulk indexing with small batches versus latency
+      - separating fresh and historical indices or tiers
+      - merge pressure and its effect on query latency
+      - prioritising new listings over updates during bursts
+    rubric:
+      excellent: Explains the refresh and segment trade-off, batches writes within the latency budget, isolates fresh data or prioritises inserts during bursts, and measures end-to-end freshness against the target.
+      good: Tunes refresh and batching and recognises the conflict between freshness and throughput.
+      weak: Sets refresh to every write or ignores the throughput impact.
+    followups:
+      - How would you measure the two-second freshness in production?
+      - What do you sacrifice first when updates spike to five times normal?
+    common_errors:
+      - Forcing a refresh after each document, which collapses indexing throughput.
+
+  - external_key: system_design.distributed_data.full_rebuild_with_live_updates
+    competency_key: data_engineering
+    topic: Backfilling a huge index while updates continue
+    difficulty: hard
+    text: >-
+      You must rebuild a five-billion-document search index from the primary store while live updates keep
+      arriving. How do you ensure the rebuilt index ends up with the latest version of every document?
+    expected_concepts:
+      - record a change-stream position before starting the backfill
+      - external versions so older backfill writes cannot overwrite newer updates
+      - live updates applied to both indices during the rebuild
+      - parallel, throttled, resumable backfill partitions
+      - final verification and catch-up before cutover
+    rubric:
+      excellent: Anchors the backfill to a change-stream position, uses version-checked writes so order doesn't matter, makes the backfill parallel, throttled and resumable, and verifies before cutover.
+      good: Runs backfill and live updates together with some way to prevent stale overwrites.
+      weak: Pauses updates for the rebuild or lets the backfill overwrite newer data.
+    followups:
+      - How would you handle deletes that happen during the backfill?
+      - The backfill crashes at sixty percent. How do you resume?
+    common_errors:
+      - Not handling documents deleted while the backfill is running.
+
+  - external_key: system_design.distributed_data.distributed_ranking_consistency
+    competency_key: distributed_systems
+    topic: Ranking and paging across search shards
+    difficulty: hard
+    text: >-
+      Users notice that search results reorder or repeat between pages, and the same query gives slightly
+      different scores on different requests. Explain what's happening in a sharded, replicated search
+      cluster and how you'd fix it.
+    expected_concepts:
+      - per-shard term statistics make scores differ between shards
+      - different replicas with different segments or deletes return different scores
+      - deep offset pagination re-runs the query and shifts with updates
+      - cursor-based paging (search after) or point-in-time snapshots
+      - preference routing to the same replicas per session
+    rubric:
+      excellent: Explains shard-local statistics and replica differences as causes, fixes paging with cursors or point-in-time views, uses consistent replica routing, and weighs global statistics against cost.
+      good: Identifies replica or shard differences and proposes cursor-based paging.
+      weak: Blames caching or proposes larger page sizes.
+    followups:
+      - Why does offset-based paging get slower and less stable deep into the results?
+      - When would you pay for global term statistics?
+    common_errors:
+      - Assuming identical queries always return identical scores across replicas.
+
+  - external_key: system_design.distributed_data.vector_search_at_scale
+    competency_key: data_engineering
+    topic: Serving vector similarity search at scale
+    difficulty: hard
+    text: >-
+      You need semantic search over five hundred million document embeddings, combined with filters such as
+      language and access rights, at low latency. How would you design the storage and query path?
+    expected_concepts:
+      - approximate nearest neighbour indexes (HNSW, IVF) and recall versus latency
+      - memory footprint, quantisation and sharding the index
+      - pre-filtering versus post-filtering and their failure modes
+      - inserting, updating and deleting vectors over time
+      - hybrid ranking with keyword search and evaluating recall
+    rubric:
+      excellent: Chooses an ANN index with memory estimates and quantisation, shards it, handles filters without losing results, plans updates and deletes, and measures recall against an exact baseline.
+      good: Proposes an ANN index with sharding and some filter strategy.
+      weak: Scans every vector per query or ignores how filters interact with approximate search.
+    followups:
+      - A strict access filter leaves only a tiny fraction of documents. What happens to recall?
+      - How would you re-embed everything when the model changes?
+    common_errors:
+      - Applying filters after the top-k search and returning too few results.
+
+  - external_key: system_design.distributed_data.derived_store_reconciliation
+    competency_key: data_engineering
+    topic: Detecting drift in derived stores
+    difficulty: hard
+    text: >-
+      Your source-of-truth database feeds a cache, a search index and an analytics store, and occasionally
+      they quietly disagree with it. Design a system to detect and repair that drift continuously.
+    expected_concepts:
+      - sampled or full comparisons using checksums or versions per range
+      - Merkle-style range hashing to narrow down differences cheaply
+      - repair by re-emitting changes from the source
+      - avoiding false alarms from in-flight lag (compare at a known position)
+      - metrics, alerting and root-cause tracking for drift
+    rubric:
+      excellent: Designs efficient comparison by hashed ranges at a consistent point, distinguishes real drift from lag, repairs by replaying from the source, and turns findings into alerts and root-cause fixes.
+      good: Proposes periodic comparison jobs and a repair mechanism.
+      weak: Relies on users reporting problems or runs full table scans without a plan for lag.
+    followups:
+      - How would you compare billions of rows without overloading the primary?
+      - What would you do with a drift rate that never reaches zero?
+    common_errors:
+      - Reporting in-flight replication lag as drift.
+
+  - external_key: system_design.distributed_data.search_serving_capacity
+    competency_key: system_design
+    topic: Serving a high query rate from a search cluster
+    difficulty: hard
+    text: >-
+      Search traffic is expected to grow to fifty thousand queries per second with a p99 target of two
+      hundred milliseconds. How would you design the serving side of the search cluster to hit that?
+    expected_concepts:
+      - capacity measurement per shard and replica count to scale reads
+      - fan-out cost and tail latency across shards
+      - caching of popular queries and filters
+      - separating indexing nodes from query nodes
+      - load shedding, timeouts and partial results
+    rubric:
+      excellent: Sizes replicas from measured per-shard throughput, limits fan-out and tail latency, caches popular queries, isolates indexing from serving, and defines degraded behaviour under overload.
+      good: Adds replicas and caching with some attention to tail latency.
+      weak: Scales nodes without measuring capacity or considering fan-out.
+    followups:
+      - Why does adding more primary shards not always make queries faster?
+      - How would you test that the cluster meets the p99 before launch?
+    common_errors:
+      - Ignoring that the slowest shard determines the latency of a fanned-out query.

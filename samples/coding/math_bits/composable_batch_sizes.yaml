@@ -1,0 +1,157 @@
+version: 1
+slug: composable_batch_sizes
+title: "Composable Batch Sizes"
+difficulty: medium
+competency_keys: [algorithms, problem_solving]
+role_tags: [backend, data, platform, general]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Composable Batch Sizes
+
+  A fulfilment line ships every batch as a stack of **identical** sealed packs. The packs come in the sizes
+  listed in `pack_sizes` (units per pack), and a batch may not mix pack sizes. A batch size of `s` units is
+  therefore **composable** when `s` is a positive multiple of at least one value in `pack_sizes`.
+
+  The planning tool lists all composable batch sizes in increasing order, each size once even when several
+  pack sizes can build it. Return the `n`-th size in that list (1-indexed).
+
+  `pack_sizes` may contain repeated values, and one pack size may be a multiple of another.
+
+  ### Example 1
+  ```
+  Input:  n = 7, pack_sizes = [4, 6]
+  Output: 20
+  Explanation: The composable sizes start 4, 6, 8, 12, 16, 18, 20, ... (12 is listed once although
+  both pack sizes build it), so the 7th is 20.
+  ```
+
+  ### Example 2
+  ```
+  Input:  n = 5, pack_sizes = [3]
+  Output: 15
+  ```
+
+  ### Constraints
+  - `1 <= n <= 10^9`
+  - `1 <= pack_sizes.length <= 5`
+  - `1 <= pack_sizes[i] <= 10^5`
+  - The answer is at most `n * min(pack_sizes) <= 10^14`, so it needs a 64-bit integer.
+
+  **Follow-up:** generating the sizes one by one is far too slow for `n = 10^9`; aim for a solution whose
+  running time depends on `log` of the answer.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: nth_batch_size
+  params:
+    - {name: n, type: "int"}
+    - {name: pack_sizes, type: "int[]"}
+  return_type: "long"
+  comparison: exact
+reference_solutions:
+  python: |
+    from math import gcd
+
+
+    def nth_batch_size(n: int, pack_sizes: list[int]) -> int:
+        hi = n * min(pack_sizes)  # the n-th multiple of the smallest pack is always composable
+        m = len(pack_sizes)
+        # Inclusion-exclusion terms: (lcm of a non-empty subset, sign). An lcm larger
+        # than hi contributes nothing, so it is capped to keep numbers small.
+        terms = []
+        for mask in range(1, 1 << m):
+            lcm = 1
+            for i in range(m):
+                if mask >> i & 1:
+                    lcm = lcm // gcd(lcm, pack_sizes[i]) * pack_sizes[i]
+                    if lcm > hi:
+                        break
+            if lcm <= hi:
+                terms.append((lcm, 1 if bin(mask).count("1") % 2 else -1))
+
+        def composable_up_to(x: int) -> int:
+            return sum(sign * (x // lcm) for lcm, sign in terms)
+
+        lo = 1
+        while lo < hi:  # smallest x with at least n composable sizes in [1, x]
+            mid = (lo + hi) // 2
+            if composable_up_to(mid) >= n:
+                hi = mid
+            else:
+                lo = mid + 1
+        return lo
+  javascript: |
+    function nthBatchSize(n, packSizes) {
+      const gcd = (a, b) => { while (b) { [a, b] = [b, a % b]; } return a; };
+      const floorDiv = (x, d) => (x - (x % d)) / d; // exact for safe integers
+      const hi0 = n * Math.min(...packSizes);
+      const m = packSizes.length;
+      const terms = [];
+      for (let mask = 1; mask < (1 << m); mask++) {
+        let lcm = 1;
+        let bits = 0;
+        let tooBig = false;
+        for (let i = 0; i < m; i++) {
+          if ((mask >> i) & 1) {
+            bits++;
+            lcm = (lcm / gcd(lcm, packSizes[i])) * packSizes[i];
+            if (lcm > hi0) { tooBig = true; break; }
+          }
+        }
+        if (!tooBig) terms.push([lcm, bits % 2 === 1 ? 1 : -1]);
+      }
+      const composableUpTo = (x) => {
+        let count = 0;
+        for (const [lcm, sign] of terms) count += sign * floorDiv(x, lcm);
+        return count;
+      };
+      let lo = 1;
+      let hi = hi0;
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (composableUpTo(mid) >= n) hi = mid;
+        else lo = mid + 1;
+      }
+      return lo;
+    }
+tests:
+  - {id: t1, args: [7, [4, 6]], expected: 20, description: "Example 1 - shared multiple 12 counted once"}
+  - {id: t2, args: [5, [3]], expected: 15, description: "Example 2 - single pack size"}
+  - {id: t3, hidden: true, args: [1, [9, 4, 7]], expected: 4, description: "n = 1 returns the smallest pack size, which is not listed first"}
+  - {id: t4, hidden: true, args: [123456, [1, 50]], expected: 123456, description: "Pack size 1 makes every positive size composable"}
+  - {id: t5, hidden: true, args: [10, [5, 5, 5]], expected: 50, description: "Repeated pack sizes must not inflate the count"}
+  - {id: t6, hidden: true, args: [13, [3, 9, 27]], expected: 39, description: "Every pack size is a multiple of the smallest one"}
+  - {id: t7, hidden: true, args: [1000, [2, 3, 5, 7, 11]], expected: 1262, description: "Five coprime sizes; all 31 inclusion-exclusion terms matter"}
+  - {id: t8, hidden: true, args: [1000000000, [99991, 99989, 99971, 99961, 99929]], expected: 19994038946719, description: "Largest n with five large primes: answer about 2 * 10^13, and the lcm of all five overflows 64 bits unless pruned"}
+  - {id: t9, hidden: true, args: [999999937, [6, 10, 15, 100000]], expected: 3749999766, description: "Pairwise non-coprime sizes with large n"}
+  - {id: t10, hidden: true, args: [2, [100000, 99999]], expected: 100000, description: "Second composable size comes from the larger pack size"}
+expected_concepts:
+  - "binary search on the answer"
+  - "counting multiples up to x with inclusion-exclusion over subsets"
+  - "least common multiple via gcd"
+  - "capping or pruning lcms that exceed the search range to avoid overflow"
+  - "duplicates and divisor pairs handled naturally by the set formulation"
+optimal_complexity: {time: "O(2^m * m * log(n * min(pack_sizes)))", space: "O(2^m)"}
+rubric:
+  excellent: "Turns the question into 'smallest x with at least n composable sizes up to x', counts them with inclusion-exclusion over lcms of subsets, binary searches x in [1, n * min], prunes lcms above the range so nothing overflows, and explains why duplicates need no special handling."
+  good: "Finds binary search plus inclusion-exclusion but needs help with the overflow of subset lcms or with the exact boundary of the search."
+  weak: "Generates sizes one at a time or with a heap (too slow for n = 10^9), or counts multiples per pack size without removing the overlaps."
+  criteria:
+    correctness: "All tests pass, including repeated sizes, divisor pairs, pack size 1 and the 10^9 case."
+    efficiency: "Logarithmic number of counting steps, each over at most 31 subsets."
+    code_quality: "Subset terms are precomputed once; the count function and the search are separate and readable."
+    edge_cases: "n = 1, a pack size of 1, duplicate sizes and lcms that exceed the 64-bit range."
+    communication: "Explains why the counting function is monotonic and why the search returns a composable size."
+hints:
+  - "Instead of building the list, ask a simpler question: for a given x, how many composable sizes are there between 1 and x?"
+  - "That count only grows as x grows, so you can search for the smallest x whose count reaches n. To count, add the multiples of each pack size, but sizes divisible by two pack sizes were added twice."
+  - "Count multiples up to x with inclusion and exclusion: for every non-empty subset of pack sizes, add or subtract x divided by the least common multiple of the subset depending on whether the subset has an odd or even size. Binary search x between 1 and n times the smallest pack size, and skip any subset whose least common multiple already exceeds that upper bound so the arithmetic never overflows."
+followups:
+  - "Why is the value returned by the binary search guaranteed to be composable itself?"
+  - "How would the approach scale if there were 30 pack sizes instead of 5?"
+  - "How would you list the first 1000 composable sizes efficiently?"
+  - "What changes if a batch may mix pack sizes freely (any non-negative combination)?"
+common_errors:
+  - "Adding the multiples of each pack size without subtracting the overlaps, which double-counts shared sizes."
+  - "Multiplying sizes instead of taking the least common multiple for non-coprime pairs."
+  - "Overflowing 64-bit integers when computing the lcm of several large sizes."
+  - "Stopping the binary search on the first x whose count equals n instead of the smallest such x."

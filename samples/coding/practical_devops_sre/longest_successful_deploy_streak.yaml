@@ -1,0 +1,274 @@
+version: 1
+slug: longest_successful_deploy_streak
+title: Deploy Success Streaks
+difficulty: hard
+competency_keys: [sql, databases]
+role_tags: [devops, sre, data_analyst, dba]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Deploy Success Streaks
+
+  The delivery pipeline records every production deployment in table `deployments`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key; ids are **not** guaranteed to follow deployment time (backfilled rows) |
+  | service | TEXT | service name |
+  | status | TEXT | `'success'`, `'failed'` or `'rolled_back'` |
+  | deployed_at | INTEGER | epoch seconds; two deployments of a service can share a timestamp |
+
+  A service's deployments are ordered by `deployed_at`, then by `id` for equal timestamps. A **success
+  streak** is a maximal run of consecutive deployments of one service, in that order, that all have
+  status `'success'`. Any other status ends the streak.
+
+  For every service with at least one successful deployment, return:
+
+  - `service`;
+  - `longest_streak`: the number of deployments in its longest success streak;
+  - `streak_start_id` and `streak_end_id`: the `id` of the first and of the last deployment of that
+    streak. If several streaks share the longest length, report the **earliest** one.
+
+  Services without any successful deployment are not returned. Order the result by `longest_streak`
+  descending, then `service` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite (window functions are allowed; no date
+  functions are needed).
+
+  ### Example 1
+  ```
+  deployments
+  +----+----------+-------------+-------------+
+  | id | service  | status      | deployed_at |
+  +----+----------+-------------+-------------+
+  | 1  | checkout | success     | 1000        |
+  | 2  | checkout | success     | 1100        |
+  | 3  | search   | success     | 1150        |
+  | 4  | checkout | failed      | 1200        |
+  | 5  | checkout | success     | 1300        |
+  | 6  | search   | rolled_back | 1350        |
+  | 7  | checkout | success     | 1400        |
+  | 8  | search   | success     | 1450        |
+  | 9  | checkout | success     | 1500        |
+  | 10 | billing  | failed      | 1600        |
+  +----+----------+-------------+-------------+
+
+  Output
+  +----------+----------------+-----------------+---------------+
+  | service  | longest_streak | streak_start_id | streak_end_id |
+  +----------+----------------+-----------------+---------------+
+  | checkout | 3              | 5               | 9             |
+  | search   | 1              | 3               | 3             |
+  +----------+----------------+-----------------+---------------+
+  search has two one-deployment streaks; the earlier one (id 3) is reported. billing never succeeded.
+  ```
+
+  ### Example 2
+  ```
+  deployments
+  +----+---------+---------+-------------+
+  | id | service | status  | deployed_at |
+  +----+---------+---------+-------------+
+  | 21 | ledger  | success | 500         |
+  | 20 | ledger  | success | 400         |
+  | 23 | ledger  | failed  | 500         |
+  | 22 | ledger  | success | 600         |
+  | 24 | ledger  | success | 700         |
+  +----+---------+---------+-------------+
+
+  Output
+  +---------+----------------+-----------------+---------------+
+  | service | longest_streak | streak_start_id | streak_end_id |
+  +---------+----------------+-----------------+---------------+
+  | ledger  | 2              | 20              | 21            |
+  +---------+----------------+-----------------+---------------+
+  In deployment order the ids are 20, 21, 23, 22, 24 (21 and 23 share a timestamp, so id decides).
+  The failure splits them into two streaks of length 2; the earlier one wins.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `0 <= deployed_at <= 4 * 10^9`
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return service, longest_streak, streak_start_id, streak_end_id for each service with a success.
+    SELECT service, COUNT(*) AS longest_streak, MIN(id) AS streak_start_id, MAX(id) AS streak_end_id
+    FROM deployments
+    WHERE status = 'success'
+    GROUP BY service
+    ORDER BY longest_streak DESC, service;
+reference_solutions:
+  sql: |
+    WITH ordered AS (
+      SELECT
+        id,
+        service,
+        status,
+        ROW_NUMBER() OVER (PARTITION BY service ORDER BY deployed_at, id) AS pos,
+        ROW_NUMBER() OVER (PARTITION BY service, status ORDER BY deployed_at, id) AS pos_in_status
+      FROM deployments
+    ),
+    streaks AS (
+      SELECT
+        service,
+        COUNT(*) AS streak_length,
+        MIN(pos) AS first_pos,
+        MAX(pos) AS last_pos
+      FROM ordered
+      WHERE status = 'success'
+      GROUP BY service, pos - pos_in_status
+    ),
+    ranked AS (
+      SELECT
+        service,
+        streak_length,
+        first_pos,
+        last_pos,
+        ROW_NUMBER() OVER (PARTITION BY service ORDER BY streak_length DESC, first_pos) AS pick
+      FROM streaks
+    )
+    SELECT
+      r.service,
+      r.streak_length AS longest_streak,
+      s.id AS streak_start_id,
+      e.id AS streak_end_id
+    FROM ranked r
+    JOIN ordered s ON s.service = r.service AND s.pos = r.first_pos
+    JOIN ordered e ON e.service = r.service AND e.pos = r.last_pos
+    WHERE r.pick = 1
+    ORDER BY longest_streak DESC, r.service;
+sql_setup: |
+  CREATE TABLE deployments (
+    id INTEGER PRIMARY KEY,
+    service VARCHAR(40) NOT NULL,
+    status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failed', 'rolled_back')),
+    deployed_at BIGINT NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - longest streak after a failure; single-deploy tie keeps the earliest"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (1, 'checkout', 'success', 1000), (2, 'checkout', 'success', 1100), (3, 'search', 'success', 1150),
+        (4, 'checkout', 'failed', 1200), (5, 'checkout', 'success', 1300), (6, 'search', 'rolled_back', 1350),
+        (7, 'checkout', 'success', 1400), (8, 'search', 'success', 1450), (9, 'checkout', 'success', 1500),
+        (10, 'billing', 'failed', 1600);
+    expected_rows: [["checkout", 3, 5, 9], ["search", 1, 3, 3]]
+  - id: t2
+    description: "Example 2 - equal timestamps ordered by id, ids not chronological, tie keeps earliest"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (21, 'ledger', 'success', 500), (20, 'ledger', 'success', 400), (23, 'ledger', 'failed', 500),
+        (22, 'ledger', 'success', 600), (24, 'ledger', 'success', 700);
+    expected_rows: [["ledger", 2, 20, 21]]
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "No successful deployment anywhere - no rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (1, 'api', 'failed', 10), (2, 'api', 'rolled_back', 20), (3, 'web', 'failed', 15);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Single successful deployment with a timestamp beyond 32-bit signed range"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (7, 'solo', 'success', 3999999999);
+    expected_rows: [["solo", 1, 7, 7]]
+  - id: t6
+    hidden: true
+    description: "All-success service and a later longer streak; rolled_back ends a streak"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (5, 'api', 'success', 50), (4, 'api', 'success', 40), (3, 'api', 'success', 30), (2, 'api', 'success', 20), (1, 'api', 'success', 10),
+        (9, 'web', 'success', 1), (8, 'web', 'rolled_back', 2), (6, 'web', 'success', 3), (10, 'web', 'success', 4), (11, 'web', 'success', 5);
+    expected_rows: [["api", 5, 1, 5], ["web", 3, 6, 11]]
+  - id: t7
+    hidden: true
+    description: "Equal streak lengths across services ordered by name; all-equal timestamps ordered by id"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (30, 'b-svc', 'success', 100), (31, 'b-svc', 'success', 100), (32, 'a-svc', 'success', 100), (33, 'a-svc', 'success', 200),
+        (34, 'c-svc', 'success', 300), (35, 'c-svc', 'failed', 300), (36, 'c-svc', 'success', 300), (37, 'c-svc', 'success', 300);
+    expected_rows: [["a-svc", 2, 32, 33], ["b-svc", 2, 30, 31], ["c-svc", 2, 36, 37]]
+  - id: t8
+    hidden: true
+    description: "Several equal-length streaks - the earliest wins, not the latest"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (1, 'api', 'success', 100), (2, 'api', 'failed', 200), (3, 'api', 'success', 300), (4, 'api', 'success', 400),
+        (5, 'api', 'rolled_back', 500), (6, 'api', 'success', 600), (7, 'api', 'success', 700),
+        (8, 'api', 'failed', 800), (9, 'api', 'success', 900);
+    expected_rows: [["api", 2, 3, 4]]
+  - id: t9
+    hidden: true
+    description: "Ids run backwards in time - streak boundaries must follow deployed_at"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (1, 'svc', 'success', 900), (2, 'svc', 'success', 800), (3, 'svc', 'failed', 700), (4, 'svc', 'success', 600),
+        (5, 'svc', 'success', 500), (6, 'svc', 'success', 400);
+    expected_rows: [["svc", 3, 6, 4]]
+  - id: t10
+    hidden: true
+    description: "48 shuffled deployments across four services with repeated timestamps"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (133, 'mail', 'failed', 17380), (124, 'cdn', 'rolled_back', 25120), (144, 'queue', 'success', 17860), (135, 'mail', 'success', 17440),
+        (130, 'mail', 'success', 13720), (131, 'mail', 'success', 13780), (114, 'cdn', 'rolled_back', 13600), (108, 'auth', 'rolled_back', 21460),
+        (129, 'mail', 'success', 10120), (111, 'auth', 'success', 25180), (145, 'queue', 'success', 17860), (137, 'queue', 'success', 10000),
+        (139, 'queue', 'success', 13660), (126, 'mail', 'rolled_back', 10060), (103, 'auth', 'success', 14200), (147, 'queue', 'success', 18460),
+        (121, 'cdn', 'rolled_back', 21460), (146, 'queue', 'success', 18460), (101, 'auth', 'success', 13600), (109, 'auth', 'success', 25060),
+        (148, 'queue', 'success', 22060), (110, 'auth', 'success', 25120), (122, 'cdn', 'success', 25060), (143, 'queue', 'success', 14260),
+        (127, 'mail', 'success', 10120), (118, 'cdn', 'success', 21460), (112, 'auth', 'failed', 25180), (117, 'cdn', 'rolled_back', 17860),
+        (113, 'cdn', 'failed', 13600), (140, 'queue', 'failed', 13660), (142, 'queue', 'failed', 13660), (115, 'cdn', 'failed', 13660),
+        (138, 'queue', 'rolled_back', 13600), (105, 'auth', 'success', 17800), (116, 'cdn', 'rolled_back', 17260), (123, 'cdn', 'success', 25120),
+        (132, 'mail', 'success', 17380), (128, 'mail', 'success', 10120), (136, 'mail', 'failed', 17500), (125, 'mail', 'success', 10000),
+        (102, 'auth', 'success', 14200), (104, 'auth', 'rolled_back', 17800), (134, 'mail', 'success', 17440), (107, 'auth', 'failed', 17860),
+        (119, 'cdn', 'success', 21460), (141, 'queue', 'failed', 13660), (120, 'cdn', 'failed', 21460), (106, 'auth', 'failed', 17800);
+    expected_rows: [["mail", 6, 127, 132], ["queue", 6, 143, 148], ["auth", 3, 101, 103], ["cdn", 2, 118, 119]]
+expected_concepts:
+  - gaps-and-islands with two ROW_NUMBER sequences
+  - deterministic ordering with a tie-breaker column
+  - picking one row per group with ROW_NUMBER and a secondary sort
+  - joining back to recover boundary ids
+  - multi-level ordering of the final result
+optimal_complexity: {time: "O(n log n) for the per-service sorts", space: O(n)}
+rubric:
+  excellent: Numbers each service's deployments overall and within each status, groups successes by the difference to form streaks, picks the longest per service with ROW_NUMBER ordered by length descending and start position, recovers the start and end ids, and explains why ordering by id alone is wrong.
+  good: Reaches a correct gaps-and-islands query with a hint, or uses LAG plus a running SUM to number streaks, but needs help with the earliest-streak tie-break or the boundary ids.
+  weak: Counts all successes per service, orders by id instead of deployed_at, uses MIN(id)/MAX(id) as streak boundaries, or loses the tie-break between equal streaks.
+  criteria:
+    correctness: All tests pass, including equal timestamps, out-of-order ids, rolled-back deployments and ties between streaks.
+    efficiency: Window functions over one scan per service instead of correlated subqueries per row.
+    code_quality: Named CTEs (ordered, streaks, ranked) with readable aliases and explicit output column names.
+    edge_cases: Empty table, services that never succeed, a single success and a service with only successes.
+    communication: Explains why the difference between the two row numbers is constant inside a streak.
+hints:
+  - Put each service's deployments in a strict order first (deployed_at, then id) and think of a streak as an island of successes in that sequence.
+  - Number every deployment within its service, and separately number it within its service and status. For consecutive successes the difference between the two numbers stays the same, and it changes after any non-success deployment.
+  - Group the success rows by service and that difference to get each streak's length and first and last positions. Rank the streaks per service with ROW_NUMBER ordered by length descending then first position, keep rank 1, and join back on the positions to read the start and end ids; order by longest_streak DESC, service.
+followups:
+  - How would you return the current (still open) streak of each service instead of the longest one?
+  - How would you solve it with LAG and a running SUM instead of two ROW_NUMBER calls?
+  - Which index helps this query on a table with millions of deployments?
+  - How would you report streaks per calendar week without vendor-specific date functions?
+common_errors:
+  - Ordering by id instead of (deployed_at, id), which breaks on backfilled rows.
+  - Counting all successes per service instead of consecutive ones.
+  - Taking MIN(id) and MAX(id) of the streak, which is wrong when ids are not chronological.
+  - Breaking ties between equal-length streaks arbitrarily instead of choosing the earliest.
+  - Treating rolled_back as a success or ignoring it instead of letting it end the streak.

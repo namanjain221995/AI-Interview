@@ -1,0 +1,140 @@
+version: 1
+slug: keyset_pagination_next_page
+title: "Keyset Pagination for an Activity Feed"
+difficulty: easy
+competency_keys: [algorithms, problem_solving, code_quality]
+role_tags: [backend, fullstack, mobile, general]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Keyset Pagination for an Activity Feed
+
+  A mobile app shows a team's activity feed, newest first. Offset paging (`?page=7`) skipped and repeated
+  items whenever new activity arrived, so the API now uses a **cursor**: the client sends back the
+  position of the last item it displayed, and the server returns the items that come after it.
+
+  Item `i` has a creation time `created_at[i]` (epoch seconds) and a unique id `ids[i]`. The arrays are
+  parallel and **not sorted**. The **feed order** is:
+
+  1. `created_at` **descending** (newest first), then
+  2. `id` **descending** when two items have the same `created_at`.
+
+  Write `keyset_next_page(created_at, ids, cursor_ts, cursor_id, page_size)` that returns the ids of the
+  next page:
+
+  - The cursor `(cursor_ts, cursor_id)` is the `created_at` and id of the last item on the previous page.
+    `cursor_ts = -1` and `cursor_id = -1` together mean "no cursor": return the first page.
+  - An item comes **after** the cursor when it would be placed later than an item with that
+    `created_at` and id in feed order: `created_at < cursor_ts`, or `created_at == cursor_ts` and
+    `id < cursor_id`.
+  - The cursor item may have been **deleted** since the previous page was served, so it is not
+    necessarily in the arrays. The rule above still applies.
+  - Return at most `page_size` ids, in feed order. Return an empty list `[]` when nothing comes after the
+    cursor.
+
+  ### Example 1
+  ```
+  Input:  created_at = [1700000300, 1700000100, 1700000200, 1700000100, 1700000250], ids = [41, 17, 33, 52, 8], cursor_ts = -1, cursor_id = -1, page_size = 3
+  Output: [41, 8, 33]
+  Explanation: feed order is 41, 8, 33, 52, 17; ids 52 and 17 share a timestamp, so 52 comes first
+  ```
+
+  ### Example 2
+  ```
+  Input:  created_at = [1700000300, 1700000100, 1700000200, 1700000100, 1700000250], ids = [41, 17, 33, 52, 8], cursor_ts = 1700000200, cursor_id = 33, page_size = 3
+  Output: [52, 17]
+  Explanation: after (1700000200, 33) come 52 and 17; only two items remain
+  ```
+
+  ### Example 3
+  ```
+  Input:  created_at = [500, 400, 400, 300], ids = [10, 25, 21, 7], cursor_ts = 400, cursor_id = 23, page_size = 2
+  Output: [21, 7]
+  Explanation: no item has id 23, but 21 sorts after (400, 23) and 25 does not
+  ```
+
+  ### Constraints
+  - `0 <= created_at.length == ids.length <= 10^5`
+  - `0 <= created_at[i] <= 4 * 10^9`
+  - `1 <= ids[i] <= 10^15`, and all ids are distinct
+  - Either `cursor_ts = cursor_id = -1`, or `0 <= cursor_ts <= 4 * 10^9` and `1 <= cursor_id <= 10^15`
+  - `1 <= page_size <= 1000`
+
+  **Follow-up:** which database index makes this query fast, and why does keyset paging stay stable when
+  new items are inserted at the top of the feed?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: keyset_next_page
+  params:
+    - {name: created_at, type: "long[]"}
+    - {name: ids, type: "long[]"}
+    - {name: cursor_ts, type: "long"}
+    - {name: cursor_id, type: "long"}
+    - {name: page_size, type: "int"}
+  return_type: "long[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def keyset_next_page(created_at: list[int], ids: list[int], cursor_ts: int, cursor_id: int, page_size: int) -> list[int]:
+        first_page = cursor_ts == -1 and cursor_id == -1
+        after = [
+            (ts, item_id)
+            for ts, item_id in zip(created_at, ids)
+            if first_page or (ts, item_id) < (cursor_ts, cursor_id)
+        ]
+        after.sort(reverse=True)  # created_at descending, then id descending
+        return [item_id for _, item_id in after[:page_size]]
+  javascript: |
+    function keysetNextPage(createdAt, ids, cursorTs, cursorId, pageSize) {
+      const firstPage = cursorTs === -1 && cursorId === -1;
+      const after = [];
+      for (let i = 0; i < ids.length; i++) {
+        const ts = createdAt[i];
+        const id = ids[i];
+        if (firstPage || ts < cursorTs || (ts === cursorTs && id < cursorId)) after.push([ts, id]);
+      }
+      after.sort((a, b) => (a[0] !== b[0] ? b[0] - a[0] : b[1] - a[1]));
+      return after.slice(0, pageSize).map((item) => item[1]);
+    }
+tests:
+  - {id: t1, args: [[1700000300, 1700000100, 1700000200, 1700000100, 1700000250], [41, 17, 33, 52, 8], -1, -1, 3], expected: [41, 8, 33], description: "Example 1 - first page from unsorted input with a timestamp tie"}
+  - {id: t2, args: [[1700000300, 1700000100, 1700000200, 1700000100, 1700000250], [41, 17, 33, 52, 8], 1700000200, 33, 3], expected: [52, 17], description: "Example 2 - cursor in the middle; tie at the next timestamp ordered by id descending"}
+  - {id: t3, args: [[500, 400, 400, 300], [10, 25, 21, 7], 400, 23, 2], expected: [21, 7], description: "Example 3 - cursor item was deleted; the tie rule still splits the 400 group"}
+  - {id: t4, hidden: true, args: [[], [], -1, -1, 5], expected: [], description: "Empty feed, first page - returns []"}
+  - {id: t5, hidden: true, args: [[100, 90, 80], [3, 2, 1], 80, 1, 10], expected: [], description: "Cursor is the last item of the feed - nothing remains"}
+  - {id: t6, hidden: true, args: [[100, 90, 80], [3, 2, 1], 90, 2, 10], expected: [1], description: "page_size larger than the remaining items returns only what is left"}
+  - {id: t7, hidden: true, args: [[60, 60, 60, 60, 60, 60], [5, 12, 3, 9, 1, 7], 60, 9, 2], expected: [7, 5], description: "All items share one timestamp - paging driven purely by id descending"}
+  - {id: t8, hidden: true, args: [[4000000000, 3999999999, 4000000000, 3500000000], [999999999999999, 2, 1000000000000, 4294967296], 4000000000, 999999999999999, 3], expected: [1000000000000, 2, 4294967296], description: "Timestamps and ids beyond 32-bit; cursor equals an existing item which is excluded"}
+  - {id: t9, hidden: true, args: [[10, 20, 30], [1, 2, 3], 1000, 1, 2], expected: [3, 2], description: "Cursor newer than every item (clock skew) - all items qualify, first two in order"}
+  - {id: t10, hidden: true, args: [[0, 5, 0, 5], [4, 3, 2, 1], 5, 3, 1], expected: [1], description: "page_size 1 and created_at 0 - id 1 at the cursor timestamp comes before older items"}
+  - {id: t11, hidden: true, args: [[1700000165, 1700000077, 1700000202, 1700000333, 1700000024, 1700000037, 1700000274, 1700000048, 1700000187, 1700000298, 1700000029, 1700000259, 1700000109, 1700000019, 1700000044, 1700000222, 1700000214, 1700000035, 1700000123, 1700000046, 1700000282, 1700000217, 1700000030, 1700000289, 1700000063, 1700000114, 1700000322, 1700000321, 1700000298, 1700000031, 1700000295, 1700000299, 1700000203, 1700000025, 1700000113, 1700000023, 1700000285, 1700000068, 1700000148, 1700000214, 1700000073, 1700000276, 1700000060, 1700000292, 1700000157, 1700000286, 1700000349, 1700000092, 1700000052, 1700000297, 1700000292, 1700000327, 1700000096, 1700000190, 1700000049, 1700000280, 1700000364, 1700000032, 1700000288, 1700000030, 1700000316, 1700000105, 1700000254, 1700000348, 1700000272, 1700000218, 1700000397, 1700000160, 1700000238, 1700000299, 1700000232, 1700000185, 1700000153, 1700000127, 1700000092, 1700000357, 1700000399, 1700000124, 1700000041, 1700000294, 1700000153, 1700000268, 1700000253, 1700000175, 1700000373, 1700000229, 1700000147, 1700000311, 1700000037, 1700000060, 1700000262, 1700000214, 1700000084, 1700000387, 1700000175, 1700000077, 1700000250, 1700000215, 1700000020, 1700000342, 1700000039, 1700000391, 1700000285, 1700000293, 1700000160, 1700000174, 1700000355, 1700000179, 1700000304, 1700000254, 1700000296, 1700000233, 1700000035, 1700000047, 1700000138, 1700000242, 1700000356, 1700000340, 1700000033, 1700000031, 1700000374, 1700000359, 1700000158, 1700000331, 1700000295, 1700000348, 1700000228, 1700000145, 1700000366, 1700000197, 1700000342, 1700000177, 1700000011, 1700000236, 1700000181, 1700000086, 1700000312, 1700000059, 1700000252, 1700000030, 1700000111, 1700000393, 1700000147, 1700000066, 1700000378, 1700000126, 1700000203, 1700000200, 1700000254, 1700000041, 1700000085, 1700000229, 1700000205, 1700000281, 1700000142, 1700000070, 1700000220, 1700000281, 1700000142, 1700000361, 1700000212, 1700000183, 1700000349, 1700000194, 1700000118, 1700000077, 1700000042, 1700000090, 1700000077, 1700000118, 1700000337, 1700000119, 1700000006, 1700000248, 1700000301, 1700000093, 1700000134, 1700000144, 1700000002, 1700000074, 1700000214, 1700000273, 1700000189, 1700000312, 1700000289, 1700000163, 1700000064, 1700000353, 1700000263, 1700000316, 1700000335, 1700000346, 1700000378, 1700000027, 1700000233, 1700000399, 1700000348, 1700000286, 1700000200, 1700000203, 1700000204, 1700000201, 1700000053, 1700000246, 1700000324, 1700000205, 1700000031, 1700000097, 1700000034, 1700000106, 1700000225, 1700000083, 1700000056, 1700000174, 1700000307, 1700000026, 1700000052, 1700000000, 1700000290, 1700000077, 1700000274, 1700000051, 1700000186, 1700000314, 1700000013, 1700000036, 1700000106, 1700000314, 1700000192, 1700000076, 1700000324, 1700000129, 1700000177, 1700000308, 1700000186, 1700000242, 1700000062, 1700000059, 1700000249, 1700000238, 1700000245, 1700000247, 1700000159, 1700000043, 1700000073, 1700000052, 1700000383, 1700000175, 1700000379, 1700000135, 1700000245, 1700000354, 1700000082, 1700000264, 1700000011, 1700000105, 1700000270, 1700000185, 1700000075, 1700000353, 1700000278, 1700000013, 1700000388, 1700000270, 1700000152, 1700000329, 1700000046, 1700000356, 1700000133, 1700000265, 1700000187, 1700000085, 1700000182, 1700000395, 1700000114, 1700000272, 1700000277, 1700000398, 1700000257, 1700000168, 1700000325, 1700000114, 1700000313, 1700000388, 1700000099, 1700000122, 1700000205, 1700000378, 1700000116, 1700000102, 1700000265, 1700000252, 1700000182, 1700000374, 1700000014, 1700000014, 1700000143, 1700000241, 1700000132, 1700000099], [1000000004957, 1000000002820, 1000000003663, 1000000002863, 1000000002987, 1000000000659, 1000000001806, 1000000000836, 1000000001858, 1000000003850, 1000000001611, 1000000002766, 1000000001674, 1000000003953, 1000000004999, 1000000000015, 1000000003927, 1000000002818, 1000000000694, 1000000000982, 1000000003182, 1000000001632, 1000000003916, 1000000001462, 1000000003554, 1000000002723, 1000000000710, 1000000003242, 1000000003794, 1000000003288, 1000000000695, 1000000001301, 1000000001392, 1000000001040, 1000000000225, 1000000001238, 1000000004839, 1000000003812, 1000000001197, 1000000004881, 1000000003885, 1000000002870, 1000000001277, 1000000004494, 1000000004491, 1000000001073, 1000000000175, 1000000000116, 1000000000841, 1000000004313, 1000000001140, 1000000003553, 1000000001595, 1000000001728, 1000000000229, 1000000002063, 1000000001743, 1000000002399, 1000000004105, 1000000001970, 1000000004804, 1000000002670, 1000000002124, 1000000004459, 1000000003432, 1000000000498, 1000000002898, 1000000003753, 1000000004778, 1000000004233, 1000000003445, 1000000004109, 1000000001071, 1000000004356, 1000000001243, 1000000004288, 1000000004182, 1000000000153, 1000000003605, 1000000001500, 1000000004985, 1000000000032, 1000000001227, 1000000001411, 1000000001159, 1000000003878, 1000000000985, 1000000004558, 1000000000505, 1000000004246, 1000000004347, 1000000004550, 1000000003952, 1000000000869, 1000000004589, 1000000000465, 1000000002035, 1000000001567, 1000000002268, 1000000000345, 1000000000800, 1000000004159, 1000000003704, 1000000004601, 1000000000228, 1000000000519, 1000000003631, 1000000002667, 1000000004141, 1000000004965, 1000000004195, 1000000001633, 1000000002270, 1000000003705, 1000000004162, 1000000004368, 1000000002028, 1000000004286, 1000000002126, 1000000004583, 1000000001659, 1000000003666, 1000000001123, 1000000003413, 1000000000996, 1000000003214, 1000000003621, 1000000002588, 1000000000594, 1000000001971, 1000000003508, 1000000000599, 1000000001742, 1000000002480, 1000000001002, 1000000001265, 1000000002999, 1000000001171, 1000000002073, 1000000001124, 1000000003831, 1000000001798, 1000000000771, 1000000003262, 1000000003991, 1000000001333, 1000000001832, 1000000001322, 1000000003535, 1000000004223, 1000000003308, 1000000002778, 1000000003451, 1000000001603, 1000000002921, 1000000002609, 1000000000755, 1000000002997, 1000000000159, 1000000002768, 1000000004538, 1000000003757, 1000000003608, 1000000000148, 1000000003148, 1000000002715, 1000000004238, 1000000002420, 1000000004196, 1000000000526, 1000000000924, 1000000001872, 1000000000858, 1000000000688, 1000000002175, 1000000002227, 1000000000324, 1000000001487, 1000000002215, 1000000001061, 1000000003459, 1000000002118, 1000000003325, 1000000001223, 1000000004395, 1000000004217, 1000000004674, 1000000004051, 1000000002679, 1000000000732, 1000000002286, 1000000000471, 1000000001501, 1000000003484, 1000000000593, 1000000002203, 1000000000137, 1000000000725, 1000000002134, 1000000000686, 1000000004982, 1000000001821, 1000000000545, 1000000002166, 1000000003717, 1000000000094, 1000000004530, 1000000003422, 1000000002194, 1000000001058, 1000000000353, 1000000004316, 1000000001953, 1000000000896, 1000000002145, 1000000000412, 1000000001483, 1000000001652, 1000000002555, 1000000002498, 1000000004350, 1000000001686, 1000000002375, 1000000003651, 1000000004096, 1000000001457, 1000000002216, 1000000002842, 1000000002051, 1000000000302, 1000000000125, 1000000000151, 1000000004142, 1000000004514, 1000000001552, 1000000004212, 1000000003889, 1000000002012, 1000000003662, 1000000000870, 1000000003540, 1000000004055, 1000000004472, 1000000003220, 1000000004150, 1000000002521, 1000000001762, 1000000001880, 1000000002807, 1000000001627, 1000000001144, 1000000003315, 1000000002847, 1000000000445, 1000000001063, 1000000000579, 1000000002093, 1000000003528, 1000000001337, 1000000000453, 1000000000692, 1000000003120, 1000000004144, 1000000002309, 1000000004905, 1000000001984, 1000000002400, 1000000000370, 1000000003763, 1000000001518, 1000000001290, 1000000003652, 1000000000029, 1000000002156, 1000000002983, 1000000002694, 1000000004481, 1000000002650, 1000000002002, 1000000000282, 1000000002535, 1000000001784, 1000000001498, 1000000000008, 1000000002747, 1000000003126, 1000000000687, 1000000003888, 1000000002284, 1000000004118, 1000000001646, 1000000002033, 1000000004134, 1000000000040, 1000000000744, 1000000002164, 1000000000735, 1000000001178, 1000000003272, 1000000004807], 1700000214, 1000000003459, 50], expected: [1000000004538, 1000000003451, 1000000000687, 1000000000094, 1000000004982, 1000000001832, 1000000001392, 1000000000686, 1000000003663, 1000000001821, 1000000002134, 1000000001322, 1000000001971, 1000000000148, 1000000002051, 1000000001728, 1000000003325, 1000000001858, 1000000001290, 1000000002375, 1000000001552, 1000000004109, 1000000003528, 1000000003757, 1000000004134, 1000000000029, 1000000001002, 1000000002667, 1000000004142, 1000000000599, 1000000004589, 1000000001880, 1000000001411, 1000000000896, 1000000000519, 1000000000282, 1000000004957, 1000000004217, 1000000003753, 1000000000228, 1000000004472, 1000000001123, 1000000004491, 1000000004985, 1000000001071, 1000000004905, 1000000001197, 1000000000985, 1000000000771, 1000000002588], description: "300 items over 400 seconds with many ties; cursor taken from position 138 of the true feed"}
+expected_concepts:
+  - "keyset (seek) pagination with a composite sort key"
+  - "lexicographic comparison of (created_at, id) tuples"
+  - "tie-breaking on a unique column so the order is total"
+  - "cursor positions that no longer exist in the data"
+  - "sorting descending and taking a bounded prefix"
+optimal_complexity: {time: "O(n log n)", space: "O(n)"}
+rubric:
+  excellent: "Treats (created_at, id) as one composite key, filters strictly after the cursor with the tie rule, handles the first-page sentinel and a deleted cursor without special lookups, returns ids in feed order and explains how a composite index would serve this in a database."
+  good: "Correct filter and ordering with a hint on one detail such as the tie rule, the sentinel cursor or returning fewer than page_size items."
+  weak: "Searches for the cursor id and fails when it was deleted, ignores the id tie-break, uses offsets, or returns items in the wrong order."
+  criteria:
+    correctness: "All tests pass, including ties, a deleted cursor, the first page and an exhausted feed."
+    efficiency: "Filters in one pass and sorts once, or keeps a bounded heap of page_size items; no repeated scans per output item."
+    code_quality: "The 'comes after' comparison is expressed once and clearly, for example as a tuple comparison or a small helper."
+    edge_cases: "Empty feed, cursor at the end, cursor newer than everything, all-equal timestamps and values beyond 32 bits."
+    communication: "Explains why offset paging breaks under inserts and why the unique id makes the ordering total."
+hints:
+  - "Think of each item's position in the feed as a pair made of its timestamp and its id; the cursor is just such a pair, whether or not that item still exists."
+  - "An item belongs to the next page when its pair is smaller than the cursor pair: an older timestamp, or the same timestamp with a smaller id. You never need to find the cursor item itself."
+  - "Keep every item whose pair is smaller than the cursor pair (or every item when the cursor is the minus-one sentinel), sort the kept pairs by timestamp descending and then id descending, and return the ids of the first page_size of them."
+followups:
+  - "Write the SQL WHERE and ORDER BY clauses for this page and name the index that supports them."
+  - "How would you encode the cursor in an opaque token so clients cannot tamper with it?"
+  - "How would you support paging backwards to newer items from the same cursor?"
+  - "If page_size is small and the feed is huge, how could you avoid sorting everything?"
+common_errors:
+  - "Looking up the cursor id in the arrays and failing when that item was deleted."
+  - "Comparing only timestamps, which skips or repeats items that share the cursor's timestamp."
+  - "Using a non-strict comparison so the cursor item itself appears again on the next page."
+  - "Sorting ties by id ascending, which disagrees with the stated feed order."

@@ -1,0 +1,221 @@
+version: 1
+slug: heartbeat_gaps_over_threshold
+title: Heartbeat Gaps
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [sre, devops, network]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Heartbeat Gaps
+
+  Every host in the fleet sends a heartbeat to the monitoring collector roughly once a minute. The
+  collector stores them in table `heartbeats`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key; says nothing about time order |
+  | host | VARCHAR(60) | host name |
+  | ts | INTEGER | Unix time in whole seconds |
+
+  Network retries mean the same `(host, ts)` pair can be stored **more than once**.
+
+  A **gap** is the stretch between two consecutive *distinct* heartbeat times of the same host. The
+  on-call team wants every gap that is **strictly longer than 90 seconds**. Return one row per such
+  gap with columns:
+
+  - `host`
+  - `gap_start`: the earlier heartbeat time
+  - `gap_end`: the next later heartbeat time of the same host
+  - `gap_seconds`: `gap_end - gap_start`
+
+  Each gap appears exactly once, even when the heartbeats around it were stored several times. Time
+  before a host's first heartbeat or after its last one is not a gap, and a host with fewer than two
+  distinct heartbeat times produces no rows. Order the result by `host` ascending, then `gap_start`
+  ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  heartbeats
+  +----+-------+-----+
+  | id | host  | ts  |
+  +----+-------+-----+
+  | 1  | web-1 | 0   |
+  | 2  | web-1 | 30  |
+  | 3  | db-1  | 10  |
+  | 4  | web-1 | 60  |
+  | 5  | db-1  | 100 |
+  | 6  | web-1 | 200 |
+  | 7  | web-1 | 230 |
+  | 8  | db-1  | 250 |
+  | 9  | web-1 | 400 |
+  +----+-------+-----+
+
+  Output
+  +-------+-----------+---------+-------------+
+  | host  | gap_start | gap_end | gap_seconds |
+  +-------+-----------+---------+-------------+
+  | db-1  | 100       | 250     | 150         |
+  | web-1 | 60        | 200     | 140         |
+  | web-1 | 230       | 400     | 170         |
+  +-------+-----------+---------+-------------+
+  db-1 from 10 to 100 is exactly 90 seconds, which is not longer than 90.
+  ```
+
+  ### Example 2
+  ```
+  heartbeats
+  +----+---------+------+
+  | id | host    | ts   |
+  +----+---------+------+
+  | 1  | queue-1 | 1000 |
+  | 2  | queue-1 | 1000 |
+  | 3  | queue-1 | 1200 |
+  | 4  | queue-1 | 1250 |
+  +----+---------+------+
+
+  Output
+  +---------+-----------+---------+-------------+
+  | host    | gap_start | gap_end | gap_seconds |
+  +---------+-----------+---------+-------------+
+  | queue-1 | 1000      | 1200    | 200         |
+  +---------+-----------+---------+-------------+
+  The heartbeat at 1000 was stored twice, but the gap is reported once.
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return host, gap_start, gap_end and gap_seconds for every gap longer than 90 seconds,
+    -- ordered by host, then gap_start.
+    SELECT host, MIN(ts) AS gap_start, MAX(ts) AS gap_end, MAX(ts) - MIN(ts) AS gap_seconds
+    FROM heartbeats
+    GROUP BY host
+    ORDER BY host;
+reference_solutions:
+  sql: |
+    WITH distinct_beats AS (
+      SELECT DISTINCT host, ts
+      FROM heartbeats
+    ),
+    with_next AS (
+      SELECT host,
+             ts,
+             LEAD(ts) OVER (PARTITION BY host ORDER BY ts) AS next_ts
+      FROM distinct_beats
+    )
+    SELECT host, ts AS gap_start, next_ts AS gap_end, next_ts - ts AS gap_seconds
+    FROM with_next
+    WHERE next_ts - ts > 90
+    ORDER BY host, gap_start;
+sql_setup: |
+  CREATE TABLE heartbeats (
+    id INTEGER PRIMARY KEY,
+    host VARCHAR(60) NOT NULL,
+    ts INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - two hosts interleaved, a gap of exactly 90 is not reported"
+    setup_sql: |
+      INSERT INTO heartbeats (id, host, ts) VALUES
+        (1, 'web-1', 0), (2, 'web-1', 30), (3, 'db-1', 10), (4, 'web-1', 60), (5, 'db-1', 100),
+        (6, 'web-1', 200), (7, 'web-1', 230), (8, 'db-1', 250), (9, 'web-1', 400);
+    expected_rows: [["db-1", 100, 250, 150], ["web-1", 60, 200, 140], ["web-1", 230, 400, 170]]
+    ordered: true
+  - id: t2
+    description: "Example 2 - a duplicated heartbeat before the gap is reported once"
+    setup_sql: |
+      INSERT INTO heartbeats (id, host, ts) VALUES
+        (1, 'queue-1', 1000), (2, 'queue-1', 1000), (3, 'queue-1', 1200), (4, 'queue-1', 1250);
+    expected_rows: [["queue-1", 1000, 1200, 200]]
+    ordered: true
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    expected_rows: []
+    ordered: true
+  - id: t4
+    hidden: true
+    description: "Hosts with a single heartbeat (or one time stored repeatedly) have no gaps"
+    setup_sql: |
+      INSERT INTO heartbeats (id, host, ts) VALUES
+        (1, 'edge-1', 500), (2, 'edge-2', 900), (3, 'edge-2', 900), (4, 'edge-2', 900);
+    expected_rows: []
+    ordered: true
+  - id: t5
+    hidden: true
+    description: "Boundary - gaps of 90 are excluded, 91 included"
+    setup_sql: |
+      INSERT INTO heartbeats (id, host, ts) VALUES
+        (1, 'lb-1', 0), (2, 'lb-1', 90), (3, 'lb-1', 181), (4, 'lb-1', 271), (5, 'lb-1', 362);
+    expected_rows: [["lb-1", 90, 181, 91], ["lb-1", 271, 362, 91]]
+    ordered: true
+  - id: t6
+    hidden: true
+    description: "Duplicates on both sides of gaps and rows inserted out of time order (self-join duplicates trap)"
+    setup_sql: |
+      INSERT INTO heartbeats (id, host, ts) VALUES
+        (1, 'api-1', 700), (2, 'api-1', 100), (3, 'api-1', 400), (4, 'api-1', 100), (5, 'api-1', 700),
+        (6, 'api-1', 400), (7, 'api-1', 100), (8, 'api-1', 760);
+    expected_rows: [["api-1", 100, 400, 300], ["api-1", 400, 700, 300]]
+    ordered: true
+  - id: t7
+    hidden: true
+    description: "Host names sort as strings (api-10 before api-2); several gaps per host ordered by gap_start"
+    setup_sql: |
+      INSERT INTO heartbeats (id, host, ts) VALUES
+        (1, 'api-2', 0), (2, 'api-10', 0), (3, 'api-2', 100), (4, 'api-10', 50), (5, 'api-2', 150),
+        (6, 'api-10', 300), (7, 'api-2', 400), (8, 'api-10', 360), (9, 'api-10', 600), (10, 'api-2', 460);
+    expected_rows: [["api-10", 50, 300, 250], ["api-10", 360, 600, 240], ["api-2", 0, 100, 100], ["api-2", 150, 400, 250]]
+    ordered: true
+  - id: t8
+    hidden: true
+    description: "Realistic epoch-second timestamps near 1.79e9 with one long outage"
+    setup_sql: |
+      INSERT INTO heartbeats (id, host, ts) VALUES
+        (1, 'db-primary', 1790000000), (2, 'db-primary', 1790000060), (3, 'db-primary', 1790000120),
+        (4, 'db-primary', 1790003720), (5, 'db-primary', 1790003780), (6, 'db-replica', 1790000030),
+        (7, 'db-replica', 1790000095);
+    expected_rows: [["db-primary", 1790000120, 1790003720, 3600]]
+    ordered: true
+  - id: t9
+    hidden: true
+    description: "Stress - 600 heartbeats on two hosts every 60s with a missed beat every 50th tick"
+    setup_sql: |
+      WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 300)
+      INSERT INTO heartbeats (id, host, ts)
+      SELECT n, 'node-a', n * 60 FROM seq WHERE n % 50 <> 0
+      UNION ALL
+      SELECT 1000 + n, 'node-b', n * 60 + 7 FROM seq WHERE n % 75 <> 0;
+    expected_rows: [["node-a", 2940, 3060, 120], ["node-a", 5940, 6060, 120], ["node-a", 8940, 9060, 120], ["node-a", 11940, 12060, 120], ["node-a", 14940, 15060, 120], ["node-b", 4447, 4567, 120], ["node-b", 8947, 9067, 120], ["node-b", 13447, 13567, 120]]
+    ordered: true
+expected_concepts:
+  - LEAD or LAG window functions partitioned by host
+  - removing duplicate rows before pairing neighbours (DISTINCT)
+  - strict versus inclusive threshold comparison
+  - deterministic ORDER BY on the final result
+optimal_complexity: {time: "O(n log n) for the per-host sort", space: O(n)}
+rubric:
+  excellent: Deduplicates (host, ts) first, pairs each heartbeat with the next one using LEAD partitioned by host, applies the strict > 90 filter in an outer query and explains why a self-join with MIN(ts) produces duplicate rows without DISTINCT; mentions an index on (host, ts).
+  good: Correct LEAD or self-join solution that needs a hint about duplicates, the 90-second boundary or ordering.
+  weak: Compares heartbeats across hosts, reports duplicate gap rows, uses >= 90, or tries to filter on the window function in the same WHERE clause.
+  criteria:
+    correctness: All tests pass, including duplicated heartbeats, the exact-90 boundary and hosts with one heartbeat.
+    efficiency: One sort per host with a window function rather than a quadratic self-join over all pairs.
+    code_quality: Readable CTEs and clearly named output columns.
+    edge_cases: Empty table, single heartbeats, duplicates on both sides of a gap and unsorted ids.
+    communication: Explains why window results must be filtered in an outer query and how duplicates are handled.
+hints:
+  - Think about each heartbeat together with the very next heartbeat of the same host; a gap lives between those two times.
+  - Window functions can look at the following row inside a partition; partition by host and order by time, but make sure repeated copies of the same time do not create extra pairs.
+  - Select DISTINCT host and ts in a CTE, add LEAD(ts) OVER (PARTITION BY host ORDER BY ts) as the next time, then in an outer query keep rows where next minus current is greater than 90 and order by host and gap start.
+followups:
+  - How would you make the threshold depend on each host's configured heartbeat interval?
+  - Which index helps this query on a table with billions of heartbeats?
+  - How would you also report hosts that have been silent since their last heartbeat until now?
+common_errors:
+  - Using >= 90 instead of > 90, which reports the exact-90 gap.
+  - Pairing rows with a self-join on MIN(next ts) without deduplicating, which repeats a gap once per duplicate heartbeat.
+  - Forgetting PARTITION BY host, which pairs heartbeats of different hosts.
+  - Filtering on the LEAD alias in the same SELECT's WHERE clause, which is not allowed.

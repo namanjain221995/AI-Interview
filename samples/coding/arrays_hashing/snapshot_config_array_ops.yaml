@@ -1,0 +1,154 @@
+version: 1
+slug: snapshot_config_array_ops
+title: Versioned Config Array
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [backend, platform, dba]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Versioned Config Array
+
+  A feature-flag service keeps an array of `length` integer config values, all starting at `0`. Operators
+  change values and take numbered snapshots so that any past version can be audited later. Simulate the
+  service for a list of operations `ops`, each a string in one of these forms (single spaces, no extra
+  whitespace):
+
+  - `"set i v"` — set the current value at index `i` to `v`.
+  - `"snap"` — take a snapshot of the whole array. Snapshots are numbered `0, 1, 2, ...` in the order they
+    are taken; output the new snapshot's id.
+  - `"get i s"` — output the value index `i` held **at the moment snapshot `s` was taken**. Changes made
+    after snapshot `s` do not affect the result.
+
+  Return the outputs of every `snap` and `get` operation, in the order the operations appear. `set`
+  produces no output.
+
+  Memory must grow with the number of `set` operations, not with snapshots times `length`: copying the
+  whole array on every snapshot is not acceptable.
+
+  ### Example 1
+  ```
+  Input:  length = 3, ops = ["set 0 5", "snap", "set 0 6", "get 0 0", "snap", "get 0 1", "get 2 1"]
+  Output: [0, 5, 1, 6, 0]
+  Explanation: Snapshot 0 saw index 0 as 5, snapshot 1 saw it as 6, and index 2 was never set.
+  ```
+
+  ### Example 2
+  ```
+  Input:  length = 2, ops = ["snap", "snap", "set 1 -4", "snap", "get 1 1", "get 1 2"]
+  Output: [0, 1, 2, 0, -4]
+  Explanation: Index 1 was still 0 when snapshot 1 was taken and -4 when snapshot 2 was taken.
+  ```
+
+  ### Constraints
+  - `1 <= length <= 10^5`
+  - `1 <= ops.length <= 2 * 10^4`
+  - `0 <= i < length`
+  - `-10^9 <= v <= 10^9`
+  - For every `get i s`, snapshot `s` has already been taken (`0 <= s < number of snaps so far`).
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: snapshot_config_array_ops
+  params:
+    - {name: length, type: "int"}
+    - {name: ops, type: "string[]"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    from bisect import bisect_right
+
+
+    def snapshot_config_array_ops(length: int, ops: list[str]) -> list[int]:
+        # history[i] holds (snap_id, value) pairs in increasing snap_id order.
+        history: list[list[tuple[int, int]]] = [[(0, 0)] for _ in range(length)]
+        snap_id = 0
+        out: list[int] = []
+        for op in ops:
+            parts = op.split()
+            if parts[0] == "set":
+                index, value = int(parts[1]), int(parts[2])
+                entries = history[index]
+                if entries[-1][0] == snap_id:
+                    entries[-1] = (snap_id, value)
+                else:
+                    entries.append((snap_id, value))
+            elif parts[0] == "snap":
+                out.append(snap_id)
+                snap_id += 1
+            else:
+                index, snap = int(parts[1]), int(parts[2])
+                entries = history[index]
+                pos = bisect_right(entries, (snap, float("inf"))) - 1
+                out.append(entries[pos][1])
+        return out
+  javascript: |
+    function snapshotConfigArrayOps(length, ops) {
+      // history[i] holds [snapId, value] pairs in increasing snapId order.
+      const history = Array.from({ length }, () => [[0, 0]]);
+      let snapId = 0;
+      const out = [];
+      for (const op of ops) {
+        const parts = op.split(" ");
+        if (parts[0] === "set") {
+          const entries = history[Number(parts[1])];
+          const value = Number(parts[2]);
+          if (entries[entries.length - 1][0] === snapId) entries[entries.length - 1][1] = value;
+          else entries.push([snapId, value]);
+        } else if (parts[0] === "snap") {
+          out.push(snapId);
+          snapId++;
+        } else {
+          const entries = history[Number(parts[1])];
+          const snap = Number(parts[2]);
+          let lo = 0, hi = entries.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (entries[mid][0] <= snap) lo = mid;
+            else hi = mid - 1;
+          }
+          out.push(entries[lo][1]);
+        }
+      }
+      return out;
+    }
+tests:
+  - {id: t1, args: [3, ["set 0 5", "snap", "set 0 6", "get 0 0", "snap", "get 0 1", "get 2 1"]], expected: [0, 5, 1, 6, 0], description: "Example 1"}
+  - {id: t2, args: [2, ["snap", "snap", "set 1 -4", "snap", "get 1 1", "get 1 2"]], expected: [0, 1, 2, 0, -4], description: "Example 2 - set between snapshots"}
+  - {id: t3, hidden: true, args: [1, ["set 0 1", "set 0 2", "set 0 3", "snap", "get 0 0"]], expected: [0, 3], description: "Several sets before one snapshot - last write wins"}
+  - {id: t4, hidden: true, args: [4, ["set 2 9"]], expected: [], description: "No snap or get - empty output"}
+  - {id: t5, hidden: true, args: [5, ["snap", "get 4 0", "set 4 8", "get 4 0"]], expected: [0, 0, 0], description: "Set after a snapshot must not change what that snapshot sees"}
+  - {id: t6, hidden: true, args: [2, ["set 0 7", "snap", "set 0 0", "snap", "get 0 0", "get 0 1"]], expected: [0, 1, 7, 0], description: "Explicitly setting a value back to 0"}
+  - {id: t7, hidden: true, args: [3, ["set 1 4", "snap", "snap", "snap", "snap", "get 1 3", "get 1 0", "get 0 2"]], expected: [0, 1, 2, 3, 4, 4, 0], description: "Many snapshots with no changes - value carried forward"}
+  - {id: t8, hidden: true, args: [2, ["set 0 1000000000", "snap", "set 0 -1000000000", "snap", "get 0 0", "get 0 1"]], expected: [0, 1, 1000000000, -1000000000], description: "Extreme values at the constraint bounds"}
+  - {id: t9, hidden: true, args: [1, ["set 0 1", "snap", "set 0 2", "snap", "set 0 3", "snap", "get 0 1", "get 0 0", "get 0 2", "get 0 1"]], expected: [0, 1, 2, 2, 1, 3, 2], description: "Same index changed between every snapshot, queried out of order"}
+  - {id: t10, hidden: true, args: [20, ["set 7 -660", "snap", "set 9 132", "set 18 -981", "get 0 0", "get 4 0", "set 19 195", "set 18 -933", "set 9 722", "get 2 0", "get 4 0", "set 4 410", "get 5 0", "set 7 269", "set 18 -628", "set 1 -383", "set 3 367", "set 0 358", "get 12 0", "set 4 -841", "snap", "get 13 1", "snap", "get 14 1", "set 2 466", "set 3 352", "get 13 2", "get 2 2", "snap", "snap", "set 7 -549", "set 14 392", "get 14 0", "get 8 4", "set 7 -433", "set 10 654", "get 12 2", "get 2 1", "snap", "set 7 -631", "snap", "set 7 121", "snap", "set 10 -751", "set 3 684", "get 19 3", "snap", "snap", "get 8 5", "set 18 450", "get 4 8", "snap", "get 13 1", "set 19 420", "set 12 888", "get 9 4", "set 12 253", "set 3 779", "get 19 9", "set 12 633", "snap", "get 3 8", "snap", "set 15 -627", "get 9 1", "set 15 925", "snap", "set 19 691", "get 17 0", "get 6 6", "get 10 5", "snap", "set 0 -546", "set 19 52", "set 0 341", "snap", "set 7 686", "get 19 0", "snap", "snap", "set 5 -910", "snap", "snap", "get 15 2", "snap", "get 6 11", "set 15 -822", "get 14 0", "get 3 9", "set 2 115", "get 10 14", "get 11 16", "get 2 2", "set 11 -672", "get 5 8", "set 2 -867", "get 10 9", "get 10 10", "get 6 1", "get 3 0", "get 8 16", "get 8 11", "get 15 16", "get 12 15", "get 19 17", "get 18 5", "get 7 0", "get 16 1", "set 10 -424", "set 9 -446", "set 2 731", "set 18 -375", "set 17 120", "get 0 11", "snap", "set 13 228", "get 14 13", "get 1 6", "set 19 -244", "set 15 -138", "get 16 18", "snap", "snap", "get 1 23", "set 12 -64", "get 17 23", "get 2 22", "get 0 2", "get 18 8", "snap", "set 8 833", "set 19 620", "snap", "set 17 -171", "set 15 -591", "set 18 882", "set 16 424", "snap", "get 9 6", "set 8 635", "set 15 506", "set 16 -543", "set 2 -821", "get 8 25", "set 7 956", "get 4 8", "set 11 195", "set 15 -834", "set 17 442", "get 11 20", "set 6 -427", "set 2 -702", "get 2 5", "get 5 22", "snap", "snap", "set 6 -404", "set 16 734", "set 11 -88", "snap", "set 12 278", "get 4 3", "set 4 -407", "set 14 760", "set 15 672", "get 10 7", "set 2 -772", "snap", "set 7 -318", "set 0 55", "snap", "snap", "snap", "get 18 27", "get 19 32", "snap", "get 19 27", "set 4 127", "get 0 28", "snap", "set 10 973", "get 7 26", "get 9 17", "set 13 542", "get 9 12", "get 5 10", "set 10 178", "get 12 3", "get 1 34", "snap", "get 8 10", "get 14 8", "set 3 -513", "get 16 1", "set 4 -370", "set 11 638", "get 19 33", "set 11 -53", "get 8 20", "set 7 939", "set 18 -581", "set 13 117", "set 2 446", "get 4 0", "snap", "snap", "get 16 10", "snap", "set 17 292", "set 4 -45", "get 19 13", "get 5 6", "get 12 8", "set 2 -637", "get 1 34", "set 12 -319", "set 8 905", "get 1 11", "set 14 -745", "snap", "get 11 15", "set 0 -862", "set 15 334", "snap", "get 16 26", "set 8 881", "set 17 -459", "set 18 309", "get 19 9", "get 19 11", "set 5 34", "set 6 -861", "snap", "set 4 385", "snap", "set 3 316", "set 16 -548", "get 1 29", "snap", "get 10 38", "snap", "get 9 38", "get 13 3", "set 16 -541", "get 17 39", "get 0 37", "snap", "snap", "set 8 -50", "get 16 20", "set 6 483", "get 2 22", "get 7 12", "get 4 36", "get 12 42", "get 10 13", "set 18 -654", "get 16 38", "set 14 4", "snap", "get 0 24", "get 11 33", "set 14 301", "get 16 0", "snap", "get 2 35", "get 17 3", "set 9 -865", "snap", "get 8 12", "get 6 13", "set 15 -87", "set 18 842", "set 8 -534", "set 7 -143", "get 15 12", "snap", "set 4 440", "set 18 928", "get 18 45", "set 12 880", "set 0 439", "set 6 347", "get 11 48", "set 2 322", "set 13 -570", "get 11 37", "get 8 35", "get 5 51", "get 15 44", "snap", "get 12 45", "set 2 -387", "snap", "set 0 -540", "set 11 -216", "get 16 24", "set 7 177", "get 1 24", "snap"]], expected: [0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 0, 3, 4, 0, 0, 0, 0, 5, 6, 7, 195, 8, 9, 0, -841, 10, 0, 722, 195, 11, 684, 12, 722, 13, 0, 0, 654, 14, 15, 0, 16, 17, 18, 19, 0, 20, 0, 0, 684, -751, 0, 0, 0, -751, -751, 0, 0, 0, 0, 925, 633, 52, -628, -660, 0, 358, 21, 392, -383, 0, 22, 23, -383, 120, 731, 358, -628, 24, 25, 26, 722, 833, -841, 0, 466, -910, 27, 28, 29, -841, 654, 30, 31, 32, 33, 882, 620, 34, 620, 341, 35, 686, 722, 722, 0, 0, -383, 36, 0, 392, 0, 620, 0, 0, 37, 38, 0, 39, 420, 0, 0, -383, -383, 40, 0, 41, 424, 195, 420, 42, 43, -383, 44, 178, 45, -446, 0, 442, 55, 46, 47, 0, 731, 121, 127, -319, -751, 734, 48, 341, -88, 0, 49, -772, 0, 50, 0, 0, 0, 51, 309, -53, -53, 635, 34, 334, 52, -319, 53, 0, -383, 54], description: "300 random operations on 20 indices (checked against full-copy brute force)"}
+expected_concepts:
+  - per-index change history instead of full copies
+  - recording the snapshot id with each change
+  - binary search for the last change at or before a snapshot
+  - overwriting repeated sets within the same snapshot epoch
+optimal_complexity: {time: O(q log q), space: O(length + q)}
+rubric:
+  excellent: Stores a per-index list of (snapshot id, value) changes, overwrites the last entry when the id has not advanced, answers each get by binary search for the last change at or before the snapshot, and states O(log q) per get and memory proportional to the number of sets.
+  good: Correct per-index history with a linear scan for gets, or the binary search version after fixing an off-by-one found by testing.
+  weak: Copies the whole array on every snapshot, records changes against the wrong snapshot id, or returns values set after the requested snapshot.
+  criteria:
+    correctness: All tests pass, including sets after a snapshot and indices that were never set.
+    efficiency: Memory grows with the number of sets and gets run in logarithmic time per query.
+    code_quality: Operation parsing is clean and the history structure is clearly named.
+    edge_cases: No snapshots, repeated sets before one snapshot, values reset to zero and many idle snapshots.
+    communication: Explains why a change made before snapshot s is tagged with id s and how the search uses that.
+hints:
+  - Copying the whole array on every snapshot wastes memory when only a few values change. What is the minimum you need to remember for each index?
+  - For each index, keep a history of changes tagged with the id the next snapshot will receive. A query then needs the latest change whose tag is not greater than the requested snapshot.
+  - Give every index a list of pairs of snapshot id and value starting with id zero and value zero; on a set, overwrite the last pair if its id equals the current snapshot counter or append otherwise; on a get, binary search the list for the last pair with id at most s and return its value.
+followups:
+  - How would you support deleting old snapshots to reclaim memory?
+  - What if values were large configuration documents rather than integers?
+  - How would you persist this structure so it survives a restart?
+  - How would the design change if reads vastly outnumber writes?
+common_errors:
+  - Taking a full copy of the array on every snapshot, which exceeds memory limits.
+  - Tagging a change with the id of the previous snapshot, which leaks the change into a snapshot taken before it.
+  - Appending a pair for every set within the same snapshot epoch and then searching for the first matching id, which returns a stale value.
+  - Forgetting that indices never set must read as 0.

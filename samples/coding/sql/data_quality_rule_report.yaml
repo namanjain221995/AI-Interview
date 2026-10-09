@@ -1,0 +1,223 @@
+version: 1
+slug: data_quality_rule_report
+title: Data Quality Rule Report
+difficulty: medium
+competency_keys: [sql, databases, debugging]
+role_tags: [data, qa, dba]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Data Quality Rule Report
+
+  Before a nightly load is promoted from staging, a data quality job runs four checks. The staging
+  snapshot was taken at the end of **2026-06-30**.
+
+  Table `accounts_stage`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | country_code | VARCHAR(8) | may be NULL, empty or only spaces |
+
+  Table `orders_stage`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | account_id | INTEGER | intended to reference `accounts_stage.id`; **may be NULL** |
+  | amount_cents | INTEGER | |
+  | placed_on | TEXT | order date as `YYYY-MM-DD` |
+
+  The rules, in report order:
+
+  1. `null_country`: accounts whose `country_code` is NULL, empty, or made only of spaces.
+  2. `negative_amount`: orders with `amount_cents < 0`.
+  3. `orphan_order`: orders that do not point to an existing account, **including orders whose
+     `account_id` is NULL**.
+  4. `future_order`: orders placed after the snapshot date, that is `placed_on > '2026-06-30'`.
+
+  Return exactly **four rows**, one per rule, with columns `rule` and `violations` (the number of
+  violating rows), in the order listed above. A rule with no violations still appears with
+  `violations = 0`. One order can violate several rules and is counted under each of them.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  accounts_stage          orders_stage
+  +----+--------------+   +----+------------+--------------+------------+
+  | id | country_code |   | id | account_id | amount_cents | placed_on  |
+  +----+--------------+   +----+------------+--------------+------------+
+  | 1  | DE           |   | 1  | 1          | 2500         | 2026-06-28 |
+  | 2  | NULL         |   | 2  | 2          | -300         | 2026-06-29 |
+  | 3  | '  '         |   | 3  | 9          | 1200         | 2026-07-02 |
+  | 4  | US           |   | 4  | NULL       | 800          | 2026-06-30 |
+  +----+--------------+   | 5  | 4          | -50          | 2026-06-30 |
+                          +----+------------+--------------+------------+
+
+  Output
+  +-----------------+------------+
+  | rule            | violations |
+  +-----------------+------------+
+  | null_country    | 2          |
+  | negative_amount | 2          |
+  | orphan_order    | 2          |
+  | future_order    | 1          |
+  +-----------------+------------+
+  Account 3's code is two spaces. Order 3 points to a missing account 9 and order 4 has no account.
+  Order 4 is placed on the snapshot date itself, which is not in the future.
+  ```
+
+  ### Example 2
+  ```
+  accounts_stage          orders_stage
+  +----+--------------+   +----+------------+--------------+------------+
+  | id | country_code |   | id | account_id | amount_cents | placed_on  |
+  +----+--------------+   +----+------------+--------------+------------+
+  | 1  | FR           |   | 1  | 1          | 100          | 2026-05-01 |
+  +----+--------------+   +----+------------+--------------+------------+
+
+  Output
+  +-----------------+------------+
+  | rule            | violations |
+  +-----------------+------------+
+  | null_country    | 0          |
+  | negative_amount | 0          |
+  | orphan_order    | 0          |
+  | future_order    | 0          |
+  +-----------------+------------+
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return rule and violations for the four rules, in the order
+    -- null_country, negative_amount, orphan_order, future_order.
+    SELECT 'negative_amount' AS rule, COUNT(*) AS violations
+    FROM orders_stage
+    WHERE amount_cents < 0
+    GROUP BY amount_cents;
+reference_solutions:
+  sql: |
+    SELECT rule, violations
+    FROM (
+      SELECT 1 AS rule_order, 'null_country' AS rule, COUNT(*) AS violations
+      FROM accounts_stage
+      WHERE country_code IS NULL OR TRIM(country_code) = ''
+      UNION ALL
+      SELECT 2, 'negative_amount', COUNT(*)
+      FROM orders_stage
+      WHERE amount_cents < 0
+      UNION ALL
+      SELECT 3, 'orphan_order', COUNT(*)
+      FROM orders_stage o
+      WHERE NOT EXISTS (SELECT 1 FROM accounts_stage a WHERE a.id = o.account_id)
+      UNION ALL
+      SELECT 4, 'future_order', COUNT(*)
+      FROM orders_stage
+      WHERE placed_on > '2026-06-30'
+    ) checks
+    ORDER BY rule_order;
+sql_setup: |
+  CREATE TABLE accounts_stage (
+    id INTEGER PRIMARY KEY,
+    country_code VARCHAR(8)
+  );
+  CREATE TABLE orders_stage (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER,
+    amount_cents INTEGER NOT NULL,
+    placed_on TEXT NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - blank code, missing and NULL account ids, the snapshot date itself is not future"
+    setup_sql: |
+      INSERT INTO accounts_stage (id, country_code) VALUES (1, 'DE'), (2, NULL), (3, '  '), (4, 'US');
+      INSERT INTO orders_stage (id, account_id, amount_cents, placed_on) VALUES
+        (1, 1, 2500, '2026-06-28'), (2, 2, -300, '2026-06-29'), (3, 9, 1200, '2026-07-02'),
+        (4, NULL, 800, '2026-06-30'), (5, 4, -50, '2026-06-30');
+    expected_rows: [["null_country", 2], ["negative_amount", 2], ["orphan_order", 2], ["future_order", 1]]
+    ordered: true
+  - id: t2
+    description: "Example 2 - clean data still reports all four rules with zero"
+    setup_sql: |
+      INSERT INTO accounts_stage (id, country_code) VALUES (1, 'FR');
+      INSERT INTO orders_stage (id, account_id, amount_cents, placed_on) VALUES (1, 1, 100, '2026-05-01');
+    expected_rows: [["null_country", 0], ["negative_amount", 0], ["orphan_order", 0], ["future_order", 0]]
+    ordered: true
+  - id: t3
+    hidden: true
+    description: "Both tables empty - four rows of zero (GROUP BY drops zero rows trap)"
+    expected_rows: [["null_country", 0], ["negative_amount", 0], ["orphan_order", 0], ["future_order", 0]]
+    ordered: true
+  - id: t4
+    hidden: true
+    description: "Accounts empty - every order is an orphan, including NULL account ids (NOT IN trap)"
+    setup_sql: |
+      INSERT INTO orders_stage (id, account_id, amount_cents, placed_on) VALUES
+        (1, 1, 10, '2026-01-01'), (2, NULL, 20, '2026-01-02'), (3, NULL, 30, '2026-01-03');
+    expected_rows: [["null_country", 0], ["negative_amount", 0], ["orphan_order", 3], ["future_order", 0]]
+    ordered: true
+  - id: t5
+    hidden: true
+    description: "Orders empty - only the country rule can fire; empty string vs spaces vs NULL vs valid"
+    setup_sql: |
+      INSERT INTO accounts_stage (id, country_code) VALUES (1, ''), (2, ' '), (3, NULL), (4, 'IN'), (5, ' NL');
+    expected_rows: [["null_country", 3], ["negative_amount", 0], ["orphan_order", 0], ["future_order", 0]]
+    ordered: true
+  - id: t6
+    hidden: true
+    description: "One order violates three rules at once and is counted under each; zero amount is not negative"
+    setup_sql: |
+      INSERT INTO accounts_stage (id, country_code) VALUES (1, 'SE');
+      INSERT INTO orders_stage (id, account_id, amount_cents, placed_on) VALUES
+        (1, 77, -1, '2026-12-31'), (2, 1, 0, '2026-06-30'), (3, 1, 5, '2026-07-01');
+    expected_rows: [["null_country", 0], ["negative_amount", 1], ["orphan_order", 1], ["future_order", 2]]
+    ordered: true
+  - id: t7
+    hidden: true
+    description: "Mixed NULL account ids with existing accounts (NOT IN with a NULL-free subquery still misses NULL ids)"
+    setup_sql: |
+      INSERT INTO accounts_stage (id, country_code) VALUES (1, 'JP'), (2, 'BR'), (3, NULL);
+      INSERT INTO orders_stage (id, account_id, amount_cents, placed_on) VALUES
+        (1, 1, 100, '2025-12-31'), (2, NULL, 200, '2026-01-15'), (3, 3, 300, '2026-02-01'),
+        (4, 4, -400, '2027-01-01'), (5, NULL, -500, '2026-06-30'), (6, 2, 600, '2026-06-29');
+    expected_rows: [["null_country", 1], ["negative_amount", 2], ["orphan_order", 3], ["future_order", 1]]
+    ordered: true
+  - id: t8
+    hidden: true
+    description: "Year boundaries - 2026-07-01 and 2027 dates are future, 2025-12-31 is not"
+    setup_sql: |
+      INSERT INTO accounts_stage (id, country_code) VALUES (1, 'CA');
+      INSERT INTO orders_stage (id, account_id, amount_cents, placed_on) VALUES
+        (1, 1, 1, '2025-12-31'), (2, 1, 1, '2026-07-01'), (3, 1, 1, '2027-01-01'), (4, 1, 1, '2026-06-01');
+    expected_rows: [["null_country", 0], ["negative_amount", 0], ["orphan_order", 0], ["future_order", 2]]
+    ordered: true
+expected_concepts:
+  - COUNT(*) without GROUP BY always returns one row
+  - UNION ALL of independent checks with an explicit sort key
+  - anti-join with NOT EXISTS and NULL foreign keys
+  - NULL versus blank string handling with TRIM
+optimal_complexity: {time: "O(n + m) with an index on accounts_stage.id", space: O(1)}
+rubric:
+  excellent: Builds one aggregate per rule combined with UNION ALL and a hidden sort column, uses NOT EXISTS so NULL account ids count as orphans, treats NULL and blank codes with IS NULL OR TRIM(...) = '', and explains why GROUP BY would drop zero-count rules.
+  good: Correct report after a hint about zero-count rules, NULL account ids or the required row order.
+  weak: Omits rules with zero violations, uses NOT IN or an inner join that misses NULL account ids, or relies on UNION ALL order without ORDER BY.
+  criteria:
+    correctness: All tests pass, including empty tables, blank codes and NULL account ids.
+    efficiency: Each check is one set-based scan or anti-join rather than per-row procedural logic.
+    code_quality: Rule names exactly as specified and a readable, extendable structure.
+    edge_cases: Empty tables, spaces-only codes, the snapshot date boundary and orders that break several rules.
+    communication: Explains NULL comparison semantics and how a new rule would be added.
+hints:
+  - Each rule is an independent count; think about how to stack four single-row results into one result set in a fixed order.
+  - An aggregate without GROUP BY returns one row even when nothing matches, and "no matching account" needs a check that also catches NULL account ids.
+  - Write one SELECT per rule that returns a sort number, the rule name and COUNT(*), combine them with UNION ALL in a subquery, use NOT EXISTS for orphans and IS NULL OR TRIM(country_code) = '' for countries, then select rule and violations ordered by the sort number.
+followups:
+  - How would you return sample ids of violating rows for each rule?
+  - How would you store rules as data so analysts can add checks without changing the query?
+  - Which of these checks could be enforced by constraints instead, and what would that cost the loader?
+common_errors:
+  - Using GROUP BY or a join that removes rules with zero violations.
+  - Using account_id NOT IN (SELECT id FROM accounts_stage), which never counts NULL account ids.
+  - Checking only country_code = '' or only IS NULL, missing the other blank forms.
+  - Relying on UNION ALL to keep row order without an ORDER BY.

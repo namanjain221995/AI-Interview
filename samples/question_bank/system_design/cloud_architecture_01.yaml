@@ -1,0 +1,615 @@
+# System design: cloud architecture (1 of 4) — landing zones, account structure and governance.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [cloud, devops]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.cloud_architecture.minimal_landing_zone
+    competency_key: system_design
+    topic: What a minimal landing zone contains
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A product team asks why they can't just be handed a fresh cloud account and start building. Explain what a
+      landing zone would give them, and sketch the smallest version you'd be comfortable putting in place first.
+    expected_concepts:
+      - separate accounts or subscriptions per environment and purpose
+      - central identity and federated sign-in instead of local users
+      - audit logging switched on and shipped to a protected location
+      - baseline guardrails such as region limits and blocked risky actions
+      - a standard network pattern teams plug into
+      - billing visibility per account
+    rubric:
+      excellent: Ties each landing zone element to a concrete risk it removes (lost audit trail, credential sprawl, surprise spend, flat network), keeps the first version deliberately small and explains what comes later.
+      good: Lists sensible components such as separate accounts, central login, logging and some guardrails, with a brief reason for most.
+      weak: Describes a landing zone as a single big account with a VPC, or cannot say what problem it solves for the team.
+    followups:
+      - Which of those pieces would you refuse to skip even under deadline pressure?
+      - How would the team request a new account once this exists?
+    common_errors:
+      - Treating the landing zone as a one-off network setup rather than an ongoing baseline for every account.
+
+  - external_key: system_design.cloud_architecture.environment_separation
+    competency_key: security
+    topic: Separating environments for one product
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Picture a single product with development, staging and production environments. How would you lay those
+      out in the cloud, and what would you allow, or not allow, to flow between them?
+    expected_concepts:
+      - one account or subscription per environment
+      - promotion of the same artifact rather than rebuilding per environment
+      - no production data copied into lower environments without masking
+      - separate credentials and access groups for production
+      - no direct network path from development into production
+    rubric:
+      excellent: Uses account-level separation, explains artifact promotion through a pipeline, protects production data and access explicitly, and names the few things that legitimately cross boundaries such as images and logs.
+      good: Separates environments sensibly and restricts production access, but is vague about how artifacts or data move between them.
+      weak: Puts every environment in one account distinguished only by names or tags, with shared credentials.
+    followups:
+      - A developer needs realistic data to reproduce a production bug. How do you support that safely?
+      - Where does the deployment pipeline itself live in this layout?
+    common_errors:
+      - Rebuilding the artifact separately for each environment so what was tested is not what ships.
+
+  - external_key: system_design.cloud_architecture.tamper_resistant_log_archive
+    competency_key: security
+    topic: Tamper-resistant central log archive
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      You want audit and access logs from every account to land somewhere that nobody working in a workload
+      account, including its administrators, can alter or delete. How would you design that?
+    expected_concepts:
+      - a dedicated log archive account with tightly restricted access
+      - organisation-level trails or diagnostic settings that member accounts cannot switch off
+      - object lock or immutable storage with a retention period
+      - encryption keys controlled outside the workload accounts
+      - alerting when log delivery stops
+    rubric:
+      excellent: Places logs in a separate account, enforces delivery at the organisation level, uses immutability and key separation, and adds a check that detects gaps in delivery.
+      good: Proposes a central account and bucket with restricted access, but misses immutability or how delivery is enforced.
+      weak: Keeps logs in each workload account, relying on permissions that the account administrators themselves control.
+    followups:
+      - How would you let the security team search these logs without giving them write access?
+      - What retention period would you pick and what drives that choice?
+    common_errors:
+      - Forgetting that an account administrator can usually disable a trail configured inside that same account.
+
+  - external_key: system_design.cloud_architecture.shared_services_placement
+    competency_key: system_design
+    topic: Placing shared services in a multi-account estate
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      In a setup with a few dozen accounts, where would you put shared tooling such as build runners, the artifact
+      repository and internal DNS, and how would workload accounts reach them?
+    expected_concepts:
+      - a dedicated shared services account or subscription
+      - private connectivity through a hub or private endpoints
+      - cross-account roles or resource policies for access
+      - keeping shared services out of production blast radius where possible
+      - separating production and non-production consumers if needed
+    rubric:
+      excellent: Proposes a dedicated account, explains both the network path and the permission model for consumers, and discusses whether production should depend on the same instances as development.
+      good: Places tools in a shared account and mentions network connectivity, with lighter treatment of permissions or blast radius.
+      weak: Duplicates every tool in every account or puts shared tools inside the production account.
+    followups:
+      - If the shared services account had an outage, what would break in production?
+      - How would you stop a build runner from becoming a path into every account?
+    common_errors:
+      - Giving build runners broad administrator rights in every target account.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.cloud_architecture.account_vending_pipeline
+    competency_key: terraform
+    topic: Self-service account vending
+    difficulty: medium
+    text: >-
+      Teams currently wait two weeks for a new cloud account. Design a self-service vending process that gets a
+      team a fully baselined account in under an hour without losing control over what gets created.
+    expected_concepts:
+      - request form or pull request capturing owner, cost centre and data classification
+      - automated approval rules with human review only for exceptions
+      - infrastructure as code applying the baseline (identity, logging, network, guardrails)
+      - placement into the right organisational unit or management group
+      - idempotent, retryable pipeline steps with clear status
+      - registry of accounts and owners
+    rubric:
+      excellent: Designs an end-to-end pipeline with captured metadata driving placement and baseline, explains idempotency and failure handling, and keeps an authoritative account inventory.
+      good: Automates creation and baseline with infrastructure as code and some approval step, but handles failures or metadata loosely.
+      weak: Proposes scripting account creation only, leaving baseline and placement as manual follow-up tasks.
+    followups:
+      - The pipeline fails halfway through networking setup. What happens to the half-built account?
+      - How would you roll a new baseline item out to accounts vended last year?
+    common_errors:
+      - Not recording an owner and purpose at creation time, which makes later clean-up very hard.
+
+  - external_key: system_design.cloud_architecture.organisational_hierarchy
+    competency_key: security
+    topic: Designing the organisational unit hierarchy
+    difficulty: medium
+    text: >-
+      You need to design the organisational unit or management group hierarchy for a company with production,
+      non-production, sandbox and a few regulated workloads. How would you structure it, and how would policies
+      attach to it?
+    expected_concepts:
+      - hierarchy organised by policy needs rather than by org chart
+      - inheritance of guardrails from parent to child units
+      - separate units for security, infrastructure and workloads
+      - stricter policies on regulated and production units
+      - a suspended or quarantine unit for retiring accounts
+      - keeping the tree shallow to stay understandable
+    rubric:
+      excellent: Organises the tree around how policies differ, explains inheritance and where each type of guardrail attaches, includes security and quarantine units, and warns against mirroring the reporting structure.
+      good: Proposes a reasonable tree separating production, non-production and sandbox with policies at each level.
+      weak: Mirrors departments or teams in the hierarchy, so a reorganisation forces account moves and policy changes.
+    followups:
+      - A team reorganisation moves a product to another division. What changes in your hierarchy?
+      - Where would you test a new deny policy before applying it to production?
+    common_errors:
+      - Building a deep hierarchy where nobody can tell which policies actually apply to an account.
+
+  - external_key: system_design.cloud_architecture.sandbox_accounts
+    competency_key: cloud_cost_optimization
+    topic: Engineer sandbox accounts with spend limits
+    difficulty: medium
+    text: >-
+      Engineers want personal sandbox accounts to experiment freely, but finance is worried about runaway bills and
+      security worries about forgotten resources. How would you design the sandbox offering?
+    expected_concepts:
+      - isolated sandbox unit with no connectivity to corporate or production networks
+      - budgets with alerts and automated actions at thresholds
+      - guardrails blocking very expensive services or instance types
+      - scheduled or lease-based clean-up of resources
+      - no production data or long-lived credentials allowed
+      - account recycling rather than unlimited new accounts
+    rubric:
+      excellent: Balances freedom and control with isolation, budget-driven enforcement, expiry or lease-based clean-up and a recycling pool, and explains what happens when a limit is hit.
+      good: Includes budgets, some restrictions and periodic clean-up, but enforcement on hitting the limit is vague.
+      weak: Relies on budget alert emails alone, or restricts sandboxes so heavily that experimentation is impossible.
+    followups:
+      - An engineer's experiment is worth keeping. How does it graduate out of the sandbox?
+      - How do you clean up resources that ignore tags or were created outside your tooling?
+    common_errors:
+      - Assuming budgets stop spending; most only alert unless an automated action is wired up.
+
+  - external_key: system_design.cloud_architecture.preventive_detective_guardrails
+    competency_key: security
+    topic: Balancing preventive and detective guardrails
+    difficulty: medium
+    text: >-
+      Design the guardrail layer for a landing zone. How would you decide which controls should block actions
+      outright, which should only detect and alert, and which should automatically fix the problem?
+    expected_concepts:
+      - preventive controls for actions that are never acceptable (disabling logging, leaving allowed regions)
+      - detective rules for context-dependent risks
+      - automatic remediation only where it is safe and reversible
+      - routing findings to the owning team with severity
+      - testing guardrails before enforcing to avoid breaking workloads
+    rubric:
+      excellent: Gives clear criteria for each control type with concrete examples, considers the cost of false positives and blocked work, and describes how findings reach owners and get tracked to closure.
+      good: Separates preventive and detective controls with examples but has little on remediation safety or ownership.
+      weak: Proposes denying everything risky up front, or only collecting findings in a dashboard nobody owns.
+    followups:
+      - An auto-remediation rule deleted a public bucket that a website depended on. What would you change?
+      - How do you measure whether your detective controls are actually acted on?
+    common_errors:
+      - Turning on many detective rules at once and burying teams in findings that never get fixed.
+
+  - external_key: system_design.cloud_architecture.baseline_drift
+    competency_key: terraform
+    topic: Detecting and reconciling baseline drift
+    difficulty: medium
+    text: >-
+      Every account gets a baseline of roles, logging and network resources at creation, but people with admin
+      access sometimes change them by hand. How would you design detection and reconciliation of that drift?
+    expected_concepts:
+      - baseline managed as code with a single owning pipeline
+      - scheduled plans or configuration rules to detect drift
+      - protecting baseline resources with deny policies for non-platform principals
+      - deciding between auto-revert and review for each resource type
+      - reporting drift to owners with context of who changed what
+    rubric:
+      excellent: Combines prevention of changes to baseline resources with periodic detection, chooses auto-revert versus review per resource based on risk, and traces changes back to the person or pipeline responsible.
+      good: Runs regular drift detection from code and reverts or reports changes, with less attention to preventing them.
+      weak: Relies on reapplying everything blindly, which can overwrite legitimate emergency fixes without anyone noticing.
+    followups:
+      - During an incident someone changed a baseline route on purpose. How should your system treat that?
+      - How would you handle drift in hundreds of accounts without running hundreds of slow plans?
+    common_errors:
+      - Letting the same broad admin role used by teams modify platform-owned baseline resources.
+
+  - external_key: system_design.cloud_architecture.security_tooling_aggregation
+    competency_key: security
+    topic: Aggregating security findings across accounts
+    difficulty: medium
+    text: >-
+      You have two hundred accounts with threat detection and posture tools enabled. Design how findings get
+      aggregated, prioritised and routed to the right team instead of piling up in one console.
+    expected_concepts:
+      - delegated administrator security account
+      - auto-enrolment of new accounts into every tool
+      - enrichment with ownership and data classification from the account registry
+      - deduplication and severity-based prioritisation
+      - ticketing or chat integration with service level targets
+      - suppression rules with expiry and review
+    rubric:
+      excellent: Builds a pipeline from enrolment to aggregation to enrichment and routing, uses account metadata to find owners, and defines prioritisation and time-bound suppression.
+      good: Centralises findings in a security account and routes some to teams, but ownership lookup or prioritisation is thin.
+      weak: Simply enables tools and expects the security team to read every finding manually.
+    followups:
+      - How would you stop a single noisy rule from drowning out critical findings?
+      - What metrics would tell you this system is working?
+    common_errors:
+      - Forgetting to enrol newly created accounts, which leaves exactly the newest workloads unmonitored.
+
+  - external_key: system_design.cloud_architecture.cross_account_service_access
+    competency_key: security
+    topic: Cross-account access between workloads
+    difficulty: medium
+    text: >-
+      Services in dozens of accounts need to read queues, buckets and APIs owned by other teams' accounts. How
+      would you design cross-account access so it stays least-privilege and doesn't turn into a tangle of trust
+      relationships?
+    expected_concepts:
+      - role assumption versus resource-based policies and when to use each
+      - conditions on organisation membership or specific principals
+      - access requested and granted as code with review by the resource owner
+      - inventory of cross-account grants
+      - avoiding wildcard principals
+    rubric:
+      excellent: Chooses between role assumption and resource policies with reasons, scopes trust with conditions, and makes the resource owner approve grants through a reviewable, auditable process.
+      good: Uses cross-account roles or resource policies correctly but has little on governance or visibility of grants.
+      weak: Shares long-lived access keys between accounts or grants access to the whole organisation by default.
+    followups:
+      - How would you find every cross-account grant that still exists for a service that was retired?
+      - What changes if one of the accounts belongs to an external partner?
+    common_errors:
+      - Trusting an entire account when only one specific role needs access.
+
+  - external_key: system_design.cloud_architecture.landing_zone_code_ownership
+    competency_key: terraform
+    topic: Structuring code for the landing zone and workloads
+    difficulty: medium
+    text: >-
+      How would you structure the infrastructure code, state and pipelines so the platform team owns the landing
+      zone baseline while product teams manage their own infrastructure in the same accounts without stepping on
+      each other?
+    expected_concepts:
+      - separate repositories or stacks for platform baseline and workload infrastructure
+      - separate state with restricted access per layer
+      - outputs or parameters published by the platform layer for teams to consume
+      - pipeline roles scoped to what each layer may change
+      - versioned modules for teams to reuse
+    rubric:
+      excellent: Defines clear layers with separate state and pipeline permissions, explains how teams consume platform outputs without editing them, and covers module versioning and upgrades.
+      good: Separates platform and team code and state sensibly, but is vague on how permissions enforce the boundary.
+      weak: Keeps everything in one repository and state with one pipeline role that can change anything.
+    followups:
+      - A team needs a change to the shared VPC for their service. How does that request flow?
+      - How do you upgrade a shared module that eighty teams pin to an old version?
+    common_errors:
+      - Letting workload pipelines run with permissions that can modify the baseline they depend on.
+
+  - external_key: system_design.cloud_architecture.new_region_enablement
+    competency_key: system_design
+    topic: Enabling a new region in the landing zone
+    difficulty: medium
+    text: >-
+      The business is expanding and wants workloads in a region you've never used. What does your landing zone need
+      to do before the first team deploys there, and how would you sequence that work?
+    expected_concepts:
+      - updating region allow-list guardrails
+      - regional networking (address ranges, hub, connectivity to other regions and on-premises)
+      - logging, security tooling and configuration recording enabled in the region
+      - service availability and quota checks
+      - regional key management and secrets
+      - updating vending and baseline code to include the region
+    rubric:
+      excellent: Produces a sequenced plan covering guardrails, network, security tooling, quotas and keys, checks service availability up front and makes the region part of the baseline code rather than a manual exception.
+      good: Covers networking and guardrails and some security tooling, with less attention to quotas or service availability.
+      weak: Simply removes the region restriction and lets teams build there with no regional baseline.
+    followups:
+      - A service the team relies on is not offered in that region yet. What are your options?
+      - How would you confirm the region is ready before announcing it?
+    common_errors:
+      - Enabling the region in guardrails before logging and detection tools are active there.
+
+  - external_key: system_design.cloud_architecture.platform_team_boundary
+    competency_key: system_design
+    topic: Responsibility split between platform and product teams
+    difficulty: medium
+    text: >-
+      In a landing zone where every product team has its own accounts, how would you decide and enforce what the
+      platform team controls versus what product teams are free to change?
+    expected_concepts:
+      - a written responsibility model per layer (identity, network, logging, workloads)
+      - guardrails that protect platform-owned resources
+      - permission boundaries or scoped roles for team administrators
+      - paved-road defaults that teams can extend
+      - a clear request path for exceptions
+    rubric:
+      excellent: Defines ownership per layer with reasoning, enforces it technically rather than by convention, and gives teams real autonomy inside the boundary along with a fast route for exceptions.
+      good: Gives a sensible split and some enforcement mechanism, but the exception path or team autonomy is underdeveloped.
+      weak: Either centralises every change through the platform team or gives teams full admin and hopes they respect conventions.
+    followups:
+      - Teams complain the platform team is a bottleneck. How would you tell whether the boundary is in the wrong place?
+      - Which resources would you never let product teams modify, and why?
+    common_errors:
+      - Relying on documentation alone to keep teams from editing shared network or logging resources.
+
+  - external_key: system_design.cloud_architecture.account_retirement
+    competency_key: security
+    topic: Retiring and closing cloud accounts
+    difficulty: medium
+    text: >-
+      A product is being shut down and its five accounts should go away. Design the retirement process so nothing
+      dangerous or expensive is left behind.
+    expected_concepts:
+      - inventory of resources, data and external dependencies
+      - data retention or export decisions before deletion
+      - removing DNS records to prevent dangling or subdomain takeover
+      - revoking cross-account trust and third-party integrations
+      - moving to a quarantine unit with deny-all before closure
+      - final billing and commitment checks
+    rubric:
+      excellent: Defines a staged process from inventory through quarantine to closure, explicitly covers dangling DNS, trust relationships and data retention, and keeps a record that the account was safely retired.
+      good: Covers data and resource clean-up and closing the account but misses DNS or trust relationships.
+      weak: Closes the account directly or just deletes resources, leaving records and trust that point to it.
+    followups:
+      - Why is a leftover DNS record pointing at a deleted resource dangerous?
+      - Legal asks you to keep the data for seven years. How does that change the plan?
+    common_errors:
+      - Deleting the resources while leaving DNS names that attackers can later claim.
+
+  - external_key: system_design.cloud_architecture.cross_account_observability
+    competency_key: observability
+    topic: Observability across many accounts
+    difficulty: medium
+    text: >-
+      A user request crosses services in six different accounts. Design how metrics, logs and traces from all of
+      them come together so an on-call engineer can follow one request end to end, while teams only see what
+      they should.
+    expected_concepts:
+      - central observability account or cross-account sharing
+      - consistent trace context propagation across services
+      - standard collection agents deployed by the baseline
+      - access control by team or data sensitivity
+      - cost controls on ingestion and retention
+    rubric:
+      excellent: Designs central aggregation with consistent propagation, explains how the baseline installs collectors, and addresses both access control and ingestion cost.
+      good: Centralises telemetry with tracing across accounts but treats access control or cost lightly.
+      weak: Expects engineers to log into each account's console separately to piece together a request.
+    followups:
+      - Logs may contain personal data. How does that affect your central design?
+      - Telemetry costs are growing faster than traffic. Where would you cut?
+    common_errors:
+      - Centralising everything with no sampling or retention policy, so observability costs explode.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.cloud_architecture.acquired_cloud_estate
+    competency_key: system_design
+    topic: Integrating an acquired company's cloud organisation
+    difficulty: hard
+    text: >-
+      Your company has acquired a business that runs on the same cloud provider but in its own separate
+      organisation, with its own identity provider and overlapping address ranges. How would you bring their
+      estate under your landing zone over the next year without breaking their production?
+    expected_concepts:
+      - discovery and risk assessment before moving anything
+      - identity federation first, then consolidating directories
+      - moving accounts between organisations and policy impact testing
+      - handling overlapping address ranges with NAT, private endpoints or readdressing
+      - phased guardrail adoption, starting in audit mode
+      - preserving billing commitments and contracts
+    rubric:
+      excellent: Lays out a phased plan that sequences identity, visibility, guardrails and networking, tests policy impact before enforcement, addresses address overlap concretely, and names rollback points.
+      good: Covers identity, account moves and guardrails in a sensible order but treats address overlap or policy impact testing superficially.
+      weak: Proposes moving every account and applying all policies at once, or rebuilding their workloads from scratch.
+    followups:
+      - One of their accounts relies on a permission your guardrails deny. How do you find that before moving it?
+      - Which integration would you deliberately leave until last, and why?
+    common_errors:
+      - Moving accounts into the new organisation before checking which inherited deny policies they would violate.
+
+  - external_key: system_design.cloud_architecture.regulated_enclave
+    competency_key: security
+    topic: Isolated enclave for card payment workloads
+    difficulty: hard
+    text: >-
+      Your company needs to start handling card payment data, and you want the compliance scope as small as
+      possible. Design an isolated enclave for that inside your existing landing zone.
+    expected_concepts:
+      - dedicated accounts and organisational unit for in-scope systems
+      - tokenisation so most systems never touch card data
+      - tightly controlled network ingress and egress with inspection
+      - separate identity and privileged access paths with session recording
+      - dedicated keys and logging with stricter retention
+      - controlled shared services so they don't pull the whole estate into scope
+    rubric:
+      excellent: Minimises scope through tokenisation and isolation, explains which shared services would drag systems into scope and how to avoid that, and covers identity, network, keys and logging specifically for the enclave.
+      good: Proposes separate accounts with stricter network and access controls, but misses how shared services or tokenisation affect scope.
+      weak: Applies stricter policies to the whole estate or puts payment systems in existing shared accounts.
+    followups:
+      - The enclave needs your central CI system. How do you avoid bringing CI into scope?
+      - How would you prove to an assessor that nothing outside the enclave can reach card data?
+    common_errors:
+      - Connecting the enclave to shared services with broad network paths, which expands the compliance scope.
+
+  - external_key: system_design.cloud_architecture.multi_cloud_guardrails
+    competency_key: system_design
+    topic: Consistent governance across three clouds
+    difficulty: hard
+    text: >-
+      Through history and acquisitions your company now runs significant workloads on three different cloud
+      providers. How would you design identity, guardrails and logging so governance is consistent without
+      pretending the three platforms are identical?
+    expected_concepts:
+      - single identity provider federated into each cloud
+      - common control objectives mapped to each provider's native policy engine
+      - policy as code with a shared catalogue of rules
+      - central security data lake normalising logs from each provider
+      - cloud-specific landing zone implementations behind common standards
+      - single inventory and ownership registry
+    rubric:
+      excellent: Separates the common control objectives from provider-specific implementations, uses each cloud's native mechanisms, centralises identity and security data, and is realistic about where consistency is not worth forcing.
+      good: Centralises identity and logging and aims for common policies, but leans on a lowest-common-denominator abstraction.
+      weak: Proposes one tool to manage all clouds identically, or lets each cloud be governed by a separate team with separate rules.
+    followups:
+      - A control is easy to enforce in one cloud but has no equivalent in another. What do you do?
+      - How would you report compliance to leadership across all three?
+    common_errors:
+      - Building a thick abstraction layer that hides useful native controls and lags behind provider features.
+
+  - external_key: system_design.cloud_architecture.landing_zone_v2_migration
+    competency_key: system_design
+    topic: Moving hundreds of accounts to a new baseline
+    difficulty: hard
+    text: >-
+      Your first landing zone was built quickly years ago. You've designed a second version with a new network
+      model and new guardrails, and three hundred accounts need to move onto it. How would you roll that out
+      without disrupting the teams?
+    expected_concepts:
+      - inventory of differences per account and dependency mapping
+      - waves starting with low-risk and volunteer accounts
+      - audit-mode guardrails to measure impact before enforcing
+      - coexistence of old and new network models during transition
+      - automated migration tooling with per-account rollback
+      - communication and support model for teams
+    rubric:
+      excellent: Plans the rollout in waves with impact measurement before enforcement, designs coexistence between old and new models, automates per-account migration with rollback and treats team communication as part of the design.
+      good: Uses waves and testing, but is light on coexistence of network models or rollback.
+      weak: Plans a big-bang cutover or expects each team to migrate themselves without tooling.
+    followups:
+      - Twenty accounts are owned by teams that no longer exist. How do you handle them?
+      - How would you know when it's safe to switch off the old network model?
+    common_errors:
+      - Enforcing new guardrails before measuring how many existing workloads would break.
+
+  - external_key: system_design.cloud_architecture.guardrail_exceptions
+    competency_key: security
+    topic: Time-bound exceptions to guardrails
+    difficulty: hard
+    text: >-
+      Your guardrails are strict, and teams regularly need legitimate exceptions, like a public bucket for a
+      website or a region outside the allow-list. Design an exception system that scales to hundreds of teams
+      without quietly eroding your controls.
+    expected_concepts:
+      - exceptions requested as code with justification and owner
+      - risk-based approval routing
+      - narrowly scoped exceptions at resource or account level
+      - automatic expiry with renewal review
+      - compensating controls and extra monitoring for exempted resources
+      - reporting on exception volume to find guardrails that need redesign
+    rubric:
+      excellent: Designs scoped, time-bound, code-managed exceptions with risk-based approval and compensating controls, and uses exception data to improve guardrails themselves.
+      good: Provides a request and approval process with some scoping and expiry, but misses compensating controls or feedback into guardrail design.
+      weak: Handles exceptions by moving accounts to a looser organisational unit or by manual permanent policy edits.
+    followups:
+      - Half of all exceptions are for the same guardrail. What does that tell you?
+      - An exception expires on a Friday night for a production service. What should happen?
+    common_errors:
+      - Granting exceptions at the account level when only one resource needed it.
+
+  - external_key: system_design.cloud_architecture.tenant_per_account_saas
+    competency_key: system_design
+    topic: Dedicated account per enterprise customer
+    difficulty: hard
+    text: >-
+      Your SaaS product promises large customers a fully dedicated cloud account for their data. You expect to
+      grow from twenty such customers to two thousand. Design the automation and architecture that makes that
+      sustainable.
+    expected_concepts:
+      - fully automated tenant account vending and baseline
+      - central control plane deploying to tenant accounts
+      - fleet-wide deployment orchestration with waves and rollback
+      - provider limits on accounts, roles and organisational policies
+      - centralised telemetry and support access with audit
+      - per-tenant cost tracking
+    rubric:
+      excellent: Designs an automated tenant lifecycle and a control plane that deploys safely across thousands of accounts, anticipates provider limits and API throttling, and covers support access and cost attribution.
+      good: Automates account creation and deployment per tenant, but misses fleet-scale concerns like throttling, limits or staged rollout.
+      weak: Treats each tenant account as a hand-maintained environment, which cannot scale past a few dozen.
+    followups:
+      - A bad release reaches three hundred tenant accounts before anyone notices. How would your design have limited that?
+      - How would support engineers get access to a tenant account for debugging?
+    common_errors:
+      - Ignoring organisation-level quotas and API rate limits that bite at thousands of accounts.
+
+  - external_key: system_design.cloud_architecture.landing_zone_control_plane_blast_radius
+    competency_key: security
+    topic: Protecting the landing zone's own control plane
+    difficulty: hard
+    text: >-
+      The management account and the pipeline that pushes organisation-wide policies can affect every workload you
+      run. How would you design around the risk of that control plane being compromised or pushing a bad change?
+    expected_concepts:
+      - minimal workloads and access in the management account
+      - hardware-backed credentials and break-glass procedures
+      - multi-party approval for organisation-wide changes
+      - staged policy rollout through test units first
+      - separation of duties between policy authors and approvers
+      - monitoring and alerting on every management account action
+    rubric:
+      excellent: Treats the control plane as the highest-value target, combines strong authentication, multi-party approval, staged rollout and monitoring, and explains how to recover if it does happen.
+      good: Restricts access and adds approvals and monitoring, but misses staged rollout or recovery.
+      weak: Runs ordinary workloads or day-to-day automation from the management account with standing admin access.
+    followups:
+      - How would you recover if a deny-all policy were attached to the root by mistake?
+      - Who should hold the break-glass credentials, and how would you test them?
+    common_errors:
+      - Granting the policy deployment pipeline permanent root-level administrative rights with no approval gate.
+
+  - external_key: system_design.cloud_architecture.fleet_quota_management
+    competency_key: system_design
+    topic: Managing service quotas across a large estate
+    difficulty: hard
+    text: >-
+      With hundreds of accounts across several regions, launches keep stalling because someone hits a service
+      quota nobody was watching. Design a system that manages quotas proactively across the whole estate.
+    expected_concepts:
+      - inventory of relevant quotas per account and region
+      - usage collection and forecasting against limits
+      - alerting at thresholds with owners
+      - automated quota increase requests as part of vending and baselines
+      - capacity reviews before major launches
+      - awareness of account-level versus organisation-level limits
+    rubric:
+      excellent: Builds a data-driven loop of collection, forecasting, alerting and automated increases, ties it into vending and launch reviews, and distinguishes the different scopes of limits.
+      good: Monitors key quotas and alerts teams, with automated requests for some, but no forecasting or launch integration.
+      weak: Raises quotas reactively when something breaks, or sets every quota to the maximum without tracking.
+    followups:
+      - Some quota increases take days for the provider to approve. How does that change your design?
+      - Which quotas would you watch first in a typical containerised estate?
+    common_errors:
+      - Forgetting that new accounts start with default quotas well below what existing ones already run with.
+
+  - external_key: system_design.cloud_architecture.org_policy_change_rollout
+    competency_key: security
+    topic: Safely rolling out organisation-wide policy changes
+    difficulty: hard
+    text: >-
+      You need to roll out a new deny policy to every account, for example blocking unencrypted storage. Last
+      time a similar change broke several production deployments. Design a rollout process that catches that
+      kind of breakage before it reaches production.
+    expected_concepts:
+      - policy as code with automated tests and simulation
+      - analysing recent activity logs to predict which calls would be denied
+      - staged rollout through test, non-production and production units
+      - notifying affected teams with time to remediate
+      - fast rollback path
+      - monitoring denied calls after each stage
+    rubric:
+      excellent: Uses log-driven impact analysis and simulation before rollout, stages the change through units with monitoring of new denials, gives teams warning and keeps a fast rollback.
+      good: Stages the rollout and tests in non-production but has no way to predict impact from real activity.
+      weak: Applies the policy to the root after reviewing it on paper, relying on teams to report breakage.
+    followups:
+      - How would you handle a workload that only runs once a quarter and so never shows up in recent logs?
+      - What signal would make you halt the rollout at the production stage?
+    common_errors:
+      - Testing only in non-production accounts whose activity does not resemble production.

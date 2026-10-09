@@ -1,0 +1,231 @@
+version: 1
+slug: highest_version_satisfying_constraint
+title: "Highest Version Satisfying a Constraint"
+difficulty: hard
+competency_keys: [problem_solving, code_quality]
+role_tags: [devops, platform, backend]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Highest Version Satisfying a Constraint
+
+  An internal package resolver has to pick which release of a dependency to install. It is given the
+  releases that are available in the registry and the version constraint written in a service's
+  manifest, and it installs the **highest** release that satisfies the constraint.
+
+  **Versions.** Every entry of `versions` is `MAJOR.MINOR.PATCH`: three non-negative integers without
+  leading zeros. Versions compare component by component from the left, **numerically**
+  (`1.10.0` is higher than `1.9.7`). The list is unsorted and may contain the same version more than once.
+
+  **Constraints.** `constraint` is one or more **ranges** separated by `||` (spaces may surround `||`).
+  A version satisfies the constraint when it satisfies **at least one** range. A range is one or more
+  **comparators** separated by spaces and/or commas; a version satisfies the range when it satisfies
+  **all** of its comparators. There is never a space between an operator and its version.
+
+  | Comparator | Matches versions `v` with |
+  |---|---|
+  | `>=X.Y.Z`, `>X.Y.Z`, `<=X.Y.Z`, `<X.Y.Z` | the usual comparison against `X.Y.Z` |
+  | `=X.Y.Z` or just `X.Y.Z` | exactly `X.Y.Z` |
+  | `~X.Y.Z` | `X.Y.Z <= v < X.(Y+1).0` |
+  | `^X.Y.Z` | `X.Y.Z <= v <` the next release of the leftmost **non-zero** component: `^1.2.3` means `< 2.0.0`, `^0.2.3` means `< 0.3.0`, `^0.0.3` means `< 0.0.4` (and `^0.0.0` matches only `0.0.0`) |
+  | `*` | every version |
+
+  The version in a comparator may be **partial** (`X` or `X.Y`); missing components are filled with `0`
+  before the comparator is applied, for every operator. So `>=2` means `>=2.0.0`, `1.4` means exactly
+  `1.4.0`, `~1` means `>=1.0.0 <1.1.0` and `^0.2` means `>=0.2.0 <0.3.0`.
+
+  Write `max_satisfying_version(versions, constraint)` that returns the highest satisfying version
+  exactly as written, or an empty string if no version satisfies the constraint.
+
+  ### Example 1
+  ```
+  Input:  versions = ["1.2.3", "1.4.0", "2.0.0", "1.10.1"], constraint = "^1.2.0"
+  Output: "1.10.1"
+  Explanation: ^1.2.0 allows 1.2.0 up to (not including) 2.0.0; 1.10.1 is the highest of those
+  ```
+
+  ### Example 2
+  ```
+  Input:  versions = ["0.2.5", "0.3.0", "0.2.9", "1.0.0"], constraint = "~0.2 || >=2"
+  Output: "0.2.9"
+  Explanation: ~0.2 is >=0.2.0 <0.3.0; nothing satisfies >=2.0.0
+  ```
+
+  ### Example 3
+  ```
+  Input:  versions = ["3.1.0", "3.2.0"], constraint = ">=1.0.0, <3.0.0"
+  Output: ""
+  ```
+
+  ### Constraints
+  - `0 <= versions.length <= 10^4`
+  - Every version component is an integer from `0` to `10^9`, written without leading zeros.
+  - `1 <= constraint.length <= 1000`; it is well formed: at least one range, every range has at least
+    one comparator, and comparator versions have 1 to 3 components in the same range of values.
+  - Only the characters `0-9 . < > = ^ ~ * | ,` and spaces appear in `constraint`.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: max_satisfying_version
+  params:
+    - {name: versions, type: "string[]"}
+    - {name: constraint, type: string}
+  return_type: string
+  comparison: exact
+reference_solutions:
+  python: |
+    from collections.abc import Callable
+
+    Version = tuple[int, int, int]
+
+
+    def max_satisfying_version(versions: list[str], constraint: str) -> str:
+        def parse(text: str) -> Version:
+            parts = [int(p) for p in text.split(".")]
+            parts += [0] * (3 - len(parts))
+            return (parts[0], parts[1], parts[2])
+
+        def comparator(token: str) -> Callable[[Version], bool]:
+            if token == "*":
+                return lambda v: True
+            op = "="
+            rest = token
+            for candidate in (">=", "<=", ">", "<", "=", "^", "~"):
+                if token.startswith(candidate):
+                    op, rest = candidate, token[len(candidate):]
+                    break
+            base = parse(rest)
+            if op == ">=":
+                return lambda v: v >= base
+            if op == "<=":
+                return lambda v: v <= base
+            if op == ">":
+                return lambda v: v > base
+            if op == "<":
+                return lambda v: v < base
+            if op == "=":
+                return lambda v: v == base
+            if op == "^":
+                if base[0] > 0:
+                    upper = (base[0] + 1, 0, 0)
+                elif base[1] > 0:
+                    upper = (0, base[1] + 1, 0)
+                else:
+                    upper = (0, 0, base[2] + 1)
+            else:  # "~"
+                upper = (base[0], base[1] + 1, 0)
+            return lambda v: base <= v < upper
+
+        ranges = [
+            [comparator(token) for token in part.replace(",", " ").split()]
+            for part in constraint.split("||")
+        ]
+        best: Version | None = None
+        best_text = ""
+        for text in versions:
+            version = parse(text)
+            if best is not None and version <= best:
+                continue
+            if any(all(check(version) for check in rng) for rng in ranges):
+                best, best_text = version, text
+        return best_text
+  javascript: |
+    function maxSatisfyingVersion(versions, constraint) {
+      const parse = (text) => {
+        const parts = text.split(".").map(Number);
+        while (parts.length < 3) parts.push(0);
+        return parts;
+      };
+      const cmp = (a, b) => {
+        for (let i = 0; i < 3; i++) {
+          if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+        }
+        return 0;
+      };
+      const OPS = [">=", "<=", ">", "<", "=", "^", "~"];
+      const comparator = (token) => {
+        if (token === "*") return () => true;
+        let op = "=";
+        let rest = token;
+        for (const candidate of OPS) {
+          if (token.startsWith(candidate)) {
+            op = candidate;
+            rest = token.slice(candidate.length);
+            break;
+          }
+        }
+        const base = parse(rest);
+        switch (op) {
+          case ">=": return (v) => cmp(v, base) >= 0;
+          case "<=": return (v) => cmp(v, base) <= 0;
+          case ">": return (v) => cmp(v, base) > 0;
+          case "<": return (v) => cmp(v, base) < 0;
+          case "=": return (v) => cmp(v, base) === 0;
+          default: {
+            let upper;
+            if (op === "~") upper = [base[0], base[1] + 1, 0];
+            else if (base[0] > 0) upper = [base[0] + 1, 0, 0];
+            else if (base[1] > 0) upper = [0, base[1] + 1, 0];
+            else upper = [0, 0, base[2] + 1];
+            return (v) => cmp(v, base) >= 0 && cmp(v, upper) < 0;
+          }
+        }
+      };
+      const ranges = constraint.split("||").map((part) =>
+        part.replace(/,/g, " ").split(" ").filter((t) => t.length > 0).map(comparator)
+      );
+      let best = null;
+      let bestText = "";
+      for (const text of versions) {
+        const version = parse(text);
+        if (best !== null && cmp(version, best) <= 0) continue;
+        if (ranges.some((rng) => rng.every((check) => check(version)))) {
+          best = version;
+          bestText = text;
+        }
+      }
+      return bestText;
+    }
+tests:
+  - {id: t1, args: [["1.2.3", "1.4.0", "2.0.0", "1.10.1"], "^1.2.0"], expected: "1.10.1", description: "Example 1 - caret on a non-zero major; numeric comparison of 1.10.1"}
+  - {id: t2, args: [["0.2.5", "0.3.0", "0.2.9", "1.0.0"], "~0.2 || >=2"], expected: "0.2.9", description: "Example 2 - partial tilde and an alternative that matches nothing"}
+  - {id: t3, args: [["3.1.0", "3.2.0"], ">=1.0.0, <3.0.0"], expected: "", description: "Example 3 - nothing satisfies, empty string"}
+  - {id: t4, hidden: true, args: [["0.1.0", "10.0.0", "9.9.9", "10.0.0"], "*"], expected: "10.0.0", description: "Star matches everything; numeric max with a duplicate"}
+  - {id: t5, hidden: true, args: [["0.0.3", "0.0.4", "0.0.10", "0.1.0"], "^0.0.3"], expected: "0.0.3", description: "Caret on 0.0.x allows only that patch"}
+  - {id: t6, hidden: true, args: [["0.2.2", "0.2.3", "0.2.99", "0.3.0", "1.0.0"], "^0.2.3"], expected: "0.2.99", description: "Caret on 0.x stops before the next minor"}
+  - {id: t7, hidden: true, args: [[], "*"], expected: "", description: "Empty registry"}
+  - {id: t8, hidden: true, args: [["1.0.0", "1.5.0", "2.0.0", "2.0.1"], ">1.0.0 ,  <=2.0.0"], expected: "2.0.0", description: "Exclusive and inclusive bounds with mixed comma and spaces"}
+  - {id: t9, hidden: true, args: [["0.9.9", "2.1.0", "2.1.7", "2.10.0"], "2.1 || <1"], expected: "2.1.0", description: "Bare partial version means exactly 2.1.0, not any 2.1.x"}
+  - {id: t10, hidden: true, args: [["0.0.0", "0.0.1", "0.1.0", "1.0.5", "1.1.0", "1.9.0"], "~1 || ^0.0"], expected: "1.0.5", description: "Partial tilde ~1 is <1.1.0 and ^0.0 matches only 0.0.0"}
+  - {id: t11, hidden: true, args: [["999999999.0.0", "1000000000.0.0", "123.456.789"], ">=999999999 <1000000000 || >2.0.0 <1.0.0 || =123.456.789"], expected: "999999999.0.0", description: "Large components, a contradictory range and an exact match"}
+  - {id: t12, hidden: true, args: [["6.2.5", "5.10.3", "3.1.2", "8.4.11", "3.10.4", "7.9.1", "2.1.3", "2.7.5", "0.3.2", "1.6.11", "11.6.4", "3.9.3", "8.5.1", "11.4.7", "0.10.2", "3.11.10", "10.2.8", "2.2.4", "12.1.6", "9.9.3", "12.12.4", "1.5.6", "7.7.5", "8.11.5", "11.12.2", "7.2.3", "4.6.1", "2.1.7", "12.8.5", "1.9.1", "0.3.4", "2.12.5", "4.12.0", "9.3.2", "11.9.5", "9.5.0", "4.3.6", "9.7.9", "5.6.3", "12.11.1", "4.6.0", "6.9.7", "5.8.2", "1.7.5", "9.10.1", "7.7.8", "8.4.0", "12.12.3", "4.0.5", "4.9.0", "3.8.4", "4.0.0", "2.9.9", "8.10.2", "4.2.8", "2.11.0", "6.1.9", "5.1.4", "10.11.11", "6.7.10", "12.7.2", "8.0.4", "0.11.11", "3.10.5", "7.5.7", "6.11.7", "5.1.12", "2.1.5", "8.9.5", "10.7.7", "10.0.9", "0.3.3", "10.1.9", "1.4.2", "8.8.9", "0.2.10", "6.12.10", "2.9.4", "5.12.3", "11.10.6", "10.11.0", "2.1.11", "9.5.4", "0.12.8", "10.9.9", "7.8.9", "5.0.5", "12.3.9", "10.4.3", "11.1.12", "11.0.2", "8.1.5", "10.12.5", "9.0.1", "11.5.5", "10.4.5", "9.8.9", "11.9.3", "10.11.4", "7.3.6", "2.3.6", "9.10.12", "3.0.4", "3.5.10", "7.5.8", "12.6.12", "1.3.9", "0.8.0", "6.9.10", "7.7.2", "4.7.10", "7.0.10", "9.3.8", "3.2.11", "9.10.6", "8.1.8", "3.6.3", "5.6.11", "10.4.12", "0.3.11", "9.2.1", "9.10.5", "1.5.1", "1.6.1", "2.3.9", "6.2.7", "3.5.5", "6.10.8", "10.11.1", "10.7.12", "2.2.1", "7.6.4", "7.10.7", "7.1.0", "12.10.4", "11.12.11", "1.4.6", "3.5.6", "5.4.2", "12.2.7", "11.6.0", "10.9.12", "8.4.9", "6.6.1", "7.6.11", "4.2.1", "5.1.11", "8.5.11", "8.9.1", "7.6.12", "2.6.3", "7.8.12", "5.10.9", "11.2.6", "5.6.7", "1.6.8", "9.6.7", "1.4.11", "1.1.7", "1.4.4", "1.10.3", "9.5.5", "11.12.0", "8.10.11", "6.12.0", "2.8.11", "8.12.0", "9.7.2", "10.3.0", "5.0.11", "10.8.3", "1.11.4", "4.6.12", "1.7.7", "5.8.11", "8.10.12", "0.9.6", "4.4.9", "4.8.2", "4.4.10", "10.9.10", "6.5.12", "6.12.4", "9.9.2", "8.4.12", "7.0.3", "1.4.8", "8.9.2", "1.8.1", "3.3.6", "0.1.3", "11.9.7", "7.3.10", "12.9.4", "10.5.9", "10.10.12", "7.3.0", "3.3.0", "3.3.12", "11.10.8", "0.10.0", "7.6.8", "3.0.10", "8.6.8", "5.5.1", "6.10.6", "12.0.10", "3.10.6", "11.2.1", "9.0.6", "6.9.0", "1.4.3", "7.7.9", "4.8.4", "11.1.0", "0.4.2", "8.3.10", "3.1.5", "6.11.8", "10.6.3", "12.8.7", "0.6.8", "11.3.11", "5.0.6", "7.1.11", "8.8.6", "7.1.12", "1.5.11", "7.10.5", "12.5.7", "11.3.4", "9.10.3", "0.12.4", "1.8.12", "11.9.0", "4.5.2", "4.11.2", "1.0.8", "3.11.0", "9.5.3", "6.12.3", "11.3.7", "1.7.10", "4.12.3", "0.10.10", "6.7.3", "12.2.6", "4.8.12", "12.7.6", "2.10.6", "3.7.1", "5.8.9", "0.8.1", "12.0.2", "3.12.1", "8.12.11", "1.7.12", "12.7.4", "3.2.6", "1.5.7", "10.11.9", "10.6.0", "9.1.1", "0.0.4", "8.6.9", "10.6.12", "1.11.12", "7.5.3", "12.6.8", "10.12.9", "7.5.11", "12.5.2", "9.10.7", "9.1.7", "7.1.7", "4.5.8", "10.7.1", "9.10.8", "12.11.7", "5.10.2", "3.6.9", "8.10.3", "9.2.8", "12.1.2", "1.12.1", "9.0.0", "6.7.2", "9.0.12", "4.0.12", "10.2.4", "8.12.4", "1.10.1", "4.2.10", "11.9.1", "6.0.5", "1.7.1", "7.9.4", "3.11.1", "8.0.8", "6.1.1"], "^1.2 || ~3.4.1, >3.4.1 || >=7.0.0 <7.3, * || =12.12.12 || ^0.0.5"], expected: "7.2.3", description: "300 random versions against five mixed ranges"}
+expected_concepts:
+  - "tokenising a small grammar: alternatives, then comparators, then operator and version"
+  - "padding partial versions and comparing numeric tuples"
+  - "desugaring caret and tilde into half-open intervals"
+  - "OR of ANDs evaluation (disjunctive normal form)"
+  - "single pass keeping the highest satisfying version"
+optimal_complexity: {time: "O(V * C) for V versions and C comparators (parse the constraint once)", space: "O(C)"}
+rubric:
+  excellent: "Parses the constraint once into a list of ranges of predicates (or intervals), handles two-character operators before one-character ones, desugars caret and tilde exactly as specified including the zero-major cases, compares versions as numeric tuples and returns the highest match as written; code is organised into small parse and match helpers."
+  good: "Correct on most rules but needs a fix for one special case (caret with leading zeros, partial versions, or comma separators), or reparses the constraint for every version."
+  weak: "Compares versions as strings, treats a partial version as a wildcard instead of padding with zeros, misreads >= as > followed by =, or ignores the OR between ranges."
+  criteria:
+    correctness: "All tests pass, including caret on 0.x and 0.0.x, partial versions, exclusive bounds and unsatisfiable ranges."
+    efficiency: "Constraint parsed once; each version checked in time proportional to the number of comparators."
+    code_quality: "Separate helpers for parsing a version, building a comparator and evaluating ranges; no duplicated comparison code; the operator table is explicit."
+    edge_cases: "Empty version list, duplicates, a star mixed with other comparators, contradictory ranges and very large components."
+    communication: "Explains the grammar as an OR of ANDs and how caret and tilde turn into half-open intervals."
+hints:
+  - "Read the constraint the way the resolver does: first split it into alternatives, then split each alternative into individual comparators, and only then look at the operator and version inside each comparator."
+  - "Turn every version into three numbers (padding with zeros) so that comparisons are numeric; caret and tilde can each be rewritten as a lower bound and an exclusive upper bound, and when you look for the operator, check the two-character ones before the one-character ones."
+  - "Build, once, a list of ranges where each range is a list of checks against a padded version; a version is accepted when some range has all of its checks true; then scan the available versions, keep the highest accepted one by numeric comparison and return its original text, or the empty string if none was accepted."
+followups:
+  - "How would you add pre-release tags such as 1.2.0-rc.1, which sort before 1.2.0?"
+  - "How would you report which comparator rejected the newest available version, to help users debug their manifest?"
+  - "If the registry list is already sorted, how would you exploit that?"
+  - "How would you validate a malformed constraint and produce a helpful error?"
+common_errors:
+  - "Comparing versions as strings, which ranks 1.9.0 above 1.10.0."
+  - "Matching the operator one character at a time so that >= is read as > with a version starting with =."
+  - "Treating ^0.2.3 like ^1.2.3 (allowing 0.9.0) or forgetting the special case for ^0.0.x."
+  - "Interpreting a bare partial version such as 2.1 as any 2.1.x release instead of exactly 2.1.0."
+  - "Splitting only on spaces and failing on comma-separated comparators."

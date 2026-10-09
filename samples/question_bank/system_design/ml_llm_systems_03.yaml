@@ -1,0 +1,605 @@
+# Curated questions: system design for ML and LLM systems (3 of 4).
+# LLM applications: serving and gateways, RAG assistants, assistants with tools and real-time voice.
+# `defaults` are merged into every question (question keys win). Easy questions override round_types.
+version: 1
+defaults:
+  role_tags: [ml, llm, data_scientist]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------- easy
+  - external_key: system_design.ml_llm_systems.docs_assistant_first_version
+    competency_key: llm_engineering
+    topic: First version of an internal docs assistant
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your engineering org wants an assistant that answers questions from its internal wiki and runbooks. Walk
+      me through the main components you'd build for a first version, and how a question flows through them.
+    expected_concepts:
+      - ingestion that parses and chunks the documents
+      - embeddings stored in a vector index, possibly with keyword search
+      - retrieval of relevant chunks for each question
+      - a prompt that grounds the answer in retrieved text with links to sources
+      - a way to collect feedback and a small test set of real questions
+    rubric:
+      excellent: Describes ingestion, indexing, retrieval and grounded generation with source links as a clear flow, and includes a refresh plan, feedback capture and a small evaluation set from day one.
+      good: Covers the core retrieve-then-generate flow with sensible components.
+      weak: Proposes pasting the whole wiki into a prompt or fine-tuning a model on it as the first step.
+    followups:
+      - A runbook was updated this morning. How does the assistant pick up the change?
+      - How would you know whether the assistant is giving correct answers?
+    common_errors:
+      - Not showing sources, so users cannot check answers or spot stale documents.
+
+  - external_key: system_design.ml_llm_systems.hosted_llm_integration
+    competency_key: llm_engineering
+    topic: Calling a hosted LLM API from a product
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A product team is adding a feature that calls a hosted LLM API for every user request. What would you
+      build around that call so the feature is reliable and the costs don't surprise anyone?
+    expected_concepts:
+      - timeouts and retries with backoff for transient errors
+      - handling provider rate limits with queuing or shedding
+      - a fallback behaviour when the model is unavailable
+      - logging tokens and cost per request and per feature
+      - keeping API keys server side
+    rubric:
+      excellent: Wraps the call with timeouts, bounded retries and rate-limit handling, defines a user-visible fallback, tracks token cost per feature and keeps credentials on the server.
+      good: Covers retries, timeouts and some cost tracking.
+      weak: Calls the API directly from the client or with no error or cost handling.
+    followups:
+      - What should the user see if the model takes twenty seconds to respond?
+      - How would you set a budget alert for this one feature?
+    common_errors:
+      - Retrying without limits, multiplying cost and load during a provider incident.
+
+  - external_key: system_design.ml_llm_systems.token_streaming_backend
+    competency_key: llm_engineering
+    topic: Streaming model output to users
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Users of your chat feature are staring at a spinner for several seconds before the whole answer appears.
+      How would you change the backend and the client so the answer streams in as it's generated?
+    expected_concepts:
+      - requesting a streamed response from the model
+      - server-sent events or WebSockets to the browser
+      - proxies and load balancers that buffer responses
+      - cancelling generation when the user stops or leaves
+      - storing the final message once the stream completes
+    rubric:
+      excellent: Streams tokens end to end over SSE or WebSockets, accounts for buffering in proxies, propagates cancellation to stop paying for unused tokens and persists the completed message.
+      good: Describes streaming from the model through the server to the client.
+      weak: Suggests a faster model or polling for the full answer.
+    followups:
+      - The user closes the tab mid-answer. What should happen on the server?
+      - How would you handle a moderation check if the answer is already streaming?
+    common_errors:
+      - Not cancelling the upstream generation when the client disconnects.
+
+  - external_key: system_design.ml_llm_systems.search_page_ai_answer
+    competency_key: llm_engineering
+    topic: An AI answer box on a search results page
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A help centre wants a short AI-generated answer above its normal search results. How would you design it
+      so the regular results stay fast and the answer only appears when it's likely to be useful?
+    expected_concepts:
+      - render regular results immediately and load the answer asynchronously
+      - generate only from top retrieved help articles with links
+      - a confidence or relevance threshold for showing an answer at all
+      - caching answers for common queries with invalidation on article updates
+      - tracking clicks and feedback on the answer box
+    rubric:
+      excellent: Keeps search independent and fast, generates grounded answers from top results only when relevance is high, caches common queries with invalidation and measures usefulness.
+      good: Loads the answer separately and grounds it in search results.
+      weak: Blocks the whole page on generation or always shows an answer regardless of relevance.
+    followups:
+      - How would you decide not to show an answer for a query?
+      - An article changes. How long can a cached answer stay wrong?
+    common_errors:
+      - Making the search page wait for the model before showing any results.
+
+  # ------------------------------------------------------------- medium
+  - external_key: system_design.ml_llm_systems.llm_gateway
+    competency_key: llm_engineering
+    topic: A central gateway for LLM access
+    difficulty: medium
+    text: >-
+      Twelve teams call different LLM providers directly with their own keys, and finance can't tell who's
+      spending what. Design a central LLM gateway for the company.
+    expected_concepts:
+      - one API in front of multiple providers and self-hosted models
+      - per-team credentials, quotas and rate limits
+      - cost attribution from token usage
+      - routing, retries and fallback between providers
+      - centralised logging with redaction and retention controls
+      - keeping the gateway from becoming a latency bottleneck or single point of failure
+    rubric:
+      excellent: Designs a unified API with per-team auth, quotas and cost attribution, provider routing and fallback, redacted logging and a highly available deployment that adds little latency.
+      good: Covers unified access, quotas and cost tracking.
+      weak: Proposes a shared API key in a vault with a spreadsheet for costs.
+    followups:
+      - How would you handle a team that needs a provider feature your unified API doesn't expose?
+      - What happens to every product if the gateway goes down?
+    common_errors:
+      - Designing the gateway as a single instance that every product depends on.
+
+  - external_key: system_design.ml_llm_systems.semantic_response_cache
+    competency_key: llm_engineering
+    topic: Caching LLM responses for similar requests
+    difficulty: medium
+    text: >-
+      Many questions to your support assistant are near-duplicates of each other. How would you design a cache
+      that reuses earlier answers for similar questions, and what could go wrong?
+    expected_concepts:
+      - exact-match cache before semantic matching
+      - embedding similarity lookup with a tuned threshold
+      - cache keys including model, prompt version and user-specific context
+      - invalidation when source documents or prompts change
+      - risk of serving a wrong answer to a subtly different question
+    rubric:
+      excellent: Layers exact and semantic caching, scopes keys by prompt version and personal context, invalidates on content changes and evaluates false hits against a threshold.
+      good: Proposes embedding-based lookup with a threshold and some invalidation.
+      weak: Caches by similarity with no thought about personalised answers or stale content.
+    followups:
+      - "How do you stop the cache answering \"cancel my order\" with the answer to \"cancel my subscription\"?"
+      - How would you measure the hit rate you can safely achieve?
+    common_errors:
+      - Sharing cached answers across users when the answer depended on their account data.
+
+  - external_key: system_design.ml_llm_systems.self_hosted_capacity_plan
+    competency_key: mlops
+    topic: Capacity planning for a self-hosted LLM
+    difficulty: medium
+    text: >-
+      You're asked to self-host an open-weight model for an internal assistant with a few hundred people using
+      it concurrently at peak. How would you work out the hardware you need and design the serving setup?
+    expected_concepts:
+      - memory for weights plus KV cache per concurrent sequence
+      - typical prompt and output lengths driving throughput needs
+      - continuous batching in an inference server
+      - quantisation trade-offs on memory and quality
+      - load testing to measure time to first token and tokens per second
+      - replicas for redundancy and autoscaling limits
+    rubric:
+      excellent: Estimates weight and KV cache memory from model size and context lengths, sizes throughput from usage patterns, uses continuous batching and quantisation where sensible and validates with load tests.
+      good: Considers model size, batching and concurrency with a rough estimate.
+      weak: Picks a number of GPUs without any reasoning about memory or throughput.
+    followups:
+      - Users start pasting very long documents. What changes in your capacity plan?
+      - Which latency metrics would you promise users, and how would you measure them?
+    common_errors:
+      - Sizing GPUs for model weights alone and forgetting the KV cache.
+
+  - external_key: system_design.ml_llm_systems.small_large_model_routing
+    competency_key: llm_engineering
+    topic: Routing between small and large models
+    difficulty: medium
+    text: >-
+      Most requests to your assistant are simple, but some need your largest model. How would you design a
+      router that sends each request to the cheapest model that can handle it well?
+    expected_concepts:
+      - a lightweight classifier or rules estimating request difficulty
+      - escalation when the small model's answer fails checks
+      - building training data for the router from evaluation results
+      - measuring quality per route, not just overall
+      - latency and cost targets driving thresholds
+    rubric:
+      excellent: Designs a router trained on quality-labelled data, adds escalation based on output checks, sets thresholds from cost and quality targets and evaluates quality per route.
+      good: Proposes a classifier or rules with escalation and some evaluation.
+      weak: Routes by prompt length or keyword with no quality measurement.
+    followups:
+      - How would you get labels saying which model was good enough for a request?
+      - What's the latency cost of escalation, and when is it acceptable?
+    common_errors:
+      - Judging the router on cost savings alone without measuring quality on downgraded requests.
+
+  - external_key: system_design.ml_llm_systems.multi_source_ingestion
+    competency_key: data_engineering
+    topic: Ingesting many content sources for an assistant
+    difficulty: medium
+    text: >-
+      Your company assistant needs content from the wiki, a shared drive, the ticketing system and chat
+      channels, and it should reflect changes within an hour. Design the ingestion side.
+    expected_concepts:
+      - connectors per source using change feeds or incremental sync
+      - normalising documents to a common schema with source metadata and permissions
+      - parsing and chunking adapted to each content type
+      - deduplication of copies across sources
+      - deletions and permission changes propagated to the index
+      - backpressure, retries and monitoring of sync lag per source
+    rubric:
+      excellent: Uses incremental connectors into a normalised schema with permissions, handles parsing per type, deduplication, deletions and permission changes, and monitors lag and failures per source.
+      good: Describes connectors, a common format and incremental updates.
+      weak: Proposes a nightly full crawl of everything into one index.
+    followups:
+      - A sensitive file is removed from the drive. How quickly is it gone from answers?
+      - How would you handle a source whose API rate limits you heavily?
+    common_errors:
+      - Syncing new and edited content but never processing deletions.
+
+  - external_key: system_design.ml_llm_systems.verifiable_citations
+    competency_key: llm_engineering
+    topic: Answers with verifiable citations
+    difficulty: medium
+    text: >-
+      Legal users of a research assistant need every claim in an answer to point to the exact passage that
+      supports it. How would you design the generation and the checks behind that?
+    expected_concepts:
+      - passing retrieved passages with stable ids into the prompt
+      - asking the model to cite ids per sentence or claim
+      - validating that cited ids exist and were provided
+      - automated support checks using an entailment model or a second pass
+      - UI linking claims to highlighted source passages
+    rubric:
+      excellent: Designs id-based citation in generation, validates citations mechanically, checks support with an entailment or verification step and presents claims linked to highlighted passages.
+      good: Has the model cite passage ids and shows them to users.
+      weak: Appends a list of retrieved documents at the end with no claim-level link.
+    followups:
+      - The model cites a real passage that doesn't actually support the claim. How would you catch that?
+      - What would you do with a sentence that has no supporting passage?
+    common_errors:
+      - Assuming that a citation to a real document means the claim is supported.
+
+  - external_key: system_design.ml_llm_systems.multi_tenant_rag
+    competency_key: llm_engineering
+    topic: Tenant isolation in a RAG product
+    difficulty: medium
+    text: >-
+      You're building a SaaS assistant where each of a few thousand business customers uploads their own
+      documents. How would you design storage, indexing and retrieval so one customer's data can never show up
+      in another's answers?
+    expected_concepts:
+      - index per tenant versus shared index with mandatory tenant filters
+      - tenant id enforced at the data access layer, not by the prompt
+      - per-tenant caches, logs and evaluation data
+      - noisy neighbours and very large tenants
+      - testing isolation with automated cross-tenant checks
+    rubric:
+      excellent: Compares index layouts with their isolation and cost trade-offs, enforces tenancy at the data layer for every store including caches, handles large tenants and proves isolation with automated tests.
+      good: Proposes per-tenant filtering or indexes with enforcement in the backend.
+      weak: Relies on the prompt telling the model to use only this customer's documents.
+    followups:
+      - Where else besides the vector index could one tenant's data leak into another's answers?
+      - How would you handle one tenant with a hundred times more documents than the rest?
+    common_errors:
+      - Sharing a semantic cache or few-shot examples across tenants.
+
+  - external_key: system_design.ml_llm_systems.invoice_extraction_batch
+    competency_key: llm_engineering
+    topic: Large-scale structured extraction with LLMs
+    difficulty: medium
+    text: >-
+      Finance has a backlog of a million invoices and wants supplier, totals and line items extracted with an
+      LLM within two weeks. How would you design that pipeline?
+    expected_concepts:
+      - batch processing with a queue, concurrency limits and checkpointing
+      - schema-constrained output and validation rules such as totals matching line items
+      - retries and repair for invalid outputs
+      - human review for low-confidence or failed validation
+      - cost and throughput estimates against the deadline
+    rubric:
+      excellent: Designs a resumable batch pipeline sized against rate limits and the deadline, validates outputs with schema and business rules, repairs or escalates failures and estimates cost.
+      good: Covers batching, structured output and validation.
+      weak: Loops over invoices one by one with no validation or restart plan.
+    followups:
+      - How would you estimate accuracy before processing the whole backlog?
+      - What happens if the job crashes on day six?
+    common_errors:
+      - Accepting syntactically valid output whose numbers do not add up.
+
+  - external_key: system_design.ml_llm_systems.llm_app_tracing
+    competency_key: llm_engineering
+    topic: Observability for an LLM application
+    difficulty: medium
+    text: >-
+      When users complain that your assistant gave a bad answer, the team can't reconstruct what happened.
+      How would you design observability for the application so any response can be traced and debugged?
+    expected_concepts:
+      - a trace per request covering retrieval, prompts, model calls and tool calls
+      - recording prompt template version, model and parameters
+      - token counts, latency and cost per step
+      - linking user feedback to traces
+      - redaction and access control for logged content
+    rubric:
+      excellent: Captures a step-level trace with versions, retrieved context, model parameters, cost and latency, links feedback to traces and protects sensitive content with redaction and access controls.
+      good: Logs prompts, responses and versions per request with feedback.
+      weak: Logs only the final answer or relies on general application logs.
+    followups:
+      - How would you find all responses affected by a bad prompt change last Tuesday?
+      - Users paste personal information into chats. How does that affect what you store?
+    common_errors:
+      - Storing raw conversations indefinitely with broad access.
+
+  - external_key: system_design.ml_llm_systems.cross_session_memory
+    competency_key: llm_engineering
+    topic: Remembering user preferences across sessions
+    difficulty: medium
+    text: >-
+      Product wants the assistant to remember things users tell it, like their preferred programming language
+      or project names, across conversations. How would you design that memory system?
+    expected_concepts:
+      - extracting candidate memories from conversations
+      - storing structured facts with source and timestamp
+      - retrieving relevant memories per request within a token budget
+      - letting users view, correct and delete memories
+      - handling conflicting or outdated memories
+    rubric:
+      excellent: Designs extraction, structured storage with provenance, relevance-based retrieval under a budget, user controls for viewing and deletion and rules for conflicts and staleness.
+      good: Stores extracted facts and retrieves them in later sessions.
+      weak: Appends every past conversation to the prompt.
+    followups:
+      - The user says they've switched from Java to Go. How does the memory update?
+      - How would you stop the assistant remembering something the user didn't want kept?
+    common_errors:
+      - Giving users no way to see or delete what the assistant remembers.
+
+  - external_key: system_design.ml_llm_systems.meeting_notes_pipeline
+    competency_key: llm_engineering
+    topic: Meeting transcription and action item pipeline
+    difficulty: medium
+    text: >-
+      Design a feature that takes a recorded meeting, produces a summary and action items, and creates tasks
+      in the team's tracker. Walk me through the pipeline.
+    expected_concepts:
+      - asynchronous job from upload through transcription and speaker labelling
+      - handling long transcripts with chunking or hierarchical summarisation
+      - structured extraction of action items with owners and due dates
+      - user confirmation before creating tasks in external tools
+      - consent and retention for recordings
+    rubric:
+      excellent: Designs an asynchronous pipeline with transcription, long-transcript handling, structured action items, user confirmation before writes to external tools and clear consent and retention rules.
+      good: Covers transcription, summarisation and task creation in a sensible flow.
+      weak: Sends raw audio to one model call and auto-creates tasks without review.
+    followups:
+      - The meeting is three hours long. How do you keep the summary accurate?
+      - How do you handle an action item whose owner is ambiguous?
+    common_errors:
+      - Creating tasks in other systems automatically with no user confirmation.
+
+  - external_key: system_design.ml_llm_systems.llm_variant_experiments
+    competency_key: statistics_experimentation
+    topic: Online experiments for prompt and model changes
+    difficulty: medium
+    text: >-
+      Your team wants to test a new prompt and a cheaper model against the current setup with real users. How
+      would you design the experimentation system for LLM features?
+    expected_concepts:
+      - sticky assignment per user or conversation
+      - variants defined as versioned prompt, model and parameter bundles
+      - outcome metrics such as task success, retention and feedback plus cost and latency
+      - automated quality scoring on sampled traffic per variant
+      - guardrails and quick rollback for safety regressions
+    rubric:
+      excellent: Assigns stickily by user or conversation, versions variant bundles, measures product outcomes alongside cost and latency, samples traffic for quality scoring and defines guardrails and rollback.
+      good: Sets up A/B assignment with versioned variants and sensible metrics.
+      weak: Swaps the prompt for everyone and compares this week with last week.
+    followups:
+      - Thumbs-up rates are low and noisy. What else would you measure?
+      - How long would you run the test, and why?
+    common_errors:
+      - Switching variants mid-conversation so a single chat mixes both.
+
+  # ------------------------------------------------------------- hard
+  - external_key: system_design.ml_llm_systems.long_prompt_interference
+    competency_key: mlops
+    topic: Mixed long and short requests on shared inference
+    difficulty: hard
+    text: >-
+      On your self-hosted inference cluster, short chat requests are fast until document-analysis requests
+      with twenty-thousand-token prompts arrive, and then chat latency spikes. How would you redesign the
+      serving setup?
+    expected_concepts:
+      - long prefill phases stalling decode for other sequences in the batch
+      - chunked prefill to interleave work
+      - separate pools or prefill and decode disaggregation
+      - prefix caching for repeated document or system prompts
+      - admission control and priority by workload class
+      - metrics for time to first token and inter-token latency per class
+    rubric:
+      excellent: Explains why long prefills hurt co-batched decodes, compares chunked prefill, separate pools and disaggregation, adds prefix caching and admission control, and measures latency per workload class.
+      good: Identifies the interference and proposes separating workloads or chunked prefill.
+      weak: Proposes adding GPUs without understanding why latency spikes.
+    followups:
+      - How would you decide between separate pools and disaggregated prefill and decode?
+      - What would you measure to show the fix worked?
+    common_errors:
+      - Reporting only average latency, which hides the spikes chat users actually feel.
+
+  - external_key: system_design.ml_llm_systems.multi_adapter_serving
+    competency_key: mlops
+    topic: Serving many fine-tuned adapters on shared GPUs
+    difficulty: hard
+    text: >-
+      Your platform lets each of several hundred customers fine-tune a LoRA adapter on the same base model.
+      How would you serve all of them without dedicating GPUs to each customer?
+    expected_concepts:
+      - one base model with adapters loaded dynamically per request
+      - batching requests that use different adapters together
+      - adapter caching in GPU and host memory with eviction
+      - routing customers to replicas to improve cache hits
+      - versioning adapters and isolating customer data
+    rubric:
+      excellent: Serves one base model with dynamically loaded adapters, batches across adapters, designs a GPU and host cache with eviction and affinity routing, and handles versioning and isolation.
+      good: Shares the base model and swaps adapters per request with some caching.
+      weak: Merges every adapter into its own full model copy on dedicated hardware.
+    followups:
+      - A customer with a rarely used adapter complains about slow first responses. What can you do?
+      - How would you roll out a new base model version when every adapter was trained on the old one?
+    common_errors:
+      - Ignoring that adapters are tied to a specific base model version.
+
+  - external_key: system_design.ml_llm_systems.agent_code_sandbox
+    competency_key: security
+    topic: Running model-generated code safely at scale
+    difficulty: hard
+    text: >-
+      An assistant can write and run code to analyse uploaded data files, and thousands of users do this
+      concurrently. Design the execution platform so generated code can't harm your systems or other users.
+    expected_concepts:
+      - strong isolation such as microVMs or hardened containers per session
+      - no network by default, restricted file system and dropped privileges
+      - CPU, memory, time and output limits
+      - prewarmed sandbox pools for low start latency
+      - per-user data isolation and cleanup after sessions
+      - auditing and abuse detection
+    rubric:
+      excellent: Uses strong per-session isolation with no network, strict resource limits and privilege reduction, keeps latency acceptable with warm pools, guarantees cleanup and per-user isolation and monitors abuse.
+      good: Runs code in locked-down containers with resource limits.
+      weak: Runs code in the application process or a shared container.
+    followups:
+      - A user's code tries to mine cryptocurrency for an hour. What stops it?
+      - How do you keep sandbox start time under a second at peak?
+    common_errors:
+      - Reusing sandboxes across users without fully resetting their state.
+
+  - external_key: system_design.ml_llm_systems.support_assistant_live_data
+    competency_key: llm_engineering
+    topic: Combining documents and live account data
+    difficulty: hard
+    text: >-
+      A telecom's support assistant must answer both policy questions from documentation and personal questions
+      like "why is my bill higher this month," which need the customer's live account data. How would you
+      design the system?
+    expected_concepts:
+      - classifying intent into document, account or mixed questions
+      - read-only tools calling account APIs with the authenticated user's scope
+      - authorisation enforced by backend services, not the model
+      - combining retrieved policy text with account facts in the answer
+      - handling API latency and failures gracefully
+      - logging and redaction for personal data
+    rubric:
+      excellent: Routes intents, exposes narrowly scoped read-only tools tied to the authenticated user, enforces authorisation in the backend, combines policy and account facts with grounded answers and handles failures and personal data carefully.
+      good: Uses retrieval for documents and tool calls for account data with user scoping.
+      weak: Loads customer records into the index or lets the model pick any account id.
+    followups:
+      - A user asks about someone else's account by number. Where exactly is that blocked?
+      - The billing API takes four seconds. What does the conversation look like?
+    common_errors:
+      - Letting the model supply the account identifier for tool calls instead of taking it from the session.
+
+  - external_key: system_design.ml_llm_systems.provider_failover
+    competency_key: llm_engineering
+    topic: Resilience to an LLM provider outage
+    difficulty: hard
+    text: >-
+      Your main LLM provider had a four-hour outage and your product was down with it. How would you design
+      for failover to another provider or a self-hosted model, given that prompts don't behave identically
+      across models?
+    expected_concepts:
+      - abstraction layer with per-model prompt variants
+      - regular evaluation of fallback models on the same test suites
+      - health detection and automatic switching with circuit breakers
+      - degraded modes such as reduced features or queued requests
+      - capacity and quota reserved with the fallback
+      - periodic failover drills
+    rubric:
+      excellent: Maintains evaluated, model-specific prompt variants behind an abstraction, switches automatically with circuit breakers, plans degraded modes and fallback capacity and proves it with drills.
+      good: Adds a second provider with automatic failover and some prompt adaptation.
+      weak: Plans to change the API endpoint manually during an outage.
+    followups:
+      - How would you know the fallback model's quality is acceptable before you need it?
+      - The fallback can handle only a third of your traffic. What do you prioritise?
+    common_errors:
+      - Never testing the fallback path, so it fails on the day it is needed.
+
+  - external_key: system_design.ml_llm_systems.voice_agent_pipeline
+    competency_key: llm_engineering
+    topic: Real-time voice assistant pipeline
+    difficulty: hard
+    text: >-
+      Design a real-time voice assistant that listens, thinks and speaks back, where the reply should start
+      within about a second of the user finishing. Walk me through the pipeline and where the latency goes.
+    expected_concepts:
+      - streaming speech recognition and end-of-turn detection
+      - streaming LLM output into sentence-level text-to-speech
+      - latency budget across endpointing, recognition, first token and first audio
+      - barge-in so users can interrupt playback
+      - persistent connections such as WebSockets and audio buffering
+      - handling recognition errors and silence
+    rubric:
+      excellent: Builds a fully streaming pipeline with a per-stage latency budget, explains end-of-turn trade-offs, streams model output into speech by sentence, supports barge-in and handles errors and silence.
+      good: Describes the STT, LLM and TTS stages with streaming and some latency reasoning.
+      weak: Runs each stage to completion before the next with no latency analysis.
+    followups:
+      - How do you decide the user has finished speaking without cutting them off mid-thought?
+      - The user interrupts halfway through the reply. What happens in each component?
+    common_errors:
+      - Waiting for the full LLM response before starting speech synthesis.
+
+  - external_key: system_design.ml_llm_systems.monorepo_code_assistant
+    competency_key: llm_engineering
+    topic: Context selection for a code assistant in a large repository
+    difficulty: hard
+    text: >-
+      Design a code assistant for a monorepo with millions of lines, where engineers ask questions and request
+      changes. The hard part is getting the right code into the model's context. How would you design it?
+    expected_concepts:
+      - indexing code with symbols, references and embeddings
+      - combining lexical search, symbol graphs and semantic retrieval
+      - incremental reindexing on commits per branch
+      - agentic exploration using search and file-read tools
+      - context budgeting and ranking of snippets
+      - evaluation on real tasks from the repository
+    rubric:
+      excellent: Combines symbol-aware indexing with lexical and semantic retrieval and tool-based exploration, keeps the index fresh per branch, budgets context deliberately and evaluates on real repository tasks.
+      good: Indexes code with embeddings plus search and retrieves relevant files.
+      weak: Embeds files as plain text chunks and hopes retrieval finds the right ones.
+    followups:
+      - An engineer is on a branch with uncommitted changes. How does the assistant see them?
+      - How would you build an evaluation set for this assistant?
+    common_errors:
+      - Chunking code by fixed line counts, splitting functions and losing structure.
+
+  - external_key: system_design.ml_llm_systems.llm_spend_controls
+    competency_key: llm_engineering
+    topic: Controlling a rapidly growing LLM bill
+    difficulty: hard
+    text: >-
+      Your company's monthly LLM spend tripled in a quarter and nobody can say which features drove it. How
+      would you design the systems and processes to bring cost under control without hurting quality?
+    expected_concepts:
+      - per-feature and per-tenant cost attribution from token logs
+      - finding the biggest drivers such as long contexts, retries or agent loops
+      - prompt and context trimming, caching and prompt caching
+      - routing to smaller models with quality checks
+      - budgets, alerts and hard limits per feature
+      - evaluating every cost change against quality metrics
+    rubric:
+      excellent: Builds attribution first, targets the largest measured drivers, applies caching, context reduction and routing with quality evaluation, and adds budgets and limits.
+      good: Adds attribution and some cost reduction techniques with quality checks.
+      weak: Switches everything to the cheapest model with no measurement.
+    followups:
+      - One agent feature loops and sometimes makes forty calls per request. What would you change?
+      - How would you prove that a cost reduction didn't reduce quality?
+    common_errors:
+      - Cutting costs across the board before finding where the spend actually goes.
+
+  - external_key: system_design.ml_llm_systems.text_to_sql_assistant
+    competency_key: llm_engineering
+    topic: Natural-language analytics over a data warehouse
+    difficulty: hard
+    text: >-
+      Business users want to ask questions in plain English and get answers from a warehouse with thousands of
+      tables. Design a text-to-SQL assistant that's accurate, safe and doesn't run up huge query bills.
+    expected_concepts:
+      - retrieving relevant tables, columns and documented metrics for the question
+      - a semantic layer or curated metric definitions
+      - read-only credentials scoped to the user's data permissions
+      - query validation, cost estimation and limits before execution
+      - showing the generated SQL and assumptions to the user
+      - evaluation on a set of questions with known correct results
+    rubric:
+      excellent: Retrieves schema and curated metrics, executes with user-scoped read-only access after validation and cost checks, shows SQL and assumptions, and measures accuracy on a benchmark of real questions.
+      good: Retrieves relevant schema, generates SQL and runs it safely with some validation.
+      weak: Puts the entire schema in the prompt and runs whatever SQL comes back with admin credentials.
+    followups:
+      - Two tables both look like they hold revenue. How does the assistant pick the right one?
+      - How would you catch a query that is valid SQL but answers the wrong question?
+    common_errors:
+      - Executing generated SQL with broad credentials instead of the user's own permissions.

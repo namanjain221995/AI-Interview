@@ -1,0 +1,228 @@
+version: 1
+slug: chat_markup_tokenizer
+title: "Chat Markup Tokenizer"
+difficulty: medium
+competency_keys: [algorithms, problem_solving, code_quality]
+role_tags: [frontend, backend, fullstack]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Chat Markup Tokenizer
+
+  The team chat client lets people format messages with a tiny bracket markup. Before rendering (and
+  before any sanitising), a message is split into **tokens**. Write the tokenizer.
+
+  Scan `source` from left to right. Outside a code block:
+
+  - **Tags.** These bracket sequences are tags; the tag name is matched **case-insensitively** and
+    always emitted in lowercase:
+
+    | Markup | Token |
+    |--------|-------|
+    | `[b]`, `[/b]` | `"OPEN:b"`, `"CLOSE:b"` |
+    | `[i]`, `[/i]` | `"OPEN:i"`, `"CLOSE:i"` |
+    | `[url=TARGET]` | `"OPEN:url=TARGET"` |
+    | `[/url]` | `"CLOSE:url"` |
+    | `[code]`, `[/code]` | `"OPEN:code"`, `"CLOSE:code"` |
+
+    `TARGET` is one or more characters that are neither `[` nor `]`, copied **verbatim** (original
+    case, no escape processing). Nothing else is allowed inside a tag: `[ b]`, `[b ]`, `[url]` and
+    `[url=]` are not tags.
+  - **Escapes.** A backslash followed by `[` produces a literal `[`; a backslash followed by another
+    backslash produces one literal backslash. Any other backslash (including one at the very end) is an
+    ordinary character, and the character after it is processed normally.
+  - **Everything else is text**, including a `[` that does not start a tag. Scanning then continues
+    with the character right after that `[`, so `[[b]` is the text `[` followed by `OPEN:b`.
+
+  After an `OPEN:code` token, the code block is **raw**: every character, including backslashes and
+  brackets, is literal text until the first `[/code]` (case-insensitive), which produces
+  `CLOSE:code` and returns to normal scanning. If there is no `[/code]`, the rest of the message is
+  text. A `[/code]` outside a code block is still a `CLOSE:code` token.
+
+  Text is emitted as `"TEXT:<text>"`. Consecutive text characters are merged into one `TEXT` token
+  and empty text tokens are never emitted. Do **not** check whether tags are balanced or nested
+  correctly: this step only tokenizes. Return the tokens in order.
+
+  The examples write strings as JSON-style literals, so `\\` inside quotes stands for **one**
+  backslash character.
+
+  ### Example 1
+  ```
+  Input:  source = "Deploy [b]now[/b], see [url=https://status.example.com]status[/url]"
+  Output: ["TEXT:Deploy ", "OPEN:b", "TEXT:now", "CLOSE:b", "TEXT:, see ", "OPEN:url=https://status.example.com", "TEXT:status", "CLOSE:url"]
+  Explanation: Tags become OPEN/CLOSE tokens, the link target is copied verbatim and the text between tags is merged.
+  ```
+
+  ### Example 2
+  ```
+  Input:  source = "Use \\[b] for bold: [CODE]if a[0] \\[b][/Code] done"
+  Output: ["TEXT:Use [b] for bold: ", "OPEN:code", "TEXT:if a[0] \\[b]", "CLOSE:code", "TEXT: done"]
+  Explanation: \[ is a literal bracket, so "[b]" after it is text. Inside the code block everything is raw
+  until [/Code], including the second \[b].
+  ```
+
+  ### Example 3
+  ```
+  Input:  source = "[[b]] [url=] [b ] \\x\\\\"
+  Output: ["TEXT:[", "OPEN:b", "TEXT:] [url=] [b ] \\x\\"]
+  Explanation: "[" before [b] is text, as are "] [url=] [b ] ", \x stays as typed and \\ becomes one backslash.
+  ```
+
+  ### Constraints
+  - `0 <= source.length <= 10^4`
+  - `source` contains printable ASCII characters only (spaces included, no line breaks)
+  - Aim for a single left-to-right pass: `O(n)` time
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: tokenize_markup
+  params:
+    - {name: source, type: "string"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def tokenize_markup(source: str) -> list[str]:
+        simple = {"[b]": "OPEN:b", "[/b]": "CLOSE:b", "[i]": "OPEN:i", "[/i]": "CLOSE:i",
+                  "[/url]": "CLOSE:url", "[code]": "OPEN:code", "[/code]": "CLOSE:code"}
+        tokens: list[str] = []
+        text: list[str] = []
+
+        def flush() -> None:
+            chunk = "".join(text)
+            text.clear()
+            if chunk:
+                tokens.append("TEXT:" + chunk)
+
+        def emit(token: str) -> None:
+            flush()
+            tokens.append(token)
+
+        n = len(source)
+        lower = source.lower()
+        i = 0
+        while i < n:
+            ch = source[i]
+            if ch == "\\" and i + 1 < n and source[i + 1] in "[\\":
+                text.append(source[i + 1])
+                i += 2
+                continue
+            if ch != "[":
+                text.append(ch)
+                i += 1
+                continue
+            tag = None
+            for markup, token in simple.items():
+                if lower.startswith(markup, i):
+                    tag = (token, len(markup))
+                    break
+            if tag is None and lower.startswith("[url=", i):
+                j = i + 5
+                while j < n and source[j] not in "[]":
+                    j += 1
+                if j < n and source[j] == "]" and j > i + 5:
+                    tag = ("OPEN:url=" + source[i + 5:j], j + 1 - i)
+            if tag is None:
+                text.append("[")
+                i += 1
+                continue
+            emit(tag[0])
+            i += tag[1]
+            if tag[0] == "OPEN:code":
+                end = lower.find("[/code]", i)
+                if end == -1:
+                    text.append(source[i:])
+                    i = n
+                else:
+                    text.append(source[i:end])
+                    emit("CLOSE:code")
+                    i = end + 7
+        flush()
+        return tokens
+  javascript: |
+    function tokenizeMarkup(source) {
+      const simple = [['[b]', 'OPEN:b'], ['[/b]', 'CLOSE:b'], ['[i]', 'OPEN:i'], ['[/i]', 'CLOSE:i'],
+        ['[/url]', 'CLOSE:url'], ['[code]', 'OPEN:code'], ['[/code]', 'CLOSE:code']];
+      const tokens = [];
+      let text = '';
+      const flush = () => { if (text) { tokens.push('TEXT:' + text); text = ''; } };
+      const emit = (token) => { flush(); tokens.push(token); };
+      const n = source.length;
+      const lower = source.toLowerCase();
+      let i = 0;
+      while (i < n) {
+        const ch = source[i];
+        if (ch === '\\' && i + 1 < n && (source[i + 1] === '[' || source[i + 1] === '\\')) {
+          text += source[i + 1];
+          i += 2;
+          continue;
+        }
+        if (ch !== '[') { text += ch; i += 1; continue; }
+        let token = null;
+        let len = 0;
+        for (const [markup, tok] of simple) {
+          if (lower.startsWith(markup, i)) { token = tok; len = markup.length; break; }
+        }
+        if (token === null && lower.startsWith('[url=', i)) {
+          let j = i + 5;
+          while (j < n && source[j] !== '[' && source[j] !== ']') j++;
+          if (j < n && source[j] === ']' && j > i + 5) {
+            token = 'OPEN:url=' + source.slice(i + 5, j);
+            len = j + 1 - i;
+          }
+        }
+        if (token === null) { text += '['; i += 1; continue; }
+        emit(token);
+        i += len;
+        if (token === 'OPEN:code') {
+          const end = lower.indexOf('[/code]', i);
+          if (end === -1) { text += source.slice(i); i = n; }
+          else { text += source.slice(i, end); emit('CLOSE:code'); i = end + 7; }
+        }
+      }
+      flush();
+      return tokens;
+    }
+tests:
+  - {id: t1, args: ["Deploy [b]now[/b], see [url=https://status.example.com]status[/url]"], expected: ["TEXT:Deploy ", "OPEN:b", "TEXT:now", "CLOSE:b", "TEXT:, see ", "OPEN:url=https://status.example.com", "TEXT:status", "CLOSE:url"], description: "Example 1 - bold and link tags"}
+  - {id: t2, args: ["Use \\[b] for bold: [CODE]if a[0] \\[b][/Code] done"], expected: ["TEXT:Use [b] for bold: ", "OPEN:code", "TEXT:if a[0] \\[b]", "CLOSE:code", "TEXT: done"], description: "Example 2 - escaped bracket, raw code block, case-insensitive tags"}
+  - {id: t3, args: ["[[b]] [url=] [b ] \\x\\\\"], expected: ["TEXT:[", "OPEN:b", "TEXT:] [url=] [b ] \\x\\"], description: "Example 3 - non-tags become text and merge"}
+  - {id: t4, hidden: true, args: [""], expected: [], description: "Empty message - no tokens"}
+  - {id: t5, hidden: true, args: ["[/i][b][i][/b]"], expected: ["CLOSE:i", "OPEN:b", "OPEN:i", "CLOSE:b"], description: "Only tags, unbalanced and badly nested - emitted as-is with no TEXT tokens"}
+  - {id: t6, hidden: true, args: ["[code][b]\\\\[url=x][/b] never closed"], expected: ["OPEN:code", "TEXT:[b]\\\\[url=x][/b] never closed"], description: "Unclosed code block - rest is raw text, backslashes kept"}
+  - {id: t7, hidden: true, args: ["[code][/code][code]\\[/code]"], expected: ["OPEN:code", "CLOSE:code", "OPEN:code", "TEXT:\\", "CLOSE:code"], description: "Empty code block emits no TEXT; backslash before [/code] inside code is literal"}
+  - {id: t8, hidden: true, args: ["[url=Https://A.example/Path?q=[1]]x[/URL] [url=a b]y\\"], expected: ["TEXT:[url=Https://A.example/Path?q=[1]]x", "CLOSE:url", "TEXT: ", "OPEN:url=a b", "TEXT:y\\"], description: "URL target with '[' is not a tag, target case preserved, space allowed, trailing backslash"}
+  - {id: t9, hidden: true, args: ["\\\\[b]x\\\\\\[i]"], expected: ["TEXT:\\", "OPEN:b", "TEXT:x\\[i]"], description: "Escaped backslash before a real tag, then escaped backslash followed by escaped bracket"}
+  - {id: t10, hidden: true, args: ["[url=ok][URL=Mixed]Case[/b"], expected: ["OPEN:url=ok", "OPEN:url=Mixed", "TEXT:Case[/b"], description: "Uppercase url keyword, target verbatim, unterminated tag at end"}
+  - {id: t11, hidden: true, args: ["[b]deploy[/b] \\[ticket-1] [url=https://ci.example.com/run/2]run[/url] [code]x[i]=3\\[/code] [I]ok[/i][ [b]deploy[/b] \\[ticket-6] [url=https://ci.example.com/run/7]run[/url] [code]x[i]=8\\[/code] [I]ok[/i][ [b]deploy[/b] \\[ticket-11] [url=https://ci.example.com/run/12]run[/url] [code]x[i]=13\\[/code] [I]ok[/i][ [b]deploy[/b] \\[ticket-16] [url=https://ci.example.com/run/17]run[/url] [code]x[i]=18\\[/code] [I]ok[/i][ [b]deploy[/b] \\[ticket-21] [url=https://ci.example.com/run/22]run[/url] [code]x[i]=23\\[/code] [I]ok[/i][ [b]deploy[/b] \\[ticket-26] [url=https://ci.example.com/run/27]run[/url] [code]x[i]=28\\[/code] [I]ok[/i][ [b]deploy[/b] \\[ticket-31] [url=https://ci.example.com/run/32]run[/url] [code]x[i]=33\\[/code] [I]ok[/i][ [b]deploy[/b] \\[ticket-36] [url=https://ci.example.com/run/37]run[/url] [code]x[i]=38\\[/code] [I]ok[/i][ "], expected: ["OPEN:b", "TEXT:deploy", "CLOSE:b", "TEXT: [ticket-1] ", "OPEN:url=https://ci.example.com/run/2", "TEXT:run", "CLOSE:url", "TEXT: ", "OPEN:code", "TEXT:x[i]=3\\", "CLOSE:code", "TEXT: ", "OPEN:i", "TEXT:ok", "CLOSE:i", "TEXT:[ ", "OPEN:b", "TEXT:deploy", "CLOSE:b", "TEXT: [ticket-6] ", "OPEN:url=https://ci.example.com/run/7", "TEXT:run", "CLOSE:url", "TEXT: ", "OPEN:code", "TEXT:x[i]=8\\", "CLOSE:code", "TEXT: ", "OPEN:i", "TEXT:ok", "CLOSE:i", "TEXT:[ ", "OPEN:b", "TEXT:deploy", "CLOSE:b", "TEXT: [ticket-11] ", "OPEN:url=https://ci.example.com/run/12", "TEXT:run", "CLOSE:url", "TEXT: ", "OPEN:code", "TEXT:x[i]=13\\", "CLOSE:code", "TEXT: ", "OPEN:i", "TEXT:ok", "CLOSE:i", "TEXT:[ ", "OPEN:b", "TEXT:deploy", "CLOSE:b", "TEXT: [ticket-16] ", "OPEN:url=https://ci.example.com/run/17", "TEXT:run", "CLOSE:url", "TEXT: ", "OPEN:code", "TEXT:x[i]=18\\", "CLOSE:code", "TEXT: ", "OPEN:i", "TEXT:ok", "CLOSE:i", "TEXT:[ ", "OPEN:b", "TEXT:deploy", "CLOSE:b", "TEXT: [ticket-21] ", "OPEN:url=https://ci.example.com/run/22", "TEXT:run", "CLOSE:url", "TEXT: ", "OPEN:code", "TEXT:x[i]=23\\", "CLOSE:code", "TEXT: ", "OPEN:i", "TEXT:ok", "CLOSE:i", "TEXT:[ ", "OPEN:b", "TEXT:deploy", "CLOSE:b", "TEXT: [ticket-26] ", "OPEN:url=https://ci.example.com/run/27", "TEXT:run", "CLOSE:url", "TEXT: ", "OPEN:code", "TEXT:x[i]=28\\", "CLOSE:code", "TEXT: ", "OPEN:i", "TEXT:ok", "CLOSE:i", "TEXT:[ ", "OPEN:b", "TEXT:deploy", "CLOSE:b", "TEXT: [ticket-31] ", "OPEN:url=https://ci.example.com/run/32", "TEXT:run", "CLOSE:url", "TEXT: ", "OPEN:code", "TEXT:x[i]=33\\", "CLOSE:code", "TEXT: ", "OPEN:i", "TEXT:ok", "CLOSE:i", "TEXT:[ ", "OPEN:b", "TEXT:deploy", "CLOSE:b", "TEXT: [ticket-36] ", "OPEN:url=https://ci.example.com/run/37", "TEXT:run", "CLOSE:url", "TEXT: ", "OPEN:code", "TEXT:x[i]=38\\", "CLOSE:code", "TEXT: ", "OPEN:i", "TEXT:ok", "CLOSE:i", "TEXT:[ "], description: "Stress - mixed tags, escapes and code blocks repeated"}
+expected_concepts:
+  - "single-pass scanner with an index pointer"
+  - "lookahead matching of tag literals"
+  - "case-insensitive comparison while preserving original text"
+  - "a raw mode for code blocks"
+  - "buffering and flushing adjacent text"
+  - "escape-sequence handling"
+optimal_complexity: {time: "O(n)", space: "O(n)"}
+rubric:
+  excellent: "Writes a clean single-pass scanner with a text buffer, a small table of fixed tags, a bounded scan for url targets and a raw mode for code blocks; explains every rule from the statement against the examples and states O(n) time."
+  good: "Produces correct tokens for normal input and fixes one or two edge cases (escapes, unclosed code, empty url target) after testing or a hint."
+  weak: "Relies on a regular expression or split that mishandles escapes or code blocks, emits empty TEXT tokens, lowercases the url target or validates nesting instead of tokenizing."
+  criteria:
+    correctness: "All tests pass, including escapes, raw code blocks, unclosed code and non-tag brackets."
+    efficiency: "Linear scan; avoids repeated string concatenation in a loop that would make the whole pass quadratic."
+    code_quality: "Separates the text buffer, tag matching and code-block mode; constants for tags instead of scattered literals."
+    edge_cases: "Empty input, trailing backslash, [[b], [url=], url targets containing '[' and case variants of tags."
+    communication: "Explains why tokenizing is separated from nesting validation and HTML escaping in a rendering pipeline."
+hints:
+  - "Walk the message one character at a time and keep a buffer for plain text; only a few characters (backslash and '[') can start something special."
+  - "When you see '[', check whether one of the fixed tags starts at this position (ignoring case) or whether it is '[url=' followed by a valid target and ']'. If nothing matches, the '[' is just text. Remember that a code block switches you into a different mode."
+  - "Flush the text buffer before emitting a tag token. For a url tag scan forward until '[' or ']'; it is a tag only if you stop at ']' with at least one character consumed. After OPEN:code, search for the next case-insensitive '[/code]' and treat everything before it as text."
+followups:
+  - "How would you add a validation pass that reports unbalanced or wrongly nested tags?"
+  - "Where in the rendering pipeline should HTML escaping happen, and why must the url target be checked against an allow-list of schemes?"
+  - "How would you support [url] without '=' where the link text is also the target?"
+  - "How would you report source positions for each token to underline markup errors in the editor?"
+common_errors:
+  - "Processing escapes inside code blocks or inside url targets."
+  - "Emitting empty TEXT tokens between adjacent tags or for an empty code block."
+  - "Lowercasing the whole token, which changes the url target."
+  - "Skipping the whole bracket sequence when it is not a tag instead of only the '[' character."
+  - "Treating any backslash as an escape and dropping it."

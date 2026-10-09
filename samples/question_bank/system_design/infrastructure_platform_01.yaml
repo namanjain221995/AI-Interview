@@ -1,0 +1,621 @@
+# System design: infrastructure and platforms (1 of 4) — CI systems and delivery tooling.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [devops, platform, sre]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.infrastructure_platform.ci_service_basics
+    competency_key: ci_cd
+    topic: Core components of a CI service
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Let's say a team of twenty engineers with about a dozen repositories wants its own continuous integration
+      service. Walk me through the main components you'd build, from a developer pushing a commit to a green
+      check appearing on the pull request.
+    expected_concepts:
+      - webhook or event trigger from the Git host
+      - a job queue between the trigger and the workers
+      - isolated, disposable build workers
+      - status reporting back to the pull request
+      - log and artifact storage
+      - per-repository pipeline definition
+    rubric:
+      excellent: Lays out trigger, queue, workers, status reporting and storage as separate pieces, explains why workers should be disposable and isolated, and says how a failed or lost job is detected.
+      good: Describes trigger, workers and status reporting with a sensible flow but treats storage or failure handling lightly.
+      weak: Describes a single server running scripts on push with no queue, isolation or way to report results reliably.
+    followups:
+      - What happens if a worker dies halfway through a job?
+      - How would a developer re-run just one failed job?
+    common_errors:
+      - Running every build on one long-lived machine that accumulates state between jobs.
+
+  - external_key: system_design.infrastructure_platform.artifact_repository_basics
+    competency_key: ci_cd
+    topic: Where build artifacts live
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your builds produce container images, language packages and a few binaries, and right now they're scattered
+      across laptops and build servers. How would you design one place for them to live, and what rules would
+      you put around it?
+    expected_concepts:
+      - a single artifact or image registry per artifact type
+      - immutable versions tied to a commit
+      - naming and versioning convention
+      - retention and cleanup policies
+      - access control for publish versus read
+      - replication or backup
+    rubric:
+      excellent: Proposes a registry with immutable, commit-traceable versions, separates publish and read permissions, and defines retention that never deletes what is still deployed.
+      good: Picks a sensible registry and versioning scheme and mentions cleanup.
+      weak: Suggests a shared folder or bucket with mutable names like latest and no retention or access rules.
+    followups:
+      - How would you avoid deleting an image that production still runs?
+      - Who should be allowed to publish to the release repository?
+    common_errors:
+      - Allowing tags to be overwritten so the same version can mean two different builds.
+
+  - external_key: system_design.infrastructure_platform.two_stage_deploy_flow
+    competency_key: ci_cd
+    topic: A first deployment flow
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Imagine a single web service that today is deployed by someone copying files to a server. Design a
+      deployment flow that takes it to staging and then production, and tell me how you'd get back to the
+      previous version if something goes wrong.
+    expected_concepts:
+      - build once and deploy the same artifact to each stage
+      - automated tests gating promotion
+      - an approval or check before production
+      - health checks after deploy
+      - rollback by redeploying the previous artifact
+    rubric:
+      excellent: Builds one artifact, promotes it unchanged through staging to production with automated gates and post-deploy health checks, and explains a quick, rehearsed rollback to the previous artifact.
+      good: Describes a staged pipeline with tests and some rollback idea.
+      weak: Rebuilds for each environment or relies on manual steps with no clear rollback.
+    followups:
+      - What would you check right after the production deploy finishes?
+      - How do you make sure rollback actually works before you need it?
+    common_errors:
+      - Rebuilding from source for production, so what was tested is not what ships.
+
+  - external_key: system_design.infrastructure_platform.build_log_streaming
+    competency_key: system_design
+    topic: Live and archived build logs
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Developers want to watch their build logs live in the browser and look them up again weeks later. How
+      would you design the way logs are captured, streamed and stored?
+    expected_concepts:
+      - workers ship log chunks as they are produced
+      - a streaming channel to the browser (websocket or server-sent events)
+      - buffering so slow viewers do not slow builds
+      - archiving finished logs to cheap object storage
+      - retention and size limits
+      - masking secrets in output
+    rubric:
+      excellent: Separates the live path from archival storage, keeps builds independent of viewers, archives to object storage with retention and size limits, and mentions secret masking.
+      good: Describes live streaming plus storage of completed logs.
+      weak: Proposes reading log files directly from the build machine or storing everything in the main database forever.
+    followups:
+      - What happens to the live view if the worker is lost mid-build?
+      - How would you stop one runaway job from producing gigabytes of logs?
+    common_errors:
+      - Coupling log delivery to the build so a slow consumer stalls the job.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.infrastructure_platform.runner_autoscaling_pool
+    competency_key: ci_cd
+    topic: Autoscaling pool of build runners
+    difficulty: medium
+    text: >-
+      Your CI runners are a fixed pool of virtual machines that sit idle overnight and queue for half an hour
+      every afternoon. Design an autoscaling runner pool that fixes both problems.
+    expected_concepts:
+      - scaling on queue depth and wait time rather than CPU
+      - ephemeral single-use runners
+      - a warm pool to hide boot time
+      - scale-down that never kills a running job
+      - separate pools by machine size or capability
+      - limits and budget caps
+    rubric:
+      excellent: Scales on queued jobs and wait time, uses single-use runners with a small warm pool, drains safely on scale-down, splits pools by job shape and bounds the spend.
+      good: Proposes queue-driven autoscaling with ephemeral runners and some handling of boot latency.
+      weak: Scales on CPU of existing runners or just suggests buying more machines.
+    followups:
+      - How would you size the warm pool, and how would you know it's right?
+      - A job needs a large machine that takes five minutes to boot — how does that fit?
+    common_errors:
+      - Using runner CPU utilisation as the scaling signal when the real signal is queued work.
+
+  - external_key: system_design.infrastructure_platform.package_proxy_mirror
+    competency_key: ci_cd
+    topic: Internal proxy for package registries
+    difficulty: medium
+    text: >-
+      Last month a public package registry had an outage and every build in the company failed for two hours.
+      Design an internal proxy for npm, PyPI, Maven and container images so that doesn't happen again.
+    expected_concepts:
+      - caching pull-through proxy per ecosystem
+      - serving cached versions when upstream is down
+      - pinning and lockfiles so builds request exact versions
+      - blocking known-malicious or unapproved packages
+      - high availability and storage sizing for the proxy itself
+      - pointing all build tooling at the proxy by default
+    rubric:
+      excellent: Designs a highly available pull-through cache per ecosystem that serves cached versions during upstream outages, enforces it as the default source, and adds a policy layer to block bad packages, while noting the proxy is now a critical dependency.
+      good: Proposes a caching proxy and explains how builds are redirected to it.
+      weak: Suggests vendoring everything into each repository or simply retrying builds.
+    followups:
+      - How do you handle a brand-new version that isn't in the cache yet during an outage?
+      - How would you stop the proxy from becoming the next single point of failure?
+    common_errors:
+      - Forgetting that floating version ranges defeat the cache when upstream is unavailable.
+
+  - external_key: system_design.infrastructure_platform.test_results_flake_detection
+    competency_key: ci_cd
+    topic: Test results service with flake detection
+    difficulty: medium
+    text: >-
+      Design a service that collects test results from every CI run across the company and automatically
+      identifies flaky tests. What does the data model look like, and how does it decide a test is flaky?
+    expected_concepts:
+      - ingesting structured reports such as JUnit XML
+      - storing results per test, commit and environment
+      - flakiness as pass and fail on the same commit
+      - retry signals and failure-rate windows
+      - quarantine workflow with an owner
+      - surfacing results back on pull requests
+    rubric:
+      excellent: Defines a per-test, per-commit result model, detects flakiness from mixed outcomes on identical code, and closes the loop with quarantine, ownership and expiry, while keeping ingestion cheap at high volume.
+      good: Collects results and uses failure rate or retries to flag flaky tests.
+      weak: Treats any frequently failing test as flaky or has no way to act on the finding.
+    followups:
+      - How do you tell a flaky test from a test that is genuinely broken on main?
+      - How would quarantined tests avoid being forgotten forever?
+    common_errors:
+      - Equating high failure rate with flakiness without checking whether the code changed.
+
+  - external_key: system_design.infrastructure_platform.webhook_event_ingestion
+    competency_key: distributed_systems
+    topic: Reliable ingestion of source-control events
+    difficulty: medium
+    text: >-
+      Your CI system starts pipelines from Git hosting webhooks, and every so often a push simply never builds.
+      How would you design the event ingestion so that pushes aren't lost, duplicated or processed out of order?
+    expected_concepts:
+      - acknowledge fast and persist events to a durable queue
+      - idempotency keys from delivery or commit identifiers
+      - periodic reconciliation by polling for missed refs
+      - per-repository or per-branch ordering
+      - collapsing superseded pushes on the same branch
+      - signature verification of webhooks
+    rubric:
+      excellent: Persists events durably before acknowledging, deduplicates idempotently, reconciles against the Git host to catch dropped webhooks, orders per branch and cancels superseded runs.
+      good: Adds a durable queue and deduplication and recognises webhooks can be lost.
+      weak: Relies on webhooks being delivered exactly once or just increases timeouts.
+    followups:
+      - Five pushes land on the same branch in ten seconds — what runs?
+      - How would you detect that you've missed events at all?
+    common_errors:
+      - Doing the expensive work inside the webhook handler so the sender times out and retries.
+
+  - external_key: system_design.infrastructure_platform.untrusted_fork_builds
+    competency_key: security
+    topic: Building pull requests from outside contributors
+    difficulty: medium
+    text: >-
+      An open-source project your company runs gets pull requests from people outside the organisation, and
+      CI has to build and test them. How would you design the build system so that untrusted code can't steal
+      secrets or tamper with releases?
+    expected_concepts:
+      - no secrets available to fork builds
+      - separate, isolated runners for untrusted jobs
+      - read-only tokens with minimal scope
+      - maintainer approval before privileged workflows run
+      - no shared caches writable by untrusted jobs
+      - release pipeline isolated from pull request pipeline
+    rubric:
+      excellent: Runs fork builds on isolated disposable runners with no secrets and read-only tokens, gates anything privileged behind maintainer approval, and prevents cache or artifact poisoning reaching trusted pipelines.
+      good: Keeps secrets away from fork builds and isolates their runners.
+      weak: Relies on reviewing the code by eye or only masks secrets in logs.
+    followups:
+      - How could a malicious pull request poison a cache that the release build later uses?
+      - Some integration tests genuinely need credentials — how would you handle those?
+    common_errors:
+      - Assuming log masking prevents a build from exfiltrating a secret.
+
+  - external_key: system_design.infrastructure_platform.deployment_inventory_service
+    competency_key: ci_cd
+    topic: What is running where
+    difficulty: medium
+    text: >-
+      During incidents nobody can quickly answer which version of each service is running in each region and
+      what changed since yesterday. Design a service that answers those questions reliably.
+    expected_concepts:
+      - deploy events emitted by every deployment path
+      - linking commit, build, artifact digest and deployment
+      - observed state from clusters, not only intended state
+      - per-environment and per-region timeline
+      - query API and integration with incident tooling
+    rubric:
+      excellent: Combines deploy events with observed runtime state, links each running digest back to its commit and build, and exposes a change timeline that incident tooling can query, while handling deploy paths that bypass the pipeline.
+      good: Records deployments with versions and timestamps and offers a way to query them.
+      weak: Proposes a wiki page or spreadsheet updated by hand.
+    followups:
+      - How would you catch changes made outside the pipeline, like a manual hotfix?
+      - What else besides code deploys belongs on that timeline?
+    common_errors:
+      - Trusting only the pipeline's record, which misses manual and failed partial deploys.
+
+  - external_key: system_design.infrastructure_platform.ci_fair_share_scheduler
+    competency_key: distributed_systems
+    topic: Fair scheduling on a shared CI fleet
+    difficulty: medium
+    text: >-
+      One team's huge monorepo regularly floods the shared CI fleet and everyone else waits behind it. How would
+      you design job scheduling so the fleet is shared fairly without wasting capacity?
+    expected_concepts:
+      - per-team or per-tenant queues
+      - weighted fair share rather than first in first out
+      - priorities for release and hotfix jobs
+      - borrowing idle capacity and preempting it back
+      - quotas and visibility of usage
+    rubric:
+      excellent: Uses per-tenant queues with weighted fair sharing, lets tenants borrow idle capacity with clear preemption rules, reserves a lane for urgent jobs, and gives teams visibility into their usage.
+      good: Proposes quotas or priorities per team and explains the basic effect.
+      weak: Keeps a single first-come queue and suggests the big team slow down.
+    followups:
+      - How do you stop everybody from labelling their jobs as high priority?
+      - What happens to a long job that gets preempted?
+    common_errors:
+      - Hard per-team caps that leave capacity idle while other teams are waiting.
+
+  - external_key: system_design.infrastructure_platform.macos_build_farm
+    competency_key: ci_cd
+    topic: Scarce macOS build capacity
+    difficulty: medium
+    text: >-
+      Your mobile teams need macOS machines for iOS builds, and those machines are expensive, slow to provision
+      and limited in number. Design the build farm and how jobs get scheduled onto it.
+    expected_concepts:
+      - pool of dedicated hosts or virtualised macOS
+      - clean state between jobs (snapshots or reimaging)
+      - toolchain versions baked into images
+      - routing only the steps that need macOS onto it
+      - caching dependencies and derived data
+      - capacity tracking and queue visibility
+    rubric:
+      excellent: Restores a clean, versioned image between jobs, moves everything that doesn't need macOS onto ordinary runners, caches aggressively, and plans capacity from queue data given the long lead time for new hardware.
+      good: Describes a pool with clean images and some caching.
+      weak: Shares a few long-lived Macs that developers configure by hand.
+    followups:
+      - How do you roll out a new Xcode version without breaking every team at once?
+      - How would you decide when to buy more machines?
+    common_errors:
+      - Letting state build up on hosts between jobs so builds pass or fail depending on the machine.
+
+  - external_key: system_design.infrastructure_platform.test_environment_leasing
+    competency_key: system_design
+    topic: Leasing shared integration environments
+    difficulty: medium
+    text: >-
+      Integration tests need a full environment with a database, a message broker and several services, and
+      there are only eight of those environments shared by forty teams. Design a system for leasing them out.
+    expected_concepts:
+      - lease with expiry and heartbeat
+      - reset to a known state between leases
+      - queueing and fair allocation
+      - health check before handing out an environment
+      - visibility of who holds what
+      - path toward on-demand environments
+    rubric:
+      excellent: Designs expiring leases with heartbeats, automatic reset and health verification before reuse, fair queueing, and visibility, and discusses when to replace the pool with on-demand environments.
+      good: Describes a reservation system with timeouts and cleanup.
+      weak: Uses a shared calendar or chat channel to claim environments.
+    followups:
+      - What happens when a CI job crashes while holding a lease?
+      - How would you know an environment was left dirty by the previous user?
+    common_errors:
+      - Leases without expiry, so crashed jobs hold environments indefinitely.
+
+  - external_key: system_design.infrastructure_platform.image_build_service_multiarch
+    competency_key: docker
+    topic: Central container image build service
+    difficulty: medium
+    text: >-
+      Design a central container image build service for the whole company that produces images for both x86
+      and ARM, builds quickly, and doesn't need privileged access on shared runners.
+    expected_concepts:
+      - rootless or daemonless builders
+      - native builders per architecture versus emulation
+      - multi-architecture manifest lists
+      - layer cache shared across builds
+      - build isolation between tenants
+      - pushing by digest and recording provenance
+    rubric:
+      excellent: Uses rootless builders on native hardware per architecture, merges results into a multi-arch manifest, shares layer cache safely between tenants, and publishes by digest with provenance.
+      good: Covers multi-arch output, caching and avoiding privileged mode.
+      weak: Runs Docker-in-Docker with privileged mode and relies on emulation for everything.
+    followups:
+      - Why might emulated ARM builds be acceptable for some images and not others?
+      - How do you stop one team's build from reading another team's cached layers?
+    common_errors:
+      - Ignoring that cross-architecture emulation can be many times slower for compile-heavy builds.
+
+  - external_key: system_design.infrastructure_platform.git_mirror_for_ci
+    competency_key: ci_cd
+    topic: Source checkout at CI scale
+    difficulty: medium
+    text: >-
+      Thousands of CI jobs an hour each clone a very large repository, and the Git server is struggling while
+      checkouts take minutes. How would you design source fetching for CI so it's fast and doesn't overload
+      the Git host?
+    expected_concepts:
+      - read-only mirrors or caching Git proxies close to runners
+      - shallow, partial or sparse checkouts
+      - pre-seeded reference repositories on runner images
+      - fetching only the needed commit
+      - mirror freshness and consistency with the primary
+    rubric:
+      excellent: Combines nearby read-only mirrors with shallow or partial fetches and pre-seeded references, and explains how jobs get the exact commit even when a mirror lags the primary.
+      good: Proposes mirrors or shallow clones with a sense of the trade-offs.
+      weak: Suggests a bigger Git server or caching the whole working directory between jobs without regard to correctness.
+    followups:
+      - A job asks for a commit the mirror hasn't seen yet — what happens?
+      - When does a shallow clone break a build?
+    common_errors:
+      - Using shallow clones for jobs that need history, such as versioning from tags.
+
+  - external_key: system_design.infrastructure_platform.one_click_rollback_service
+    competency_key: ci_cd
+    topic: Fast, reliable rollback
+    difficulty: medium
+    text: >-
+      Leadership wants any on-call engineer to be able to roll back any service in under five minutes, even in
+      the middle of an incident. Design the rollback capability.
+    expected_concepts:
+      - recording the last known good release per environment
+      - redeploying a previous immutable artifact
+      - bypassing slow gates safely during rollback
+      - config and schema compatibility with the old version
+      - rollback path independent of the systems that might be down
+      - audit trail and regular rehearsal
+    rubric:
+      excellent: Tracks last known good per environment, redeploys immutable artifacts through a fast path with appropriate gate bypasses and audit, accounts for config and schema compatibility, and keeps the path working when CI itself is degraded.
+      good: Describes redeploying the previous version quickly with some safeguards.
+      weak: Describes reverting the commit and waiting for a normal pipeline run.
+    followups:
+      - What would make a rollback unsafe, and how would the tool warn you?
+      - How do you make sure rollback still works if the CI system is the thing that's broken?
+    common_errors:
+      - Treating a git revert plus full pipeline as a rollback, which can take far longer than five minutes.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.infrastructure_platform.multi_region_deploy_orchestrator
+    competency_key: ci_cd
+    topic: Deployment orchestrator across regions
+    difficulty: hard
+    text: >-
+      Design the deployment orchestrator that rolls every service out across eight regions. It should move in
+      waves, stop on its own when something looks wrong, and be safe to use for hundreds of deploys a day.
+    expected_concepts:
+      - durable rollout state machine per deploy
+      - waves ordered by risk with bake times
+      - automated health gates using service metrics
+      - automatic pause and rollback of affected waves
+      - concurrency limits across services and regions
+      - manual override, audit and resumability after orchestrator restart
+    rubric:
+      excellent: Models each rollout as a durable, resumable state machine with risk-ordered waves, bake times and metric-based gates, handles automatic halt and rollback, limits concurrent change, and keeps the orchestrator itself highly available and auditable.
+      good: Describes waves with health checks and automatic stopping, with some thought about state.
+      weak: Deploys region by region in a script with fixed sleeps and manual checking.
+    followups:
+      - The orchestrator crashes mid-rollout — what state are things in and how does it resume?
+      - How would you set bake times without slowing every deploy unnecessarily?
+      - Two services that depend on each other deploy at the same time — does your design care?
+    common_errors:
+      - Keeping rollout progress only in memory of the process running it.
+      - Using a fixed sleep as the only health gate between waves.
+
+  - external_key: system_design.infrastructure_platform.ci_self_recovery
+    competency_key: ci_cd
+    topic: A CI system that can fix itself
+    difficulty: hard
+    text: >-
+      Your CI and deployment platform is deployed by itself. Imagine it's broken in a way that stops it from
+      building or deploying, including the fix for itself. How would you design the platform so you can always
+      recover?
+    expected_concepts:
+      - minimal independent bootstrap path to deploy the platform
+      - break-glass deployment from a separate environment
+      - avoiding circular dependencies on the platform's own services
+      - pinned, previously built artifacts for the platform
+      - documented and rehearsed recovery
+      - staged rollout of platform changes
+    rubric:
+      excellent: Identifies the circular dependency explicitly, designs an independent minimal bootstrap path with pinned artifacts and break-glass access, rolls platform changes out in stages, and rehearses recovery regularly.
+      good: Recognises the circularity and proposes a manual or separate path to redeploy the platform.
+      weak: Does not see the circular dependency or says they would just fix it by hand on the servers.
+    followups:
+      - What other hidden circular dependencies might the platform have, like DNS or the artifact registry?
+      - How often would you exercise the bootstrap path, and how?
+    common_errors:
+      - Hosting the bootstrap tooling on the same infrastructure it is meant to recover.
+
+  - external_key: system_design.infrastructure_platform.global_artifact_replication
+    competency_key: ci_cd
+    topic: Replicating artifacts to every region and isolated site
+    difficulty: hard
+    text: >-
+      Builds happen in one region, but you deploy to eight cloud regions and three customer sites with no
+      internet access. Design how artifacts and images get to every location quickly, with their integrity
+      provable at the destination.
+    expected_concepts:
+      - regional registry replicas pulled or pushed by digest
+      - replication before deploy as a gate
+      - signed artifacts verified at the destination
+      - offline transfer bundles for disconnected sites
+      - garbage collection that respects replicas
+      - monitoring replication lag and failures
+    rubric:
+      excellent: Replicates by digest to regional registries and makes replication a deploy precondition, uses signatures verified at each destination, designs signed offline bundles for disconnected sites, and covers lag monitoring and safe cleanup.
+      good: Proposes regional replicas and some integrity check, with a plan for offline sites.
+      weak: Has every region pull from the build region at deploy time and ignores disconnected sites.
+    followups:
+      - A region's replica is behind when a deploy starts — what should happen?
+      - How do you revoke an artifact that has already been copied to an offline site?
+    common_errors:
+      - Verifying integrity only at build time, not at the place the artifact is run.
+
+  - external_key: system_design.infrastructure_platform.edge_config_rollout
+    competency_key: ci_cd
+    topic: Global rollout of edge and network configuration
+    difficulty: hard
+    text: >-
+      Your team owns the configuration for a fleet of edge proxies and CDN rules worldwide, and a bad change
+      can break every customer in seconds. Design the pipeline that takes a configuration change from a pull
+      request to the whole fleet.
+    expected_concepts:
+      - schema validation and semantic checks before merge
+      - testing against recorded or synthetic traffic
+      - staged propagation starting with a canary point of presence
+      - fast global rollback to a previous config version
+      - versioned, atomic config bundles on each node
+      - nodes keep last known good config if delivery fails
+    rubric:
+      excellent: Validates syntax and semantics, tests against representative traffic, propagates in stages from a canary location with automated health checks, keeps versioned atomic bundles with last known good fallback, and supports a rollback faster than the rollout.
+      good: Has validation, staged rollout and a rollback path.
+      weak: Pushes config to all nodes at once after a manual review.
+    followups:
+      - How would you handle an emergency change, like blocking an attack, that must go everywhere in a minute?
+      - What does a node do if it receives a config it can't parse?
+    common_errors:
+      - Treating configuration as lower risk than code and skipping staged rollout.
+
+  - external_key: system_design.infrastructure_platform.test_impact_selection
+    competency_key: ci_cd
+    topic: Selecting which tests to run per change
+    difficulty: hard
+    text: >-
+      The full test suite takes three hours, so you're asked to design a service that picks only the tests
+      affected by each change while keeping the risk of missing a real failure very low. How would you build it?
+    expected_concepts:
+      - dependency graph from the build system
+      - coverage or historical mapping from files to tests
+      - safety net of full runs on a schedule or before release
+      - always-run tests and handling of config or build-file changes
+      - measuring escaped failures to tune selection
+    rubric:
+      excellent: Combines build-graph dependencies with coverage or history data, falls back to broad runs for risky change types, keeps periodic full runs as a safety net, and measures missed failures to tune the model.
+      good: Uses a dependency graph or coverage mapping with some fallback.
+      weak: Picks tests by directory name only or has no safety net for misses.
+    followups:
+      - How would you measure how often selection misses a failing test?
+      - A change edits a shared configuration file — what runs?
+    common_errors:
+      - Ignoring non-code inputs like configuration and test data when computing what a change affects.
+
+  - external_key: system_design.infrastructure_platform.pipeline_migration_platform
+    competency_key: ci_cd
+    topic: Migrating thousands of pipelines to a new CI system
+    difficulty: hard
+    text: >-
+      The company has two thousand pipelines on an ageing CI server full of plugins and custom scripts, and
+      you've chosen a new CI system. Design the tooling and approach for migrating everything without halting
+      delivery.
+    expected_concepts:
+      - inventory and classification of existing pipelines
+      - automated translation for common patterns
+      - running old and new in parallel and comparing results
+      - migration waves with opt-in then default then mandatory
+      - handling long-tail custom plugins
+      - tracking progress and decommissioning
+    rubric:
+      excellent: Starts with an inventory, automates conversion of common patterns, validates by running both systems side by side, moves teams in waves with clear support, and plans the long tail and the shutdown date.
+      good: Plans phased migration with some automation and validation.
+      weak: Asks each team to rewrite their pipelines by a deadline with no tooling or validation.
+    followups:
+      - How would you decide which pipelines to migrate first?
+      - What do you do about the handful of pipelines nobody owns?
+    common_errors:
+      - Big-bang cutover without a period of running both systems in parallel.
+
+  - external_key: system_design.infrastructure_platform.release_signing_service
+    competency_key: security
+    topic: Central signing service for releases
+    difficulty: hard
+    text: >-
+      Design a signing service that every pipeline uses to sign release artifacts. The keys must never be
+      exposed to build jobs, and the service mustn't become a bottleneck or a single point of failure for
+      releases.
+    expected_concepts:
+      - keys held in an HSM or cloud KMS, never exported
+      - pipelines authenticate with short-lived workload identity
+      - policy on who can sign what, tied to provenance
+      - signing digests rather than whole artifacts
+      - transparency log or audit of every signature
+      - key rotation and compromise response
+    rubric:
+      excellent: Keeps keys non-exportable in an HSM or KMS, authenticates callers with short-lived identity and checks provenance before signing, signs digests to keep latency low, logs every signature, and plans for rotation and key compromise.
+      good: Uses managed key storage and an authenticated signing API with audit.
+      weak: Distributes the private key to build agents as a secret.
+    followups:
+      - A signing key is suspected compromised — what does your recovery look like?
+      - How would verifiers keep working through a key rotation?
+    common_errors:
+      - Signing anything that is submitted without checking where the artifact was built.
+
+  - external_key: system_design.infrastructure_platform.spot_runner_fleet
+    competency_key: cloud_cost_optimization
+    topic: CI fleet on interruptible capacity
+    difficulty: hard
+    text: >-
+      Finance wants the CI fleet to run mostly on spot or preemptible instances to cut costs by half. Design a
+      runner fleet that does that while keeping build times and reliability acceptable.
+    expected_concepts:
+      - diversifying instance types and zones
+      - handling interruption notices by draining or rescheduling
+      - automatic retry of interrupted jobs with idempotent steps
+      - on-demand fallback for long or critical jobs
+      - splitting long jobs or checkpointing
+      - measuring interruption rates and cost per build
+    rubric:
+      excellent: Diversifies capacity, reacts to interruption notices, retries interrupted work automatically, routes long or release-critical jobs to on-demand capacity, and measures cost and interruption impact to tune the mix.
+      good: Uses spot with retries and some on-demand fallback.
+      weak: Moves everything to spot without considering interruptions or long jobs.
+    followups:
+      - What kinds of jobs would you never put on spot capacity?
+      - How would you prove the savings were real once retries are counted?
+    common_errors:
+      - Ignoring that interrupted multi-hour jobs can cost more than running them on demand.
+
+  - external_key: system_design.infrastructure_platform.schema_migration_orchestrator
+    competency_key: databases
+    topic: Platform service for database migrations
+    difficulty: hard
+    text: >-
+      Three hundred services each run their own database schema migrations in different ways, and several
+      outages started with a migration. Design a platform service that runs migrations safely for all of them.
+    expected_concepts:
+      - migrations as versioned, reviewed artifacts separate from app deploy
+      - linting for locking or destructive operations
+      - expand and contract sequencing with app compatibility
+      - running with lock timeouts and on replicas or shadow copies first
+      - progress tracking, pause and resume for large backfills
+      - audit and per-database concurrency control
+    rubric:
+      excellent: Decouples migrations from app deploys, lints for dangerous operations, enforces expand-and-contract compatibility, runs with lock timeouts and controlled concurrency, and supports pausing, resuming and auditing large backfills.
+      good: Centralises migrations with review, linting and some safety around locks.
+      weak: Lets each app run migrations at startup with no review or safety checks.
+    followups:
+      - How would the service know an application version is compatible with the new schema?
+      - A backfill is slowing the primary database — what can the service do?
+    common_errors:
+      - Running migrations automatically on application startup across many replicas at once.

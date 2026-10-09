@@ -1,0 +1,199 @@
+version: 1
+slug: devices_off_target_firmware
+title: Devices Off Target Firmware
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [devops, sre, qa, network]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Devices Off Target Firmware
+
+  A fleet-management service tracks edge devices and the firmware each one last reported. The
+  release team pins one **target firmware version per device model** and needs a list of devices that
+  still need an update.
+
+  Table `devices`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | model | VARCHAR(40) | device model |
+  | firmware | VARCHAR(40) | last reported firmware version; **NULL when the device never reported one** |
+
+  Table `target_firmware`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | model | VARCHAR(40) | primary key |
+  | version | VARCHAR(40) | the target version for that model |
+
+  Return every device whose model **has** a target version and whose `firmware` is **not exactly
+  equal** to that target (version strings are compared as plain text, so a newer version also counts
+  as off target). A device with `NULL` firmware is unknown and counts as **off target**. Devices whose
+  model has no row in `target_firmware` are skipped.
+
+  Return `id`, `model`, `firmware` and `target_version`, ordered by `id` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  devices                          target_firmware
+  +----+-------+----------+        +-------+---------+
+  | id | model | firmware |        | model | version |
+  +----+-------+----------+        +-------+---------+
+  | 1  | gw100 | 2.4.1    |        | gw100 | 2.4.1   |
+  | 2  | gw100 | 2.3.9    |        | cam20 | 1.1.0   |
+  | 3  | cam20 | NULL     |        +-------+---------+
+  | 4  | cam20 | 1.0.0    |
+  | 5  | th7   | 0.9.0    |
+  +----+-------+----------+
+
+  Output
+  +----+-------+----------+----------------+
+  | id | model | firmware | target_version |
+  +----+-------+----------+----------------+
+  | 2  | gw100 | 2.3.9    | 2.4.1          |
+  | 3  | cam20 | NULL     | 1.1.0          |
+  | 4  | cam20 | 1.0.0    | 1.1.0          |
+  +----+-------+----------+----------------+
+  Device 5 is skipped because model th7 has no target version.
+  ```
+
+  ### Example 2
+  ```
+  devices                          target_firmware
+  +----+-------+----------+        +-------+---------+
+  | id | model | firmware |        | model | version |
+  +----+-------+----------+        +-------+---------+
+  | 1  | gw100 | 2.4.1    |        | gw100 | 2.4.1   |
+  | 2  | gw100 | 2.4.1    |        +-------+---------+
+  +----+-------+----------+
+
+  Output
+  +----+-------+----------+----------------+
+  | id | model | firmware | target_version |
+  +----+-------+----------+----------------+
+  (no rows - every device is on target)
+  ```
+
+  ### Constraints
+  - `0 <= devices <= 10^5`, `0 <= target_firmware <= 10^3`
+  - `model` and `version` are never NULL; only `devices.firmware` can be NULL.
+  - Version strings are compared exactly (case-sensitive, no semantic version parsing).
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return id, model, firmware, target_version for devices not on their model's target (NULL firmware counts), ordered by id.
+    SELECT d.id, d.model, d.firmware, NULL AS target_version
+    FROM devices d
+    ORDER BY d.id;
+reference_solutions:
+  sql: |
+    SELECT d.id, d.model, d.firmware, t.version AS target_version
+    FROM devices d
+    JOIN target_firmware t ON t.model = d.model
+    WHERE d.firmware IS NULL OR d.firmware <> t.version
+    ORDER BY d.id;
+sql_setup: |
+  CREATE TABLE target_firmware (
+    model VARCHAR(40) PRIMARY KEY,
+    version VARCHAR(40) NOT NULL
+  );
+  CREATE TABLE devices (
+    id INTEGER PRIMARY KEY,
+    model VARCHAR(40) NOT NULL,
+    firmware VARCHAR(40)
+  );
+tests:
+  - id: t1
+    description: "Example 1 - outdated, NULL firmware and a model without target"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_firmware (model, version) VALUES ('gw100', '2.4.1'), ('cam20', '1.1.0');
+      INSERT INTO devices (id, model, firmware) VALUES
+        (1, 'gw100', '2.4.1'), (2, 'gw100', '2.3.9'), (3, 'cam20', NULL), (4, 'cam20', '1.0.0'), (5, 'th7', '0.9.0');
+    expected_rows: [[2, "gw100", "2.3.9", "2.4.1"], [3, "cam20", null, "1.1.0"], [4, "cam20", "1.0.0", "1.1.0"]]
+  - id: t2
+    description: "Example 2 - every device on target returns nothing"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_firmware (model, version) VALUES ('gw100', '2.4.1');
+      INSERT INTO devices (id, model, firmware) VALUES (1, 'gw100', '2.4.1'), (2, 'gw100', '2.4.1');
+    expected_rows: []
+  - id: t3
+    hidden: true
+    description: "Empty tables return no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Only NULL firmware devices - the <> comparison alone would drop all of them"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_firmware (model, version) VALUES ('ap5', '5.0.2');
+      INSERT INTO devices (id, model, firmware) VALUES (7, 'ap5', NULL), (3, 'ap5', NULL);
+    expected_rows: [[3, "ap5", null, "5.0.2"], [7, "ap5", null, "5.0.2"]]
+  - id: t5
+    hidden: true
+    description: "Models without a target are skipped even with NULL firmware (LEFT JOIN trap)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_firmware (model, version) VALUES ('sw24', '9.1');
+      INSERT INTO devices (id, model, firmware) VALUES (1, 'rt1', NULL), (2, 'rt1', '1.0'), (3, 'sw24', '9.0'), (4, 'lb3', '2.2');
+    expected_rows: [[3, "sw24", "9.0", "9.1"]]
+  - id: t6
+    hidden: true
+    description: "Newer-than-target and suffixed versions are off target; exact matches are not"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_firmware (model, version) VALUES ('gw100', '2.4.1'), ('cam20', '1.1.0');
+      INSERT INTO devices (id, model, firmware) VALUES
+        (10, 'gw100', '3.0.0'), (11, 'gw100', '2.4.1-hotfix'), (12, 'gw100', '2.4.1'), (13, 'cam20', '1.1.0'),
+        (14, 'cam20', '1.1'), (15, 'cam20', '1.1.0 ');
+    expected_rows: [[10, "gw100", "3.0.0", "2.4.1"], [11, "gw100", "2.4.1-hotfix", "2.4.1"], [14, "cam20", "1.1", "1.1.0"], [15, "cam20", "1.1.0 ", "1.1.0"]]
+  - id: t7
+    hidden: true
+    description: "Target rows without any devices produce nothing; output ordered by id across models"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_firmware (model, version) VALUES ('gw100', '2.4.1'), ('cam20', '1.1.0'), ('unused', '0.1');
+      INSERT INTO devices (id, model, firmware) VALUES
+        (40, 'cam20', '1.0.9'), (5, 'gw100', '2.4.0'), (22, 'cam20', NULL), (8, 'gw100', '2.4.1'), (31, 'gw100', NULL);
+    expected_rows: [[5, "gw100", "2.4.0", "2.4.1"], [22, "cam20", null, "1.1.0"], [31, "gw100", null, "2.4.1"], [40, "cam20", "1.0.9", "1.1.0"]]
+  - id: t8
+    hidden: true
+    description: "Case-sensitive comparison of version strings"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_firmware (model, version) VALUES ('ups2', 'r12b');
+      INSERT INTO devices (id, model, firmware) VALUES (1, 'ups2', 'R12B'), (2, 'ups2', 'r12b'), (3, 'ups2', 'r12');
+    expected_rows: [[1, "ups2", "R12B", "r12b"], [3, "ups2", "r12", "r12b"]]
+expected_concepts:
+  - "inner join to a lookup table"
+  - "NULL semantics of <> (three-valued logic)"
+  - "IS NULL / IS DISTINCT FROM style comparisons"
+  - "inner versus left join for skipping unmatched rows"
+optimal_complexity: {time: "O(n) with a hash join or an index on target_firmware.model", space: "O(m) for m target rows"}
+rubric:
+  excellent: "Inner-joins devices to targets, filters with firmware IS NULL OR firmware <> version, explains that <> against NULL is unknown and that a LEFT JOIN would wrongly keep models without a target, and mentions IS DISTINCT FROM portability."
+  good: "Correct query after a hint about NULL firmware or models without targets."
+  weak: "Uses only firmware <> version (dropping NULL firmware), uses a LEFT JOIN that keeps untargeted models, or compares versions numerically."
+  criteria:
+    correctness: "All tests pass, including NULL firmware, untargeted models and near-identical version strings."
+    efficiency: "Single join on the model key; no per-row subqueries required."
+    code_quality: "Clear aliases, the target column renamed to target_version and an explicit ORDER BY id."
+    edge_cases: "Empty tables, all on target, NULL firmware and targets without devices."
+    communication: "Explains three-valued logic and why the join type matters here."
+hints:
+  - "Pair every device with its model's target version first; devices whose model has no target should disappear at that step."
+  - "Comparing a NULL firmware with a version using <> is neither true nor false, so that device would vanish - handle unknown firmware explicitly."
+  - "Inner-join devices to target_firmware on model and keep rows where firmware IS NULL OR firmware <> version; select the target as target_version and order by id."
+followups:
+  - "How would you compare versions semantically so that 2.10.0 counts as newer than 2.9.0?"
+  - "What does IS DISTINCT FROM do, and which engines support it?"
+  - "How would you report the count of off-target devices per model, including models with zero?"
+common_errors:
+  - "Filtering only with firmware <> version, which silently drops devices with NULL firmware."
+  - "Using a LEFT JOIN, which returns devices whose model has no target."
+  - "Comparing versions with < or >, which is not the contract and fails on string ordering."

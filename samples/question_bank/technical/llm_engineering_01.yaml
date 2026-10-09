@@ -1,0 +1,643 @@
+# LLM application engineering, part 1: retrieval — chunking, embeddings, indexes, hybrid search,
+# reranking, ingestion and keeping the index in sync.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [llm]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: technical.llm_engineering.chunk_size_tradeoffs
+    competency_key: llm_engineering
+    topic: Chunk size and overlap
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you split documents into chunks for retrieval, how do you decide on chunk size and overlap? Tell me
+      what goes wrong when chunks are too small, and what goes wrong when they're too large.
+    expected_concepts:
+      - small chunks lose surrounding context and meaning
+      - large chunks dilute the embedding and waste context window
+      - overlap to avoid cutting answers across boundaries
+      - sizing in tokens relative to the embedding model's limit
+      - tuning chunk size against a retrieval evaluation set
+    rubric:
+      excellent: Explains both failure modes with concrete symptoms, sizes chunks in tokens against the embedding model and the generation budget, and says they would pick values by measuring retrieval on a test set.
+      good: Knows small chunks lose context and large ones dilute relevance, and uses some overlap.
+      weak: Picks a number from a tutorial with no reasoning about the trade-off.
+    followups:
+      - How would overlap affect your index size and duplicate results?
+      - What would you change if most user questions needed a whole table rather than a paragraph?
+    common_errors:
+      - Measuring chunk size in characters while the embedding model truncates by tokens.
+
+  - external_key: technical.llm_engineering.embedding_model_choice
+    competency_key: llm_engineering
+    topic: Choosing an embedding model
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How would you choose an embedding model for a new retrieval project? I'm interested in what you'd look at
+      beyond a public leaderboard ranking.
+    expected_concepts:
+      - evaluating on your own queries and documents
+      - language and domain coverage
+      - maximum input length and dimensionality
+      - latency, cost and hosting constraints
+      - query and document prefixes or asymmetric models
+      - storage cost of vector dimensions
+    rubric:
+      excellent: Runs a small in-domain retrieval benchmark, weighs input length, dimensions, languages, latency and hosting, and notes model-specific details such as query versus passage prefixes.
+      good: Mentions testing on their own data and at least two practical constraints like cost or languages.
+      weak: Picks the top leaderboard model without checking it on their data.
+    followups:
+      - How many labelled query and document pairs would you want before trusting the comparison?
+      - What does doubling the vector dimension cost you at scale?
+    common_errors:
+      - Forgetting the query or passage prefix some embedding models require, which quietly lowers recall.
+
+  - external_key: technical.llm_engineering.rag_pipeline_walkthrough
+    competency_key: llm_engineering
+    topic: End-to-end RAG pipeline
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Walk me through a retrieval-augmented generation pipeline you've built or worked on, from the raw documents
+      all the way to the answer the user sees. Where did most of the problems show up?
+    expected_concepts:
+      - ingestion, parsing and cleaning
+      - chunking and embedding
+      - indexing and retrieval with filters
+      - prompt assembly with retrieved context
+      - generation with citations
+      - evaluation and monitoring of each stage
+    rubric:
+      excellent: Describes every stage of a real system with the specific tools and decisions used, and pinpoints where quality problems actually came from with an example.
+      good: Covers the main stages in the right order with some real detail.
+      weak: Describes RAG generically without reference to anything they built, or skips ingestion and evaluation entirely.
+    followups:
+      - Which stage would you instrument first if answer quality dropped?
+      - What did you learn about parsing that you wish you'd known at the start?
+    common_errors:
+      - Treating retrieval and generation as one black box, so failures cannot be attributed to a stage.
+
+  - external_key: technical.llm_engineering.keyword_beats_dense
+    competency_key: llm_engineering
+    topic: Lexical versus semantic search
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Can you explain the kinds of queries where plain keyword search beats embedding search? If you can, give me
+      an example from a real system where you saw that happen.
+    expected_concepts:
+      - exact identifiers such as error codes, SKUs and names
+      - rare domain terms the embedding model has not learned
+      - acronyms and version numbers
+      - embeddings capturing paraphrase and intent
+      - motivation for hybrid retrieval
+    rubric:
+      excellent: Names concrete query types (identifiers, rare jargon, exact phrases) with a real example, explains why dense vectors blur them, and links this to hybrid retrieval.
+      good: Says keyword search handles exact matches and IDs better, with a plausible example.
+      weak: Claims embeddings are always better or cannot name a case where keyword search wins.
+    followups:
+      - How would you detect these query types in your logs?
+      - What would you do with queries that mix an error code with a natural-language description?
+    common_errors:
+      - Assuming semantic similarity also captures exact identifier matches.
+
+  - external_key: technical.llm_engineering.similarity_metric_normalization
+    competency_key: llm_engineering
+    topic: Similarity metrics and normalization
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A teammate stored embeddings and searches them by inner product, and long documents seem to win far too
+      often. What could be going on, and what would you check?
+    expected_concepts:
+      - cosine similarity versus inner product versus Euclidean distance
+      - unnormalized vectors letting magnitude dominate
+      - matching the metric the embedding model was trained with
+      - index configured with a different metric than the queries
+      - re-checking ranking on known query and document pairs
+    rubric:
+      excellent: Identifies vector magnitude as the likely cause, explains how normalization makes inner product equal cosine, checks the model's intended metric and the index configuration, and verifies on known pairs.
+      good: Suggests normalizing vectors or switching to cosine and explains why roughly.
+      weak: Proposes changing the model or chunk size without considering the metric.
+    followups:
+      - If you normalize now, what needs to be rebuilt?
+      - Why might a model card recommend a specific metric?
+    common_errors:
+      - Building the index with one distance metric and querying with assumptions from another.
+
+  - external_key: technical.llm_engineering.metadata_filtering_scope
+    competency_key: llm_engineering
+    topic: Metadata filtering for scoped answers
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Employees using an internal policy assistant complain that answers mix up rules from different regional
+      offices and from outdated policy versions. How would you use metadata to fix that?
+    expected_concepts:
+      - attaching region, version and effective date metadata at ingestion
+      - filtering at query time based on the user's context
+      - excluding superseded documents
+      - asking a clarifying question when scope is unknown
+      - showing the source and version in the answer
+    rubric:
+      excellent: Designs metadata capture at ingestion, applies filters from user context or a clarifying question, retires superseded versions, and surfaces the source version to the user.
+      good: Adds region and version metadata and filters on it.
+      weak: Tries to fix it only by telling the model in the prompt to use the right region.
+    followups:
+      - Where would the user's region come from, and what if it's missing?
+      - How would you handle a policy that applies to all regions except one?
+    common_errors:
+      - Leaving superseded documents in the index and relying on the model to prefer the newest.
+
+  - external_key: technical.llm_engineering.pdf_ingestion
+    competency_key: llm_engineering
+    topic: Ingesting messy PDFs
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You're asked to make a few thousand PDF equipment manuals searchable for a RAG assistant. Many have tables,
+      diagrams and some scanned pages. How would you approach ingestion?
+    expected_concepts:
+      - detecting text-based versus scanned pages and using OCR for scans
+      - layout-aware parsing for tables, headers and columns
+      - preserving section headings as metadata
+      - handling headers, footers and repeated boilerplate
+      - spot-checking parsed output before indexing
+    rubric:
+      excellent: Separates scanned and digital pages, uses layout-aware parsing for tables and headings, strips boilerplate, keeps section structure as metadata and validates samples of parsed output.
+      good: Mentions OCR for scans and some special handling for tables.
+      weak: Extracts raw text with a single library and indexes it without checking the output.
+    followups:
+      - How would you represent a table so retrieval and the model can both use it?
+      - How would you catch parsing failures across thousands of files without reading them all?
+    common_errors:
+      - Flattening tables into run-on text so rows and columns can no longer be matched.
+
+  - external_key: technical.llm_engineering.contextual_chunk_headers
+    competency_key: llm_engineering
+    topic: Making chunks self-contained
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Retrieved chunks often don't make sense on their own — for example a paragraph that says "this limit
+      applies" without saying which product it's about. How would you make chunks more self-explanatory?
+    expected_concepts:
+      - prepending document title and section headings to each chunk
+      - generating a short context summary per chunk at ingestion
+      - splitting on document structure instead of fixed length
+      - retrieving neighbouring chunks or the parent section
+      - measuring the effect on retrieval recall
+    rubric:
+      excellent: Proposes adding title and heading context or generated chunk summaries, structure-aware splitting and parent or neighbour expansion, and checks the change against retrieval metrics.
+      good: Suggests adding headings or document titles to chunks.
+      weak: Only increases chunk size or does not see why the chunk is ambiguous.
+    followups:
+      - What does generating a summary for every chunk cost, and is it worth it?
+      - Should the added context be embedded, shown to the model, or both?
+    common_errors:
+      - Fixing ambiguity by making chunks huge, which hurts retrieval precision.
+
+  # ------------------------------------------------------------------ medium
+  - external_key: technical.llm_engineering.hybrid_search_fusion
+    competency_key: llm_engineering
+    topic: Fusing keyword and dense results
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you combine keyword and dense retrieval results into a single ranked list? Talk me through the
+      fusion approach you'd use and how you'd tune it.
+    expected_concepts:
+      - scores on incomparable scales
+      - reciprocal rank fusion
+      - weighted score combination after normalization
+      - candidate depth from each retriever
+      - tuning weights on a labelled query set
+      - reranking the fused list
+    rubric:
+      excellent: Explains why raw scores cannot be added, describes reciprocal rank fusion or normalized weighting, chooses candidate depths, tunes on labelled queries and may add a reranker.
+      good: Knows reciprocal rank fusion or weighted merging and that weights need tuning.
+      weak: Concatenates both result lists or adds raw scores together.
+    followups:
+      - When would you weight keyword results more heavily for some queries than others?
+      - How would you tell whether fusion helped compared with dense retrieval alone?
+    common_errors:
+      - Adding BM25 scores directly to cosine similarities.
+
+  - external_key: technical.llm_engineering.reranker_budget
+    competency_key: llm_engineering
+    topic: Cross-encoder reranking under a latency budget
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Where does a cross-encoder reranker fit into a retrieval pipeline, and how would you decide how many
+      candidates to rerank when you have a tight latency budget?
+    expected_concepts:
+      - bi-encoder retrieval for recall, cross-encoder for precision
+      - reranker cost grows with candidates and passage length
+      - measuring recall at the retrieval depth
+      - batching and GPU placement of the reranker
+      - choosing the final top k passed to the model
+    rubric:
+      excellent: Explains the recall versus precision split between stages, picks the candidate count from measured recall and reranker latency per batch, and decides the final top k from answer quality and context cost.
+      good: Knows rerankers are slower but more accurate and that the candidate count is a trade-off.
+      weak: Reranks the whole corpus or cannot explain what a reranker adds.
+    followups:
+      - What would you do if the reranker improved precision but answers didn't get better?
+      - How would passage truncation affect the reranker?
+    common_errors:
+      - Reranking far more candidates than the latency budget allows without measuring where recall saturates.
+
+  - external_key: technical.llm_engineering.ann_recall_tuning
+    competency_key: llm_engineering
+    topic: Approximate nearest neighbour recall
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Explain how an approximate nearest neighbour index such as HNSW trades recall for speed. If recall dropped
+      as your corpus grew, which knobs would you look at?
+    expected_concepts:
+      - graph-based search with greedy traversal
+      - build-time parameters such as connections per node and construction breadth
+      - query-time search breadth parameter
+      - measuring recall against exact brute-force search
+      - memory and build time costs
+      - alternatives such as IVF and product quantization
+    rubric:
+      excellent: Describes how the index is searched, separates build-time and query-time parameters, measures recall against exact search on sampled queries and weighs memory and latency costs.
+      good: Knows approximate search can miss neighbours and that a query-time parameter raises recall at a latency cost.
+      weak: Treats vector search as exact or suggests only adding hardware.
+    followups:
+      - How would you measure the index's recall separately from the embedding model's quality?
+      - When would a quantized index be the better choice?
+    common_errors:
+      - Never comparing the approximate index against exact search, so recall loss goes unnoticed.
+
+  - external_key: technical.llm_engineering.filtered_vector_search
+    competency_key: llm_engineering
+    topic: Filtered vector search returning too few results
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You ask your vector store for the top ten results filtered to one customer's documents, and you only get two
+      back even though plenty of matching documents exist. What's likely happening, and how would you fix it?
+    expected_concepts:
+      - post-filtering after the approximate search
+      - selective filters starving the candidate list
+      - pre-filtering or filter-aware index traversal
+      - iterative or expanded search depth
+      - partitioning or separate indexes per tenant
+    rubric:
+      excellent: Explains that the index returns nearest neighbours before the filter removes most of them, and offers filter-aware search, iterative scans, higher search depth or per-tenant partitioning with their trade-offs.
+      good: Identifies post-filtering as the cause and suggests raising the candidate count.
+      weak: Assumes the documents were not indexed and re-ingests them.
+    followups:
+      - How would the answer change with ten thousand small tenants versus five large ones?
+      - What happens to latency when the filter is very selective?
+    common_errors:
+      - Blaming ingestion when the cause is filtering applied after the nearest-neighbour search.
+
+  - external_key: technical.llm_engineering.conversational_query_rewriting
+    competency_key: llm_engineering
+    topic: Query rewriting for follow-up questions
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      In a multi-turn chat over documents, follow-ups like "what about the second one?" retrieve nothing useful.
+      How would you design query rewriting to deal with that?
+    expected_concepts:
+      - rewriting the follow-up into a standalone query using chat history
+      - using a small fast model for the rewrite
+      - deciding when retrieval is needed at all
+      - generating multiple query variants
+      - evaluating rewrites against retrieval results
+    rubric:
+      excellent: Rewrites follow-ups into standalone queries with a cheap model, decides when to skip retrieval, considers multiple variants, and evaluates rewrites by their effect on retrieval and latency.
+      good: Proposes condensing history into a standalone question before retrieval.
+      weak: Embeds the whole conversation as the query or ignores the problem.
+    followups:
+      - What latency does the rewrite add, and how would you hide it?
+      - How would you catch a rewrite that changes the user's meaning?
+    common_errors:
+      - Embedding the full chat transcript as the search query.
+
+  - external_key: technical.llm_engineering.structure_aware_chunking
+    competency_key: llm_engineering
+    topic: Chunking different document types
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your corpus mixes API reference pages, long legal contracts and short FAQ entries. How would you chunk each
+      type differently, and why?
+    expected_concepts:
+      - FAQ entries kept whole as question and answer pairs
+      - API pages split per endpoint or function with signatures intact
+      - contracts split by clause and section with numbering preserved
+      - document-type metadata for filtering and prompting
+      - separate evaluation per document type
+    rubric:
+      excellent: Gives a structure-aware strategy for each type with reasons tied to how users ask questions, keeps identifiers and numbering intact, and evaluates per type.
+      good: Recognises that one fixed chunker is a poor fit and suggests sensible splits for at least two types.
+      weak: Applies the same fixed-length splitter to everything.
+    followups:
+      - How would you handle a contract clause that refers to definitions fifty pages earlier?
+      - Would you use one index or several for these types?
+    common_errors:
+      - Splitting code signatures or clause numbers across chunks.
+
+  - external_key: technical.llm_engineering.index_sync_updates_deletes
+    competency_key: llm_engineering
+    topic: Keeping the index in sync with edits and deletions
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Documents in your knowledge base are edited and deleted every day, and users sometimes get answers quoting
+      text that no longer exists. How would you design the indexing pipeline so it stays in sync?
+    expected_concepts:
+      - stable document ids with chunk ids derived from them
+      - change detection through events or content hashes
+      - deleting all old chunks before or atomically with inserting new ones
+      - handling deletions explicitly, including tombstones
+      - monitoring index lag and reconciliation jobs
+    rubric:
+      excellent: Designs incremental indexing keyed on stable ids and content hashes, replaces a document's chunks atomically, propagates deletions, and runs a periodic reconciliation with lag monitoring.
+      good: Re-indexes changed documents and removes old chunks.
+      weak: Proposes a nightly full rebuild without considering deletions, lag or cost.
+    followups:
+      - Why might deletions matter more than edits for compliance?
+      - How would you know the index is out of date before a user notices?
+    common_errors:
+      - Inserting new chunks for an edited document without removing the old ones.
+
+  - external_key: technical.llm_engineering.reembedding_migration
+    competency_key: llm_engineering
+    topic: Migrating to a new embedding model
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You want to switch to a better embedding model, but you have fifty million vectors in production and can't
+      take the search down. How would you plan the migration?
+    expected_concepts:
+      - vectors from different models are not comparable
+      - building a parallel index while serving the old one
+      - backfill throughput, cost and rate limits
+      - capturing writes during the backfill
+      - offline evaluation and shadow or canary traffic before cutover
+      - keeping the old index for rollback
+    rubric:
+      excellent: Builds a new index side by side, plans backfill throughput and dual writes, compares quality offline and on live traffic, cuts over gradually and keeps a rollback path.
+      good: Knows everything must be re-embedded and proposes a parallel index with a cutover.
+      weak: Re-embeds in place or mixes old and new vectors in one index.
+    followups:
+      - How long would the backfill take, and how would you estimate it?
+      - What if the new model has a different vector dimension?
+    common_errors:
+      - Querying an index with vectors from a different embedding model.
+
+  - external_key: technical.llm_engineering.embedding_finetuning
+    competency_key: llm_engineering
+    topic: Fine-tuning an embedding model
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When would you fine-tune an embedding model on your own data instead of using an off-the-shelf one, and how
+      would you build the training pairs?
+    expected_concepts:
+      - domain vocabulary poorly served by generic models
+      - positive pairs from click logs, FAQs or generated queries
+      - hard negatives mined from current retrieval
+      - contrastive loss with in-batch negatives
+      - held-out evaluation and re-indexing cost
+    rubric:
+      excellent: Justifies fine-tuning with measured retrieval gaps, sources positives from real or synthetic queries, mines hard negatives, evaluates on a held-out set and accounts for the re-index cost.
+      good: Knows to train on query and document pairs and evaluate against the base model.
+      weak: Suggests fine-tuning by default with no data plan or evaluation.
+    followups:
+      - What risks come with generating training queries using an LLM?
+      - Why do hard negatives matter more than random ones?
+    common_errors:
+      - Evaluating the fine-tuned embedder on queries generated from the same chunks it was trained on.
+
+  - external_key: technical.llm_engineering.retrieval_labels_from_scratch
+    competency_key: llm_engineering
+    topic: Building a retrieval evaluation set
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Suppose you have no labelled data at all. How would you build an evaluation set for the retrieval step, and
+      which metrics would you report from it?
+    expected_concepts:
+      - sampling real user queries where available
+      - synthetic questions generated from chunks, with review
+      - labelling relevant passages, not just answers
+      - recall at k, MRR or nDCG
+      - covering hard query types and slicing results
+    rubric:
+      excellent: Combines real and reviewed synthetic queries, labels relevant passages, reports recall at the depth actually used plus a rank-aware metric, and slices by query type.
+      good: Builds a set of queries with known relevant documents and reports recall at k.
+      weak: Judges retrieval only by reading a few final answers.
+    followups:
+      - How do you stop synthetic questions from being too easy for your retriever?
+      - What would you do when several passages are equally relevant?
+    common_errors:
+      - Reporting recall at a depth different from the number of passages actually given to the model.
+
+  - external_key: technical.llm_engineering.tabular_numeric_questions
+    competency_key: llm_engineering
+    topic: Numeric questions over tables
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Users ask your assistant things like "what was the total spend in the third quarter?" over spreadsheets and
+      financial tables, and the answers are often wrong. How would you change the pipeline?
+    expected_concepts:
+      - text chunking breaks table structure
+      - loading tables into a queryable store
+      - having the model generate a query or call a calculation tool
+      - not letting the model do arithmetic in its head
+      - validating results and showing the computation
+    rubric:
+      excellent: Routes tabular questions to structured storage, has the model produce a query or use a calculator tool, validates the result and shows its working, and keeps text retrieval for prose questions.
+      good: Recognises the model is bad at arithmetic over chunks and suggests a tool or structured query.
+      weak: Tries a better prompt or a bigger model only.
+    followups:
+      - How would you decide whether a question needs the table path or the text path?
+      - How would you guard a generated query against touching data it shouldn't?
+    common_errors:
+      - Expecting the model to sum or compare numbers reliably from text chunks.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: technical.llm_engineering.multi_hop_retrieval
+    competency_key: llm_engineering
+    topic: Multi-hop retrieval
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Some questions need facts from several documents combined — for instance comparing the termination clauses
+      of two contracts. How would you design retrieval for these multi-hop questions, and how would you know it's
+      working?
+    expected_concepts:
+      - query decomposition into sub-questions
+      - iterative retrieval where one result informs the next query
+      - entity-aware filtering per sub-question
+      - context budgeting across documents
+      - multi-hop evaluation that checks each needed fact was retrieved
+    rubric:
+      excellent: Decomposes questions, retrieves per sub-question or iteratively, budgets context across sources, and evaluates whether every required fact was retrieved as well as the final answer, with latency trade-offs.
+      good: Proposes decomposition into sub-queries and merging results.
+      weak: Raises top k and hopes both documents appear.
+    followups:
+      - How would you cap latency when decomposition creates many sub-queries?
+      - What does failure look like when one hop retrieves the wrong entity?
+    common_errors:
+      - Evaluating only the final answer, which hides which hop failed.
+
+  - external_key: technical.llm_engineering.permission_aware_rag
+    competency_key: llm_engineering
+    topic: Enforcing document permissions in RAG
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You're building an assistant over the company's shared drives, where each person can only see some of the
+      files. How would you enforce document permissions end to end, including when someone's access changes?
+    expected_concepts:
+      - enforcing access in retrieval, never in the prompt
+      - access control metadata stored with each chunk
+      - syncing permission changes and group membership
+      - re-checking access at query time against the source system
+      - caches, logs and summaries as leakage paths
+      - testing with users of different access levels
+    rubric:
+      excellent: Filters at retrieval using synced access metadata, re-validates against the source for sensitive results, handles revocation latency, and closes side channels like caches, logs and derived summaries, with tests per access level.
+      good: Stores permissions on chunks and filters search results by the user's groups.
+      weak: Retrieves everything and tells the model not to reveal restricted content.
+    followups:
+      - How quickly must a revoked permission take effect, and how would you guarantee it?
+      - How would a cached answer leak data across users?
+    common_errors:
+      - Relying on the system prompt to hide documents the user cannot access.
+
+  - external_key: technical.llm_engineering.retrieval_billion_scale
+    competency_key: llm_engineering
+    topic: Retrieval architecture at very large scale
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your corpus is growing from about a million chunks to around a billion. What changes in your retrieval
+      architecture, and what would you measure to make those decisions?
+    expected_concepts:
+      - memory footprint of full-precision vectors
+      - quantization and compressed indexes with rescoring
+      - sharding and fan-out query latency
+      - partitioning by tenant, time or topic
+      - index build and update times
+      - recall and tail latency measured on realistic queries
+    rubric:
+      excellent: Estimates memory and cost from numbers, chooses compression with rescoring, plans sharding and partitioning, accounts for build and update time, and decides from measured recall and tail latency.
+      good: Mentions sharding, quantization and that recall must be re-measured.
+      weak: Assumes the same single-node setup will scale with more hardware.
+    followups:
+      - Roughly how much memory would a billion 1024-dimension float vectors need?
+      - How does fan-out across shards affect your tail latency?
+    common_errors:
+      - Ignoring index rebuild time, which can take days at this scale.
+
+  - external_key: technical.llm_engineering.long_context_vs_retrieval
+    competency_key: llm_engineering
+    topic: Long context windows versus retrieval
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Models now accept very long contexts. When would you put whole documents into the prompt rather than
+      retrieving chunks, and what evidence would convince you one way or the other?
+    expected_concepts:
+      - cost and latency grow with prompt length
+      - attention to information degrades in very long contexts
+      - corpus size relative to the window
+      - prefix caching for reused documents
+      - side-by-side evaluation on the same questions
+    rubric:
+      excellent: Weighs cost, latency, recall within long contexts and corpus size, considers caching and hybrid approaches, and proposes a head-to-head evaluation with quality, latency and cost numbers.
+      good: Knows long context costs more and can miss details, and that a small fixed corpus may not need retrieval.
+      weak: Claims long context makes retrieval obsolete, or dismisses it without reasons.
+    followups:
+      - How would you test whether the model actually uses information in the middle of a long document?
+      - What would a hybrid of the two approaches look like?
+    common_errors:
+      - Assuming a model uses everything in its context window equally well.
+
+  - external_key: technical.llm_engineering.reindex_quality_regression
+    competency_key: llm_engineering
+    topic: Debugging a quality drop after reindexing
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      After a routine reindex, answer quality on your evaluation set drops by eight points, but nobody touched the
+      model or the prompts. How would you track down the cause?
+    expected_concepts:
+      - separating retrieval metrics from generation metrics
+      - diffing chunk counts, sizes and parsed text before and after
+      - parser or library version changes
+      - embedding model or preprocessing mismatch
+      - index parameters or metric configuration
+      - keeping the previous index for comparison and rollback
+    rubric:
+      excellent: Rolls back or keeps the old index, isolates retrieval from generation, diffs the ingestion outputs and configuration, checks parser, tokenizer and embedding versions and confirms the root cause with a targeted test.
+      good: Checks retrieval quality separately and looks for changes in parsing or embeddings.
+      weak: Tweaks prompts or retrains without finding what changed.
+    followups:
+      - What would you version so this kind of change is visible next time?
+      - How would you compare two indexes on the same queries?
+    common_errors:
+      - Overwriting the previous index, leaving nothing to compare against or roll back to.
+
+  - external_key: technical.llm_engineering.knowledge_graph_alongside_vectors
+    competency_key: llm_engineering
+    topic: Structured knowledge alongside vector search
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      When would you add a knowledge graph or another structured store alongside vector retrieval, and what does
+      that cost you to build and maintain?
+    expected_concepts:
+      - relationship and aggregation questions vectors handle poorly
+      - entity extraction and resolution pipelines
+      - keeping structured data in sync with sources
+      - routing questions to the right store
+      - extraction errors compounding into wrong answers
+    rubric:
+      excellent: Names question types that need relationships or aggregation, describes entity extraction and resolution, routing and sync, and weighs maintenance cost and extraction error against measured gains.
+      good: Explains that graphs help with relationship questions and add maintenance effort.
+      weak: Adds a graph because it is fashionable, without a question type it solves.
+    followups:
+      - How would you measure whether the graph improved answers enough to justify it?
+      - What happens when entity resolution merges two different customers?
+    common_errors:
+      - Underestimating the ongoing cost of entity resolution and sync.

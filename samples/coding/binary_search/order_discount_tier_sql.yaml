@@ -1,0 +1,232 @@
+version: 1
+slug: order_discount_tier_sql
+title: Assign Discount Tiers to Orders
+difficulty: medium
+competency_keys: [sql, databases, problem_solving]
+role_tags: [data, data_analyst, dba, backend]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Assign Discount Tiers to Orders
+
+  A shop's pricing team keeps its volume discount ladder in table `tiers`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | tier_name | VARCHAR(50) | label shown on the invoice |
+  | min_amount | INTEGER | the tier applies to orders of at least this amount; values are unique |
+
+  Orders are stored in table `orders`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | amount | INTEGER | order total in whole currency units, `>= 0` |
+
+  An order earns the tier with the **greatest `min_amount` that is less than or equal to the order
+  amount**. Tier ids say nothing about the ladder order; only `min_amount` does. An order below every
+  tier's `min_amount` (or any order when `tiers` is empty) earns no tier and must still be listed, with
+  `tier_name` set to `NULL`.
+
+  Return `order_id`, `amount` and `tier_name` for **every** order, ordered by `order_id` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  tiers                               orders
+  +----+-----------+------------+     +----+--------+
+  | id | tier_name | min_amount |     | id | amount |
+  +----+-----------+------------+     +----+--------+
+  | 1  | Bronze    | 100        |     | 1  | 250    |
+  | 2  | Gold      | 1000       |     | 2  | 40     |
+  | 3  | Silver    | 500        |     | 3  | 500    |
+  +----+-----------+------------+     | 4  | 1800   |
+                                      +----+--------+
+
+  Output
+  +----------+--------+-----------+
+  | order_id | amount | tier_name |
+  +----------+--------+-----------+
+  | 1        | 250    | Bronze    |
+  | 2        | 40     | NULL      |
+  | 3        | 500    | Silver    |
+  | 4        | 1800   | Gold      |
+  +----------+--------+-----------+
+  Order 3 sits exactly on Silver's threshold, so it earns Silver. Order 2 is below every tier.
+  ```
+
+  ### Example 2
+  ```
+  tiers                               orders
+  +----+-----------+------------+     +----+--------+
+  | id | tier_name | min_amount |     | id | amount |
+  +----+-----------+------------+     +----+--------+
+  | 7  | Standard  | 0          |     | 5  | 0      |
+  | 8  | Wholesale | 2000       |     | 6  | 1999   |
+  +----+-----------+------------+     +----+--------+
+
+  Output
+  +----------+--------+-----------+
+  | order_id | amount | tier_name |
+  +----------+--------+-----------+
+  | 5        | 0      | Standard  |
+  | 6        | 1999   | Standard  |
+  +----------+--------+-----------+
+  ```
+
+  ### Constraints
+  - `0 <= rows in tiers <= 10^3`, `0 <= rows in orders <= 10^5`
+  - `0 <= min_amount, amount <= 10^9`
+  - `min_amount` values are unique.
+languages: [sql]
+starter_code:
+  sql: |
+    -- For every order, return the tier with the greatest min_amount not above the order amount (NULL if none).
+    SELECT o.id AS order_id, o.amount, NULL AS tier_name
+    FROM orders o
+    ORDER BY o.id;
+reference_solutions:
+  sql: |
+    SELECT o.id AS order_id, o.amount, t.tier_name
+    FROM orders o
+    LEFT JOIN tiers t
+      ON t.min_amount = (
+        SELECT MAX(t2.min_amount)
+        FROM tiers t2
+        WHERE t2.min_amount <= o.amount
+      )
+    ORDER BY o.id;
+sql_setup: |
+  CREATE TABLE tiers (
+    id INTEGER PRIMARY KEY,
+    tier_name VARCHAR(50) NOT NULL,
+    min_amount INTEGER NOT NULL UNIQUE
+  );
+  CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    amount INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - exact threshold, below all tiers and tier ids out of ladder order"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tiers (id, tier_name, min_amount) VALUES (1, 'Bronze', 100), (2, 'Gold', 1000), (3, 'Silver', 500);
+      INSERT INTO orders (id, amount) VALUES (1, 250), (2, 40), (3, 500), (4, 1800);
+    expected_rows:
+      - [1, 250, "Bronze"]
+      - [2, 40, null]
+      - [3, 500, "Silver"]
+      - [4, 1800, "Gold"]
+  - id: t2
+    description: "Example 2 - zero threshold and an amount one below the next tier"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tiers (id, tier_name, min_amount) VALUES (7, 'Standard', 0), (8, 'Wholesale', 2000);
+      INSERT INTO orders (id, amount) VALUES (5, 0), (6, 1999);
+    expected_rows:
+      - [5, 0, "Standard"]
+      - [6, 1999, "Standard"]
+  - id: t3
+    hidden: true
+    description: "Both tables empty"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "No tiers at all - every order is listed with NULL (inner joins drop them)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, amount) VALUES (3, 10), (1, 0), (2, 999999999);
+    expected_rows:
+      - [1, 0, null]
+      - [2, 999999999, null]
+      - [3, 10, null]
+  - id: t5
+    hidden: true
+    description: "Tiers but no orders - empty result"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tiers (id, tier_name, min_amount) VALUES (1, 'Bronze', 100);
+    expected_rows: []
+  - id: t6
+    hidden: true
+    description: "Single tier - orders one below, exactly on and one above the threshold"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tiers (id, tier_name, min_amount) VALUES (4, 'Partner', 300);
+      INSERT INTO orders (id, amount) VALUES (10, 299), (11, 300), (12, 301);
+    expected_rows:
+      - [10, 299, null]
+      - [11, 300, "Partner"]
+      - [12, 301, "Partner"]
+  - id: t7
+    hidden: true
+    description: "Many tiers - an order above several thresholds appears once with the highest one (a plain non-equi join returns duplicates)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tiers (id, tier_name, min_amount) VALUES
+        (1, 'T5', 5000), (2, 'T1', 10), (3, 'T4', 2500), (4, 'T2', 100), (5, 'T3', 1000);
+      INSERT INTO orders (id, amount) VALUES (1, 9), (2, 10), (3, 99), (4, 2499), (5, 2500), (6, 1000000000);
+    expected_rows:
+      - [1, 9, null]
+      - [2, 10, "T1"]
+      - [3, 99, "T1"]
+      - [4, 2499, "T3"]
+      - [5, 2500, "T4"]
+      - [6, 1000000000, "T5"]
+  - id: t8
+    hidden: true
+    description: "Duplicate order amounts and non-contiguous order ids keep their own rows in id order"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tiers (id, tier_name, min_amount) VALUES (2, 'Plus', 50), (1, 'Base', 1);
+      INSERT INTO orders (id, amount) VALUES (40, 75), (7, 75), (19, 0), (3, 50), (25, 49);
+    expected_rows:
+      - [3, 50, "Plus"]
+      - [7, 75, "Plus"]
+      - [19, 0, null]
+      - [25, 49, "Base"]
+      - [40, 75, "Plus"]
+  - id: t9
+    hidden: true
+    description: "Tier names that sort differently from their thresholds - picking MAX(tier_name) instead of the max threshold fails"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tiers (id, tier_name, min_amount) VALUES (1, 'Zinc', 0), (2, 'Amber', 400), (3, 'Mint', 800);
+      INSERT INTO orders (id, amount) VALUES (1, 100), (2, 450), (3, 900);
+    expected_rows:
+      - [1, 100, "Zinc"]
+      - [2, 450, "Amber"]
+      - [3, 900, "Mint"]
+expected_concepts:
+  - non-equi join (range lookup) between orders and tiers
+  - floor lookup with a correlated MAX subquery or a window function
+  - LEFT JOIN to keep orders without a tier
+  - deterministic ordering with ORDER BY
+  - index on tiers.min_amount for the lookup
+optimal_complexity: {time: "O(n log t) with an index on min_amount", space: O(n)}
+rubric:
+  excellent: Writes a correct floor lookup (correlated MAX subquery joined back, or ranking candidate tiers per order with ROW_NUMBER), keeps tier-less orders with a LEFT JOIN, orders by order_id, and explains how an index on min_amount turns each lookup into a range seek.
+  good: Correct result after a hint about duplicates from the non-equi join or about orders without a tier.
+  weak: Joins on amount >= min_amount without choosing a single tier (duplicate rows), uses an inner join that drops orders below every tier, or relies on tier ids being in ladder order.
+  criteria:
+    correctness: All tests pass, including empty tables, exact thresholds and orders below every tier.
+    efficiency: Set-based lookup; mentions indexing min_amount or precomputing the upper bound of each tier.
+    code_quality: Clear aliases, output columns named exactly order_id, amount and tier_name.
+    edge_cases: Exact thresholds, a zero threshold, no tiers at all and duplicate amounts.
+    communication: Explains why a plain range join produces several rows per order and how the query picks one.
+hints:
+  - For one order, which tiers could apply to it, and which one of those should win?
+  - Every tier at or below the amount qualifies; you need the qualifying tier with the largest threshold, and orders with no qualifying tier must not disappear from the output.
+  - Compute the largest min_amount not above each order's amount with a correlated subquery (or rank the qualifying tiers per order with a window function), left join tiers on that threshold to get the name, and finish with ORDER BY on the order id.
+followups:
+  - How would you precompute each tier's upper bound with LEAD so the lookup becomes a BETWEEN join?
+  - Which index makes this fast when orders has millions of rows?
+  - How would you also return the amount still needed to reach the next tier?
+common_errors:
+  - Joining on amount >= min_amount without picking one tier, which returns several rows per order.
+  - Using an inner join, which drops orders below every tier.
+  - Taking MAX(tier_name) or the highest tier id instead of the tier with the highest threshold.
+  - Forgetting ORDER BY order_id.

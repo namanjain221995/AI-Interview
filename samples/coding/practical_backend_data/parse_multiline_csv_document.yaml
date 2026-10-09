@@ -1,0 +1,235 @@
+version: 1
+slug: parse_multiline_csv_document
+title: Parse a Multi-Line CSV Document
+difficulty: hard
+competency_keys: [problem_solving, code_quality, debugging]
+role_tags: [backend, data, qa, fullstack]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Parse a Multi-Line CSV Document
+
+  Customers upload product catalogues as CSV exports from spreadsheets. Descriptions often contain
+  commas, quotes and even line breaks, so splitting on newlines and commas breaks the import. Write a
+  parser for the **whole document** that either returns every record or pinpoints the first broken
+  one.
+
+  **Format**
+
+  - The document is a sequence of **records**. A record ends at a line ending, `\n` or `\r\n`, that
+    is not inside a quoted field. A line ending at the very end of the text does **not** start
+    another (empty) record. Every `\r` in the text is immediately followed by `\n`.
+  - A record is a list of **fields** separated by commas. An empty line is a record with one empty
+    field.
+  - A field is **quoted** when its **first** character is `"`. Its value runs to the matching closing
+    quote; inside it, `""` stands for one `"`, and commas and line breaks (`\n` or `\r\n`) are part of
+    the value, kept exactly as written. After the closing quote the next character must be a comma, a
+    line ending or the end of the text.
+  - Any other field is **unquoted**: its value is all characters up to the next comma or line ending,
+    and it must not contain `"`.
+
+  **Errors.** A record is malformed when it has an **unterminated** quoted field, a `"` inside an
+  unquoted field, characters **after a closing quote** (other than a comma or line ending), or a
+  **different number of fields** than the first record. If any record is malformed, return
+  `[["#ERROR", "<line>"]]`, where `<line>` is the 1-based **physical line** (counting every `\n`,
+  including those inside quoted fields) on which the **first** malformed record **starts**. Otherwise
+  return all records in order. An empty text returns `[]`.
+
+  The examples write strings with escapes: `\n` is a newline, `\r` a carriage return and `\"` a
+  quote character.
+
+  ### Example 1
+  ```
+  Input:  text = "id,name,note\n1,\"Smith, Jo\",\"said \"\"hi\"\"\"\n2,Lee,\n"
+  Output: [["id", "name", "note"], ["1", "Smith, Jo", "said \"hi\""], ["2", "Lee", ""]]
+  ```
+
+  ### Example 2
+  ```
+  Input:  text = "sku,description\r\nA100,\"Line one\r\nLine two\"\r\nB200,plain"
+  Output: [["sku", "description"], ["A100", "Line one\r\nLine two"], ["B200", "plain"]]
+  ```
+
+  ### Example 3
+  ```
+  Input:  text = "a,b\n\"x\ny\",1\n3\n"
+  Output: [["#ERROR", "4"]]
+  Explanation: the second record starts on line 2 and spans lines 2-3 because of the quoted line
+  break. The third record, "3", has one field instead of two and starts on line 4.
+  ```
+
+  ### Constraints
+  - `0 <= text.length <= 10^5`
+  - `text` contains printable ASCII characters, `\n` and `\r`; every `\r` is followed by `\n`
+  - the result never needs more than `10^4` records
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: parse_csv_document
+  params:
+    - {name: text, type: string}
+  return_type: "string[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def parse_csv_document(text: str) -> list[list[str]]:
+        n = len(text)
+        i = 0
+        line = 1                      # physical line of position i
+        records: list[list[str]] = []
+        width = -1                    # field count of the first record
+
+        def at_line_end(pos: int) -> bool:
+            return pos < n and (text[pos] == "\n" or text.startswith("\r\n", pos))
+
+        while i < n:
+            start_line = line
+            error = [["#ERROR", str(start_line)]]
+            record: list[str] = []
+            while True:
+                if i < n and text[i] == '"':
+                    i += 1
+                    chars: list[str] = []
+                    while True:
+                        if i >= n:
+                            return error                      # unterminated quote
+                        ch = text[i]
+                        if ch == '"':
+                            if i + 1 < n and text[i + 1] == '"':
+                                chars.append('"')
+                                i += 2
+                                continue
+                            i += 1
+                            break
+                        if ch == "\n":
+                            line += 1
+                        chars.append(ch)
+                        i += 1
+                    if i < n and text[i] != "," and not at_line_end(i):
+                        return error                          # text after closing quote
+                    record.append("".join(chars))
+                else:
+                    start = i
+                    while i < n and text[i] not in ',"' and not at_line_end(i):
+                        i += 1
+                    if i < n and text[i] == '"':
+                        return error                          # stray quote
+                    record.append(text[start:i])
+                if i < n and text[i] == ",":
+                    i += 1
+                    continue
+                break
+            if text.startswith("\r\n", i):
+                i += 2
+                line += 1
+            elif i < n and text[i] == "\n":
+                i += 1
+                line += 1
+            if width < 0:
+                width = len(record)
+            elif len(record) != width:
+                return error                                  # wrong field count
+            records.append(record)
+        return records
+  javascript: |
+    function parseCsvDocument(text) {
+      const n = text.length;
+      let i = 0;
+      let line = 1;
+      const records = [];
+      let width = -1;
+      const atLineEnd = (pos) => pos < n && (text[pos] === "\n" || text.startsWith("\r\n", pos));
+      while (i < n) {
+        const error = [["#ERROR", String(line)]];
+        const record = [];
+        for (;;) {
+          if (i < n && text[i] === '"') {
+            i++;
+            let field = "";
+            for (;;) {
+              if (i >= n) return error;
+              const ch = text[i];
+              if (ch === '"') {
+                if (i + 1 < n && text[i + 1] === '"') {
+                  field += '"';
+                  i += 2;
+                  continue;
+                }
+                i++;
+                break;
+              }
+              if (ch === "\n") line++;
+              field += ch;
+              i++;
+            }
+            if (i < n && text[i] !== "," && !atLineEnd(i)) return error;
+            record.push(field);
+          } else {
+            const start = i;
+            while (i < n && text[i] !== "," && text[i] !== '"' && !atLineEnd(i)) i++;
+            if (i < n && text[i] === '"') return error;
+            record.push(text.slice(start, i));
+          }
+          if (i < n && text[i] === ",") {
+            i++;
+            continue;
+          }
+          break;
+        }
+        if (text.startsWith("\r\n", i)) {
+          i += 2;
+          line++;
+        } else if (i < n && text[i] === "\n") {
+          i++;
+          line++;
+        }
+        if (width < 0) width = record.length;
+        else if (record.length !== width) return error;
+        records.push(record);
+      }
+      return records;
+    }
+tests:
+  - {id: t1, args: ["id,name,note\n1,\"Smith, Jo\",\"said \"\"hi\"\"\"\n2,Lee,\n"], expected: [["id", "name", "note"], ["1", "Smith, Jo", "said \"hi\""], ["2", "Lee", ""]], description: "Example 1 - quoted comma, escaped quotes, empty last field, final newline adds no record"}
+  - {id: t2, args: ["sku,description\r\nA100,\"Line one\r\nLine two\"\r\nB200,plain"], expected: [["sku", "description"], ["A100", "Line one\r\nLine two"], ["B200", "plain"]], description: "Example 2 - CRLF endings, line break kept verbatim inside quotes, no final newline"}
+  - {id: t3, args: ["a,b\n\"x\ny\",1\n3\n"], expected: [["#ERROR", "4"]], description: "Example 3 - wrong field count reported at the physical line where the record starts"}
+  - {id: t4, hidden: true, args: [""], expected: [], description: "Empty text returns an empty list"}
+  - {id: t5, hidden: true, args: ["x\n\ny\n"], expected: [["x"], [""], ["y"]], description: "Single-column document - a blank line is a record with one empty field"}
+  - {id: t6, hidden: true, args: ["a,b\n1,2\n\n3,4"], expected: [["#ERROR", "3"]], description: "Blank line in a two-column document is a field-count error on line 3"}
+  - {id: t7, hidden: true, args: ["a,b\n1,2\n3,4\"5\n"], expected: [["#ERROR", "3"]], description: "Stray quote inside an unquoted field (line 3)"}
+  - {id: t8, hidden: true, args: ["name,qty\nbolt, \"5\"\n"], expected: [["#ERROR", "2"]], description: "Space before an opening quote makes the field unquoted, so the quote is stray (line 2)"}
+  - {id: t9, hidden: true, args: ["a,b\n\"x\"y,1\n"], expected: [["#ERROR", "2"]], description: "Text after a closing quote (line 2)"}
+  - {id: t10, hidden: true, args: ["k,v\n1,2\n3,\"open\nmore\nlines\n"], expected: [["#ERROR", "3"]], description: "Unterminated quote running to the end - reported at the line where its record starts (3)"}
+  - {id: t11, hidden: true, args: ["\"\",\"\"\"\"\n\"a\"\"b\",\"\"\r\n\"c,\n\nd\",e"], expected: [["", "\""], ["a\"b", ""], ["c,\n\nd", "e"]], description: "Quoted empty fields, a field that is a single quote, escaped quotes and blank lines inside quotes"}
+  - {id: t12, hidden: true, args: ["a,b,\r\n1,,\r\n"], expected: [["a", "b", ""], ["1", "", ""]], description: "Trailing commas give empty last fields; final CRLF adds no record"}
+  - {id: t13, hidden: true, args: ["a,b\r\n\"1\r\n2\r\n3\",x\r\ny\r\n"], expected: [["#ERROR", "5"]], description: "CRLF inside a quoted field counts as one physical line each - error on line 5"}
+expected_concepts:
+  - character-level state machine (unquoted, quoted, after closing quote)
+  - escaped quotes by doubling
+  - line endings that are data inside quotes but separators outside them
+  - tracking physical line numbers separately from record numbers
+  - validation and precise error reporting
+optimal_complexity: {time: O(n), space: O(n)}
+rubric:
+  excellent: Writes a single-pass state machine that handles quoted and unquoted fields, doubled quotes, both line endings, embedded line breaks and the final line ending, tracks the physical line where each record starts, detects all four error kinds and explains each state transition.
+  good: Correct parsing of valid documents with a hint needed for one error kind, the CRLF handling or the line-number rule.
+  weak: Splits the text on newlines or commas first, loses line breaks inside quotes, reports the record index instead of the physical line, or adds an empty record for the final line ending.
+  criteria:
+    correctness: All tests pass, including multi-line quoted fields, CRLF, empty fields, blank lines and every error kind.
+    efficiency: One linear pass with an index into the text; no repeated string splitting or copying.
+    code_quality: Explicit states or helper functions for quoted and unquoted fields; no deeply tangled flags.
+    edge_cases: Empty text, a single blank line, trailing commas, a final line ending, a quoted field holding only a quote, and errors on the first record.
+    communication: Explains how the parser decides whether a line ending is data or a record separator.
+hints:
+  - Splitting on line breaks first cannot work, because a line break inside quotes is part of a value; read the text one character at a time and remember whether you are inside a quoted field.
+  - Treat each field separately - if it starts with a quote, read until a quote that is not doubled, then require a comma, a line ending or the end; otherwise read until a comma or line ending and reject any quote. Keep a running count of newline characters so you know the physical line where each record begins.
+  - Loop over records with an index; save the current line number when a record starts, parse fields until you stop on a line ending or the end of the text, consume a two-character or one-character line ending, compare the field count with the first record's count, and on any violation return the error row with the saved line number. Do not start a new record when the index has reached the end of the text.
+followups:
+  - How would you stream a multi-gigabyte file without holding it in memory?
+  - How would you support a different delimiter, or a header row that maps fields to names?
+  - Instead of stopping at the first error, how would you collect every error with its line?
+  - Which of these rules differ from RFC 4180 and from common spreadsheet exports?
+common_errors:
+  - Splitting on newlines before parsing, which breaks quoted multi-line fields.
+  - Counting records instead of physical lines in the error position.
+  - Producing an extra empty record for the line ending at the end of the text.
+  - Leaving a carriage return at the end of the last field when the line ends with CRLF.
+  - Accepting text after a closing quote or a quote inside an unquoted field.

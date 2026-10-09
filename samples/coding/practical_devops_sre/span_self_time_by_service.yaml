@@ -1,0 +1,182 @@
+version: 1
+slug: span_self_time_by_service
+title: Trace Self-Time Breakdown
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [sre, backend, platform]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Trace Self-Time Breakdown
+
+  A tracing backend wants to show which services actually burn time in a request, not just which
+  services sit on the call path. You receive the spans of one or more traces as parallel arrays: span
+  `i` has id `span_ids[i]`, parent id `parent_ids[i]`, belongs to service `services[i]` and covers the
+  half-open interval `[starts[i], ends[i])` in milliseconds.
+
+  - The **direct children** of a span are the spans whose `parent_ids` value equals its id. A parent
+    id of `""` means "no parent"; a parent id that does not appear in `span_ids` refers to a span that
+    was not collected and has no effect.
+  - Because of clock skew, children can start before or end after their parent, and children can
+    overlap each other (parallel calls).
+  - The **self time** of a span is its duration `ends[i] - starts[i]` minus the total length of the
+    **union** of its direct children's intervals, after clipping each child interval to the span's own
+    interval. Grandchildren are not subtracted directly; they are already accounted for in their own
+    parent's self time.
+
+  Sum the self time per service and return one string `"service=total"` per service that appears in
+  the input (also when its total is `0`), sorted by total **descending**, then service name ascending
+  (plain character-code order).
+
+  ### Example 1
+  ```
+  Input:  span_ids   = ["a", "b", "c", "d"]
+          parent_ids = ["", "a", "a", "b"]
+          services   = ["gateway", "orders", "inventory", "db"]
+          starts     = [0, 10, 40, 20]
+          ends       = [100, 60, 80, 50]
+  Output: ["inventory=40", "db=30", "gateway=30", "orders=20"]
+  Explanation: gateway's children cover [10, 60) and [40, 80), a union of 70 ms, so gateway's self
+  time is 30. orders loses 30 ms to its db call. db and gateway tie at 30 and are ordered by name.
+  ```
+
+  ### Example 2
+  ```
+  Input:  span_ids   = ["r", "s", "t"]
+          parent_ids = ["", "r", "zz"]
+          services   = ["api", "cache", "api"]
+          starts     = [1000, 1090, 5]
+          ends       = [1100, 1130, 15]
+  Output: ["api=100", "cache=40"]
+  Explanation: the cache span overruns its parent; only [1090, 1100) is clipped from r, giving 90.
+  Span t's parent was not collected; it adds its 10 ms to api.
+  ```
+
+  ### Constraints
+  - `1 <= span_ids.length <= 10^4`; all arrays have the same length
+  - Span ids are unique non-empty strings of letters and digits; `parent_ids[i] != span_ids[i]`
+  - Service names are non-empty and use lowercase letters, digits and `-`
+  - `0 <= starts[i] <= ends[i] <= 10^13` and `ends[i] - starts[i] <= 10^9`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: span_self_time_by_service
+  params:
+    - {name: span_ids, type: "string[]"}
+    - {name: parent_ids, type: "string[]"}
+    - {name: services, type: "string[]"}
+    - {name: starts, type: "long[]"}
+    - {name: ends, type: "long[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def span_self_time_by_service(span_ids: list[str], parent_ids: list[str], services: list[str],
+                                  starts: list[int], ends: list[int]) -> list[str]:
+        children: dict[str, list[int]] = {}
+        for i, parent in enumerate(parent_ids):
+            if parent:
+                children.setdefault(parent, []).append(i)
+        totals: dict[str, int] = {}
+        for i, span_id in enumerate(span_ids):
+            lo, hi = starts[i], ends[i]
+            clipped = []
+            for c in children.get(span_id, []):
+                a, b = max(lo, starts[c]), min(hi, ends[c])
+                if a < b:
+                    clipped.append((a, b))
+            clipped.sort()
+            covered = 0
+            cur_a = cur_b = None
+            for a, b in clipped:
+                if cur_b is None or a > cur_b:
+                    if cur_b is not None:
+                        covered += cur_b - cur_a
+                    cur_a, cur_b = a, b
+                else:
+                    cur_b = max(cur_b, b)
+            if cur_b is not None:
+                covered += cur_b - cur_a
+            totals[services[i]] = totals.get(services[i], 0) + (hi - lo) - covered
+        ranked = sorted(totals.items(), key=lambda item: (-item[1], item[0]))
+        return [f"{service}={total}" for service, total in ranked]
+  javascript: |
+    function spanSelfTimeByService(spanIds, parentIds, services, starts, ends) {
+      const children = new Map();
+      parentIds.forEach((parent, i) => {
+        if (parent === "") return;
+        if (!children.has(parent)) children.set(parent, []);
+        children.get(parent).push(i);
+      });
+      const totals = new Map();
+      spanIds.forEach((spanId, i) => {
+        const lo = starts[i];
+        const hi = ends[i];
+        const clipped = [];
+        for (const c of children.get(spanId) || []) {
+          const a = Math.max(lo, starts[c]);
+          const b = Math.min(hi, ends[c]);
+          if (a < b) clipped.push([a, b]);
+        }
+        clipped.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+        let covered = 0;
+        let curA = null;
+        let curB = null;
+        for (const [a, b] of clipped) {
+          if (curB === null || a > curB) {
+            if (curB !== null) covered += curB - curA;
+            curA = a;
+            curB = b;
+          } else {
+            curB = Math.max(curB, b);
+          }
+        }
+        if (curB !== null) covered += curB - curA;
+        totals.set(services[i], (totals.get(services[i]) || 0) + (hi - lo) - covered);
+      });
+      const ranked = [...totals.entries()].sort((x, y) => {
+        if (x[1] !== y[1]) return y[1] - x[1];
+        return x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0;
+      });
+      return ranked.map(([service, total]) => `${service}=${total}`);
+    }
+tests:
+  - {id: t1, args: [["a", "b", "c", "d"], ["", "a", "a", "b"], ["gateway", "orders", "inventory", "db"], [0, 10, 40, 20], [100, 60, 80, 50]], expected: ["inventory=40", "db=30", "gateway=30", "orders=20"], description: "Example 1 - overlapping children unioned, tie broken by name"}
+  - {id: t2, args: [["r", "s", "t"], ["", "r", "zz"], ["api", "cache", "api"], [1000, 1090, 5], [1100, 1130, 15]], expected: ["api=100", "cache=40"], description: "Example 2 - child overruns parent (clipped) and a span with a missing parent"}
+  - {id: t3, hidden: true, args: [["x"], [""], ["solo"], [7], [7]], expected: ["solo=0"], description: "Single zero-length span - service listed with 0"}
+  - {id: t4, hidden: true, args: [["p", "c1", "c2", "c3"], ["", "p", "p", "p"], ["web", "auth", "auth", "auth"], [0, 0, 30, 60], [90, 40, 70, 95]], expected: ["auth=115", "web=0"], description: "Children fully cover the parent - parent self time 0 still listed"}
+  - {id: t5, hidden: true, args: [["p", "c", "g"], ["", "p", "c"], ["web", "rpc", "db"], [100, 120, 0], [200, 150, 500]], expected: ["db=500", "web=70", "rpc=0"], description: "Grandchild overruns everything - only subtracted from its own parent, clipped"}
+  - {id: t6, hidden: true, args: [["p", "early", "late"], ["", "p", "p"], ["svc", "svc", "svc"], [50, 0, 80], [60, 40, 99]], expected: ["svc=69"], description: "Children entirely outside the parent due to clock skew subtract nothing"}
+  - {id: t7, hidden: true, args: [["p", "c1", "c2", "c3", "c4"], ["", "p", "p", "p", "p"], ["a-b", "a1", "ab", "a-b", "a1"], [0, 10, 10, 20, 50], [100, 20, 20, 30, 50]], expected: ["a-b=90", "a1=10", "ab=10"], description: "Duplicate identical children, a zero-length child, touching intervals, ASCII tie order with '-' and digits"}
+  - {id: t8, hidden: true, args: [["root", "k1", "k2"], ["", "root", "root"], ["ingest", "store", "ingest"], [1730000000000, 1730000000100, 1729999999000], [1730001000000, 1730000400100, 1730000000500]], expected: ["ingest=601400", "store=400000"], description: "Epoch-millisecond timestamps beyond 32 bits with a skewed early child"}
+  - {id: t9, hidden: true, args: [["sp0", "sp1", "sp2", "sp3", "sp4", "sp5", "sp6", "sp7", "sp8", "sp9", "sp10", "sp11", "sp12", "sp13", "sp14", "sp15", "sp16", "sp17", "sp18", "sp19", "sp20", "sp21", "sp22", "sp23", "sp24", "sp25", "sp26", "sp27", "sp28", "sp29", "sp30", "sp31", "sp32", "sp33", "sp34", "sp35", "sp36", "sp37", "sp38", "sp39", "sp40", "sp41", "sp42", "sp43", "sp44", "sp45", "sp46", "sp47", "sp48", "sp49", "sp50", "sp51", "sp52", "sp53", "sp54", "sp55", "sp56", "sp57", "sp58", "sp59", "sp60", "sp61", "sp62", "sp63", "sp64", "sp65", "sp66", "sp67", "sp68", "sp69", "sp70", "sp71", "sp72", "sp73", "sp74", "sp75", "sp76", "sp77", "sp78", "sp79", "sp80", "sp81", "sp82", "sp83", "sp84", "sp85", "sp86", "sp87", "sp88", "sp89", "sp90", "sp91", "sp92", "sp93", "sp94", "sp95", "sp96", "sp97", "sp98", "sp99", "sp100", "sp101", "sp102", "sp103", "sp104", "sp105", "sp106", "sp107", "sp108", "sp109", "sp110", "sp111", "sp112", "sp113", "sp114", "sp115", "sp116", "sp117", "sp118", "sp119", "sp120", "sp121", "sp122", "sp123", "sp124", "sp125", "sp126", "sp127", "sp128", "sp129", "sp130", "sp131", "sp132", "sp133", "sp134", "sp135", "sp136", "sp137", "sp138", "sp139", "sp140", "sp141", "sp142", "sp143", "sp144", "sp145", "sp146", "sp147", "sp148", "sp149", "sp150", "sp151", "sp152", "sp153", "sp154", "sp155", "sp156", "sp157", "sp158", "sp159", "sp160", "sp161", "sp162", "sp163", "sp164", "sp165", "sp166", "sp167", "sp168", "sp169", "sp170", "sp171", "sp172", "sp173", "sp174", "sp175", "sp176", "sp177", "sp178", "sp179", "sp180", "sp181", "sp182", "sp183", "sp184", "sp185", "sp186", "sp187", "sp188", "sp189", "sp190", "sp191", "sp192", "sp193", "sp194", "sp195", "sp196", "sp197", "sp198", "sp199"], ["", "sp0", "sp1", "sp2", "sp3", "sp3", "sp2", "sp2", "sp1", "sp8", "sp9", "sp9", "sp9", "sp9", "sp8", "sp1", "sp15", "sp15", "sp17", "sp1", "sp19", "sp19", "sp21", "sp21", "sp0", "sp24", "sp24", "sp24", "sp27", "sp27", "sp27", "sp27", "", "sp32", "sp33", "sp34", "sp34", "sp36", "sp33", "sp38", "sp32", "sp40", "sp41", "sp40", "sp40", "sp44", "sp45", "sp45", "sp44", "sp48", "sp48", "sp44", "sp51", "sp44", "sp53", "sp40", "sp55", "sp55", "sp57", "sp55", "sp59", "sp59", "sp32", "sp32", "", "sp64", "sp65", "sp66", "sp67", "sp67", "sp67", "sp67", "sp66", "sp66", "sp73", "sp66", "sp65", "sp76", "sp65", "", "sp79", "sp80", "sp80", "sp82", "sp83", "sp83", "sp80", "sp86", "sp86", "", "sp89", "sp90", "sp90", "sp92", "sp93", "sp93", "sp92", "sp92", "sp97", "sp97", "sp92", "sp100", "sp100", "sp100", "sp100", "", "sp105", "sp106", "sp106", "sp108", "sp109", "sp109", "sp109", "sp108", "", "", "sp115", "sp116", "sp117", "sp116", "sp116", "sp120", "sp121", "sp121", "sp121", "sp120", "sp125", "sp120", "sp127", "sp127", "sp120", "sp130", "sp130", "sp130", "sp130", "sp116", "sp135", "sp135", "sp137", "sp137", "sp135", "sp140", "sp140", "sp140", "sp140", "sp135", "sp145", "sp145", "sp145", "", "sp149", "sp149", "sp151", "sp152", "sp153", "sp153", "sp153", "sp151", "sp157", "sp157", "sp157", "sp151", "sp161", "sp162", "sp162", "sp162", "sp162", "sp149", "sp167", "", "sp169", "sp170", "sp170", "sp170", "sp170", "sp169", "", "sp176", "", "sp178", "sp179", "sp180", "sp179", "sp182", "sp183", "sp182", "sp185", "sp185", "sp185", "sp182", "sp189", "sp189", "sp182", "sp179", "sp178", "sp194", "sp195", "sp195", "sp197", "sp194"], ["pricing", "cart", "queue", "auth", "queue", "db-main", "pricing", "cache", "auth", "pricing", "edge", "db-main", "search", "auth", "auth", "auth", "search", "pricing", "queue", "queue", "edge", "search", "pricing", "queue", "cart", "edge", "db-main", "search", "queue", "edge", "cache", "cart", "cache", "cart", "search", "edge", "edge", "db-main", "auth", "auth", "edge", "edge", "auth", "edge", "pricing", "cache", "db-main", "edge", "cache", "cache", "search", "db-main", "pricing", "auth", "cart", "queue", "pricing", "auth", "cache", "pricing", "queue", "db-main", "pricing", "search", "auth", "pricing", "cart", "auth", "pricing", "db-main", "db-main", "search", "search", "queue", "edge", "cart", "queue", "cart", "auth", "search", "auth", "search", "queue", "search", "search", "db-main", "queue", "db-main", "pricing", "edge", "cache", "pricing", "pricing", "cache", "db-main", "pricing", "db-main", "cache", "cache", "pricing", "edge", "auth", "db-main", "search", "cart", "db-main", "queue", "db-main", "edge", "auth", "cart", "cart", "cart", "search", "queue", "pricing", "db-main", "cache", "cart", "auth", "cart", "auth", "edge", "search", "cache", "auth", "cart", "cache", "cart", "cart", "cache", "edge", "pricing", "queue", "cache", "cache", "auth", "cart", "auth", "cache", "edge", "auth", "search", "cache", "pricing", "cache", "edge", "db-main", "cart", "search", "queue", "search", "edge", "cache", "auth", "cache", "cart", "edge", "pricing", "pricing", "db-main", "pricing", "search", "cart", "cache", "edge", "cart", "cache", "cache", "queue", "db-main", "queue", "edge", "db-main", "cache", "auth", "auth", "queue", "cart", "cart", "edge", "search", "cart", "queue", "search", "queue", "cart", "cache", "search", "cart", "cache", "search", "edge", "cache", "search", "db-main", "cache", "auth", "search", "auth"], [1730000598032, 1730000598151, 1730000598212, 1730000598213, 1730000598216, 1730000598210, 1730000598214, 1730000598222, 1730000598184, 1730000598184, 1730000598185, 1730000598186, 1730000598189, 1730000598183, 1730000598182, 1730000598167, 1730000598164, 1730000598168, 1730000598171, 1730000598193, 1730000598221, 1730000598220, 1730000598218, 1730000598217, 1730000598214, 1730000598234, 1730000598233, 1730000598225, 1730000598228, 1730000598229, 1730000598228, 1730000598224, 1730000959431, 1730000959721, 1730000960143, 1730000960169, 1730000960167, 1730000960171, 1730000960152, 1730000960152, 1730000959494, 1730000959936, 1730000960038, 1730000959632, 1730000960093, 1730000960119, 1730000960118, 1730000960116, 1730000960153, 1730000960166, 1730000960153, 1730000960153, 1730000960155, 1730000960106, 1730000960129, 1730000959631, 1730000959793, 1730000959639, 1730000959646, 1730000960004, 1730000960001, 1730000960025, 1730000960170, 1730000959720, 1730000362565, 1730000362660, 1730000362658, 1730000362657, 1730000362661, 1730000362660, 1730000362658, 1730000362660, 1730000362662, 1730000362656, 1730000362657, 1730000362656, 1730000362669, 1730000362679, 1730000362681, 1730000835863, 1730000836005, 1730000836008, 1730000836008, 1730000836024, 1730000836028, 1730000836025, 1730000836012, 1730000836039, 1730000836037, 1730000320813, 1730000321068, 1730000321241, 1730000321175, 1730000321189, 1730000321197, 1730000321189, 1730000321173, 1730000321198, 1730000321198, 1730000321203, 1730000321175, 1730000321207, 1730000321188, 1730000321177, 1730000321210, 1730000406487, 1730000406667, 1730000406669, 1730000406668, 1730000406667, 1730000406672, 1730000406666, 1730000406670, 1730000406669, 1730000558238, 1730000012287, 1730000012629, 1730000012786, 1730000012903, 1730000012683, 1730000012713, 1730000012880, 1730000012896, 1730000012900, 1730000012889, 1730000012715, 1730000012828, 1730000012837, 1730000012847, 1730000012847, 1730000012762, 1730000012774, 1730000012765, 1730000012784, 1730000012763, 1730000012759, 1730000012820, 1730000012781, 1730000012790, 1730000012785, 1730000012808, 1730000012815, 1730000012805, 1730000012810, 1730000012811, 1730000012820, 1730000012819, 1730000012821, 1730000012817, 1730000595830, 1730000596234, 1730000596028, 1730000596064, 1730000596129, 1730000596136, 1730000596135, 1730000596137, 1730000596217, 1730000596226, 1730000596222, 1730000596222, 1730000596193, 1730000596190, 1730000596198, 1730000596206, 1730000596187, 1730000596201, 1730000596198, 1730000596200, 1730000649349, 1730000649378, 1730000649380, 1730000649381, 1730000649382, 1730000649386, 1730000649354, 1730000214527, 1730000214605, 1730000763791, 1730000763811, 1730000763961, 1730000763967, 1730000764040, 1730000764038, 1730000764042, 1730000764042, 1730000764040, 1730000764042, 1730000764043, 1730000764040, 1730000764045, 1730000764037, 1730000764042, 1730000763830, 1730000763922, 1730000763995, 1730000763995, 1730000763993, 1730000763996, 1730000763932], [1730000598253, 1730000598235, 1730000598223, 1730000598224, 1730000598221, 1730000598224, 1730000598223, 1730000598223, 1730000598198, 1730000598195, 1730000598191, 1730000598195, 1730000598196, 1730000598194, 1730000598194, 1730000598179, 1730000598166, 1730000598174, 1730000598175, 1730000598231, 1730000598223, 1730000598227, 1730000598229, 1730000598226, 1730000598235, 1730000598238, 1730000598234, 1730000598230, 1730000598231, 1730000598233, 1730000598231, 1730000598226, 1730000960209, 1730000960186, 1730000960171, 1730000960172, 1730000960173, 1730000960172, 1730000960158, 1730000960156, 1730000960191, 1730000960127, 1730000960041, 1730000960100, 1730000960193, 1730000960134, 1730000960134, 1730000960117, 1730000960172, 1730000960169, 1730000960164, 1730000960182, 1730000960172, 1730000960140, 1730000960138, 1730000960124, 1730000960121, 1730000959652, 1730000959649, 1730000960037, 1730000960033, 1730000960035, 1730000960188, 1730000959802, 1730000362699, 1730000362682, 1730000362666, 1730000362664, 1730000362663, 1730000362667, 1730000362665, 1730000362662, 1730000362666, 1730000362662, 1730000362661, 1730000362659, 1730000362680, 1730000362683, 1730000362683, 1730000836051, 1730000836038, 1730000836037, 1730000836037, 1730000836030, 1730000836030, 1730000836026, 1730000836040, 1730000836040, 1730000836040, 1730000321324, 1730000321291, 1730000321249, 1730000321216, 1730000321210, 1730000321198, 1730000321195, 1730000321219, 1730000321215, 1730000321212, 1730000321209, 1730000321214, 1730000321215, 1730000321203, 1730000321198, 1730000321213, 1730000406685, 1730000406673, 1730000406672, 1730000406674, 1730000406677, 1730000406678, 1730000406674, 1730000406674, 1730000406672, 1730000558492, 1730000012964, 1730000012911, 1730000012908, 1730000012908, 1730000012827, 1730000012909, 1730000012906, 1730000012900, 1730000012909, 1730000012890, 1730000012831, 1730000012830, 1730000012874, 1730000012864, 1730000012866, 1730000012791, 1730000012779, 1730000012772, 1730000012792, 1730000012786, 1730000012856, 1730000012821, 1730000012826, 1730000012806, 1730000012827, 1730000012817, 1730000012820, 1730000012812, 1730000012815, 1730000012817, 1730000012828, 1730000012821, 1730000012830, 1730000012829, 1730000596374, 1730000596305, 1730000596234, 1730000596159, 1730000596151, 1730000596146, 1730000596145, 1730000596144, 1730000596227, 1730000596228, 1730000596224, 1730000596225, 1730000596212, 1730000596211, 1730000596211, 1730000596213, 1730000596209, 1730000596211, 1730000596216, 1730000596215, 1730000649417, 1730000649387, 1730000649383, 1730000649384, 1730000649383, 1730000649388, 1730000649416, 1730000215380, 1730000214717, 1730000764179, 1730000764044, 1730000763969, 1730000763969, 1730000764046, 1730000764043, 1730000764046, 1730000764047, 1730000764048, 1730000764049, 1730000764048, 1730000764049, 1730000764051, 1730000764052, 1730000764047, 1730000764003, 1730000764001, 1730000764003, 1730000763996, 1730000763999, 1730000763999, 1730000763985]], expected: ["auth=1366", "edge=1242", "pricing=1004", "cart=840", "cache=793", "search=761", "queue=756", "db-main=413"], description: "200 spans across several traces with nested, overlapping and skewed calls"}
+expected_concepts:
+  - grouping children by parent id with a hash map
+  - clipping intervals to a parent's range
+  - union length of overlapping intervals (sort and merge)
+  - aggregating per key and sorting with a tie-breaker
+  - robustness to clock skew and missing parents
+optimal_complexity: {time: O(n log n), space: O(n)}
+rubric:
+  excellent: Builds a parent-to-children index in one pass, clips each child to the parent's interval, merges the sorted clipped intervals to get the covered length, aggregates per service with 64-bit totals, and explains why only direct children are subtracted and why overlaps must be unioned rather than summed.
+  good: Correct result with the right merging logic but a less efficient child lookup (for example scanning all spans per parent) or needing a hint about clipping skewed children.
+  weak: Sums child durations without taking the union (so parallel calls make self time negative), subtracts all descendants, ignores clipping, or drops services with zero self time.
+  criteria:
+    correctness: All tests pass, including overlapping children, skewed children, missing parents and zero totals.
+    efficiency: O(n log n) overall with a hash map from parent id to children; no per-span scan of every span.
+    code_quality: Small helpers for clipping and union length, clear names for covered and self time.
+    edge_cases: Single span, zero-length spans, children entirely outside the parent and very large timestamps.
+    communication: Explains how self time differs from duration and why the definition attributes parallel waiting to the parent only once.
+hints:
+  - You only need each span's direct children. Build a map from parent id to the list of child spans before computing anything.
+  - Children can overlap each other and can stick out of the parent. Cut every child interval down to the parent's interval first, then measure how much of the parent is covered, counting overlapping parts once.
+  - For each span, sort its clipped child intervals by start and merge them while summing the merged lengths; self time is the duration minus that sum. Add it to a per-service total and sort the totals descending, breaking ties by service name.
+followups:
+  - How would you compute the critical path of a trace instead of self time?
+  - How would you attribute self time when a span's children run asynchronously after the parent ends?
+  - How would you process millions of spans per minute in a streaming pipeline where children arrive before parents?
+  - How would you detect and report spans whose parent links form a cycle?
+common_errors:
+  - Subtracting the sum of child durations instead of the union, which double-counts parallel calls.
+  - Not clipping children to the parent interval, producing negative self time under clock skew.
+  - Subtracting grandchildren as well as children.
+  - Dropping services whose total self time is zero.
+  - Using 32-bit integers for millisecond epoch timestamps.

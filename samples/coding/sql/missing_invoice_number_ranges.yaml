@@ -1,0 +1,275 @@
+version: 1
+slug: missing_invoice_number_ranges
+title: Missing Invoice Number Ranges
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data, business_analyst, qa]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Missing Invoice Number Ranges
+
+  A billing system hands out invoice numbers from pre-allocated **number books**: each book reserves a
+  continuous block of numbers, and every invoice issued from a book must use a number from that block.
+  Before the year-end audit, the finance team must explain every reserved number that was **never
+  issued** (voided drafts, crashed batch runs, manual skips).
+
+  Table `invoice_books`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | book_id | INTEGER | primary key |
+  | first_no | INTEGER | first number reserved by the book |
+  | last_no | INTEGER | last number reserved by the book, `last_no >= first_no` |
+
+  Table `invoices`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | invoice_no | INTEGER | primary key |
+  | book_id | INTEGER | references `invoice_books.book_id` |
+
+  The number ranges of different books never overlap, and every invoice's number lies inside the range
+  `[first_no, last_no]` of its own book.
+
+  For each book, find every **maximal run of consecutive reserved numbers that were never issued**.
+  Runs can sit at the start of the book, between two issued numbers or at the end of the book, and a
+  book with no invoices at all is one single run. A run never continues into another book, even when
+  the next book's range starts right after this one.
+
+  Return one row per run with columns `book_id`, `gap_start`, `gap_end` (both **inclusive**) and
+  `missing_count` (`gap_end - gap_start + 1`), ordered by `book_id` ascending and then by `gap_start`
+  ascending. A book whose numbers were all issued produces no rows.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  invoice_books                    invoices
+  +---------+----------+---------+ +------------+---------+
+  | book_id | first_no | last_no | | invoice_no | book_id |
+  +---------+----------+---------+ +------------+---------+
+  | 1       | 1000     | 1009    | | 1000       | 1       |
+  | 2       | 2000     | 2004    | | 1001       | 1       |
+  +---------+----------+---------+ | 1004       | 1       |
+                                   | 1005       | 1       |
+                                   | 1009       | 1       |
+                                   | 2002       | 2       |
+                                   +------------+---------+
+
+  Output
+  +---------+-----------+---------+---------------+
+  | book_id | gap_start | gap_end | missing_count |
+  +---------+-----------+---------+---------------+
+  | 1       | 1002      | 1003    | 2             |
+  | 1       | 1006      | 1008    | 3             |
+  | 2       | 2000      | 2001    | 2             |
+  | 2       | 2003      | 2004    | 2             |
+  +---------+-----------+---------+---------------+
+  Book 2 is missing numbers both before and after its only invoice.
+  ```
+
+  ### Example 2
+  ```
+  invoice_books                    invoices
+  +---------+----------+---------+ +------------+---------+
+  | book_id | first_no | last_no | | invoice_no | book_id |
+  +---------+----------+---------+ +------------+---------+
+  | 7       | 500      | 503     | | 500        | 7       |
+  | 8       | 600      | 602     | | 501        | 7       |
+  +---------+----------+---------+ | 502        | 7       |
+                                   | 503        | 7       |
+                                   +------------+---------+
+
+  Output
+  +---------+-----------+---------+---------------+
+  | book_id | gap_start | gap_end | missing_count |
+  +---------+-----------+---------+---------------+
+  | 8       | 600       | 602     | 3             |
+  +---------+-----------+---------+---------------+
+  Book 7 is complete; book 8 has not issued anything yet.
+  ```
+
+  ### Constraints
+  - `0 <= rows in invoice_books <= 10^4`, `0 <= rows in invoices <= 10^6`
+  - `1 <= first_no <= last_no <= 10^9`; book ranges never overlap.
+  - Every `invoice_no` is unique and lies inside its own book's range.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return book_id, gap_start, gap_end and missing_count for every run of never-issued numbers.
+    SELECT b.book_id, b.first_no AS gap_start, b.last_no AS gap_end, 0 AS missing_count
+    FROM invoice_books b
+    ORDER BY b.book_id, b.first_no;
+reference_solutions:
+  sql: |
+    WITH starts AS (
+      SELECT b.book_id, b.first_no AS gap_start, b.last_no
+      FROM invoice_books b
+      WHERE NOT EXISTS (SELECT 1 FROM invoices i WHERE i.invoice_no = b.first_no)
+      UNION ALL
+      SELECT b.book_id, i.invoice_no + 1 AS gap_start, b.last_no
+      FROM invoices i
+      JOIN invoice_books b ON b.book_id = i.book_id
+      WHERE i.invoice_no < b.last_no
+        AND NOT EXISTS (SELECT 1 FROM invoices n WHERE n.invoice_no = i.invoice_no + 1)
+    ),
+    gaps AS (
+      SELECT
+        s.book_id,
+        s.gap_start,
+        COALESCE(
+          (SELECT MIN(n.invoice_no) FROM invoices n
+           WHERE n.invoice_no > s.gap_start AND n.invoice_no <= s.last_no) - 1,
+          s.last_no
+        ) AS gap_end
+      FROM starts s
+    )
+    SELECT book_id, gap_start, gap_end, gap_end - gap_start + 1 AS missing_count
+    FROM gaps
+    ORDER BY book_id, gap_start;
+sql_setup: |
+  CREATE TABLE invoice_books (
+    book_id INTEGER PRIMARY KEY,
+    first_no INTEGER NOT NULL,
+    last_no INTEGER NOT NULL
+  );
+  CREATE TABLE invoices (
+    invoice_no INTEGER PRIMARY KEY,
+    book_id INTEGER NOT NULL REFERENCES invoice_books (book_id)
+  );
+tests:
+  - id: t1
+    description: "Example 1 - gaps in the middle, at the start and at the end of books"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoice_books (book_id, first_no, last_no) VALUES (1, 1000, 1009), (2, 2000, 2004);
+      INSERT INTO invoices (invoice_no, book_id) VALUES (1000, 1), (1001, 1), (1004, 1), (1005, 1), (1009, 1), (2002, 2);
+    expected_rows: 
+      - [1, 1002, 1003, 2]
+      - [1, 1006, 1008, 3]
+      - [2, 2000, 2001, 2]
+      - [2, 2003, 2004, 2]
+  - id: t2
+    description: "Example 2 - complete book gives no rows, empty book is one run"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoice_books (book_id, first_no, last_no) VALUES (7, 500, 503), (8, 600, 602);
+      INSERT INTO invoices (invoice_no, book_id) VALUES (500, 7), (501, 7), (502, 7), (503, 7);
+    expected_rows: [[8, 600, 602, 3]]
+  - id: t3
+    hidden: true
+    description: "Empty tables"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Books without any invoice, including a one-number book - min/max of issued numbers finds nothing"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoice_books (book_id, first_no, last_no) VALUES (3, 10, 10), (1, 1, 5);
+    expected_rows: [[1, 1, 5, 5], [3, 10, 10, 1]]
+  - id: t5
+    hidden: true
+    description: "Single missing number at the very start and very end of a book (outside the min-max of issued numbers)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoice_books (book_id, first_no, last_no) VALUES (1, 100, 110);
+      INSERT INTO invoices (invoice_no, book_id) VALUES
+        (101, 1), (102, 1), (103, 1), (104, 1), (105, 1), (106, 1), (107, 1), (108, 1), (109, 1);
+    expected_rows: [[1, 100, 100, 1], [1, 110, 110, 1]]
+  - id: t6
+    hidden: true
+    description: "Adjacent books - 104 (end of book 1) and 105 (start of book 2) must stay separate runs"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoice_books (book_id, first_no, last_no) VALUES (1, 100, 104), (2, 105, 109);
+      INSERT INTO invoices (invoice_no, book_id) VALUES (100, 1), (101, 1), (102, 1), (103, 1), (106, 2), (107, 2), (108, 2), (109, 2);
+    expected_rows: [[1, 104, 104, 1], [2, 105, 105, 1]]
+  - id: t7
+    hidden: true
+    description: "One-number books issued and not issued, plus a three-number book with only the middle issued"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoice_books (book_id, first_no, last_no) VALUES (5, 77, 77), (6, 78, 78), (4, 79, 81);
+      INSERT INTO invoices (invoice_no, book_id) VALUES (77, 5), (80, 4);
+    expected_rows: [[4, 79, 79, 1], [4, 81, 81, 1], [6, 78, 78, 1]]
+  - id: t8
+    hidden: true
+    description: "Large invoice numbers near 10^9"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoice_books (book_id, first_no, last_no) VALUES (9, 999999990, 1000000000);
+      INSERT INTO invoices (invoice_no, book_id) VALUES (999999990, 9), (999999995, 9);
+    expected_rows: [[9, 999999991, 999999994, 4], [9, 999999996, 1000000000, 5]]
+  - id: t9
+    hidden: true
+    description: "Output is ordered by book_id, not by invoice number (book 2 holds the lower numbers)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoice_books (book_id, first_no, last_no) VALUES (2, 1, 20), (1, 21, 40);
+      INSERT INTO invoices (invoice_no, book_id) VALUES
+        (1, 2), (2, 2), (5, 2), (6, 2), (7, 2), (8, 2), (10, 2), (11, 2), (12, 2), (13, 2), (14, 2), (16, 2), (17, 2), (18, 2), (19, 2),
+        (23, 1), (24, 1), (25, 1), (26, 1), (27, 1), (28, 1), (29, 1), (33, 1), (34, 1), (35, 1), (36, 1), (37, 1), (39, 1), (40, 1);
+    expected_rows: 
+      - [1, 21, 22, 2]
+      - [1, 30, 32, 3]
+      - [1, 38, 38, 1]
+      - [2, 3, 4, 2]
+      - [2, 9, 9, 1]
+      - [2, 15, 15, 1]
+      - [2, 20, 20, 1]
+  - id: t10
+    hidden: true
+    description: "Every other number issued - many one-number runs including both ends"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoice_books (book_id, first_no, last_no) VALUES (3, 1, 31);
+      INSERT INTO invoices (invoice_no, book_id) VALUES
+        (2, 3), (4, 3), (6, 3), (8, 3), (10, 3), (12, 3), (14, 3), (16, 3), (18, 3), (20, 3), (22, 3), (24, 3), (26, 3), (28, 3), (30, 3);
+    expected_rows: 
+      - [3, 1, 1, 1]
+      - [3, 3, 3, 1]
+      - [3, 5, 5, 1]
+      - [3, 7, 7, 1]
+      - [3, 9, 9, 1]
+      - [3, 11, 11, 1]
+      - [3, 13, 13, 1]
+      - [3, 15, 15, 1]
+      - [3, 17, 17, 1]
+      - [3, 19, 19, 1]
+      - [3, 21, 21, 1]
+      - [3, 23, 23, 1]
+      - [3, 25, 25, 1]
+      - [3, 27, 27, 1]
+      - [3, 29, 29, 1]
+      - [3, 31, 31, 1]
+expected_concepts:
+  - gaps-and-islands on integer sequences
+  - finding run starts with NOT EXISTS (n + 1) and run ends with the next issued number
+  - LAG/LEAD with sentinel rows for range boundaries
+  - outer boundaries of a range that are not covered by any data row
+  - keeping runs inside their partition (per book)
+optimal_complexity: {time: "O(n log n) for sorting invoices per book (O(n) index lookups with an index on invoice_no)", space: O(n)}
+rubric:
+  excellent: Finds run starts (book start or issued number + 1 when the next number is unissued) and run ends (next issued number - 1 or book end), or uses LEAD over issued numbers plus sentinel rows at first_no - 1 and last_no + 1 per book, handles empty books and book edges, and orders the output.
+  good: Correctly finds gaps between issued numbers but needs a hint for leading or trailing runs, empty books or adjacent books.
+  weak: Only reports gaps between the smallest and largest issued number, merges runs across books, lists missing numbers one per row, or returns wrong inclusive bounds.
+  criteria:
+    correctness: All tests pass, including empty books, one-number books, adjacent books and runs at both ends.
+    efficiency: Set-based query that does not materialize every reserved number of large books.
+    code_quality: Named CTEs for run starts and run ends, clear inclusive bounds and an explicit ORDER BY.
+    edge_cases: Empty tables, books with no invoices, complete books, single-number gaps and large numbers.
+    communication: Explains the run-start/run-end idea or the sentinel trick and why the book boundaries need special handling.
+hints:
+  - Think about what marks the beginning of a missing run and what marks its end, and remember that a run may touch the first or last reserved number of a book.
+  - A run starts at the book's first number when that number is unissued, or right after an issued number whose successor is unissued; it ends just before the next issued number of the same book, or at the book's last number if there is none.
+  - Build the candidate starts with two queries combined by UNION ALL (book first_no when not issued, invoice_no + 1 when invoice_no + 1 is not issued and still inside the book), then compute each end as COALESCE(smallest issued number above the start within the book minus 1, last_no); alternatively apply LEAD over each book's issued numbers padded with first_no - 1 and last_no + 1 and keep pairs that differ by more than 1.
+followups:
+  - How would you list the individual missing numbers when the auditors need one row per number, and what is the risk for huge books?
+  - Which indexes help this query on ten million invoices?
+  - How would you also flag invoices whose number lies outside their book's range?
+common_errors:
+  - Only looking between the smallest and largest issued number, which misses leading, trailing and whole-book runs.
+  - Letting a run cross from one book into the next when the ranges are adjacent.
+  - Off-by-one bounds, such as reporting the issued neighbours instead of the first and last missing numbers.
+  - Generating every reserved number with a recursive CTE, which is slow for large books.

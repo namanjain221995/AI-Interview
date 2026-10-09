@@ -1,0 +1,113 @@
+version: 1
+slug: group_multiline_log_events
+title: Stack Trace Line Grouping
+difficulty: easy
+competency_keys: [code_quality, problem_solving]
+role_tags: [sre, backend, support_engineer, devops]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Stack Trace Line Grouping
+
+  A log shipper forwards application logs to a search cluster one record per line, which splits every
+  exception across dozens of records. Configure the grouping yourself: rebuild the multi-line events
+  from the raw lines.
+
+  - A line is a **continuation** line if it starts with a space or a tab character, or if it starts with
+    the exact text `Caused by:` (case-sensitive).
+  - Every other line **starts a new event**.
+  - An event consists of its start line followed by all continuation lines up to the next start line.
+
+  Return the events in their original order. Each event is a single string: the start line unchanged,
+  followed by each of its continuation lines with **leading** spaces and tabs removed, all joined with
+  `" | "` (space, vertical bar, space). Continuation lines that appear before the first start line
+  belong to an event that began before the log was captured; discard them.
+
+  In the examples, `\t` inside a string stands for a tab character.
+
+  ### Example 1
+  ```
+  Input:  lines = ["10:00:01 INFO request served", "10:00:02 ERROR payment failed", "    at billing.charge(Billing.java:42)", "Caused by: SocketTimeoutException: read timed out", "\tat net.Socket.read(Socket.java:88)", "10:00:03 INFO retry scheduled"]
+  Output: ["10:00:01 INFO request served", "10:00:02 ERROR payment failed | at billing.charge(Billing.java:42) | Caused by: SocketTimeoutException: read timed out | at net.Socket.read(Socket.java:88)", "10:00:03 INFO retry scheduled"]
+  ```
+
+  ### Example 2
+  ```
+  Input:  lines = ["  at orphan.frame(Job.java:7)", "Caused by: stale state", "boot complete", "ready"]
+  Output: ["boot complete", "ready"]
+  ```
+
+  ### Constraints
+  - `0 <= lines.length <= 10^4`
+  - Each line has 1 to 300 characters and contains at least one character that is not a space or tab.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: group_multiline_log_events
+  params:
+    - {name: lines, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def group_multiline_log_events(lines: list[str]) -> list[str]:
+        events: list[list[str]] = []
+        for line in lines:
+            is_continuation = line[0] in " \t" or line.startswith("Caused by:")
+            if not is_continuation:
+                events.append([line])
+            elif events:  # orphans before the first start line are dropped
+                events[-1].append(line.lstrip(" \t"))
+        return [" | ".join(parts) for parts in events]
+  javascript: |
+    function groupMultilineLogEvents(lines) {
+      const events = [];
+      for (const line of lines) {
+        const isContinuation = line[0] === " " || line[0] === "\t" || line.startsWith("Caused by:");
+        if (!isContinuation) {
+          events.push([line]);
+        } else if (events.length > 0) {
+          events[events.length - 1].push(line.replace(/^[ \t]+/, ""));
+        }
+      }
+      return events.map((parts) => parts.join(" | "));
+    }
+tests:
+  - {id: t1, args: [["10:00:01 INFO request served", "10:00:02 ERROR payment failed", "    at billing.charge(Billing.java:42)", "Caused by: SocketTimeoutException: read timed out", "\tat net.Socket.read(Socket.java:88)", "10:00:03 INFO retry scheduled"]], expected: ["10:00:01 INFO request served", "10:00:02 ERROR payment failed | at billing.charge(Billing.java:42) | Caused by: SocketTimeoutException: read timed out | at net.Socket.read(Socket.java:88)", "10:00:03 INFO retry scheduled"], description: "Example 1 - exception with indented frames, a cause and a tab-indented frame"}
+  - {id: t2, args: [["  at orphan.frame(Job.java:7)", "Caused by: stale state", "boot complete", "ready"]], expected: ["boot complete", "ready"], description: "Example 2 - continuation lines before the first start line are discarded"}
+  - {id: t3, hidden: true, args: [[]], expected: [], description: "No lines"}
+  - {id: t4, hidden: true, args: [["\tat a.b(C.java:1)", "    at d.e(F.java:2)", "Caused by: X"]], expected: [], description: "Only continuation lines - nothing survives"}
+  - {id: t5, hidden: true, args: [["single start line"]], expected: ["single start line"], description: "One start line with no continuation"}
+  - {id: t6, hidden: true, args: [["ERROR outer", "caused by: lowercase is a new event", "Caused by inner without colon", "Caused by:inner"]], expected: ["ERROR outer", "caused by: lowercase is a new event", "Caused by inner without colon | Caused by:inner"], description: "Case and colon rules for the cause marker"}
+  - {id: t7, hidden: true, args: [["WARN slow query", " \t \tSELECT  *   FROM orders", "    WHERE id = 7   "]], expected: ["WARN slow query | SELECT  *   FROM orders | WHERE id = 7   "], description: "Mixed leading tabs and spaces trimmed; inner and trailing whitespace preserved"}
+  - {id: t8, hidden: true, args: [["a", "b", "  c", "d", "  e", "  f"]], expected: ["a", "b | c", "d | e | f"], description: "Consecutive start lines and several short events"}
+  - {id: t9, hidden: true, args: [["Caused by: root", "  at x", "INFO later"]], expected: ["INFO later"], description: "Log begins with a cause block that must be dropped entirely"}
+  - {id: t10, hidden: true, args: [["2026-05-01T12:00:00Z ERROR job 0 failed", "Caused by: io.TimeoutError: attempt 0", "\t\tat io.Net.read(Net.kt:9)", "2026-05-01T12:00:01Z ERROR job 1 failed", "    at worker.step0(Worker.kt:1)", "2026-05-01T12:00:02Z ERROR job 2 failed", "    at worker.step0(Worker.kt:2)", "    at worker.step1(Worker.kt:3)", "2026-05-01T12:00:03Z ERROR job 3 failed", "    at worker.step0(Worker.kt:3)", "    at worker.step1(Worker.kt:4)", "    at worker.step2(Worker.kt:5)", "2026-05-01T12:00:04Z ERROR job 4 failed", "2026-05-01T12:00:05Z ERROR job 5 failed", "    at worker.step0(Worker.kt:5)", "Caused by: io.TimeoutError: attempt 5", "\t\tat io.Net.read(Net.kt:9)", "2026-05-01T12:00:06Z ERROR job 6 failed", "    at worker.step0(Worker.kt:6)", "    at worker.step1(Worker.kt:7)", "2026-05-01T12:00:07Z ERROR job 7 failed", "    at worker.step0(Worker.kt:7)", "    at worker.step1(Worker.kt:8)", "    at worker.step2(Worker.kt:9)", "2026-05-01T12:00:08Z ERROR job 8 failed", "2026-05-01T12:00:09Z ERROR job 9 failed", "    at worker.step0(Worker.kt:9)", "2026-05-01T12:00:10Z ERROR job 10 failed", "    at worker.step0(Worker.kt:10)", "    at worker.step1(Worker.kt:11)", "Caused by: io.TimeoutError: attempt 10", "\t\tat io.Net.read(Net.kt:9)", "2026-05-01T12:00:11Z ERROR job 11 failed", "    at worker.step0(Worker.kt:11)", "    at worker.step1(Worker.kt:12)", "    at worker.step2(Worker.kt:13)", "2026-05-01T12:00:12Z ERROR job 12 failed", "2026-05-01T12:00:13Z ERROR job 13 failed", "    at worker.step0(Worker.kt:13)", "2026-05-01T12:00:14Z ERROR job 14 failed", "    at worker.step0(Worker.kt:14)", "    at worker.step1(Worker.kt:15)", "2026-05-01T12:00:15Z ERROR job 15 failed", "    at worker.step0(Worker.kt:15)", "    at worker.step1(Worker.kt:16)", "    at worker.step2(Worker.kt:17)", "Caused by: io.TimeoutError: attempt 15", "\t\tat io.Net.read(Net.kt:9)", "2026-05-01T12:00:16Z ERROR job 16 failed", "2026-05-01T12:00:17Z ERROR job 17 failed", "    at worker.step0(Worker.kt:17)", "2026-05-01T12:00:18Z ERROR job 18 failed", "    at worker.step0(Worker.kt:18)", "    at worker.step1(Worker.kt:19)", "2026-05-01T12:00:19Z ERROR job 19 failed", "    at worker.step0(Worker.kt:19)", "    at worker.step1(Worker.kt:20)", "    at worker.step2(Worker.kt:21)", "2026-05-01T12:00:20Z ERROR job 20 failed", "Caused by: io.TimeoutError: attempt 20", "\t\tat io.Net.read(Net.kt:9)", "2026-05-01T12:00:21Z ERROR job 21 failed", "    at worker.step0(Worker.kt:21)", "2026-05-01T12:00:22Z ERROR job 22 failed", "    at worker.step0(Worker.kt:22)", "    at worker.step1(Worker.kt:23)", "2026-05-01T12:00:23Z ERROR job 23 failed", "    at worker.step0(Worker.kt:23)", "    at worker.step1(Worker.kt:24)", "    at worker.step2(Worker.kt:25)", "2026-05-01T12:00:24Z ERROR job 24 failed", "2026-05-01T12:00:25Z ERROR job 25 failed", "    at worker.step0(Worker.kt:25)", "Caused by: io.TimeoutError: attempt 25", "\t\tat io.Net.read(Net.kt:9)", "2026-05-01T12:00:26Z ERROR job 26 failed", "    at worker.step0(Worker.kt:26)", "    at worker.step1(Worker.kt:27)", "2026-05-01T12:00:27Z ERROR job 27 failed", "    at worker.step0(Worker.kt:27)", "    at worker.step1(Worker.kt:28)", "    at worker.step2(Worker.kt:29)", "2026-05-01T12:00:28Z ERROR job 28 failed", "2026-05-01T12:00:29Z ERROR job 29 failed", "    at worker.step0(Worker.kt:29)", "2026-05-01T12:00:30Z ERROR job 30 failed", "    at worker.step0(Worker.kt:30)", "    at worker.step1(Worker.kt:31)", "Caused by: io.TimeoutError: attempt 30", "\t\tat io.Net.read(Net.kt:9)", "2026-05-01T12:00:31Z ERROR job 31 failed", "    at worker.step0(Worker.kt:31)", "    at worker.step1(Worker.kt:32)", "    at worker.step2(Worker.kt:33)", "2026-05-01T12:00:32Z ERROR job 32 failed", "2026-05-01T12:00:33Z ERROR job 33 failed", "    at worker.step0(Worker.kt:33)", "2026-05-01T12:00:34Z ERROR job 34 failed", "    at worker.step0(Worker.kt:34)", "    at worker.step1(Worker.kt:35)", "2026-05-01T12:00:35Z ERROR job 35 failed", "    at worker.step0(Worker.kt:35)", "    at worker.step1(Worker.kt:36)", "    at worker.step2(Worker.kt:37)", "Caused by: io.TimeoutError: attempt 35", "\t\tat io.Net.read(Net.kt:9)", "2026-05-01T12:00:36Z ERROR job 36 failed", "2026-05-01T12:00:37Z ERROR job 37 failed", "    at worker.step0(Worker.kt:37)", "2026-05-01T12:00:38Z ERROR job 38 failed", "    at worker.step0(Worker.kt:38)", "    at worker.step1(Worker.kt:39)", "2026-05-01T12:00:39Z ERROR job 39 failed", "    at worker.step0(Worker.kt:39)", "    at worker.step1(Worker.kt:40)", "    at worker.step2(Worker.kt:41)", "2026-05-01T12:00:40Z ERROR job 40 failed", "Caused by: io.TimeoutError: attempt 40", "\t\tat io.Net.read(Net.kt:9)", "2026-05-01T12:00:41Z ERROR job 41 failed", "    at worker.step0(Worker.kt:41)", "2026-05-01T12:00:42Z ERROR job 42 failed", "    at worker.step0(Worker.kt:42)", "    at worker.step1(Worker.kt:43)", "2026-05-01T12:00:43Z ERROR job 43 failed", "    at worker.step0(Worker.kt:43)", "    at worker.step1(Worker.kt:44)", "    at worker.step2(Worker.kt:45)", "2026-05-01T12:00:44Z ERROR job 44 failed", "2026-05-01T12:00:45Z ERROR job 45 failed", "    at worker.step0(Worker.kt:45)", "Caused by: io.TimeoutError: attempt 45", "\t\tat io.Net.read(Net.kt:9)", "2026-05-01T12:00:46Z ERROR job 46 failed", "    at worker.step0(Worker.kt:46)", "    at worker.step1(Worker.kt:47)", "2026-05-01T12:00:47Z ERROR job 47 failed", "    at worker.step0(Worker.kt:47)", "    at worker.step1(Worker.kt:48)", "    at worker.step2(Worker.kt:49)", "2026-05-01T12:00:48Z ERROR job 48 failed", "2026-05-01T12:00:49Z ERROR job 49 failed", "    at worker.step0(Worker.kt:49)", "2026-05-01T12:00:50Z ERROR job 50 failed", "    at worker.step0(Worker.kt:50)", "    at worker.step1(Worker.kt:51)", "Caused by: io.TimeoutError: attempt 50", "\t\tat io.Net.read(Net.kt:9)", "2026-05-01T12:00:51Z ERROR job 51 failed", "    at worker.step0(Worker.kt:51)", "    at worker.step1(Worker.kt:52)", "    at worker.step2(Worker.kt:53)", "2026-05-01T12:00:52Z ERROR job 52 failed", "2026-05-01T12:00:53Z ERROR job 53 failed", "    at worker.step0(Worker.kt:53)", "2026-05-01T12:00:54Z ERROR job 54 failed", "    at worker.step0(Worker.kt:54)", "    at worker.step1(Worker.kt:55)", "2026-05-01T12:00:55Z ERROR job 55 failed", "    at worker.step0(Worker.kt:55)", "    at worker.step1(Worker.kt:56)", "    at worker.step2(Worker.kt:57)", "Caused by: io.TimeoutError: attempt 55", "\t\tat io.Net.read(Net.kt:9)", "2026-05-01T12:00:56Z ERROR job 56 failed", "2026-05-01T12:00:57Z ERROR job 57 failed", "    at worker.step0(Worker.kt:57)", "2026-05-01T12:00:58Z ERROR job 58 failed", "    at worker.step0(Worker.kt:58)", "    at worker.step1(Worker.kt:59)", "2026-05-01T12:00:59Z ERROR job 59 failed", "    at worker.step0(Worker.kt:59)", "    at worker.step1(Worker.kt:60)", "    at worker.step2(Worker.kt:61)"]], expected: ["2026-05-01T12:00:00Z ERROR job 0 failed | Caused by: io.TimeoutError: attempt 0 | at io.Net.read(Net.kt:9)", "2026-05-01T12:00:01Z ERROR job 1 failed | at worker.step0(Worker.kt:1)", "2026-05-01T12:00:02Z ERROR job 2 failed | at worker.step0(Worker.kt:2) | at worker.step1(Worker.kt:3)", "2026-05-01T12:00:03Z ERROR job 3 failed | at worker.step0(Worker.kt:3) | at worker.step1(Worker.kt:4) | at worker.step2(Worker.kt:5)", "2026-05-01T12:00:04Z ERROR job 4 failed", "2026-05-01T12:00:05Z ERROR job 5 failed | at worker.step0(Worker.kt:5) | Caused by: io.TimeoutError: attempt 5 | at io.Net.read(Net.kt:9)", "2026-05-01T12:00:06Z ERROR job 6 failed | at worker.step0(Worker.kt:6) | at worker.step1(Worker.kt:7)", "2026-05-01T12:00:07Z ERROR job 7 failed | at worker.step0(Worker.kt:7) | at worker.step1(Worker.kt:8) | at worker.step2(Worker.kt:9)", "2026-05-01T12:00:08Z ERROR job 8 failed", "2026-05-01T12:00:09Z ERROR job 9 failed | at worker.step0(Worker.kt:9)", "2026-05-01T12:00:10Z ERROR job 10 failed | at worker.step0(Worker.kt:10) | at worker.step1(Worker.kt:11) | Caused by: io.TimeoutError: attempt 10 | at io.Net.read(Net.kt:9)", "2026-05-01T12:00:11Z ERROR job 11 failed | at worker.step0(Worker.kt:11) | at worker.step1(Worker.kt:12) | at worker.step2(Worker.kt:13)", "2026-05-01T12:00:12Z ERROR job 12 failed", "2026-05-01T12:00:13Z ERROR job 13 failed | at worker.step0(Worker.kt:13)", "2026-05-01T12:00:14Z ERROR job 14 failed | at worker.step0(Worker.kt:14) | at worker.step1(Worker.kt:15)", "2026-05-01T12:00:15Z ERROR job 15 failed | at worker.step0(Worker.kt:15) | at worker.step1(Worker.kt:16) | at worker.step2(Worker.kt:17) | Caused by: io.TimeoutError: attempt 15 | at io.Net.read(Net.kt:9)", "2026-05-01T12:00:16Z ERROR job 16 failed", "2026-05-01T12:00:17Z ERROR job 17 failed | at worker.step0(Worker.kt:17)", "2026-05-01T12:00:18Z ERROR job 18 failed | at worker.step0(Worker.kt:18) | at worker.step1(Worker.kt:19)", "2026-05-01T12:00:19Z ERROR job 19 failed | at worker.step0(Worker.kt:19) | at worker.step1(Worker.kt:20) | at worker.step2(Worker.kt:21)", "2026-05-01T12:00:20Z ERROR job 20 failed | Caused by: io.TimeoutError: attempt 20 | at io.Net.read(Net.kt:9)", "2026-05-01T12:00:21Z ERROR job 21 failed | at worker.step0(Worker.kt:21)", "2026-05-01T12:00:22Z ERROR job 22 failed | at worker.step0(Worker.kt:22) | at worker.step1(Worker.kt:23)", "2026-05-01T12:00:23Z ERROR job 23 failed | at worker.step0(Worker.kt:23) | at worker.step1(Worker.kt:24) | at worker.step2(Worker.kt:25)", "2026-05-01T12:00:24Z ERROR job 24 failed", "2026-05-01T12:00:25Z ERROR job 25 failed | at worker.step0(Worker.kt:25) | Caused by: io.TimeoutError: attempt 25 | at io.Net.read(Net.kt:9)", "2026-05-01T12:00:26Z ERROR job 26 failed | at worker.step0(Worker.kt:26) | at worker.step1(Worker.kt:27)", "2026-05-01T12:00:27Z ERROR job 27 failed | at worker.step0(Worker.kt:27) | at worker.step1(Worker.kt:28) | at worker.step2(Worker.kt:29)", "2026-05-01T12:00:28Z ERROR job 28 failed", "2026-05-01T12:00:29Z ERROR job 29 failed | at worker.step0(Worker.kt:29)", "2026-05-01T12:00:30Z ERROR job 30 failed | at worker.step0(Worker.kt:30) | at worker.step1(Worker.kt:31) | Caused by: io.TimeoutError: attempt 30 | at io.Net.read(Net.kt:9)", "2026-05-01T12:00:31Z ERROR job 31 failed | at worker.step0(Worker.kt:31) | at worker.step1(Worker.kt:32) | at worker.step2(Worker.kt:33)", "2026-05-01T12:00:32Z ERROR job 32 failed", "2026-05-01T12:00:33Z ERROR job 33 failed | at worker.step0(Worker.kt:33)", "2026-05-01T12:00:34Z ERROR job 34 failed | at worker.step0(Worker.kt:34) | at worker.step1(Worker.kt:35)", "2026-05-01T12:00:35Z ERROR job 35 failed | at worker.step0(Worker.kt:35) | at worker.step1(Worker.kt:36) | at worker.step2(Worker.kt:37) | Caused by: io.TimeoutError: attempt 35 | at io.Net.read(Net.kt:9)", "2026-05-01T12:00:36Z ERROR job 36 failed", "2026-05-01T12:00:37Z ERROR job 37 failed | at worker.step0(Worker.kt:37)", "2026-05-01T12:00:38Z ERROR job 38 failed | at worker.step0(Worker.kt:38) | at worker.step1(Worker.kt:39)", "2026-05-01T12:00:39Z ERROR job 39 failed | at worker.step0(Worker.kt:39) | at worker.step1(Worker.kt:40) | at worker.step2(Worker.kt:41)", "2026-05-01T12:00:40Z ERROR job 40 failed | Caused by: io.TimeoutError: attempt 40 | at io.Net.read(Net.kt:9)", "2026-05-01T12:00:41Z ERROR job 41 failed | at worker.step0(Worker.kt:41)", "2026-05-01T12:00:42Z ERROR job 42 failed | at worker.step0(Worker.kt:42) | at worker.step1(Worker.kt:43)", "2026-05-01T12:00:43Z ERROR job 43 failed | at worker.step0(Worker.kt:43) | at worker.step1(Worker.kt:44) | at worker.step2(Worker.kt:45)", "2026-05-01T12:00:44Z ERROR job 44 failed", "2026-05-01T12:00:45Z ERROR job 45 failed | at worker.step0(Worker.kt:45) | Caused by: io.TimeoutError: attempt 45 | at io.Net.read(Net.kt:9)", "2026-05-01T12:00:46Z ERROR job 46 failed | at worker.step0(Worker.kt:46) | at worker.step1(Worker.kt:47)", "2026-05-01T12:00:47Z ERROR job 47 failed | at worker.step0(Worker.kt:47) | at worker.step1(Worker.kt:48) | at worker.step2(Worker.kt:49)", "2026-05-01T12:00:48Z ERROR job 48 failed", "2026-05-01T12:00:49Z ERROR job 49 failed | at worker.step0(Worker.kt:49)", "2026-05-01T12:00:50Z ERROR job 50 failed | at worker.step0(Worker.kt:50) | at worker.step1(Worker.kt:51) | Caused by: io.TimeoutError: attempt 50 | at io.Net.read(Net.kt:9)", "2026-05-01T12:00:51Z ERROR job 51 failed | at worker.step0(Worker.kt:51) | at worker.step1(Worker.kt:52) | at worker.step2(Worker.kt:53)", "2026-05-01T12:00:52Z ERROR job 52 failed", "2026-05-01T12:00:53Z ERROR job 53 failed | at worker.step0(Worker.kt:53)", "2026-05-01T12:00:54Z ERROR job 54 failed | at worker.step0(Worker.kt:54) | at worker.step1(Worker.kt:55)", "2026-05-01T12:00:55Z ERROR job 55 failed | at worker.step0(Worker.kt:55) | at worker.step1(Worker.kt:56) | at worker.step2(Worker.kt:57) | Caused by: io.TimeoutError: attempt 55 | at io.Net.read(Net.kt:9)", "2026-05-01T12:00:56Z ERROR job 56 failed", "2026-05-01T12:00:57Z ERROR job 57 failed | at worker.step0(Worker.kt:57)", "2026-05-01T12:00:58Z ERROR job 58 failed | at worker.step0(Worker.kt:58) | at worker.step1(Worker.kt:59)", "2026-05-01T12:00:59Z ERROR job 59 failed | at worker.step0(Worker.kt:59) | at worker.step1(Worker.kt:60) | at worker.step2(Worker.kt:61)"], description: "Stress - 60 exceptions with varying frame counts and nested causes"}
+expected_concepts:
+  - "single-pass grouping with a current-event accumulator"
+  - "precise line classification rules (leading whitespace, prefix match)"
+  - "trimming only leading whitespace"
+  - "handling orphan lines before the first event"
+optimal_complexity: {time: "O(total characters)", space: "O(total characters) for the output"}
+rubric:
+  excellent: "Classifies each line with a small predicate, accumulates the current event and flushes on each start line, drops orphan continuations, trims only leading spaces and tabs, and joins with the exact separator."
+  good: "Correct grouping after fixing one detail such as trailing-space trimming, the orphan rule or the case-sensitive cause marker."
+  weak: "Trims all whitespace, treats 'Caused by:' as a new event, attaches orphans to a later event, or loses the last event at the end of input."
+  criteria:
+    correctness: "All tests pass, including orphans, mixed indentation and look-alike cause markers."
+    efficiency: "One pass over the lines with linear-size output; no repeated string concatenation in a quadratic pattern."
+    code_quality: "A named continuation predicate and a clear accumulate-then-join structure."
+    edge_cases: "Empty input, only continuation lines, lowercase or colon-less cause text and inner whitespace."
+    communication: "Restates the classification rules and how the final event is emitted."
+hints:
+  - "Process the lines in order and decide, for each line, whether it begins something new or belongs to what came before."
+  - "Keep the event currently being built. A start line opens a new one; a continuation line is added to the open event, and if there is no open event yet it has nowhere to go."
+  - "Keep a list of events, each a list of parts. For a line that does not begin with a space or tab and does not begin with the exact cause marker, append a new event holding that line. Otherwise, if any event exists, append the line with only its leading spaces and tabs removed to the latest event. Finally join each event's parts with space, bar, space."
+followups:
+  - "How would you make the continuation rule configurable, for example with a regular expression per application?"
+  - "In a streaming shipper, when would you flush an event if the next start line never arrives?"
+  - "How would you cap the size of a single event to protect the search cluster?"
+  - "How would you handle interleaved output from two threads writing to the same log?"
+common_errors:
+  - "Trimming trailing or inner whitespace instead of only the leading indentation."
+  - "Treating 'Caused by:' lines as new events because they are not indented."
+  - "Attaching orphan continuation lines to the first real event."
+  - "Matching the cause marker case-insensitively or without the colon."

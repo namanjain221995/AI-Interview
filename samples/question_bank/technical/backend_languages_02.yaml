@@ -1,0 +1,650 @@
+# Curated questions: backend language depth, part 2 (Java/JVM memory, GC, concurrency, builds, testing).
+# `defaults` are merged into every question (question keys win).
+# Round types follow difficulty: easy -> technical_screening + combined; medium -> + deep_technical;
+# hard -> deep_technical + combined.
+version: 1
+defaults:
+  role_tags: [backend]
+questions:
+  # ------------------------------------------------------------- language and error handling
+  - external_key: technical.backend_languages.java_checked_vs_unchecked
+    competency_key: java
+    topic: Checked and unchecked exceptions
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What's your view on checked versus unchecked exceptions in Java, and how does that play out across the
+      layers of a typical service you've built?
+    expected_concepts:
+      - checked exceptions force callers to handle or declare them
+      - unchecked exceptions for programming errors and unrecoverable failures
+      - wrapping checked exceptions at layer boundaries with the cause preserved
+      - checked exceptions and lambdas or streams not mixing well
+      - a central handler that maps exceptions to responses
+    rubric:
+      excellent: Gives a reasoned position with trade-offs, explains wrapping with cause preservation at boundaries, mentions friction with lambdas, and shows where errors are finally handled in a real service.
+      good: Explains the difference correctly and describes a consistent approach in their code.
+      weak: Catches and ignores exceptions to satisfy the compiler, or cannot explain the distinction.
+    followups:
+      - How do you deal with a checked exception thrown inside a stream pipeline?
+      - When would you define a checked exception in your own API?
+    common_errors:
+      - Wrapping exceptions without passing the original cause, losing the stack trace.
+
+  - external_key: technical.backend_languages.java_exception_to_response
+    competency_key: code_quality
+    topic: Mapping internal errors to API responses
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you turn exceptions from the database or HTTP client layers into the responses your Java API
+      returns, without leaking internals to clients or losing the detail you need for debugging?
+    expected_concepts:
+      - translating infrastructure exceptions into domain exceptions
+      - a single exception handler such as ControllerAdvice
+      - stable error codes and a consistent error body
+      - logging full detail with a correlation id on the server side only
+      - distinguishing client errors from server errors in status codes
+    rubric:
+      excellent: Describes layered translation, one central mapping point with a stable error schema, server-side logging with correlation ids, and correct status code choices, with an example from real work.
+      good: Uses a global exception handler and avoids returning stack traces to clients.
+      weak: Returns raw exception messages or stack traces to clients, or maps everything to a generic 500.
+    followups:
+      - How would a client tell a retryable error from a permanent one?
+      - Where do validation errors fit in this scheme?
+    common_errors:
+      - Exposing SQL or library messages in API error responses.
+
+  - external_key: technical.backend_languages.java_optional_boundaries
+    competency_key: java
+    topic: Using Optional well
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you use Optional in Java code, and where do you think it doesn't belong?
+    expected_concepts:
+      - return type for values that may legitimately be absent
+      - not for fields, parameters or collections
+      - map, flatMap and orElseGet instead of get
+      - orElse evaluating its argument eagerly
+      - empty collections instead of Optional of a collection
+    rubric:
+      excellent: Uses Optional as a return type for absence, explains why it is a poor fit for fields, parameters and collections, and uses the functional methods correctly including the orElse versus orElseGet difference.
+      good: Uses Optional for return values and avoids calling get without checking.
+      weak: Wraps everything in Optional or calls get directly, reintroducing the null problem.
+    followups:
+      - Why might orElse with a method call cause a performance or side-effect issue?
+      - How do you handle absence in a JPA entity field instead?
+    common_errors:
+      - Returning null from a method declared to return Optional.
+
+  - external_key: technical.backend_languages.java_records_and_immutability
+    competency_key: java
+    topic: Records and immutable domain objects
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When do you reach for records in modern Java, and how do you think about immutability in your domain
+      objects more generally?
+    expected_concepts:
+      - records as transparent immutable data carriers
+      - compact constructors for validation
+      - shallow immutability and defensive copies of collections
+      - thread-safety and easier reasoning from immutable objects
+      - where records do not fit, such as JPA entities
+    rubric:
+      excellent: Explains what records generate, validates in compact constructors, points out shallow immutability and defensive copying, and explains why entities managed by an ORM are not records.
+      good: Uses records for DTOs or value objects and understands they are immutable.
+      weak: Treats records as just shorter classes and misses immutability, or has not used them.
+    followups:
+      - What happens if a record holds a mutable list that the caller later changes?
+      - How do you build a modified copy of a record cleanly?
+    common_errors:
+      - Assuming a record makes its contained collections immutable.
+
+  - external_key: technical.backend_languages.java_equals_hashcode_cache_miss
+    competency_key: java
+    topic: Broken equality in map keys
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A teammate built a cache keyed on a custom Java class, and it keeps missing even though the same values
+      are being looked up. What would you suspect, and how would you explain the fix?
+    expected_concepts:
+      - equals and hashCode must both be overridden consistently
+      - mutable fields used in hashCode changing after insertion
+      - records or IDE-generated implementations
+      - unit tests for the equality contract
+      - choosing an immutable key type
+    rubric:
+      excellent: Names the missing or inconsistent equals and hashCode contract and the mutable-key problem, explains how hash-based lookup works, and proposes an immutable key such as a record plus a test.
+      good: Identifies the equals and hashCode issue and how to fix it.
+      weak: Suggests clearing the cache or switching cache libraries without finding the cause.
+    followups:
+      - What happens if two unequal objects share the same hash code?
+      - How would you catch this class of bug in code review?
+    common_errors:
+      - Overriding equals but not hashCode.
+
+  - external_key: technical.backend_languages.java_npe_after_deploy
+    competency_key: debugging
+    topic: Null pointer failures after a deploy
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Right after a deploy, a Java service starts throwing NullPointerExceptions from a line that hasn't changed
+      in months. How would you approach it?
+    expected_concepts:
+      - helpful NullPointerException messages naming the null expression
+      - something upstream changed, such as config, data or a dependency
+      - comparing the deploy diff, including dependency and configuration changes
+      - rolling back to stop the impact
+      - adding validation at the boundary where the null entered
+    rubric:
+      excellent: Restores service by rolling back if needed, uses the exception message and stack trace to identify the null value, traces it to the upstream change in config, data or dependencies, and fixes it at the boundary with a test.
+      good: Reads the stack trace, checks what changed in the deploy, and adds a null check or fix.
+      weak: Wraps the line in a null check and moves on without asking why the value is null.
+    followups:
+      - How would you find the change if the code diff looks harmless?
+      - What would you add so this fails faster and clearer next time?
+    common_errors:
+      - Looking only at the application code diff and ignoring configuration and dependency changes.
+
+  # ------------------------------------------------------------- memory and GC
+  - external_key: technical.backend_languages.java_gc_selection
+    competency_key: java
+    topic: Choosing a JVM garbage collector
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you choose between garbage collectors such as G1, ZGC or Parallel for a Java service, and what
+      evidence would make you switch from one to another?
+    expected_concepts:
+      - throughput versus pause time trade-off
+      - G1 as a balanced default with a pause target
+      - ZGC or Shenandoah for very low pauses on large heaps
+      - Parallel for batch throughput
+      - GC logs and pause metrics as evidence
+      - heap sizing interacts with the choice
+    rubric:
+      excellent: Frames the choice as throughput, latency and footprint trade-offs, matches collectors to workloads, and insists on GC logs and latency percentiles before and after any change.
+      good: Knows the main collectors and their goals and would look at GC logs.
+      weak: Picks a collector by reputation or tunes flags without measuring.
+    followups:
+      - What would you look for in a GC log to decide pauses are the problem?
+      - What does a lower pause collector usually cost you?
+    common_errors:
+      - Copying tuning flags from blog posts without measuring the specific service.
+
+  - external_key: technical.backend_languages.java_container_oom_kill
+    competency_key: java
+    topic: JVM memory beyond the heap in containers
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A Java service runs in a container with a two-gigabyte memory limit and keeps getting killed by the kernel,
+      yet the heap never looks full. What's going on, and how would you fix it?
+    expected_concepts:
+      - the process uses memory beyond the heap such as metaspace, thread stacks, code cache and direct buffers
+      - MaxRAMPercentage or an explicit heap size leaving headroom
+      - Native Memory Tracking to break down usage
+      - thread count and stack size
+      - direct buffer limits for networking libraries
+    rubric:
+      excellent: Explains that the kill is on total process memory, lists the non-heap areas, uses Native Memory Tracking to measure them, and sizes the heap and other areas to fit the limit with headroom.
+      good: Knows non-heap memory exists and suggests lowering the heap size relative to the limit.
+      weak: Raises the heap size, which makes the kills more frequent, or blames the container platform.
+    followups:
+      - How would you tell an OOM kill from a Java OutOfMemoryError in your logs and metrics?
+      - Which libraries commonly allocate a lot of direct memory?
+    common_errors:
+      - Setting the heap equal to the container limit.
+
+  - external_key: technical.backend_languages.java_gc_latency_spikes
+    competency_key: java
+    topic: Proving whether GC causes latency spikes
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A latency-sensitive Java service shows p99 spikes of several hundred milliseconds every few minutes. How
+      would you prove or rule out garbage collection as the cause, and what would you tune if it is?
+    expected_concepts:
+      - correlating GC log pause timestamps with latency spikes
+      - safepoint pauses that are not GC
+      - allocation rate and promotion into the old generation
+      - humongous allocations in G1
+      - reducing allocation in hot paths before changing flags
+      - verifying with a load test that reproduces the pattern
+    rubric:
+      excellent: Correlates GC and safepoint logs with latency data, looks at allocation and promotion rates, identifies specific causes such as humongous objects or premature promotion, reduces allocation first, and verifies under realistic load.
+      good: Checks GC logs against the spikes and proposes reasonable tuning or a different collector.
+      weak: Switches collectors immediately without evidence or ignores non-GC pauses.
+    followups:
+      - What else can stop all threads at once besides garbage collection?
+      - How would you find which code produces most of the allocations?
+    common_errors:
+      - Assuming any periodic spike is GC without checking the logs.
+
+  # ------------------------------------------------------------- concurrency
+  - external_key: technical.backend_languages.java_virtual_threads_adoption
+    competency_key: java
+    topic: Adopting virtual threads
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What do virtual threads change about writing concurrent Java services, and what pitfalls would you watch
+      for when adopting them?
+    expected_concepts:
+      - cheap threads allow simple blocking code at high concurrency
+      - no need to pool virtual threads
+      - downstream limits still need semaphores or connection pools
+      - pinning around synchronized blocks or native calls in older JDKs
+      - ThreadLocal memory cost with millions of threads
+      - no benefit for CPU-bound work
+    rubric:
+      excellent: Explains the thread-per-request benefit, why pooling them is wrong, why downstream concurrency must still be limited, and names pinning and ThreadLocal pitfalls with how to detect them.
+      good: Knows virtual threads make blocking cheap and mentions at least one pitfall.
+      weak: Thinks virtual threads make CPU-bound code faster or puts them in a fixed-size pool.
+    followups:
+      - How would you protect a database that can only handle fifty connections?
+      - How would you detect pinning in a running service?
+    common_errors:
+      - Assuming unlimited concurrency is safe because threads are cheap.
+
+  - external_key: technical.backend_languages.java_carrier_pinning
+    competency_key: java
+    topic: Diagnosing virtual thread pinning
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      After moving a service to virtual threads, throughput falls under load and thread dumps show the carrier
+      threads all blocked. What might be happening, and how would you investigate?
+    expected_concepts:
+      - pinning when blocking inside synchronized sections or native frames
+      - JFR events or diagnostic flags that report pinned threads
+      - libraries holding monitors around I/O
+      - replacing synchronized with ReentrantLock or upgrading the JDK or library
+      - carrier pool size and parallelism settings
+    rubric:
+      excellent: Identifies pinning as the likely mechanism, uses JFR or tracing flags to locate the exact frames, distinguishes own code from library code, and chooses between code changes, library upgrades or a newer JDK.
+      good: Suspects pinning or blocking on synchronized code and knows how to look for it.
+      weak: Increases thread counts or reverts without understanding the cause.
+    followups:
+      - Why does blocking inside a synchronized block behave differently from blocking with a lock object?
+      - What if the pinning happens inside a third-party driver you can't change?
+    common_errors:
+      - Raising the carrier pool size to mask the problem.
+
+  - external_key: technical.backend_languages.java_blocking_pool_saturation
+    competency_key: java
+    topic: Thread pool sizing for slow downstream calls
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A Spring service uses a fixed pool of two hundred threads to call a slow downstream API. Under load,
+      requests queue up and time out. How would you reason about the pool size, and what would you change?
+    expected_concepts:
+      - Little's law relating throughput, latency and concurrency
+      - bounded queues and rejection instead of unbounded waiting
+      - timeouts shorter than the caller's deadline
+      - bulkheads that separate slow dependencies
+      - async clients or virtual threads as alternatives
+      - checking whether the downstream can handle more concurrency
+    rubric:
+      excellent: Uses Little's law to size concurrency, bounds queues with fast rejection, sets timeouts against the end-to-end deadline, isolates the slow dependency, and checks downstream capacity before increasing concurrency.
+      good: Adds timeouts and adjusts the pool with some reasoning about latency and throughput.
+      weak: Simply raises the thread count without considering the downstream or memory.
+    followups:
+      - What should a caller see when the pool is full?
+      - How would you know the downstream, not your service, is the limit?
+    common_errors:
+      - Using an unbounded queue that hides overload until everything times out.
+
+  - external_key: technical.backend_languages.java_completablefuture_errors
+    competency_key: java
+    topic: Composing CompletableFuture safely
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you compose asynchronous calls with CompletableFuture, and how do you handle errors and timeouts so
+      that a failure doesn't silently disappear?
+    expected_concepts:
+      - thenCompose versus thenApply and thenCombine
+      - exceptionally or handle for recovery
+      - orTimeout and completeOnTimeout
+      - choosing executors rather than the common pool for blocking work
+      - unobserved failures when nobody joins the future
+      - propagating context such as trace ids across stages
+    rubric:
+      excellent: Uses the right combinators, handles errors at a deliberate point, applies timeouts, chooses executors for blocking work, and explains how failures get lost when futures are never observed.
+      good: Composes futures correctly and adds error handling with exceptionally or handle.
+      weak: Calls get or join immediately, defeating the purpose, or ignores error handling.
+    followups:
+      - Why is running blocking calls on the common pool risky?
+      - How would you cancel the remaining calls if one fails?
+    common_errors:
+      - Running blocking I/O on the common ForkJoinPool.
+
+  - external_key: technical.backend_languages.java_context_across_threads
+    competency_key: java
+    topic: Propagating request context across threads
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you propagate request context like trace ids or tenant ids across threads in Java, and what goes
+      wrong with ThreadLocal when work hops between threads?
+    expected_concepts:
+      - ThreadLocal values do not follow work to other threads
+      - stale values leaking between requests in pooled threads
+      - clearing ThreadLocals in finally blocks
+      - wrapping executors or using context propagation libraries
+      - scoped values as a newer alternative
+      - MDC for logging context
+    rubric:
+      excellent: Explains both failure modes, missing context on other threads and stale context in pooled threads, and gives concrete fixes such as executor wrapping, cleanup in finally and scoped values, with a real example such as MDC.
+      good: Knows ThreadLocal is per thread and that context must be copied when using executors.
+      weak: Unaware that context is lost or leaked across thread pools.
+    followups:
+      - What could a leaked tenant id cause in a multi-tenant service?
+      - How does this change with virtual threads?
+    common_errors:
+      - Setting a ThreadLocal per request without clearing it afterwards.
+
+  - external_key: technical.backend_languages.java_memory_model_visibility
+    competency_key: java
+    topic: The Java memory model and visibility
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Explain what the Java memory model guarantees through volatile and happens-before, and walk me through a
+      bug that appears when code doesn't respect those guarantees.
+    expected_concepts:
+      - visibility and reordering without synchronization
+      - happens-before through locks, volatile, thread start and join
+      - volatile gives visibility but not atomic compound operations
+      - safe publication and final fields
+      - broken double-checked locking without volatile
+      - atomic classes for counters
+    rubric:
+      excellent: Explains visibility and reordering, lists happens-before edges, distinguishes visibility from atomicity, and gives a concrete bug such as a stop flag never seen or double-checked locking publishing a half-built object.
+      good: Knows volatile provides visibility and that increments are not atomic, with a simple example.
+      weak: Believes volatile makes operations atomic or that the problem only exists on multi-core machines in theory.
+    followups:
+      - Why is count plus plus on a volatile field still a race?
+      - How do final fields help with safe publication?
+    common_errors:
+      - Using volatile to protect a read-modify-write sequence.
+
+  - external_key: technical.backend_languages.java_hung_service_dumps
+    competency_key: java
+    topic: Investigating a hung JVM
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A Java service occasionally stops responding until it's restarted, and CPU sits near zero while it's stuck.
+      How would you capture evidence and track down the root cause?
+    expected_concepts:
+      - several thread dumps a few seconds apart before restarting
+      - deadlock detection in thread dumps
+      - threads waiting on exhausted connection pools or locks
+      - calls without timeouts waiting forever on a remote system
+      - automating dump capture when health checks fail
+      - reproducing with targeted load and fixing lock ordering or timeouts
+    rubric:
+      excellent: Captures multiple thread dumps before restart, reads lock ownership and waiting chains, considers deadlocks, pool exhaustion and missing timeouts, automates evidence capture, and fixes the specific cause with a reproduction.
+      good: Takes a thread dump and knows how to spot deadlocks or blocked threads.
+      weak: Keeps restarting the service or adds memory without collecting evidence.
+    followups:
+      - How do you tell a deadlock from pool exhaustion in a thread dump?
+      - How would you make sure the evidence is captured automatically next time?
+    common_errors:
+      - Restarting first and losing the only evidence of the hang.
+
+  # ------------------------------------------------------------- builds and dependencies
+  - external_key: technical.backend_languages.java_build_dependency_alignment
+    competency_key: java
+    topic: Keeping dependency versions aligned in Maven or Gradle
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you manage dependencies in a Java project with Maven or Gradle, and how do you keep versions
+      consistent across several modules?
+    expected_concepts:
+      - dependency management sections or version catalogs
+      - BOMs to align families of libraries
+      - transitive dependency resolution rules
+      - dependency tree inspection
+      - automated update tooling and vulnerability scanning
+    rubric:
+      excellent: Centralises versions with a BOM or version catalog, explains how transitive versions are resolved in their tool, inspects the dependency tree when conflicts appear, and automates updates and scanning.
+      good: Uses a parent POM or shared version properties and can inspect the dependency tree.
+      weak: Declares versions ad hoc in each module and cannot explain where transitive versions come from.
+    followups:
+      - How does Maven pick a version when two paths bring in different ones?
+      - What does a BOM give you that a shared property doesn't?
+    common_errors:
+      - Assuming the newest version always wins in Maven's resolution.
+
+  - external_key: technical.backend_languages.java_nosuchmethod_after_upgrade
+    competency_key: java
+    topic: Runtime linkage errors after an upgrade
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      After a dependency upgrade, a Java service compiles fine but fails at runtime with NoSuchMethodError. How
+      would you diagnose and fix it?
+    expected_concepts:
+      - two versions of a library on the classpath with one resolved at runtime
+      - transitive dependency pulling an older or newer version
+      - dependency tree or dependency insight to find the path
+      - aligning versions with a BOM or explicit constraint
+      - shading or relocation as a last resort
+      - a startup or integration test that catches linkage errors
+    rubric:
+      excellent: Explains the compile-time versus runtime version mismatch, finds the conflicting path with dependency tooling, aligns versions deliberately, considers shading only when necessary, and adds a test that would catch it.
+      good: Recognises a version conflict and uses the dependency tree to resolve it.
+      weak: Rolls back the upgrade without understanding the cause or tries random exclusions.
+    followups:
+      - Why didn't the compiler catch this?
+      - When would you shade a dependency, and what does it cost you?
+    common_errors:
+      - Excluding transitive dependencies blindly until it starts, without testing the affected features.
+
+  - external_key: technical.backend_languages.java_static_analysis_in_review
+    competency_key: code_quality
+    topic: Static analysis in Java code review
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What role do static analysis tools such as Error Prone, SpotBugs or Sonar play in your Java code reviews,
+      and how do you keep them from turning into noise that everyone ignores?
+    expected_concepts:
+      - catching mechanical bugs automatically so reviewers focus on design
+      - failing builds only on high-signal rules
+      - baselines for existing issues and gating new code
+      - suppressions with written justification
+      - tuning or removing rules with many false positives
+    rubric:
+      excellent: Positions tools as freeing human review for design, describes a curated, gated rule set with a baseline, justified suppressions and periodic tuning, and gives an example of a real bug caught.
+      good: Runs analysis in CI and fixes or suppresses findings with some selectivity.
+      weak: Either ignores the tools entirely or enables every rule and lets warnings pile up.
+    followups:
+      - How would you introduce a new rule to a large existing codebase?
+      - What kinds of problems can these tools never catch?
+    common_errors:
+      - Treating a clean scan as proof the code is correct.
+
+  # ------------------------------------------------------------- generics and modelling
+  - external_key: technical.backend_languages.java_type_erasure_design
+    competency_key: java
+    topic: Generics and type erasure
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How does type erasure in Java generics affect the way you design APIs? Tell me about a problem it caused
+      you and how you worked around it.
+    expected_concepts:
+      - generic type arguments are not available at runtime
+      - passing Class or type tokens explicitly
+      - deserialization of generic collections needing type references
+      - overloads that clash after erasure
+      - bounded wildcards for flexible APIs
+    rubric:
+      excellent: Explains erasure precisely, gives a real problem such as deserializing a list of objects or clashing overloads, and describes type tokens or wildcard bounds as solutions.
+      good: Knows types are erased at runtime and names the type token workaround.
+      weak: Believes generic types can be checked at runtime with instanceof or cannot give an example.
+    followups:
+      - When would you use extends versus super in a wildcard?
+      - How do JSON libraries recover generic type information?
+    common_errors:
+      - Expecting to create a new instance of a type parameter directly.
+
+  - external_key: technical.backend_languages.java_sealed_pattern_modelling
+    competency_key: java
+    topic: Modelling domains with sealed types and pattern matching
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How have sealed interfaces, records and pattern matching changed the way you model domain logic in Java?
+      Walk me through an example where they replaced an older design.
+    expected_concepts:
+      - closed hierarchies of variants with sealed interfaces
+      - exhaustive switch expressions checked by the compiler
+      - replacing visitor patterns or type flags
+      - records as variants carrying data
+      - trade-off against open extension through polymorphism
+    rubric:
+      excellent: Gives a concrete before and after, explains compiler-checked exhaustiveness, contrasts with visitors or enums plus nullable fields, and discusses when an open polymorphic design is still better.
+      good: Describes sealed types and switch pattern matching correctly with a plausible example.
+      weak: Knows the syntax only or cannot say what problem the features solve.
+    followups:
+      - What happens to existing switch statements when you add a new variant?
+      - When would you still prefer adding a method to each class instead?
+    common_errors:
+      - Adding a default branch that silences the exhaustiveness check.
+
+  # ------------------------------------------------------------- runtime performance
+  - external_key: technical.backend_languages.java_warmup_latency
+    competency_key: java
+    topic: JIT warm-up after deploys
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Right after every deploy, a Java service has a few minutes of high latency before it settles down. What
+      causes this, and what can you do about it?
+    expected_concepts:
+      - interpreted code and JIT compilation warming up
+      - class loading and lazy initialisation of pools and caches
+      - warm-up traffic before joining the load balancer
+      - slow start or gradual traffic shifting
+      - class data sharing or ahead-of-time options
+      - readiness checks that reflect real readiness
+    rubric:
+      excellent: Explains JIT and lazy initialisation as causes, proposes warm-up before readiness, gradual traffic ramping, and startup optimisations such as class data sharing, and verifies with latency during rollout.
+      good: Identifies JIT warm-up and suggests warming the service before sending full traffic.
+      weak: Blames the network or adds more instances without addressing the warm-up.
+    followups:
+      - How would you design a warm-up that exercises the right code paths?
+      - What could go wrong if warm-up traffic writes to real data stores?
+    common_errors:
+      - Marking the service ready as soon as the port opens.
+
+  - external_key: technical.backend_languages.java_native_image_tradeoffs
+    competency_key: java
+    topic: Native images versus the JVM
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      What are the trade-offs of compiling a Java service to a native image with GraalVM instead of running it on
+      the JVM, and when would you choose each?
+    expected_concepts:
+      - fast startup and lower memory for native images
+      - closed-world assumption and reflection configuration
+      - lower peak throughput without JIT profiling in many cases
+      - longer, heavier builds
+      - library and framework compatibility
+      - fits for serverless, CLIs or scale-to-zero services
+    rubric:
+      excellent: Weighs startup and footprint against peak throughput, build cost and reflection limits, explains the closed-world assumption, and matches each option to concrete deployment patterns.
+      good: Knows native images start fast and use less memory but have reflection limitations.
+      weak: Assumes native images are always faster or has no idea of the constraints.
+    followups:
+      - How would you find out whether your dependencies work in a native image?
+      - How would you compare the two fairly for a long-running service?
+    common_errors:
+      - Expecting reflection-heavy code to work without configuration.
+
+  # ------------------------------------------------------------- testing
+  - external_key: technical.backend_languages.java_overmocked_tests_review
+    competency_key: testing
+    topic: Reviewing over-mocked unit tests
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You're reviewing a pull request where every test mocks five or six collaborators with Mockito and verifies
+      each interaction. What feedback would you give, and why?
+    expected_concepts:
+      - tests coupled to implementation details break on every refactor
+      - asserting outcomes and state instead of call sequences
+      - using real objects or fakes for simple collaborators
+      - many collaborators as a design smell
+      - verifying interactions only where the interaction is the behaviour
+    rubric:
+      excellent: Explains how interaction-heavy tests lock in implementation, suggests asserting outcomes with real or fake collaborators, notes the design smell of many dependencies, and keeps verification where it matters.
+      good: Points out the tests are brittle and suggests fewer mocks.
+      weak: Approves them because coverage is high, or asks for even more verification.
+    followups:
+      - When is verifying an interaction the right assertion?
+      - How would you deliver this feedback to a junior engineer?
+    common_errors:
+      - Treating line coverage from heavily mocked tests as evidence the code works.
+
+  - external_key: technical.backend_languages.java_integration_tests_containers
+    competency_key: testing
+    topic: Integration testing with real dependencies
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you write integration tests for a Java service that talks to PostgreSQL and Kafka, and what do you do
+      to keep them reliable and reasonably fast?
+    expected_concepts:
+      - Testcontainers or similar for real dependencies
+      - reusing containers across a test run
+      - isolating data per test with transactions, schemas or unique keys
+      - waiting on conditions rather than sleeping for async consumers
+      - running schema migrations as part of setup
+      - separating them from the fast unit suite
+    rubric:
+      excellent: Uses real dependencies in containers, reuses them for speed, isolates test data, waits for async effects with polling and timeouts, applies real migrations, and organises suites so feedback stays fast.
+      good: Uses containers or a shared test environment and has a strategy for test data.
+      weak: Relies on in-memory substitutes with different behaviour or on a shared environment that tests pollute.
+    followups:
+      - How would you test that a consumer handles a duplicate message correctly?
+      - Why might an in-memory database give you false confidence?
+    common_errors:
+      - Using fixed sleeps to wait for Kafka consumers.

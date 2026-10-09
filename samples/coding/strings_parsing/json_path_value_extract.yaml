@@ -1,0 +1,307 @@
+version: 1
+slug: json_path_value_extract
+title: JSON Path Value Extract
+difficulty: hard
+competency_keys: [algorithms, data_structures]
+role_tags: [backend, fullstack, platform]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## JSON Path Value Extract
+
+  A deployment pipeline needs to read single values out of service manifests on a minimal runner that has
+  **no JSON library**. Given a valid JSON document `doc` and a `path`, return the value the path points to.
+
+  **Paths.** A path is a sequence of steps:
+  - a **key step** is a name made of `[A-Za-z0-9_]` characters; it is written first or after a `.`
+    (for example `meta.owner`) and selects a member of an object;
+  - an **index step** is `[k]` with a non-negative decimal integer `k` (no leading zeros) and selects the
+    `k`-th element (0-based) of an array, for example `services[2].ports[0]` or `[1].name`;
+  - an **empty path** selects the whole document.
+
+  **Lookup rules.**
+  - If an object contains the same key more than once, the **last** occurrence wins.
+  - Object keys in `doc` never contain backslashes, so a key matches a step when its characters are equal.
+  - If any step names a missing key or an index past the end, or applies a key step to a value that is not an
+    object or an index step to a value that is not an array, return the empty string `""`.
+
+  **Output.** Return the selected value in **compact form**: its exact source text with every whitespace
+  character (space, tab, newline, carriage return) that lies **outside** string literals removed. Strings
+  (including their quotes and escape sequences) and numbers are copied exactly as written, so `1.50E+3` stays
+  `1.50E+3` and `"\u0041"` stays `"\u0041"`. Because a selected string keeps its quotes, an empty string
+  value comes back as a two-character result (two quote marks), which differs from the zero-length not-found
+  result.
+
+  The examples write `doc`, `path` and the result in JSON string notation, so a quote inside them appears
+  as `\"`.
+
+  ### Example 1
+  ```
+  Input:  doc = "{\"service\": \"api\", \"ports\": [80, 443], \"meta\": {\"owner\": \"team-a\", \"tier\": 2}}", path = "ports[1]"
+  Output: "443"
+  Explanation: The value is the number 443, returned as its source text.
+  ```
+
+  ### Example 2
+  ```
+  Input:  doc = "{\"service\": \"api\", \"ports\": [80, 443], \"meta\": {\"owner\": \"team-a\", \"tier\": 2}}", path = "meta"
+  Output: "{\"owner\":\"team-a\",\"tier\":2}"
+  Explanation: Whitespace outside strings is removed; the strings themselves are copied as written.
+  ```
+
+  ### Example 3
+  ```
+  Input:  doc = "{\"service\": \"api\", \"ports\": [80, 443], \"meta\": {\"owner\": \"team-a\", \"tier\": 2}}", path = "meta.region"
+  Output: ""
+  Explanation: `meta` has no `region` key, so the result is the empty string.
+  ```
+
+  ### Constraints
+  - `1 <= doc.length <= 10^5`; `doc` is valid JSON (RFC 8259) and its nesting depth is at most `500`.
+  - `0 <= path.length <= 200`, and `path` follows the grammar above.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: json_path_extract
+  params:
+    - {name: doc, type: "string"}
+    - {name: path, type: "string"}
+  return_type: "string"
+  comparison: exact
+reference_solutions:
+  python: |
+    def json_path_extract(doc: str, path: str) -> str:
+        n = len(doc)
+        blank = " \t\n\r"
+
+        def skip_ws(i: int) -> int:
+            while i < n and doc[i] in blank:
+                i += 1
+            return i
+
+        def skip_string(i: int) -> int:
+            """doc[i] is an opening quote; return the index just past the closing quote."""
+            i += 1
+            while doc[i] != '"':
+                i += 2 if doc[i] == "\\" else 1
+            return i + 1
+
+        def skip_value(i: int) -> int:
+            """doc[i] starts a value; return the index just past it."""
+            if doc[i] == '"':
+                return skip_string(i)
+            if doc[i] in "{[":
+                depth = 0
+                while True:
+                    c = doc[i]
+                    if c == '"':
+                        i = skip_string(i)
+                        continue
+                    if c in "{[":
+                        depth += 1
+                    elif c in "}]":
+                        depth -= 1
+                        if depth == 0:
+                            return i + 1
+                    i += 1
+            while i < n and doc[i] not in ",}]" + blank:
+                i += 1
+            return i
+
+        steps: list[object] = []
+        i = 0
+        while i < len(path):
+            if path[i] == "[":
+                j = path.index("]", i)
+                steps.append(int(path[i + 1:j]))
+                i = j + 1
+            elif path[i] == ".":
+                i += 1
+            else:
+                j = i
+                while j < len(path) and path[j] not in ".[":
+                    j += 1
+                steps.append(path[i:j])
+                i = j
+
+        pos = skip_ws(0)
+        for step in steps:
+            found = -1
+            if isinstance(step, str):
+                if doc[pos] != "{":
+                    return ""
+                i = skip_ws(pos + 1)
+                while doc[i] != "}":
+                    key_end = skip_string(i)
+                    key = doc[i + 1:key_end - 1]
+                    i = skip_ws(skip_ws(key_end) + 1)  # past the colon
+                    if key == step:
+                        found = i  # keep scanning: the last duplicate wins
+                    i = skip_ws(skip_value(i))
+                    if doc[i] == ",":
+                        i = skip_ws(i + 1)
+            else:
+                if doc[pos] != "[":
+                    return ""
+                i = skip_ws(pos + 1)
+                index = 0
+                while doc[i] != "]":
+                    if index == step:
+                        found = i
+                        break
+                    i = skip_ws(skip_value(i))
+                    if doc[i] == ",":
+                        i = skip_ws(i + 1)
+                    index += 1
+            if found < 0:
+                return ""
+            pos = found
+
+        end = skip_value(pos)
+        out: list[str] = []
+        i = pos
+        while i < end:
+            if doc[i] == '"':
+                j = skip_string(i)
+                out.append(doc[i:j])
+                i = j
+            else:
+                if doc[i] not in blank:
+                    out.append(doc[i])
+                i += 1
+        return "".join(out)
+  javascript: |
+    function jsonPathExtract(doc, path) {
+      const n = doc.length;
+      const isBlank = (c) => c === " " || c === "\t" || c === "\n" || c === "\r";
+      const skipWs = (i) => {
+        while (i < n && isBlank(doc[i])) i++;
+        return i;
+      };
+      const skipString = (i) => {
+        i++;
+        while (doc[i] !== '"') i += doc[i] === "\\" ? 2 : 1;
+        return i + 1;
+      };
+      const skipValue = (i) => {
+        if (doc[i] === '"') return skipString(i);
+        if (doc[i] === "{" || doc[i] === "[") {
+          let depth = 0;
+          for (;;) {
+            const c = doc[i];
+            if (c === '"') { i = skipString(i); continue; }
+            if (c === "{" || c === "[") depth++;
+            else if (c === "}" || c === "]") {
+              depth--;
+              if (depth === 0) return i + 1;
+            }
+            i++;
+          }
+        }
+        while (i < n && !",}]".includes(doc[i]) && !isBlank(doc[i])) i++;
+        return i;
+      };
+
+      const steps = [];
+      for (let i = 0; i < path.length; ) {
+        if (path[i] === "[") {
+          const j = path.indexOf("]", i);
+          steps.push(Number(path.slice(i + 1, j)));
+          i = j + 1;
+        } else if (path[i] === ".") {
+          i++;
+        } else {
+          let j = i;
+          while (j < path.length && path[j] !== "." && path[j] !== "[") j++;
+          steps.push(path.slice(i, j));
+          i = j;
+        }
+      }
+
+      let pos = skipWs(0);
+      for (const step of steps) {
+        let found = -1;
+        if (typeof step === "string") {
+          if (doc[pos] !== "{") return "";
+          let i = skipWs(pos + 1);
+          while (doc[i] !== "}") {
+            const keyEnd = skipString(i);
+            const key = doc.slice(i + 1, keyEnd - 1);
+            i = skipWs(skipWs(keyEnd) + 1);
+            if (key === step) found = i;
+            i = skipWs(skipValue(i));
+            if (doc[i] === ",") i = skipWs(i + 1);
+          }
+        } else {
+          if (doc[pos] !== "[") return "";
+          let i = skipWs(pos + 1);
+          let index = 0;
+          while (doc[i] !== "]") {
+            if (index === step) { found = i; break; }
+            i = skipWs(skipValue(i));
+            if (doc[i] === ",") i = skipWs(i + 1);
+            index++;
+          }
+        }
+        if (found < 0) return "";
+        pos = found;
+      }
+
+      const end = skipValue(pos);
+      let out = "";
+      for (let i = pos; i < end; ) {
+        if (doc[i] === '"') {
+          const j = skipString(i);
+          out += doc.slice(i, j);
+          i = j;
+        } else {
+          if (!isBlank(doc[i])) out += doc[i];
+          i++;
+        }
+      }
+      return out;
+    }
+tests:
+  - {id: t1, args: ["{\"service\": \"api\", \"ports\": [80, 443], \"meta\": {\"owner\": \"team-a\", \"tier\": 2}}", "ports[1]"], expected: "443", description: "Example 1 - index step inside an object member"}
+  - {id: t2, args: ["{\"service\": \"api\", \"ports\": [80, 443], \"meta\": {\"owner\": \"team-a\", \"tier\": 2}}", "meta"], expected: "{\"owner\":\"team-a\",\"tier\":2}", description: "Example 2 - an object value returned in compact form"}
+  - {id: t3, args: ["{\"service\": \"api\", \"ports\": [80, 443], \"meta\": {\"owner\": \"team-a\", \"tier\": 2}}", "meta.region"], expected: "", description: "Example 3 - missing key returns the empty string"}
+  - {id: t4, hidden: true, args: [" { \"msg\" : \"say \\\"hi\\\" , ok\" ,\n\t\"n\" : [ ] } ", ""], expected: "{\"msg\":\"say \\\"hi\\\" , ok\",\"n\":[]}", description: "Empty path returns the whole document compacted; spaces and escaped quotes inside strings are preserved"}
+  - {id: t5, hidden: true, args: [" {\"a\": 1, \"a\": {\"b\": [true, null]}} ", "a.b[1]"], expected: "null", description: "Duplicate key: the last occurrence wins and a null literal is returned"}
+  - {id: t6, hidden: true, args: ["[{\"id\": 7}, {\"id\": 8}]", "[1].id"], expected: "8", description: "Root array with a leading index step"}
+  - {id: t7, hidden: true, args: ["{\"grid\": [[1, 2], [3, [4, 5]]], \"x\": 0}", "grid[1][1][0]"], expected: "4", description: "Chained index steps through nested arrays"}
+  - {id: t8, hidden: true, args: ["{\"service\": \"api\", \"ports\": [80, 443], \"meta\": {\"owner\": \"team-a\", \"tier\": 2}}", "ports.length"], expected: "", description: "Key step applied to an array returns the empty string"}
+  - {id: t9, hidden: true, args: ["{\"0\": \"zero\", \"list\": []}", "[0]"], expected: "", description: "Index step applied to an object returns the empty string even when a key is named 0"}
+  - {id: t10, hidden: true, args: ["{\"tpl\": \"{\\u0041} [x], }\", \"ratio\": -1.50E+3, \"big\": 12345678901234567890}", "ratio"], expected: "-1.50E+3", description: "Brackets and commas inside a skipped string; number copied verbatim including exponent"}
+  - {id: t11, hidden: true, args: ["{\"port\": 1, \"port2\": {}, \"empty\": \"\"}", "empty"], expected: "\"\"", description: "Selected value is an empty string literal, distinct from not found"}
+  - {id: t12, hidden: true, args: ["{\n  \"cluster\": \"edge\",\n  \"services\": [\n    {\"name\": \"svc0\", \"ports\": [8000, 9000], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc1\", \"ports\": [8001, 9001], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc2\", \"ports\": [8002, 9002], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc3\", \"ports\": [8003, 9003], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc4\", \"ports\": [8004, 9004], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc5\", \"ports\": [8005, 9005], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc6\", \"ports\": [8006, 9006], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc7\", \"ports\": [8007, 9007], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc8\", \"ports\": [8008, 9008], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc9\", \"ports\": [8009, 9009], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc10\", \"ports\": [8010, 9010], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc11\", \"ports\": [8011, 9011], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc12\", \"ports\": [8012, 9012], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc13\", \"ports\": [8013, 9013], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc14\", \"ports\": [8014, 9014], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc15\", \"ports\": [8015, 9015], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc16\", \"ports\": [8016, 9016], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc17\", \"ports\": [8017, 9017], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc18\", \"ports\": [8018, 9018], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc19\", \"ports\": [8019, 9019], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc20\", \"ports\": [8020, 9020], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc21\", \"ports\": [8021, 9021], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc22\", \"ports\": [8022, 9022], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc23\", \"ports\": [8023, 9023], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc24\", \"ports\": [8024, 9024], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}}\n  ]\n}", "services[24].labels.note"], expected: "\"x, y]{\"", description: "Large multi-line manifest; last array element; string with brackets and braces"}
+  - {id: t13, hidden: true, args: ["{\n  \"cluster\": \"edge\",\n  \"services\": [\n    {\"name\": \"svc0\", \"ports\": [8000, 9000], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc1\", \"ports\": [8001, 9001], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc2\", \"ports\": [8002, 9002], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc3\", \"ports\": [8003, 9003], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc4\", \"ports\": [8004, 9004], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc5\", \"ports\": [8005, 9005], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc6\", \"ports\": [8006, 9006], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc7\", \"ports\": [8007, 9007], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc8\", \"ports\": [8008, 9008], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc9\", \"ports\": [8009, 9009], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc10\", \"ports\": [8010, 9010], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc11\", \"ports\": [8011, 9011], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc12\", \"ports\": [8012, 9012], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc13\", \"ports\": [8013, 9013], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc14\", \"ports\": [8014, 9014], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc15\", \"ports\": [8015, 9015], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc16\", \"ports\": [8016, 9016], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc17\", \"ports\": [8017, 9017], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc18\", \"ports\": [8018, 9018], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc19\", \"ports\": [8019, 9019], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc20\", \"ports\": [8020, 9020], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc21\", \"ports\": [8021, 9021], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc22\", \"ports\": [8022, 9022], \"labels\": {\"tier\": \"t1\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc23\", \"ports\": [8023, 9023], \"labels\": {\"tier\": \"t2\", \"note\": \"x, y]{\"}},\n    {\"name\": \"svc24\", \"ports\": [8024, 9024], \"labels\": {\"tier\": \"t0\", \"note\": \"x, y]{\"}}\n  ]\n}", "services[25]"], expected: "", description: "Index exactly one past the end of an array"}
+expected_concepts:
+  - "single-pass scanning with a cursor instead of building a full tree"
+  - "skipping a value by tracking bracket depth while jumping over string literals"
+  - "escape-aware string scanning"
+  - "parsing the path into key and index steps"
+  - "last-duplicate-wins lookup and explicit not-found handling"
+optimal_complexity: {time: "O(n + p)", space: "O(p)"}
+rubric:
+  excellent: "Tokenises the path, walks the document with a cursor that skips whole values (depth counting, escape-aware strings), keeps scanning objects so the last duplicate wins, distinguishes every not-found case from an empty-string value, and compacts only whitespace outside strings in a single linear pass."
+  good: "Builds a small recursive-descent parser or skipper that works on the tests, with minor slips around escapes, duplicates or type mismatches fixed after testing."
+  weak: "Uses string searching for the key name (which matches inside nested objects or string values), strips all whitespace including inside strings, or re-formats numbers."
+  criteria:
+    correctness: "All tests pass, including duplicates, escapes inside strings, root arrays and empty-string values."
+    efficiency: "Linear in the document size; no repeated re-scanning of the same text per step."
+    code_quality: "Small helpers (skip whitespace, skip string, skip value) with clear cursor contracts."
+    edge_cases: "Empty path, wrong-type steps, index one past the end, brackets inside strings and escaped quotes."
+    communication: "Explains how strings are skipped safely and why searching for the key text is unsound."
+hints:
+  - "You never need the whole document as a tree: you only need to find where the selected value starts and ends in the text."
+  - "Write a helper that, given the index where a value starts, returns the index just past it. Strings end at the first unescaped quote; objects and arrays end where the bracket depth returns to zero, as long as you jump over string literals while counting."
+  - "Split the path into key and index steps. For a key step, walk the object's members one by one: read the key string, skip the colon, remember the value start if the key matches (keep going so the last duplicate wins) and skip the value. For an index step, skip that many elements. Finally copy the selected value, dropping whitespace outside string literals and copying strings unchanged."
+followups:
+  - "How would you support quoted keys in the path, such as keys that contain dots or brackets?"
+  - "How would you stream a multi-gigabyte document without loading it into memory?"
+  - "How would you add a wildcard step that returns the values of every array element?"
+  - "What would change if the document could be invalid and you had to report the first error position?"
+common_errors:
+  - "Searching for the quoted key text anywhere in the document, which can hit a nested object or a string value."
+  - "Counting brackets that appear inside string literals."
+  - "Treating an escaped quote as the end of a string."
+  - "Returning the first duplicate key instead of the last."
+  - "Removing spaces inside strings or normalising numbers while compacting."

@@ -1,0 +1,120 @@
+version: 1
+slug: csv_export_formula_injection
+title: Formula-Safe CSV Export
+difficulty: easy
+competency_keys: [problem_solving, code_quality]
+role_tags: [security, backend, fullstack, data_analyst]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Formula-Safe CSV Export
+
+  The support console lets staff export ticket data as a CSV file that is usually opened in a
+  spreadsheet application. The cells contain text typed by customers, and a cell such as
+  `=HYPERLINK(...)` would be executed as a formula when the file is opened. Write the exporter so that
+  such text is shown as plain text and the file stays valid CSV.
+
+  Process every cell of `rows` with these two steps, **in this order**:
+
+  1. **Neutralise formulas.** If the cell is non-empty and its first character is `=`, `+`, `-`, `@`,
+     a tab (`\t`) or a carriage return (`\r`), put a single quote `'` in front of it. Nothing else is
+     changed in this step (this deliberately includes negative numbers such as `-42`).
+  2. **Quote for CSV.** If the cell (after step 1) contains a comma `,`, a double quote `"`, a newline
+     `\n` or a carriage return `\r`, replace every `"` in it with `""` and wrap the whole cell in double
+     quotes. Other cells, including empty ones, are written as they are.
+
+  Join the cells of a row with `,` and join the rows with `\n`. There is no trailing newline; a row
+  with no cells becomes an empty line, and an empty `rows` list gives `""`. Return the CSV text.
+
+  Strings in the examples are written as JSON string literals, so `\n` stands for a newline character and `\"` for one double quote.
+
+  ### Example 1
+  ```
+  Input:  rows = [["ticket", "note", "amount"], ["T-1001", "=HYPERLINK(\"http://x.test\")", "-42"], ["T-1002", "Paid, thanks", "17"]]
+  Output: "ticket,note,amount\nT-1001,\"'=HYPERLINK(\"\"http://x.test\"\")\",'-42\nT-1002,\"Paid, thanks\",17"
+  Explanation: the formula and the negative number get a leading quote; the formula then
+  contains double quotes, so it is wrapped and its inner quotes are doubled. "Paid, thanks"
+  contains a comma and is wrapped as well. In the output, \n is the row separator.
+  ```
+
+  ### Example 2
+  ```
+  Input:  rows = [["@sum(A1:A2)", "line one\nline two", "plain"], [], ["+1 555 0100", "", "a\"b"]]
+  Output: "'@sum(A1:A2),\"line one\nline two\",plain\n\n'+1 555 0100,,\"a\"\"b\""
+  Explanation: the empty second row becomes an empty line.
+  ```
+
+  ### Constraints
+  - `0 <= rows.length <= 1000`, `0 <= rows[i].length <= 50`
+  - `0 <= rows[i][j].length <= 500`; cells contain printable ASCII plus `\t`, `\r` and `\n`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: to_safe_csv
+  params:
+    - {name: rows, type: "string[][]"}
+  return_type: string
+  comparison: exact
+reference_solutions:
+  python: |
+    FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+    NEEDS_QUOTES = (",", '"', "\n", "\r")
+
+
+    def safe_cell(cell: str) -> str:
+        if cell.startswith(FORMULA_TRIGGERS):
+            cell = "'" + cell
+        if any(ch in cell for ch in NEEDS_QUOTES):
+            cell = '"' + cell.replace('"', '""') + '"'
+        return cell
+
+
+    def to_safe_csv(rows: list[list[str]]) -> str:
+        return "\n".join(",".join(safe_cell(cell) for cell in row) for row in rows)
+  javascript: |
+    function safeCell(cell) {
+      if (cell.length > 0 && '=+-@\t\r'.includes(cell[0])) cell = "'" + cell;
+      if (/[,"\n\r]/.test(cell)) cell = '"' + cell.replace(/"/g, '""') + '"';
+      return cell;
+    }
+
+    function toSafeCsv(rows) {
+      return rows.map((row) => row.map(safeCell).join(',')).join('\n');
+    }
+tests:
+  - {id: t1, args: [[["ticket", "note", "amount"], ["T-1001", "=HYPERLINK(\"http://x.test\")", "-42"], ["T-1002", "Paid, thanks", "17"]]], expected: "ticket,note,amount\nT-1001,\"'=HYPERLINK(\"\"http://x.test\"\")\",'-42\nT-1002,\"Paid, thanks\",17", description: "Example 1"}
+  - {id: t2, args: [[["@sum(A1:A2)", "line one\nline two", "plain"], [], ["+1 555 0100", "", "a\"b"]]], expected: "'@sum(A1:A2),\"line one\nline two\",plain\n\n'+1 555 0100,,\"a\"\"b\"", description: "Example 2 - at-sign trigger, embedded newline, empty row, empty cell, lone inner quote"}
+  - {id: t3, hidden: true, args: [[]], expected: "", description: "No rows - empty string"}
+  - {id: t4, hidden: true, args: [[["safe"], ["also safe"], ["x=1"], ["a-b"]]], expected: "safe\nalso safe\nx=1\na-b", description: "Trigger characters only matter at the start of a cell; plain cells unchanged"}
+  - {id: t5, hidden: true, args: [[["\tcmd", "\rstart", "\n leading newline"]]], expected: "'\tcmd,\"'\rstart\",\"\n leading newline\"", description: "Tab and carriage return triggers; the prefixed carriage-return cell must also be quoted; a leading newline is quoted but not prefixed"}
+  - {id: t6, hidden: true, args: [[["=\"a\",\"b\"", "\"", "\"\""]]], expected: "\"'=\"\"a\"\",\"\"b\"\"\",\"\"\"\",\"\"\"\"\"\"", description: "Prefix applied before quoting; cells that are only quotes are escaped correctly"}
+  - {id: t7, hidden: true, args: [[[""], ["", ""], ["", "", ""]]], expected: "\n,\n,,", description: "Rows of empty cells - commas only, empty cells never quoted"}
+  - {id: t8, hidden: true, args: [[["-", "+", "=", "@", "'", "'=already"]]], expected: "'-,'+,'=,'@,','=already", description: "Single-character trigger cells; an existing leading apostrophe is not a trigger"}
+  - {id: t9, hidden: true, args: [[["id", "comment"], ["1", "row 1"], ["2", "row 2"], ["3", "-3"], ["4", "row 4"], ["5", "say \"hi\", ok"], ["6", "-6"], ["7", "=cmd|' /C calc'!A0"], ["8", "row 8"], ["9", "-9"], ["10", "say \"hi\", ok"], ["11", "row 11"], ["12", "-12"], ["13", "row 13"], ["14", "=cmd|' /C calc'!A0"], ["15", "say \"hi\", ok"], ["16", "row 16"], ["17", "row 17"], ["18", "-18"], ["19", "row 19"], ["20", "say \"hi\", ok"], ["21", "=cmd|' /C calc'!A0"], ["22", "row 22"], ["23", "row 23"], ["24", "-24"], ["25", "say \"hi\", ok"], ["26", "row 26"], ["27", "-27"], ["28", "=cmd|' /C calc'!A0"], ["29", "row 29"], ["30", "say \"hi\", ok"], ["31", "row 31"], ["32", "row 32"], ["33", "-33"], ["34", "row 34"], ["35", "=cmd|' /C calc'!A0"], ["36", "-36"], ["37", "row 37"], ["38", "row 38"], ["39", "-39"], ["40", "say \"hi\", ok"]]], expected: "id,comment\n1,row 1\n2,row 2\n3,'-3\n4,row 4\n5,\"say \"\"hi\"\", ok\"\n6,'-6\n7,'=cmd|' /C calc'!A0\n8,row 8\n9,'-9\n10,\"say \"\"hi\"\", ok\"\n11,row 11\n12,'-12\n13,row 13\n14,'=cmd|' /C calc'!A0\n15,\"say \"\"hi\"\", ok\"\n16,row 16\n17,row 17\n18,'-18\n19,row 19\n20,\"say \"\"hi\"\", ok\"\n21,'=cmd|' /C calc'!A0\n22,row 22\n23,row 23\n24,'-24\n25,\"say \"\"hi\"\", ok\"\n26,row 26\n27,'-27\n28,'=cmd|' /C calc'!A0\n29,row 29\n30,\"say \"\"hi\"\", ok\"\n31,row 31\n32,row 32\n33,'-33\n34,row 34\n35,'=cmd|' /C calc'!A0\n36,'-36\n37,row 37\n38,row 38\n39,'-39\n40,\"say \"\"hi\"\", ok\"", description: "40 rows mixing DDE-style payloads, quoted commas, negative numbers and plain text"}
+expected_concepts:
+  - CSV / formula injection in spreadsheet exports
+  - order of operations - neutralise first, then quote
+  - RFC 4180 style quoting with doubled inner quotes
+  - string building with joins instead of repeated concatenation
+optimal_complexity: {time: O(total characters), space: O(total characters)}
+rubric:
+  excellent: Explains why spreadsheet formulas in exported data are a security risk, applies the prefix before quoting, quotes exactly the cells that need it, doubles inner quotes, handles empty rows and cells, and mentions the trade-off that numeric-looking negative values become text.
+  good: Correct output after a hint about the order of the two steps or about the carriage-return trigger needing quotes.
+  weak: Quotes every cell or none, forgets to double inner quotes, checks triggers anywhere in the cell instead of at the start, or adds a trailing newline.
+  criteria:
+    correctness: All tests pass, including trigger cells that also need quoting and cells made only of quotes.
+    efficiency: One pass per cell and a single join per row and for the file.
+    code_quality: A small per-cell helper with the trigger and quote character sets named as constants.
+    edge_cases: No rows, empty rows, empty cells, single-character trigger cells, leading tab and carriage return.
+    communication: Describes the attack the prefix prevents and why the prefix must happen before quoting.
+hints:
+  - Handle one cell at a time with a helper and then think about how rows and the whole file are joined.
+  - The two transformations interact - decide the order so that the added apostrophe ends up inside the quotes, and remember a cell that starts with a carriage return also needs quoting.
+  - In the helper, first add the apostrophe when the first character is one of the six triggers, then, if the cell contains a comma, quote, newline or carriage return, double every quote and wrap the cell in quotes; join cells with commas and rows with newlines.
+followups:
+  - Some teams prefer escaping with a leading tab or rejecting such input instead of prefixing a quote - what are the trade-offs?
+  - How would you stream a million-row export without building the whole string in memory?
+  - How would you keep legitimate negative numbers numeric for analysts while still blocking formulas?
+common_errors:
+  - Quoting first and then prefixing, which puts the apostrophe outside the quotes and breaks the CSV.
+  - Forgetting to double inner double quotes when wrapping a cell.
+  - Checking for trigger characters anywhere in the cell rather than only at the start.
+  - Ignoring the carriage-return trigger or quoting rule, so a cell starting with \r stays unquoted.

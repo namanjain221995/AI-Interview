@@ -1,0 +1,170 @@
+version: 1
+slug: login_lockout_timeline
+title: "Login Lockout Timeline"
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [security, backend, fullstack]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Login Lockout Timeline
+
+  The identity team is tuning brute-force protection and wants to replay one account's login attempts
+  against a candidate policy to see exactly what users would have experienced.
+
+  Attempt `k` happened at second `timestamps[k]` and succeeded (correct password) when
+  `successes[k]` is `true`. Timestamps are non-decreasing. The account starts unlocked with an empty
+  failure history. Process the attempts in order:
+
+  1. If the account is locked, meaning `t < lock_until`, the outcome is `"LOCKED"` and the attempt is
+     otherwise **ignored** (it is not checked, recorded or counted).
+  2. Otherwise, a successful attempt is `"OK"` and **clears** the failure history.
+  3. Otherwise the attempt is `"FAIL"` and its time is recorded. If the history now contains at least
+     `max_failures` failures with time in the window `(t - window_seconds, t]`, the account locks:
+     `lock_until = t + lockout_seconds`, and the failure history is cleared.
+
+  The lock is released exactly at `lock_until`: an attempt at that second is processed normally.
+  Return the outcome of every attempt, in order.
+
+  ### Example 1
+  ```
+  Input:  timestamps = [0, 10, 20, 25, 30, 50, 70, 80, 81],
+          successes = [false, false, true, false, false, false, true, true, false],
+          max_failures = 3,
+          window_seconds = 60,
+          lockout_seconds = 30
+  Output: ["FAIL", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "LOCKED", "OK", "FAIL"]
+  Explanation: The success at 20 clears the two earlier failures. Failures at 25, 30 and 50 lock the
+  account until 80, so the correct password at 70 is LOCKED. The lock is released at 80.
+  ```
+
+  ### Example 2
+  ```
+  Input:  timestamps = [0, 30, 61, 90, 91, 150, 191, 192],
+          successes = [false, false, false, false, false, false, true, false],
+          max_failures = 3,
+          window_seconds = 60,
+          lockout_seconds = 100
+  Output: ["FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "OK", "FAIL"]
+  Explanation: At 90 the window (30, 90] holds only the failures at 61 and 90, so there is no lock yet. The
+  failure at 91 is the third in (31, 91] and locks the account until 191.
+  ```
+
+  ### Example 3
+  ```
+  Input:  timestamps = [5, 5, 5, 6, 7],
+          successes = [false, true, false, false, true],
+          max_failures = 1,
+          window_seconds = 10,
+          lockout_seconds = 2
+  Output: ["FAIL", "LOCKED", "LOCKED", "LOCKED", "OK"]
+  Explanation: The failure at 5 locks the account until 7, so the next three attempts (the correct password
+  included) are LOCKED and the attempt at 7 is processed normally.
+  ```
+
+  ### Constraints
+  - `0 <= timestamps.length == successes.length <= 10^5`
+  - `0 <= timestamps[k] <= 10^9`, non-decreasing
+  - `1 <= max_failures <= 1000`, `1 <= window_seconds <= 10^6`, `1 <= lockout_seconds <= 10^6`
+  - Expected time `O(n)`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: login_attempt_outcomes
+  params:
+    - {name: timestamps, type: "int[]"}
+    - {name: successes, type: "bool[]"}
+    - {name: max_failures, type: "int"}
+    - {name: window_seconds, type: "int"}
+    - {name: lockout_seconds, type: "int"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    from collections import deque
+
+
+    def login_attempt_outcomes(timestamps: list[int], successes: list[bool], max_failures: int,
+                               window_seconds: int, lockout_seconds: int) -> list[str]:
+        outcomes: list[str] = []
+        failures: deque[int] = deque()
+        lock_until = None
+        for t, ok in zip(timestamps, successes):
+            if lock_until is not None and t < lock_until:
+                outcomes.append("LOCKED")
+                continue
+            if ok:
+                outcomes.append("OK")
+                failures.clear()
+                continue
+            outcomes.append("FAIL")
+            failures.append(t)
+            while failures and failures[0] <= t - window_seconds:
+                failures.popleft()
+            if len(failures) >= max_failures:
+                lock_until = t + lockout_seconds
+                failures.clear()
+        return outcomes
+  javascript: |
+    function loginAttemptOutcomes(timestamps, successes, maxFailures, windowSeconds, lockoutSeconds) {
+      const outcomes = [];
+      const failures = []; // queue: failures[head..] are the recorded failure times
+      let head = 0;
+      let lockUntil = null;
+      for (let k = 0; k < timestamps.length; k++) {
+        const t = timestamps[k];
+        if (lockUntil !== null && t < lockUntil) { outcomes.push('LOCKED'); continue; }
+        if (successes[k]) { outcomes.push('OK'); failures.length = 0; head = 0; continue; }
+        outcomes.push('FAIL');
+        failures.push(t);
+        while (head < failures.length && failures[head] <= t - windowSeconds) head++;
+        if (failures.length - head >= maxFailures) {
+          lockUntil = t + lockoutSeconds;
+          failures.length = 0;
+          head = 0;
+        }
+      }
+      return outcomes;
+    }
+tests:
+  - {id: t1, args: [[0, 10, 20, 25, 30, 50, 70, 80, 81], [false, false, true, false, false, false, true, true, false], 3, 60, 30], expected: ["FAIL", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "LOCKED", "OK", "FAIL"], description: "Example 1 - success clears history, third failure locks, correct password while locked is ignored, release at lock_until"}
+  - {id: t2, args: [[0, 30, 61, 90, 91, 150, 191, 192], [false, false, false, false, false, false, true, false], 3, 60, 100], expected: ["FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "OK", "FAIL"], description: "Example 2 - failures expire from the half-open window before the threshold is reached"}
+  - {id: t3, args: [[5, 5, 5, 6, 7], [false, true, false, false, true], 1, 10, 2], expected: ["FAIL", "LOCKED", "LOCKED", "LOCKED", "OK"], description: "Example 3 - max_failures 1 locks on every failure; same-second attempts"}
+  - {id: t4, hidden: true, args: [[], [], 3, 60, 30], expected: [], description: "No attempts - empty result"}
+  - {id: t5, hidden: true, args: [[100], [false], 2, 10, 10], expected: ["FAIL"], description: "Single failure below the threshold"}
+  - {id: t6, hidden: true, args: [[0, 10, 20, 30, 40, 50], [false, false, false, false, false, false], 2, 10, 5], expected: ["FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL"], description: "Failures exactly window_seconds apart never count together (half-open window)"}
+  - {id: t7, hidden: true, args: [[0, 1, 2, 3, 3, 3, 4, 1000003, 1000004], [false, false, false, false, true, false, false, true, false], 3, 100, 1000000], expected: ["FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "OK", "FAIL"], description: "Locked attempts (including a correct password) are ignored and do not extend the lock; large lockout"}
+  - {id: t8, hidden: true, args: [[0, 0, 0, 0, 0, 0], [false, false, false, false, false, false], 2, 1, 1], expected: ["FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED"], description: "All attempts in the same second: lock, then still locked at that second"}
+  - {id: t9, hidden: true, args: [[10, 20, 30, 40, 41, 42], [false, false, true, false, false, false], 3, 1000, 1], expected: ["FAIL", "FAIL", "OK", "FAIL", "FAIL", "FAIL"], description: "Success before the threshold resets the count even inside a long window"}
+  - {id: t10, hidden: true, args: [[999999990, 999999995, 1000000000, 1000000000], [false, false, false, false], 3, 1000000, 1000000], expected: ["FAIL", "FAIL", "FAIL", "LOCKED"], description: "Timestamps near 10^9 with large window and lockout"}
+  - {id: t11, hidden: true, args: [[1000, 1003, 1004, 1049, 1057, 1057, 1102, 1147, 1192, 1212, 1212, 1213, 1218, 1220, 1225, 1233, 1238, 1238, 1283, 1291, 1294, 1384, 1389, 1389, 1391, 1391, 1391, 1411, 1416, 1421, 1424, 1424, 1425, 1427, 1435, 1480, 1485, 1485, 1485, 1493, 1495, 1585, 1590, 1610, 1630, 1631, 1676, 1766, 1856, 1858, 1859, 1859, 1859, 1860, 1868, 1876, 1896, 1941, 1941, 1941, 1986, 1991, 1999, 1999, 2002, 2003, 2003, 2006, 2051, 2052, 2053, 2098, 2188, 2188, 2193, 2196, 2198, 2198, 2218, 2263, 2264, 2309, 2354, 2362, 2407, 2409, 2417, 2422, 2467, 2469, 2474, 2519, 2521, 2521, 2521, 2521, 2524, 2526, 2616, 2618, 2626, 2626, 2631, 2651, 2651, 2651, 2656, 2656, 2658, 2659, 2662, 2662, 2707, 2752, 2752, 2754, 2774, 2782, 2783, 2791, 2811, 2856, 2876, 2879, 2879, 2924, 2929, 3019, 3064, 3109, 3110, 3110, 3112, 3202, 3292, 3292, 3382, 3387, 3389, 3394, 3402, 3405, 3405, 3495, 3495, 3497, 3498, 3498, 3503, 3523, 3526, 3571, 3616, 3616, 3617, 3617, 3618, 3708, 3713, 3716, 3719, 3719, 3727, 3727, 3728, 3731, 3751, 3759, 3759, 3760, 3765, 3766, 3766, 3766, 3768, 3768, 3813, 3821, 3822, 3824, 3825, 3825, 3830, 3838, 3840, 3840, 3840, 3842, 3862, 3864, 3866, 3869, 3872, 3917, 3962, 3962, 3965, 3968, 4058, 4063, 4108, 4198, 4198, 4198, 4243, 4245, 4245, 4250, 4250, 4253, 4261, 4264, 4266, 4274, 4275, 4278, 4278, 4280, 4370, 4375, 4395, 4440, 4441, 4444, 4534, 4536, 4538, 4539, 4541, 4631, 4631, 4721, 4729, 4731, 4731, 4731, 4733, 4778, 4823, 4823, 4843, 4888, 4908, 4953, 4998, 4999, 5019, 5021, 5024, 5069, 5071, 5071, 5073, 5078, 5078, 5080, 5081, 5081, 5086, 5094, 5102, 5192, 5192, 5282, 5282, 5285, 5293, 5338, 5340, 5343, 5343, 5351, 5371, 5461, 5469, 5469, 5477, 5497, 5500, 5502, 5507, 5515, 5523, 5523, 5568, 5573, 5573, 5573, 5575, 5575, 5577, 5577, 5579, 5582, 5583, 5583, 5584, 5584, 5587, 5595], [true, true, false, true, true, true, false, true, false, false, false, false, false, false, true, true, false, false, true, true, false, false, false, true, false, false, false, false, true, true, false, false, false, true, false, true, false, true, false, false, false, false, true, false, true, true, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, true, true, false, false, false, false, false, false, false, false, false, false, true, false, true, false, true, false, false, false, true, false, false, false, false, false, false, false, true, true, true, true, true, false, false, false, false, false, false, true, false, false, false, false, true, false, true, false, false, false, false, true, false, false, true, false, false, false, false, false, false, true, true, false, true, true, false, true, true, true, false, false, true, true, false, false, false, false, true, true, false, true, false, true, false, false, false, false, false, false, true, false, false, false, false, false, true, true, false, false, true, false, true, false, true, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, true, false, true, false, false, false, false, false, true, true, true, false, false, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, true, false, true, false, false, true, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, false, false, false, false, false, false, true, true, false, false, true, false, true, false, false, false, false, false, false, false, false, false], 4, 30, 60], expected: ["OK", "OK", "FAIL", "OK", "OK", "OK", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "OK", "OK", "FAIL", "FAIL", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "OK", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "OK", "FAIL", "OK", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "FAIL", "FAIL", "FAIL", "FAIL", "OK", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "FAIL", "FAIL", "OK", "FAIL", "OK", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "OK", "OK", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "FAIL", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "FAIL", "OK", "OK", "FAIL", "OK", "OK", "FAIL", "OK", "OK", "OK", "FAIL", "FAIL", "OK", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "OK", "OK", "FAIL", "OK", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "OK", "OK", "FAIL", "FAIL", "OK", "FAIL", "OK", "FAIL", "OK", "FAIL", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "FAIL", "FAIL", "OK", "OK", "OK", "FAIL", "FAIL", "OK", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "OK", "FAIL", "OK", "FAIL", "FAIL", "OK", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "FAIL", "FAIL", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "FAIL", "FAIL", "FAIL", "OK", "OK", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "OK", "FAIL", "OK", "FAIL", "FAIL", "FAIL", "FAIL", "LOCKED", "LOCKED", "LOCKED", "LOCKED", "LOCKED"], description: "Stress - 300 pseudo-random attempts with bursts"}
+expected_concepts:
+  - "event replay as a state machine"
+  - "sliding window over timestamps with a queue"
+  - "half-open time intervals"
+  - "resetting state on success and on lock"
+  - "ignoring events while locked"
+optimal_complexity: {time: "O(n)", space: "O(max_failures + n) in the worst case, O(n)"}
+rubric:
+  excellent: "Models the account as a small state machine (lock_until plus a queue of failure times), evicts expired failures from the front, applies the half-open window and the exact release second correctly, and explains each step against the examples with O(n) amortised time."
+  good: "Correct outcomes with a list that is filtered on every failure (O(n * k)), or a single boundary bug fixed after testing."
+  weak: "Counts all failures since the start, extends the lock on locked attempts, treats a locked success as OK, or gets the window boundaries wrong in several places."
+  criteria:
+    correctness: "All tests pass, including same-second attempts, half-open windows and locked successes."
+    efficiency: "Amortised O(1) per attempt with a deque or head index."
+    code_quality: "State kept in two clearly named variables; the three rules map to three branches."
+    edge_cases: "Empty input, max_failures of 1, failures exactly window_seconds apart and attempts at lock_until."
+    communication: "Discusses trade-offs of lockouts (denial of service against real users) versus progressive delays or CAPTCHA."
+hints:
+  - "Replay the attempts in order and keep only the state you need: when the account is locked until, and which recent failures still matter."
+  - "Store the times of recorded failures in a queue. On each new failure, drop failures from the front that are no longer inside the window, then compare the queue size with max_failures."
+  - "Check the lock first (t < lock_until means LOCKED and nothing else happens). A success clears the queue. A failure is appended, failures with time <= t - window_seconds are popped, and if the size reaches max_failures set lock_until = t + lockout_seconds and clear the queue."
+followups:
+  - "Attackers can lock real users out on purpose. How would you change the policy to limit that?"
+  - "How would you implement the same policy across many servers that see attempts for the same account?"
+  - "How would progressive lockouts (each lock longer than the last) change the state you keep?"
+  - "Should failures from different IP addresses count together? What are the trade-offs?"
+common_errors:
+  - "Using a closed window [t - window_seconds, t] instead of the half-open one."
+  - "Recording failures or clearing history for attempts made while locked."
+  - "Releasing the lock one second too late by using t <= lock_until."
+  - "Forgetting to clear the history when the account locks, which causes an immediate relock."
+  - "Re-scanning the whole failure list on every attempt."

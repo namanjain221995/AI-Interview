@@ -1,0 +1,216 @@
+version: 1
+slug: top_spending_customers_sql
+title: "Top Three Spending Customers"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, backend, data]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Top Three Spending Customers
+
+  An online shop's growth team wants to thank its three biggest spenders.
+
+  - `customer(id, name)`: one row per shopper account; `id` is the key and the display `name` may repeat
+    across accounts.
+  - `purchase(id, customer_id, amount_cents)`: one row per completed checkout; `customer_id` points at
+    the buying account, or is NULL when someone checked out as a guest; `amount_cents >= 0`.
+
+  Produce `customer_id`, `name` and `total_cents` (the sum of that account's checkout amounts) for the
+  **three accounts with the largest totals**.
+
+  - Accounts without any checkout never appear, even when fewer than three accounts qualify; if fewer
+    than three have checkouts, list all of them.
+  - Sort by `total_cents` descending, then by `customer_id` ascending. The same rule settles ties at
+    the cut-off, so the result has at most three rows.
+  - Guest checkouts belong to nobody and are ignored.
+
+  The query must be portable between PostgreSQL and SQLite; `LIMIT` is fine.
+
+  ### Example 1
+  ```
+  customer            purchase
+  +----+------+       +----+-------------+--------------+
+  | id | name |       | id | customer_id | amount_cents |
+  +----+------+       +----+-------------+--------------+
+  | 1  | Ana  |       | 1  | 1           | 2500         |
+  | 2  | Ben  |       | 2  | 2           | 4000         |
+  | 3  | Chen |       | 3  | 1           | 1800         |
+  | 4  | Dee  |       | 4  | 3           | 900          |
+  | 5  | Eli  |       | 5  | 4           | 5000         |
+  +----+------+       | 6  | 2           | 300          |
+                      +----+-------------+--------------+
+
+  Output
+  +-------------+------+-------------+
+  | customer_id | name | total_cents |
+  +-------------+------+-------------+
+  | 4           | Dee  | 5000        |
+  | 1           | Ana  | 4300        |
+  | 2           | Ben  | 4300        |
+  +-------------+------+-------------+
+  Ana and Ben tie on 4300, so Ana (lower id) comes first. Chen (900) is fourth; Eli bought nothing.
+  ```
+
+  ### Example 2
+  ```
+  customer            purchase
+  +----+------+       +----+-------------+--------------+
+  | id | name |       | id | customer_id | amount_cents |
+  +----+------+       +----+-------------+--------------+
+  | 1  | Kai  |       | 1  | 2           | 700          |
+  | 2  | Lu   |       | 2  | 3           | 250          |
+  | 3  | Mo   |       | 3  | 2           | 300          |
+  +----+------+       +----+-------------+--------------+
+
+  Output
+  +-------------+------+-------------+
+  | customer_id | name | total_cents |
+  +-------------+------+-------------+
+  | 2           | Lu   | 1000        |
+  | 3           | Mo   | 250         |
+  +-------------+------+-------------+
+  Only two customers have purchases, so only two rows are returned.
+  ```
+
+  ### Constraints
+  - `0 <= rows in customer, purchase <= 10^5`
+  - `0 <= amount_cents <= 2^31 - 1`; totals can exceed the 32-bit range
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return customer_id, name and total_cents for the three biggest spenders.
+    SELECT c.id AS customer_id, c.name, 0 AS total_cents
+    FROM customer c
+    ORDER BY c.id
+    LIMIT 3;
+reference_solutions:
+  sql: |
+    SELECT c.id AS customer_id, c.name, SUM(p.amount_cents) AS total_cents
+    FROM customer c
+    JOIN purchase p ON p.customer_id = c.id
+    GROUP BY c.id, c.name
+    ORDER BY total_cents DESC, c.id ASC
+    LIMIT 3;
+sql_setup: |
+  CREATE TABLE customer (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL
+  );
+  CREATE TABLE purchase (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER REFERENCES customer (id),
+    amount_cents INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - tie on 4300 broken by customer id, fourth customer cut off, non-buyer excluded"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customer (id, name) VALUES (1, 'Ana'), (2, 'Ben'), (3, 'Chen'), (4, 'Dee'), (5, 'Eli');
+      INSERT INTO purchase (id, customer_id, amount_cents) VALUES
+        (1, 1, 2500), (2, 2, 4000), (3, 1, 1800), (4, 3, 900), (5, 4, 5000), (6, 2, 300);
+    expected_rows: [[4, "Dee", 5000], [1, "Ana", 4300], [2, "Ben", 4300]]
+  - id: t2
+    description: "Example 2 - fewer than three buyers, all of them returned"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customer (id, name) VALUES (1, 'Kai'), (2, 'Lu'), (3, 'Mo');
+      INSERT INTO purchase (id, customer_id, amount_cents) VALUES (1, 2, 700), (2, 3, 250), (3, 2, 300);
+    expected_rows: [[2, "Lu", 1000], [3, "Mo", 250]]
+  - id: t3
+    hidden: true
+    description: "Empty tables"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Customers exist but nobody has purchased - no zero-total rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customer (id, name) VALUES (1, 'A'), (2, 'B');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Three-way tie at second place - the lowest two ids win, inserted out of id order"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customer (id, name) VALUES (9, 'Ivy'), (4, 'Dan'), (7, 'Gus'), (2, 'Bea'), (5, 'Eve');
+      INSERT INTO purchase (id, customer_id, amount_cents) VALUES
+        (1, 9, 500), (2, 4, 900), (3, 7, 500), (4, 2, 100), (5, 5, 500);
+    expected_rows: [[4, "Dan", 900], [5, "Eve", 500], [7, "Gus", 500]]
+  - id: t6
+    hidden: true
+    description: "Guest purchases with NULL customer_id are ignored"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customer (id, name) VALUES (1, 'Ana'), (2, 'Ben');
+      INSERT INTO purchase (id, customer_id, amount_cents) VALUES
+        (1, NULL, 999999), (2, 1, 10), (3, NULL, 50000), (4, 2, 20);
+    expected_rows: [[2, "Ben", 20], [1, "Ana", 10]]
+  - id: t7
+    hidden: true
+    description: "Totals beyond the 32-bit range"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customer (id, name) VALUES (1, 'Big'), (2, 'Mid'), (3, 'Small'), (4, 'Tiny');
+      INSERT INTO purchase (id, customer_id, amount_cents) VALUES
+        (1, 1, 2000000000), (2, 1, 2000000000), (3, 1, 2000000000),
+        (4, 2, 2100000000), (5, 2, 1), (6, 3, 2147483647), (7, 4, 5);
+    expected_rows: [[1, "Big", 6000000000], [3, "Small", 2147483647], [2, "Mid", 2100000001]]
+  - id: t8
+    hidden: true
+    description: "Two different customers share a name - grouping by name would merge them"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customer (id, name) VALUES (1, 'Sam'), (2, 'Sam'), (3, 'Ola'), (4, 'Raj');
+      INSERT INTO purchase (id, customer_id, amount_cents) VALUES
+        (1, 1, 600), (2, 2, 500), (3, 3, 700), (4, 4, 400);
+    expected_rows: [[3, "Ola", 700], [1, "Sam", 600], [2, "Sam", 500]]
+  - id: t9
+    hidden: true
+    description: "A customer whose only purchase is 0 cents still qualifies"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customer (id, name) VALUES (1, 'Zed'), (2, 'Ann'), (3, 'Bo');
+      INSERT INTO purchase (id, customer_id, amount_cents) VALUES (1, 1, 0), (2, 2, 50);
+    expected_rows: [[2, "Ann", 50], [1, "Zed", 0]]
+  - id: t10
+    hidden: true
+    description: "Many small purchases outrank one large one - rank by total, not by max purchase"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customer (id, name) VALUES (1, 'Pat'), (2, 'Quinn'), (3, 'Rae'), (4, 'Sol');
+      INSERT INTO purchase (id, customer_id, amount_cents) VALUES
+        (1, 1, 1000), (2, 2, 300), (3, 2, 300), (4, 2, 300), (5, 2, 300),
+        (6, 3, 999), (7, 4, 450), (8, 4, 450);
+    expected_rows: [[2, "Quinn", 1200], [1, "Pat", 1000], [3, "Rae", 999]]
+expected_concepts:
+  - "aggregation with GROUP BY and SUM"
+  - "inner join to drop customers without purchases"
+  - "deterministic ORDER BY with a tie-breaker"
+  - "LIMIT for top-N"
+  - "grouping by primary key rather than by name"
+optimal_complexity: {time: "O(m + n log n) for m purchases and n buyers (or O(m + n) with a top-N sort)", space: "O(n)"}
+rubric:
+  excellent: "Joins purchase to customer, groups by customer id, orders by total descending then id ascending with LIMIT 3, explains why an inner join excludes non-buyers and guest rows, and mentions an index on purchase.customer_id."
+  good: "Correct aggregation and limit, needing a prompt for the id tie-breaker or for grouping by id instead of name."
+  weak: "Groups by name, omits the tie-breaker so results are non-deterministic, uses a LEFT JOIN that returns zero-total customers, or ranks by the largest single purchase."
+  criteria:
+    correctness: "All tests pass, including ties at the cut-off, shared names and guest purchases."
+    efficiency: "Single aggregation pass; no correlated subquery per customer."
+    code_quality: "Clear aliases and output column names exactly as requested."
+    edge_cases: "Empty tables, fewer than three buyers, zero-cent purchases and totals beyond 32 bits."
+    communication: "Explains why ORDER BY needs a unique tie-breaker before LIMIT."
+hints:
+  - "First work out each customer's total spend, then think about how to keep only the biggest ones."
+  - "Aggregate purchases per customer id with an inner join so only customers with purchases appear, and make the ordering fully deterministic before cutting the list."
+  - "Join purchase to customer on the customer id, group by the customer id and name, sum the amounts as total_cents, order by that total descending and then by customer id ascending, and keep the first three rows with LIMIT."
+followups:
+  - "How would you return every customer tied with the third place instead of exactly three rows?"
+  - "Which index helps this query on a large purchase table?"
+  - "How would you compute the top three per month?"
+common_errors:
+  - "Grouping by name, which merges different customers who share a name."
+  - "Ordering only by total, so ties at the cut-off are resolved arbitrarily."
+  - "Using a LEFT JOIN and returning customers with no purchases as zero totals."
+  - "Selecting columns that are not in the GROUP BY, which PostgreSQL rejects."

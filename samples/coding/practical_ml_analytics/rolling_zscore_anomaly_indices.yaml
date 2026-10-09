@@ -1,0 +1,143 @@
+version: 1
+slug: rolling_zscore_anomaly_indices
+title: Rolling Z-Score Anomaly Detector
+difficulty: medium
+competency_keys: [algorithms, problem_solving, machine_learning]
+role_tags: [sre, data_scientist, devops, data_analyst]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Rolling Z-Score Anomaly Detector
+
+  An alerting pipeline receives the number of failed requests per minute for a service as `values`
+  (time order). A minute is suspicious when it is far from what the service did just before it,
+  measured in standard deviations of the recent past.
+
+  For every index `i` with `i >= window`, look at the **previous** `window` values
+  `values[i - window], ..., values[i - 1]` (the current value is not part of its own baseline):
+
+  - `mean` is their arithmetic mean;
+  - `std` is their **population** standard deviation, `sqrt(sum((x - mean)^2) / window)`;
+  - if `std > 0`, the z-score of minute `i` is `|values[i] - mean| / std`.
+
+  Flag minute `i` when `std > 0` **and** its z-score is **strictly greater** than `threshold`. A
+  baseline whose values are all identical has `std = 0`, so the minute after it is never flagged
+  (there is no spread to measure against). Minutes with `i < window` are never flagged.
+
+  Return the flagged indices in increasing order (empty list if none).
+
+  The tests never place a z-score within rounding distance of the threshold, except in cases where
+  every quantity is exactly representable (for example a z-score of exactly `2.0` against a threshold
+  of `2.0`, which is **not** flagged).
+
+  ### Example 1
+  ```
+  Input:  values = [3, 4, 3, 5, 4, 18, 4, 3, 5, 4], window = 4, threshold = 2.0
+  Output: [5]
+  Explanation: at index 5 the baseline [4, 3, 5, 4] has mean 4 and std 0.707,
+               so 18 has a z-score near 19.8. Afterwards the baseline contains 18 and its std
+               is large, so no other minute crosses the threshold.
+  ```
+
+  ### Example 2
+  ```
+  Input:  values = [0, 2, 3, 1, 1, 1, 7], window = 2, threshold = 2.0
+  Output: [3]
+  Explanation: index 2: baseline [0, 2], mean 1, std 1, z = 2.0, not strictly greater.
+               index 3: baseline [2, 3], mean 2.5, std 0.5, z = 3.0, flagged.
+               index 6: baseline [1, 1] has std 0, so 7 is not flagged.
+  ```
+
+  ### Constraints
+  - `0 <= values.length <= 10^5`
+  - `0 <= values[i] <= 10^4`
+  - `1 <= window <= 1000`
+  - `0 < threshold <= 10`
+  - Aim for `O(n)` time, independent of `window`.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: zscore_anomalies
+  params:
+    - {name: values, type: "int[]"}
+    - {name: window, type: "int"}
+    - {name: threshold, type: "float"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import math
+
+
+    def zscore_anomalies(values: list[int], window: int, threshold: float) -> list[int]:
+        flagged: list[int] = []
+        total = 0
+        total_sq = 0
+        for i, value in enumerate(values):
+            if i >= window:
+                # z = |value - mean| / std = |w*value - sum| / sqrt(w*sum_sq - sum^2)  (exact integers)
+                spread = window * total_sq - total * total
+                if spread > 0 and abs(window * value - total) / math.sqrt(spread) > threshold:
+                    flagged.append(i)
+                old = values[i - window]
+                total -= old
+                total_sq -= old * old
+            total += value
+            total_sq += value * value
+        return flagged
+  javascript: |
+    function zscoreAnomalies(values, window, threshold) {
+      const flagged = [];
+      for (let i = window; i < values.length; i++) {
+        let mean = 0;
+        for (let j = i - window; j < i; j++) mean += values[j];
+        mean /= window;
+        let variance = 0;
+        for (let j = i - window; j < i; j++) variance += (values[j] - mean) ** 2;
+        variance /= window;
+        const std = Math.sqrt(variance);
+        if (std > 0 && Math.abs(values[i] - mean) / std > threshold) flagged.push(i);
+      }
+      return flagged;
+    }
+tests:
+  - {id: t1, args: [[3, 4, 3, 5, 4, 18, 4, 3, 5, 4], 4, 2.0], expected: [5], description: "Example 1 - one clear spike; the spike then inflates the baseline for the next minutes"}
+  - {id: t2, args: [[0, 2, 3, 1, 1, 1, 7], 2, 2.0], expected: [3], description: "Example 2 - z exactly equal to the threshold is not flagged; a flat baseline never flags"}
+  - {id: t3, hidden: true, args: [[], 3, 1.0], expected: [], description: "Empty input"}
+  - {id: t4, hidden: true, args: [[5, 90, 4], 3, 1.0], expected: [], description: "No index has a full baseline (length equals window)"}
+  - {id: t5, hidden: true, args: [[1, 50, 2, 70, 3], 1, 0.5], expected: [], description: "Window of one - std is always 0, nothing is flagged"}
+  - {id: t6, hidden: true, args: [[100, 102, 98, 101, 99, 100, 40, 100], 6, 3.0], expected: [6], description: "A sharp drop is flagged too - absolute deviation"}
+  - {id: t7, hidden: true, args: [[1, 3, 1, 3, 5, 1, 3, 1, 3, 6], 4, 3.0], expected: [9], description: "Exact boundary with window 4 - z of exactly 3.0 at index 4 is not flagged, larger deviation at index 9 is"}
+  - {id: t8, hidden: true, args: [[7, 7, 7, 7, 7, 7, 7, 7], 3, 0.1], expected: [], description: "Completely flat series - every baseline has std 0"}
+  - {id: t9, hidden: true, args: [[10, 12, 11, 13, 10, 14, 9, 15, 8, 16], 3, 0.5], expected: [3, 4, 5, 6, 7, 8, 9], description: "Low threshold with oscillating values - many minutes flagged"}
+  - {id: t10, hidden: true, args: [[2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 9500, 9500, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 9500, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 1500, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060, 2033, 2006, 2048, 2021, 2063, 2036, 2009, 2051, 2024, 2066, 2039, 2012, 2054, 2027, 2000, 2042, 2015, 2057, 2030, 2003, 2045, 2018, 2060], 30, 4.0], expected: [90, 91, 250, 330], description: "Stress - 400 minutes with a two-minute burst, a later spike and a dip; window 30"}
+expected_concepts:
+  - "trailing baseline that excludes the current point"
+  - "population standard deviation"
+  - "running sum and running sum of squares for O(1) window updates"
+  - "guarding against zero standard deviation"
+  - "strict threshold comparison"
+optimal_complexity: {time: "O(n)", space: "O(1) extra besides the output"}
+rubric:
+  excellent: "Maintains a running sum and sum of squares so each step is O(1), excludes the current value from its own baseline, guards the zero-spread case, compares strictly and discusses numerical stability (for example exact integer arithmetic or Welford's method)."
+  good: "Correct results with an O(n * window) recomputation, or the O(n) version after a hint about the boundary or the zero-std rule."
+  weak: "Includes the current value in the baseline, uses the sample (n - 1) deviation, divides by zero on flat baselines, or flags values equal to the threshold."
+  criteria:
+    correctness: "All tests pass, including flat baselines, exact-boundary z-scores and drops below the mean."
+    efficiency: "O(n) using incremental sums; O(n * window) recomputation is acceptable only as a starting point."
+    code_quality: "Window updates (add new, remove old) are clearly ordered relative to the check for the current index."
+    edge_cases: "Empty input, fewer values than the window, window of one, constant series and very low thresholds."
+    communication: "Explains why the current point is excluded and why a zero-spread baseline cannot flag anything."
+hints:
+  - "For each minute you need the mean and the spread of the minutes just before it. Think about how those statistics change when the window slides forward by one minute."
+  - "The mean only needs a running sum, and the population variance can be written as the mean of the squares minus the square of the mean, so a running sum of squares is enough as well. Check the current minute before adding it to the window."
+  - "Keep a running sum and sum of squares of the previous window values. For each index from window onward, compute the variance from those two totals, skip the minute if it is zero, otherwise flag it when the absolute deviation from the mean divided by the square root of the variance is strictly larger than the threshold; then add the current value and remove the oldest one. Working with window times sum of squares minus sum squared keeps everything in exact integers."
+followups:
+  - "Why does a single large spike hide the minutes right after it, and how would a median-based score (MAD) behave instead?"
+  - "How would you avoid cancellation errors with the sum-of-squares formula on large floating-point values?"
+  - "How would you add seasonality so that a Monday-morning peak is compared with previous Monday mornings?"
+  - "How would you suppress repeated alerts for a burst that lasts several minutes?"
+common_errors:
+  - "Including the current minute in its own baseline, which shrinks every z-score."
+  - "Using the sample standard deviation (dividing by window - 1) instead of the population one."
+  - "Dividing by zero, or flagging everything, when the baseline is flat."
+  - "Using greater-or-equal, which flags a z-score exactly equal to the threshold."
+  - "Recomputing every window from scratch without noting the O(n * window) cost."

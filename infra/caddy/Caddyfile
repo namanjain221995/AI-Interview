@@ -1,0 +1,362 @@
+# =============================================================================
+# AI Interview Platform — edge proxy (Caddy 2.11)
+#
+# Listeners (host networking; both serve the same application):
+#   :3200  HTTP. http://localhost is a secure context, so camera and microphone
+#          work for local use. Also the plain-HTTP target when a TLS-terminating
+#          load balancer sits in front of the edge.
+#   :3443  HTTPS signed by Caddy's internal CA ("tls internal"). Browsers only
+#          expose getUserMedia on secure origins, so LAN candidates use
+#          https://<host-ip-or-name>:3443. Certificates are issued on demand for
+#          loopback / private / CGNAT addresses, LAN-style host names and
+#          EDGE_TLS_HOSTNAMES. Export the root CA with `make edge-ca`.
+#
+# Routing (both listeners):
+#   /api/*                      FastAPI app at {$API_UPSTREAM}; per-route body
+#                               limits; SSE-friendly /api/v1/sessions/{id}/live
+#   /ws/*                       realtime WebSocket gateway (long-lived streams
+#                               that survive config reloads)
+#   /metrics, /api/v1/test/*, /api/docs, /api/openapi.json: loopback clients only (403 for everyone else)
+#   /__edge/metrics
+#   everything else             SPA from {$EDGE_SITE_ROOT}; client-side routes
+#                               fall back to /index.html
+#
+# Environment (docker-compose.yml sets these; defaults in braces):
+#   EDGE_HTTP_PORT {3200}  EDGE_HTTPS_PORT {3443}  API_UPSTREAM {127.0.0.1:8200}
+#   EDGE_SITE_ROOT {/srv/www}
+#   EDGE_TLS_HOSTNAMES  space-separated extra DNS names that may receive
+#                       on-demand internal certificates (exact match)
+#   EDGE_HSTS {max-age=31536000}  Strict-Transport-Security on :3443
+#
+# Validate:  make edge-validate   (caddy validate in the pinned image)
+# Reload:    make edge-reload     (graceful; WebSockets get stream_close_delay)
+# =============================================================================
+{
+	# Admin API on a container-local unix socket: no TCP port on the shared
+	# host, still usable for graceful reloads (`make edge-reload`).
+	admin unix//run/caddy/admin.sock
+
+	http_port {$EDGE_HTTP_PORT:3200}
+	https_port {$EDGE_HTTPS_PORT:3443}
+	# :3200 serves the application itself, and Caddy must never try to bind
+	# :80 / :443 on the shared host.
+	auto_https disable_redirects
+	# The container cannot (and must not) modify the host trust store.
+	skip_install_trust
+	grace_period 20s
+
+	# Certificates for :3443 are minted by the internal CA on the first
+	# handshake for a name. The ask endpoint (served on loopback by the :3200
+	# site below) limits which names qualify, so arbitrary SNI values cannot
+	# grow the certificate store.
+	on_demand_tls {
+		ask http://127.0.0.1:{$EDGE_HTTP_PORT:3200}/__edge/tls/ask
+	}
+
+	# HTTP request metrics (caddy_http_*), exposed on /__edge/metrics to
+	# loopback clients only. Sites are catch-alls, so no per-host labels.
+	metrics
+
+	# Slow-header protection on both listeners. Body and write timeouts stay
+	# unset on purpose: they would cut WebSocket/SSE streams and slow uploads.
+	servers :{$EDGE_HTTP_PORT:3200} {
+		protocols h1
+		timeouts {
+			read_header 15s
+			idle 2m
+		}
+	}
+	# No HTTP/3: avoids a UDP listener on the shared host; WebSockets use
+	# HTTP/1.1 upgrade or HTTP/2 extended CONNECT anyway.
+	servers :{$EDGE_HTTPS_PORT:3443} {
+		protocols h1 h2
+		timeouts {
+			read_header 15s
+			idle 2m
+		}
+	}
+
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+}
+
+# -----------------------------------------------------------------------------
+# Snippets
+# -----------------------------------------------------------------------------
+
+(security_headers) {
+	header {
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; worker-src 'self' blob:; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), fullscreen=(self), geolocation=()"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
+		-X-Powered-By
+		-Via
+		# Apply when the response is written so values from the upstream API
+		# are replaced instead of duplicated.
+		defer
+	}
+}
+
+# Browsers ignore HSTS for IP addresses; localhost is excluded so that
+# http://localhost:3200 (and other local dev servers) keep working.
+(hsts) {
+	@hsts_eligible not host localhost *.localhost
+	header @hsts_eligible Strict-Transport-Security "{$EDGE_HSTS:max-age=31536000}"
+}
+
+# JSON access log on stdout (rotated by Docker's json-file driver). Credentials
+# never reach the log: invite tokens (/i/{token}, /candidate-access/{token}),
+# open-link and personal-link tokens (/j/, /r/, /link-access/, /link-return/),
+# signed media tokens (/media/signed/{token}) and WebSocket tickets are
+# redacted; Referer (which can carry the invite URL) and the CSRF header are
+# dropped. Cookie, Set-Cookie and Authorization are redacted by Caddy itself.
+(access_log) {
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri multi_regexp {
+					regexp "(/(?:i|j|r|candidate-access|link-access|link-return|signed)/)[^/?#]+" "${1}REDACTED"
+					regexp "([?&](?:ticket|token|access_code|code)=)[^&#]*" "${1}REDACTED"
+				}
+				request>headers>Referer delete
+				request>headers>X-Csrf-Token delete
+				# Static policy headers add ~1 KB per line and no information.
+				resp_headers>Content-Security-Policy delete
+				resp_headers>Permissions-Policy delete
+				resp_headers>Referrer-Policy delete
+				resp_headers>X-Frame-Options delete
+				resp_headers>X-Content-Type-Options delete
+				resp_headers>Cross-Origin-Opener-Policy delete
+				resp_headers>Strict-Transport-Security delete
+			}
+		}
+	}
+}
+
+# Internal endpoints: answer 403 to anything that is not a loopback client.
+# The edge is the first hop, so remote_ip is the real peer address.
+(loopback_only) {
+	@not_loopback not remote_ip 127.0.0.0/8 ::1
+	header @not_loopback Content-Type "application/json"
+	respond @not_loopback `{"error":{"code":"forbidden","message":"This endpoint is only reachable from the host."}}` 403
+}
+
+(api_upstream) {
+	# Ride out API restarts (deploys, crash loops) for a few seconds instead
+	# of failing every in-flight request immediately. Only failed dials are
+	# retried, so request bodies are never replayed.
+	lb_try_duration 5s
+	lb_try_interval 250ms
+	header_up X-Request-ID {http.request.uuid}
+	transport http {
+		dial_timeout 3s
+		keepalive 60s
+		keepalive_idle_conns_per_host 32
+	}
+}
+
+(app) {
+	import security_headers
+	import access_log
+
+	# ---- edge-local endpoints ------------------------------------------
+	handle /__edge/health {
+		log_skip
+		respond "ok" 200
+	}
+
+	handle /__edge/metrics {
+		log_skip
+		import loopback_only
+		metrics
+	}
+
+	# ---- loopback-only API surfaces -----------------------------------
+	handle /metrics {
+		log_skip
+		import loopback_only
+		reverse_proxy {$API_UPSTREAM:127.0.0.1:8200} {
+			import api_upstream
+		}
+	}
+
+	handle /api/v1/test/* {
+		import loopback_only
+		reverse_proxy {$API_UPSTREAM:127.0.0.1:8200} {
+			import api_upstream
+		}
+	}
+
+	# OpenAPI docs reveal the full route surface; production disables them in
+	# the API (ENABLE_API_DOCS=false) and the edge keeps them host-only anyway.
+	@api_docs path /api/docs /api/docs/* /api/redoc /api/openapi.json
+	handle @api_docs {
+		import loopback_only
+		reverse_proxy {$API_UPSTREAM:127.0.0.1:8200} {
+			import api_upstream
+		}
+	}
+
+	# ---- realtime WebSocket ------------------------------------------
+	handle /ws/* {
+		reverse_proxy {$API_UPSTREAM:127.0.0.1:8200} {
+			import api_upstream
+			flush_interval -1
+			# Interviews run 30-90 minutes; this only reaps zombie streams.
+			stream_timeout 6h
+			# Config reloads would otherwise close every live interview
+			# socket at once; the client resumes from its outbox anyway.
+			stream_close_delay 10m
+		}
+	}
+
+	# ---- REST API ----------------------------------------------------
+	handle /api/* {
+		@sse path_regexp sse ^/api/v1/sessions/[^/]+/live/?$
+		@upload_large path_regexp upload_large ^/api/v1/(?:candidates/[^/]+/resumes|portal/interviews/[^/]+/resume|portal/sessions/[^/]+/recording)/?$
+		@upload_frame path_regexp upload_frame ^/api/v1/portal/sessions/[^/]+/frames/?$
+		@default_body not path_regexp default_body ^/api/v1/(?:candidates/[^/]+/resumes|portal/interviews/[^/]+/resume|portal/sessions/[^/]+/(?:recording|frames))/?$
+		@compressible not path_regexp compressible ^/api/v1/sessions/[^/]+/live/?$
+
+		# Resumes (MAX_RESUME_BYTES 10 MiB) and recording chunks
+		# (MAX_RECORDING_CHUNK_BYTES 16 MiB) plus multipart overhead; frames
+		# (MAX_FRAME_BYTES 2 MiB); everything else is JSON. The API enforces
+		# the exact limits; the edge stops oversized bodies early (413).
+		request_body @upload_large {
+			max_size 25MiB
+		}
+		request_body @upload_frame {
+			max_size 4MiB
+		}
+		request_body @default_body {
+			max_size 2MiB
+		}
+
+		encode @compressible zstd gzip {
+			minimum_length 1024
+		}
+
+		# Server-sent events: never buffered, never compressed.
+		reverse_proxy @sse {$API_UPSTREAM:127.0.0.1:8200} {
+			import api_upstream
+			flush_interval -1
+			stream_close_delay 1m
+		}
+
+		reverse_proxy {$API_UPSTREAM:127.0.0.1:8200} {
+			import api_upstream
+		}
+	}
+
+	# ---- single-page application ---------------------------------------
+	handle {
+		root * {$EDGE_SITE_ROOT:/srv/www}
+
+		# A missing file-like path (/assets/x.js, /favicon.ico) is a real
+		# 404, not the SPA shell: serving HTML as JS breaks caching and MIME.
+		@missing_file {
+			path_regexp missing_file \.[A-Za-z0-9]{1,16}$
+			not file
+		}
+		# Vite's content-hashed bundles never change.
+		@hashed_asset {
+			path /assets/*
+			file
+		}
+		# Large non-hashed binaries (avatar models, wasm): long cache with
+		# ETag revalidation after a week.
+		@model_asset {
+			path *.glb *.gltf *.vrm *.wasm *.ktx2 *.hdr *.onnx *.tflite
+			not path /assets/*
+			file
+		}
+		@html path / /index.html *.html
+
+		route {
+			error @missing_file 404
+			try_files {path} /index.html
+			header @hashed_asset Cache-Control "public, max-age=31536000, immutable"
+			header @model_asset Cache-Control "public, max-age=604800"
+			header @html Cache-Control "no-cache"
+			encode zstd gzip {
+				minimum_length 1024
+				match {
+					header Content-Type text/*
+					header Content-Type application/javascript*
+					header Content-Type application/json*
+					header Content-Type application/manifest+json*
+					header Content-Type application/wasm*
+					header Content-Type image/svg+xml*
+					header Content-Type model/gltf-binary*
+					header Content-Type model/gltf+json*
+				}
+			}
+			# Build-time .br/.zst/.gz siblings are served when present
+			# (apps/web/docker/precompress.mjs); others are compressed above.
+			file_server {
+				precompressed br zstd gzip
+			}
+		}
+	}
+
+	# Errors raised by the edge itself (413 body limit, 502/504 upstream,
+	# 404 missing asset). API routes get the platform's JSON error envelope.
+	handle_errors {
+		import security_headers
+		header Cache-Control "no-store"
+		map {http.error.status_code} {edge_error_code} {
+			400 bad_request
+			403 forbidden
+			404 not_found
+			405 method_not_allowed
+			408 request_timeout
+			413 payload_too_large
+			502 upstream_unavailable
+			503 service_unavailable
+			504 upstream_timeout
+			default edge_error
+		}
+		@api_error path /api/* /ws/* /metrics /__edge/*
+		header @api_error Content-Type "application/json"
+		respond @api_error `{"error":{"code":"{edge_error_code}","message":"{http.error.status_text}","request_id":"{http.request.uuid}"}}` {http.error.status_code}
+		respond "{http.error.status_code} {http.error.status_text}" {http.error.status_code}
+	}
+}
+
+# -----------------------------------------------------------------------------
+# Sites
+# -----------------------------------------------------------------------------
+
+http://:{$EDGE_HTTP_PORT:3200} {
+	# Permission check for on-demand certificates on :3443 (called by Caddy
+	# itself over loopback with ?domain=<name>; 200 allows issuance).
+	handle /__edge/tls/ask {
+		log_skip
+		import loopback_only
+		@tls_allowed expression <<CEL
+			{http.request.uri.query.domain}.matches(r'^(localhost|127(\.[0-9]{1,3}){3}|10(\.[0-9]{1,3}){3}|192\.168(\.[0-9]{1,3}){2}|172\.(1[6-9]|2[0-9]|3[01])(\.[0-9]{1,3}){2}|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])(\.[0-9]{1,3}){2}|::1|f[cd][0-9a-f]{2}:[0-9a-f:]*|fe80:[0-9a-f:]*|([a-z0-9-]+\.)+(local|lan|internal|home\.arpa|ts\.net))$')
+			|| {http.request.uri.query.domain} in '{$EDGE_TLS_HOSTNAMES}'.split(' ')
+			CEL
+		respond @tls_allowed "allowed" 200
+		respond "denied" 403
+	}
+
+	import app
+}
+
+https://:{$EDGE_HTTPS_PORT:3443} {
+	tls internal {
+		on_demand
+	}
+	import hsts
+	import app
+}

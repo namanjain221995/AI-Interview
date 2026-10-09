@@ -1,0 +1,144 @@
+version: 1
+slug: config_drift_report
+title: "Config Drift Report"
+difficulty: easy
+competency_keys: [data_structures, problem_solving]
+role_tags: [devops, platform, sre]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Config Drift Report
+
+  A deployment agent compares the configuration that is actually running on a host (`deployed`) with
+  the configuration checked into the repository (`desired`). Each configuration is a list of lines of
+  the form `key=value`:
+
+  - A line is split at its **first** `=`. Everything before it is the key; everything after it is the
+    value, which may be empty and may itself contain more `=` characters.
+  - Keys are unique within each list and are case-sensitive.
+
+  Return the drift report as a list of strings:
+
+  - `"+key"` for every key that appears only in `desired` (it must be added),
+  - `"-key"` for every key that appears only in `deployed` (it must be removed),
+  - `"~key"` for every key that appears in both lists with **different** values (it must be changed).
+
+  Keys whose values are identical in both lists are not reported. Order the report by **key** in
+  ascending string order (by character code), ignoring the leading symbol. Return an empty list when
+  there is no drift.
+
+  ### Example 1
+  ```
+  Input:  deployed = ["db.host=10.0.0.5", "db.pool=20", "log.level=info"],
+          desired  = ["db.host=10.0.0.7", "db.pool=20", "cache.ttl=300"]
+  Output: ["+cache.ttl", "~db.host", "-log.level"]
+  Explanation: Sorted keys are cache.ttl, db.host, db.pool and log.level; db.pool is identical and omitted.
+  ```
+
+  ### Example 2
+  ```
+  Input:  deployed = ["feature.flags=a=1,b=2", "region=eu-west"],
+          desired  = ["region=eu-west", "feature.flags=a=1,b=3"]
+  Output: ["~feature.flags"]
+  Explanation: Only the first '=' separates key and value, so the values are "a=1,b=2" and "a=1,b=3".
+  ```
+
+  ### Constraints
+  - `0 <= deployed.length, desired.length <= 1000`
+  - Each line has `1` to `100` printable ASCII characters and contains at least one `=`.
+  - Every key is non-empty and contains only ASCII letters, digits, `.`, `_` and `-`.
+  - Keys are unique within `deployed` and unique within `desired`.
+
+  **Follow-up:** what is the cost of your approach if both configurations were already sorted by key?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: config_drift
+  params:
+    - {name: deployed, type: "string[]"}
+    - {name: desired, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def config_drift(deployed: list[str], desired: list[str]) -> list[str]:
+        def parse(lines: list[str]) -> dict[str, str]:
+            values: dict[str, str] = {}
+            for line in lines:
+                key, _, value = line.partition("=")
+                values[key] = value
+            return values
+
+        current, target = parse(deployed), parse(desired)
+        report: list[str] = []
+        for key in sorted(current.keys() | target.keys()):
+            if key not in current:
+                report.append("+" + key)
+            elif key not in target:
+                report.append("-" + key)
+            elif current[key] != target[key]:
+                report.append("~" + key)
+        return report
+  javascript: |
+    function configDrift(deployed, desired) {
+      const parse = (lines) => {
+        const values = new Map();
+        for (const line of lines) {
+          const at = line.indexOf("=");
+          values.set(line.slice(0, at), line.slice(at + 1));
+        }
+        return values;
+      };
+      const current = parse(deployed);
+      const target = parse(desired);
+      const keys = [...new Set([...current.keys(), ...target.keys()])];
+      keys.sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
+      const report = [];
+      for (const key of keys) {
+        if (!current.has(key)) report.push("+" + key);
+        else if (!target.has(key)) report.push("-" + key);
+        else if (current.get(key) !== target.get(key)) report.push("~" + key);
+      }
+      return report;
+    }
+tests:
+  - {id: t1, args: [["db.host=10.0.0.5", "db.pool=20", "log.level=info"], ["db.host=10.0.0.7", "db.pool=20", "cache.ttl=300"]], expected: ["+cache.ttl", "~db.host", "-log.level"], description: "Example 1 - one of each kind, sorted by key not by symbol"}
+  - {id: t2, args: [["feature.flags=a=1,b=2", "region=eu-west"], ["region=eu-west", "feature.flags=a=1,b=3"]], expected: ["~feature.flags"], description: "Example 2 - value contains '=', lists in different order"}
+  - {id: t3, hidden: true, args: [[], []], expected: [], description: "Both configurations empty"}
+  - {id: t4, hidden: true, args: [[], ["port=8080", "host=0.0.0.0", "debug=false"]], expected: ["+debug", "+host", "+port"], description: "Nothing deployed yet - every key is an addition, sorted"}
+  - {id: t5, hidden: true, args: [["port=8080", "host=0.0.0.0"], []], expected: ["-host", "-port"], description: "Desired config empty - every key is a removal"}
+  - {id: t6, hidden: true, args: [["debug=", "mode=fast ", "empty="], ["debug=false", "mode=fast", "empty="]], expected: ["~debug", "~mode"], description: "Empty value versus missing value, and a trailing space that makes values differ"}
+  - {id: t7, hidden: true, args: [["Port=80", "alpha=1", "gamma=1"], ["port=80", "beta=1", "gamma=2"]], expected: ["-Port", "-alpha", "+beta", "~gamma", "+port"], description: "Case-sensitive keys (uppercase sorts first) and the sort must ignore the +/-/~ symbol"}
+  - {id: t8, hidden: true, args: [["db=1", "db.host=a", "db-x=2", "db_y=3"], ["db.host=b", "db_y=3", "db=1", "db-x=9"]], expected: ["~db-x", "~db.host"], description: "Keys that are prefixes of each other and separator characters order by character code"}
+  - {id: t9, hidden: true, args: [["a=1", "b=2", "c=3"], ["c=3", "a=1", "b=2"]], expected: [], description: "Identical configurations listed in a different order - no drift"}
+  - {id: t10, hidden: true, args: [["svc000.replicas=0", "svc001.replicas=1", "svc002.replicas=2", "svc003.replicas=3", "svc004.replicas=4", "svc005.replicas=5", "svc006.replicas=6", "svc007.replicas=0", "svc008.replicas=1", "svc009.replicas=2", "svc010.replicas=3", "svc011.replicas=4", "svc012.replicas=5", "svc013.replicas=6", "svc014.replicas=0", "svc015.replicas=1", "svc016.replicas=2", "svc017.replicas=3", "svc018.replicas=4", "svc019.replicas=5", "svc020.replicas=6", "svc021.replicas=0", "svc022.replicas=1", "svc023.replicas=2", "svc024.replicas=3", "svc025.replicas=4", "svc026.replicas=5", "svc027.replicas=6", "svc028.replicas=0", "svc029.replicas=1", "svc030.replicas=2", "svc031.replicas=3", "svc032.replicas=4", "svc033.replicas=5", "svc034.replicas=6", "svc035.replicas=0", "svc036.replicas=1", "svc037.replicas=2", "svc038.replicas=3", "svc039.replicas=4", "svc040.replicas=5", "svc041.replicas=6", "svc042.replicas=0", "svc043.replicas=1", "svc044.replicas=2", "svc045.replicas=3", "svc046.replicas=4", "svc047.replicas=5", "svc048.replicas=6", "svc049.replicas=0", "svc050.replicas=1", "svc051.replicas=2", "svc052.replicas=3", "svc053.replicas=4", "svc054.replicas=5", "svc055.replicas=6", "svc056.replicas=0", "svc057.replicas=1", "svc058.replicas=2", "svc059.replicas=3", "svc060.replicas=4", "svc061.replicas=5", "svc062.replicas=6", "svc063.replicas=0", "svc064.replicas=1", "svc065.replicas=2", "svc066.replicas=3", "svc067.replicas=4", "svc068.replicas=5", "svc069.replicas=6", "svc070.replicas=0", "svc071.replicas=1", "svc072.replicas=2", "svc073.replicas=3", "svc074.replicas=4", "svc075.replicas=5", "svc076.replicas=6", "svc077.replicas=0", "svc078.replicas=1", "svc079.replicas=2", "svc080.replicas=3", "svc081.replicas=4", "svc082.replicas=5", "svc083.replicas=6", "svc084.replicas=0", "svc085.replicas=1", "svc086.replicas=2", "svc087.replicas=3", "svc088.replicas=4", "svc089.replicas=5", "svc090.replicas=6", "svc091.replicas=0", "svc092.replicas=1", "svc093.replicas=2", "svc094.replicas=3", "svc095.replicas=4", "svc096.replicas=5", "svc097.replicas=6", "svc098.replicas=0", "svc099.replicas=1", "svc100.replicas=2", "svc101.replicas=3", "svc102.replicas=4", "svc103.replicas=5", "svc104.replicas=6", "svc105.replicas=0", "svc106.replicas=1", "svc107.replicas=2", "svc108.replicas=3", "svc109.replicas=4", "svc110.replicas=5", "svc111.replicas=6", "svc112.replicas=0", "svc113.replicas=1", "svc114.replicas=2", "svc115.replicas=3", "svc116.replicas=4", "svc117.replicas=5", "svc118.replicas=6", "svc119.replicas=0", "svc120.replicas=1", "svc121.replicas=2", "svc122.replicas=3", "svc123.replicas=4", "svc124.replicas=5", "svc125.replicas=6", "svc126.replicas=0", "svc127.replicas=1", "svc128.replicas=2", "svc129.replicas=3", "svc130.replicas=4", "svc131.replicas=5", "svc132.replicas=6", "svc133.replicas=0", "svc134.replicas=1", "svc135.replicas=2", "svc136.replicas=3", "svc137.replicas=4", "svc138.replicas=5", "svc139.replicas=6", "svc140.replicas=0", "svc141.replicas=1", "svc142.replicas=2", "svc143.replicas=3", "svc144.replicas=4", "svc145.replicas=5", "svc146.replicas=6", "svc147.replicas=0", "svc148.replicas=1", "svc149.replicas=2", "svc150.replicas=3", "svc151.replicas=4", "svc152.replicas=5", "svc153.replicas=6", "svc154.replicas=0", "svc155.replicas=1", "svc156.replicas=2", "svc157.replicas=3", "svc158.replicas=4", "svc159.replicas=5", "svc160.replicas=6", "svc161.replicas=0", "svc162.replicas=1", "svc163.replicas=2", "svc164.replicas=3", "svc165.replicas=4", "svc166.replicas=5", "svc167.replicas=6", "svc168.replicas=0", "svc169.replicas=1", "svc170.replicas=2", "svc171.replicas=3", "svc172.replicas=4", "svc173.replicas=5", "svc174.replicas=6", "svc175.replicas=0", "svc176.replicas=1", "svc177.replicas=2", "svc178.replicas=3", "svc179.replicas=4", "svc180.replicas=5", "svc181.replicas=6", "svc182.replicas=0", "svc183.replicas=1", "svc184.replicas=2", "svc185.replicas=3", "svc186.replicas=4", "svc187.replicas=5", "svc188.replicas=6", "svc189.replicas=0", "svc190.replicas=1", "svc191.replicas=2", "svc192.replicas=3", "svc193.replicas=4", "svc194.replicas=5", "svc195.replicas=6", "svc196.replicas=0", "svc197.replicas=1", "svc198.replicas=2", "svc199.replicas=3"], ["svc020.replicas=7", "svc021.replicas=0", "svc022.replicas=1", "svc023.replicas=2", "svc024.replicas=3", "svc025.replicas=5", "svc026.replicas=5", "svc027.replicas=6", "svc028.replicas=0", "svc029.replicas=1", "svc030.replicas=3", "svc031.replicas=3", "svc032.replicas=4", "svc033.replicas=5", "svc034.replicas=6", "svc035.replicas=1", "svc036.replicas=1", "svc037.replicas=2", "svc038.replicas=3", "svc039.replicas=4", "svc040.replicas=6", "svc041.replicas=6", "svc042.replicas=0", "svc043.replicas=1", "svc044.replicas=2", "svc045.replicas=4", "svc046.replicas=4", "svc047.replicas=5", "svc048.replicas=6", "svc049.replicas=0", "svc050.replicas=2", "svc051.replicas=2", "svc052.replicas=3", "svc053.replicas=4", "svc054.replicas=5", "svc055.replicas=7", "svc056.replicas=0", "svc057.replicas=1", "svc058.replicas=2", "svc059.replicas=3", "svc060.replicas=5", "svc061.replicas=5", "svc062.replicas=6", "svc063.replicas=0", "svc064.replicas=1", "svc065.replicas=3", "svc066.replicas=3", "svc067.replicas=4", "svc068.replicas=5", "svc069.replicas=6", "svc070.replicas=1", "svc071.replicas=1", "svc072.replicas=2", "svc073.replicas=3", "svc074.replicas=4", "svc075.replicas=6", "svc076.replicas=6", "svc077.replicas=0", "svc078.replicas=1", "svc079.replicas=2", "svc080.replicas=4", "svc081.replicas=4", "svc082.replicas=5", "svc083.replicas=6", "svc084.replicas=0", "svc085.replicas=2", "svc086.replicas=2", "svc087.replicas=3", "svc088.replicas=4", "svc089.replicas=5", "svc090.replicas=7", "svc091.replicas=0", "svc092.replicas=1", "svc093.replicas=2", "svc094.replicas=3", "svc095.replicas=5", "svc096.replicas=5", "svc097.replicas=6", "svc098.replicas=0", "svc099.replicas=1", "svc100.replicas=3", "svc101.replicas=3", "svc102.replicas=4", "svc103.replicas=5", "svc104.replicas=6", "svc105.replicas=1", "svc106.replicas=1", "svc107.replicas=2", "svc108.replicas=3", "svc109.replicas=4", "svc110.replicas=6", "svc111.replicas=6", "svc112.replicas=0", "svc113.replicas=1", "svc114.replicas=2", "svc115.replicas=4", "svc116.replicas=4", "svc117.replicas=5", "svc118.replicas=6", "svc119.replicas=0", "svc120.replicas=2", "svc121.replicas=2", "svc122.replicas=3", "svc123.replicas=4", "svc124.replicas=5", "svc125.replicas=7", "svc126.replicas=0", "svc127.replicas=1", "svc128.replicas=2", "svc129.replicas=3", "svc130.replicas=5", "svc131.replicas=5", "svc132.replicas=6", "svc133.replicas=0", "svc134.replicas=1", "svc135.replicas=3", "svc136.replicas=3", "svc137.replicas=4", "svc138.replicas=5", "svc139.replicas=6", "svc140.replicas=1", "svc141.replicas=1", "svc142.replicas=2", "svc143.replicas=3", "svc144.replicas=4", "svc145.replicas=6", "svc146.replicas=6", "svc147.replicas=0", "svc148.replicas=1", "svc149.replicas=2", "svc150.replicas=4", "svc151.replicas=4", "svc152.replicas=5", "svc153.replicas=6", "svc154.replicas=0", "svc155.replicas=2", "svc156.replicas=2", "svc157.replicas=3", "svc158.replicas=4", "svc159.replicas=5", "svc160.replicas=7", "svc161.replicas=0", "svc162.replicas=1", "svc163.replicas=2", "svc164.replicas=3", "svc165.replicas=5", "svc166.replicas=5", "svc167.replicas=6", "svc168.replicas=0", "svc169.replicas=1", "svc170.replicas=3", "svc171.replicas=3", "svc172.replicas=4", "svc173.replicas=5", "svc174.replicas=6", "svc175.replicas=1", "svc176.replicas=1", "svc177.replicas=2", "svc178.replicas=3", "svc179.replicas=4", "svc180.replicas=6", "svc181.replicas=6", "svc182.replicas=0", "svc183.replicas=1", "svc184.replicas=2", "svc185.replicas=4", "svc186.replicas=4", "svc187.replicas=5", "svc188.replicas=6", "svc189.replicas=0", "svc190.replicas=2", "svc191.replicas=2", "svc192.replicas=3", "svc193.replicas=4", "svc194.replicas=5", "svc195.replicas=7", "svc196.replicas=0", "svc197.replicas=1", "svc198.replicas=2", "svc199.replicas=3", "svc200.replicas=5", "svc201.replicas=5", "svc202.replicas=6", "svc203.replicas=0", "svc204.replicas=1", "svc205.replicas=3", "svc206.replicas=3", "svc207.replicas=4", "svc208.replicas=5", "svc209.replicas=6", "svc210.replicas=1", "svc211.replicas=1", "svc212.replicas=2", "svc213.replicas=3", "svc214.replicas=4", "svc215.replicas=6", "svc216.replicas=6", "svc217.replicas=0", "svc218.replicas=1", "svc219.replicas=2"]], expected: ["-svc000.replicas", "-svc001.replicas", "-svc002.replicas", "-svc003.replicas", "-svc004.replicas", "-svc005.replicas", "-svc006.replicas", "-svc007.replicas", "-svc008.replicas", "-svc009.replicas", "-svc010.replicas", "-svc011.replicas", "-svc012.replicas", "-svc013.replicas", "-svc014.replicas", "-svc015.replicas", "-svc016.replicas", "-svc017.replicas", "-svc018.replicas", "-svc019.replicas", "~svc020.replicas", "~svc025.replicas", "~svc030.replicas", "~svc035.replicas", "~svc040.replicas", "~svc045.replicas", "~svc050.replicas", "~svc055.replicas", "~svc060.replicas", "~svc065.replicas", "~svc070.replicas", "~svc075.replicas", "~svc080.replicas", "~svc085.replicas", "~svc090.replicas", "~svc095.replicas", "~svc100.replicas", "~svc105.replicas", "~svc110.replicas", "~svc115.replicas", "~svc120.replicas", "~svc125.replicas", "~svc130.replicas", "~svc135.replicas", "~svc140.replicas", "~svc145.replicas", "~svc150.replicas", "~svc155.replicas", "~svc160.replicas", "~svc165.replicas", "~svc170.replicas", "~svc175.replicas", "~svc180.replicas", "~svc185.replicas", "~svc190.replicas", "~svc195.replicas", "+svc200.replicas", "+svc201.replicas", "+svc202.replicas", "+svc203.replicas", "+svc204.replicas", "+svc205.replicas", "+svc206.replicas", "+svc207.replicas", "+svc208.replicas", "+svc209.replicas", "+svc210.replicas", "+svc211.replicas", "+svc212.replicas", "+svc213.replicas", "+svc214.replicas", "+svc215.replicas", "+svc216.replicas", "+svc217.replicas", "+svc218.replicas", "+svc219.replicas"], description: "200 vs 200 keys overlapping on 180 with some changed values"}
+expected_concepts:
+- parsing key=value lines at the first separator
+- hash maps keyed by config key
+- set union and difference of keys
+- sorting by key rather than by the formatted output
+optimal_complexity:
+  time: O((n + m) log(n + m))
+  space: O(n + m)
+rubric:
+  excellent: Parses each line at the first '=' into two maps, walks the sorted union of keys emitting add, remove and change markers, sorts by key rather than by the formatted string, and explains the O((n + m) log(n + m)) cost dominated by sorting.
+  good: Correct map-based solution that needs a nudge on splitting at the first '=' only or on sorting by key instead of by the prefixed string.
+  weak: Splits on every '=', compares lists with nested loops, sorts the output strings so the symbols decide the order, or reports identical keys.
+  criteria:
+    correctness: All tests pass, including values containing '=', empty values and case-sensitive keys.
+    efficiency: Hash lookups plus one sort of the key union instead of quadratic pairwise comparison.
+    code_quality: A small parse helper and clear names for the two configurations.
+    edge_cases: Empty lists, empty values, trailing spaces in values and keys that are prefixes of each other.
+    communication: States the parsing rule and the ordering rule explicitly before coding.
+hints:
+- Turn each list into something that lets you ask quickly what value a given key has, and remember that a value may itself contain an equals sign.
+- Once both configurations are lookups, every key that matters is in the union of their key sets; decide for each key whether it was added, removed or changed.
+- Split every line at the first equals sign into two maps, take the union of the keys, sort that key list, and for each key emit a plus when it is missing from deployed, a minus when it is missing from desired, or a tilde when both have it with different values, skipping keys whose values match.
+followups:
+- If both inputs arrived already sorted by key, how would you produce the report in linear time?
+- How would you extend the report to show the old and new value for each changed key?
+- How would you treat keys that differ only in letter case if the deployment target were case-insensitive?
+- What would change if a key could appear more than once and the last occurrence wins?
+common_errors:
+- Splitting on every '=' so values such as a=1,b=2 are truncated.
+- Sorting the output strings, which orders by the +, - and ~ symbols instead of by key.
+- Reporting keys whose values are identical.
+- Treating an empty value as a missing key.

@@ -1,0 +1,185 @@
+version: 1
+slug: backdated_stock_level_queries
+title: "Stock Levels with Backdated Movements"
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [backend, data, data_analyst, general]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Stock Levels with Backdated Movements
+
+  A warehouse service records **stock movements** (receipts, picks, adjustments) per SKU. Scanners in the
+  yard sync late, so a movement often reaches the service **after** movements that happened later in real
+  time: each movement carries the `event_time` at which it physically happened, which may be earlier than
+  movements already recorded. Auditors ask "what was the stock of this SKU at time `t`?" and want the answer
+  **based on what the service has received so far**.
+
+  You are given the operations in the order the service receives them. Each operation is a string with
+  single-space-separated fields:
+
+  - `"MOVE <sku> <event_time> <delta>"`: record a movement of `delta` units (negative for outgoing) that
+    happened at `event_time`.
+  - `"QUERY <sku> <t>"`: the answer is the sum of `delta` over all movements of that SKU **received before
+    this query** whose `event_time <= t`. If there are none, the answer is `0`.
+
+  SKUs are compared exactly (case-sensitive). Several movements may share an `event_time`. Stock may go
+  negative (the counts are reconciled later). Write `answer_stock_queries(ops)` that returns the answers to
+  the `QUERY` operations, in the order the queries appear.
+
+  ### Example 1
+  ```
+  Input:  ops = ["MOVE WIDGET-7 100 50", "MOVE WIDGET-7 300 -20", "QUERY WIDGET-7 250", "MOVE WIDGET-7 200 -5", "QUERY WIDGET-7 250", "QUERY WIDGET-7 300"]
+  Output: [50, 45, 25]
+  Explanation: the first query sees only the receipt at 100 (the pick at 300 is later than 250). Then a
+  backdated pick at 200 arrives, so the stock at 250 becomes 45, and at 300 it is 50 - 5 - 20 = 25.
+  ```
+
+  ### Example 2
+  ```
+  Input:  ops = ["QUERY BOLT-M4 10", "MOVE BOLT-M4 10 40", "MOVE NUT-M4 5 7", "QUERY BOLT-M4 10", "QUERY BOLT-M4 9", "QUERY WASHER-M4 100"]
+  Output: [0, 40, 0, 0]
+  Explanation: the first query comes before any movement was received. event_time 10 counts for t = 10 but
+  not for t = 9. Movements of NUT-M4 never affect BOLT-M4, and WASHER-M4 has no movements at all.
+  ```
+
+  ### Constraints
+  - `0 <= ops.length <= 10^5`
+  - SKUs are 1 to 30 characters: letters, digits and `-`
+  - `0 <= event_time, t <= 10^9`
+  - `-10^9 <= delta <= 10^9`; answers fit in a signed 64-bit integer
+
+  **Follow-up:** a linear scan per query is `O(n)` and the whole run `O(n^2)`. Can you answer every query in
+  `O(log n)`, given that you may read all operations before answering?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: answer_stock_queries
+  params:
+    - {name: ops, type: "string[]"}
+  return_type: "long[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    from bisect import bisect_left, bisect_right
+
+
+    def answer_stock_queries(ops: list[str]) -> list[int]:
+        parsed = [op.split() for op in ops]
+        # offline pass: the distinct movement times of every SKU, sorted
+        times: dict[str, list[int]] = {}
+        for parts in parsed:
+            if parts[0] == "MOVE":
+                times.setdefault(parts[1], []).append(int(parts[2]))
+        for sku in times:
+            times[sku] = sorted(set(times[sku]))
+        trees = {sku: [0] * (len(ts) + 1) for sku, ts in times.items()}  # one Fenwick tree per SKU
+
+        answers: list[int] = []
+        for parts in parsed:
+            sku = parts[1]
+            if parts[0] == "MOVE":
+                tree, ts = trees[sku], times[sku]
+                i = bisect_left(ts, int(parts[2])) + 1
+                delta = int(parts[3])
+                while i < len(tree):
+                    tree[i] += delta
+                    i += i & -i
+            else:
+                if sku not in times:
+                    answers.append(0)
+                    continue
+                tree, ts = trees[sku], times[sku]
+                i = bisect_right(ts, int(parts[2]))  # movements with event_time <= t
+                total = 0
+                while i > 0:
+                    total += tree[i]
+                    i -= i & -i
+                answers.append(total)
+        return answers
+  javascript: |
+    function answerStockQueries(ops) {
+      const parsed = ops.map((op) => op.trim().split(/\s+/));
+      const times = new Map(); // sku -> sorted distinct movement times
+      for (const p of parsed) {
+        if (p[0] === "MOVE") {
+          if (!times.has(p[1])) times.set(p[1], []);
+          times.get(p[1]).push(Number(p[2]));
+        }
+      }
+      const trees = new Map();
+      for (const [sku, ts] of times) {
+        const uniq = [...new Set(ts)].sort((a, b) => a - b);
+        times.set(sku, uniq);
+        trees.set(sku, new Array(uniq.length + 1).fill(0));
+      }
+      // number of times <= t (upper bound)
+      const upper = (ts, t) => {
+        let lo = 0, hi = ts.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (ts[mid] <= t) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo;
+      };
+      const answers = [];
+      for (const p of parsed) {
+        const sku = p[1];
+        const t = Number(p[2]);
+        if (p[0] === "MOVE") {
+          const tree = trees.get(sku);
+          const delta = Number(p[3]);
+          for (let i = upper(times.get(sku), t); i < tree.length; i += i & -i) tree[i] += delta;
+        } else if (!times.has(sku)) {
+          answers.push(0);
+        } else {
+          const tree = trees.get(sku);
+          let total = 0;
+          for (let i = upper(times.get(sku), t); i > 0; i -= i & -i) total += tree[i];
+          answers.push(total);
+        }
+      }
+      return answers;
+    }
+tests:
+  - {id: t1, args: [["MOVE WIDGET-7 100 50", "MOVE WIDGET-7 300 -20", "QUERY WIDGET-7 250", "MOVE WIDGET-7 200 -5", "QUERY WIDGET-7 250", "QUERY WIDGET-7 300"]], expected: [50, 45, 25], description: "Example 1 - a backdated movement changes the answer for an earlier time"}
+  - {id: t2, args: [["QUERY BOLT-M4 10", "MOVE BOLT-M4 10 40", "MOVE NUT-M4 5 7", "QUERY BOLT-M4 10", "QUERY BOLT-M4 9", "QUERY WASHER-M4 100"]], expected: [0, 40, 0, 0], description: "Example 2 - queries only see movements received earlier; inclusive time; unknown SKU gives 0"}
+  - {id: t3, hidden: true, args: [[]], expected: [], description: "No operations - empty result"}
+  - {id: t4, hidden: true, args: [["MOVE A 5 10", "MOVE A 5 -3", "MOVE A 5 8", "QUERY A 5", "QUERY A 4"]], expected: [15, 0], description: "Several movements at the same event_time are all summed"}
+  - {id: t5, hidden: true, args: [["MOVE A 0 -12", "QUERY A 0", "MOVE A 0 12", "QUERY A 1000000000"]], expected: [-12, 0], description: "Negative running stock, time 0 and the maximum query time"}
+  - {id: t6, hidden: true, args: [["MOVE sku-9 10 1", "MOVE SKU-9 10 100", "QUERY sku-9 10", "QUERY SKU-9 10"]], expected: [1, 100], description: "SKU names are case-sensitive and kept separate"}
+  - {id: t7, hidden: true, args: [["MOVE BIG 1 1000000000", "MOVE BIG 2 1000000000", "MOVE BIG 3 1000000000", "MOVE BIG 4 1000000000", "MOVE BIG 5 1000000000", "QUERY BIG 5", "MOVE BIG 0 -1000000000", "QUERY BIG 3"]], expected: [5000000000, 2000000000], description: "Totals beyond 32-bit range require 64-bit sums"}
+  - {id: t8, hidden: true, args: [["MOVE P 900 1", "MOVE P 800 2", "MOVE P 700 4", "MOVE P 600 8", "QUERY P 650", "QUERY P 750", "QUERY P 850", "QUERY P 950", "QUERY P 599"]], expected: [8, 12, 14, 15, 0], description: "Movements arrive in decreasing time order; queries at points between them"}
+  - {id: t9, hidden: true, args: [["QUERY SKU-2001 85", "QUERY SKU-1001 433", "MOVE sku-1001 66 -1", "MOVE SKU-2001 113 66", "MOVE SKU-1001 363 77", "MOVE sku-1001 321 60", "QUERY SKU-2001 210", "QUERY SKU-1001 176", "QUERY SKU-1002 371", "QUERY SKU-2001 288", "QUERY SKU-2001 485", "QUERY SKU-1002 458", "MOVE SKU-1002 91 32", "QUERY SKU-1002 84", "MOVE SKU-1001 290 20", "QUERY SKU-2001 338", "MOVE SKU-1001 147 28", "MOVE sku-1001 132 -12", "QUERY SKU-1001 122", "MOVE sku-1001 279 -14", "QUERY SKU-1001 171", "QUERY sku-1001 57", "MOVE sku-1001 83 7", "QUERY SKU-1001 58", "QUERY sku-1001 354", "QUERY SKU-1001 386", "MOVE sku-1001 38 17", "MOVE sku-1001 386 67", "MOVE SKU-2001 52 -7", "MOVE SKU-1002 215 -8", "MOVE SKU-1001 175 56", "QUERY SKU-1002 422", "QUERY SKU-1001 244", "MOVE SKU-2001 153 -37", "MOVE SKU-2001 323 -15", "QUERY SKU-2001 440", "MOVE SKU-1002 338 -30", "QUERY SKU-2001 116", "QUERY SKU-1002 482", "QUERY sku-1001 278", "MOVE SKU-1001 12 -14", "MOVE sku-1001 348 -43", "QUERY SKU-1002 432", "MOVE SKU-1001 141 72", "MOVE SKU-1002 152 17", "MOVE SKU-1001 31 77", "QUERY sku-1001 467", "MOVE sku-1001 163 54", "QUERY SKU-2001 280", "MOVE SKU-2001 21 57", "QUERY sku-1001 261", "QUERY SKU-2001 393", "QUERY SKU-1002 149", "MOVE SKU-2001 236 -20", "QUERY SKU-2001 452", "QUERY SKU-1001 265", "MOVE SKU-1001 288 70", "MOVE SKU-1001 40 20", "MOVE SKU-1002 75 -27", "QUERY SKU-1002 405", "MOVE SKU-2001 40 -7", "QUERY SKU-1001 186", "MOVE SKU-1001 349 -15", "MOVE SKU-2001 363 25", "QUERY SKU-1001 104", "MOVE SKU-2001 179 -27", "QUERY SKU-1002 211", "QUERY sku-1001 227", "QUERY sku-1001 224", "MOVE SKU-2001 337 -17", "MOVE SKU-2001 396 29", "MOVE SKU-1001 179 3", "MOVE SKU-1002 208 58", "MOVE SKU-1001 376 59", "QUERY sku-1001 424", "MOVE SKU-2001 161 -42", "MOVE SKU-2001 88 52", "QUERY SKU-2001 16", "QUERY sku-1001 186", "QUERY sku-1001 440", "MOVE SKU-1001 1 50", "MOVE sku-1001 377 -42", "MOVE sku-1001 499 19", "MOVE SKU-1002 32 68", "QUERY SKU-1001 433", "QUERY sku-1001 316", "QUERY SKU-1001 213", "QUERY SKU-1002 319", "QUERY SKU-2001 440", "QUERY sku-1001 302", "QUERY SKU-2001 22", "QUERY SKU-1002 156", "QUERY SKU-1001 143", "QUERY SKU-1001 317", "MOVE SKU-2001 423 -30", "QUERY SKU-1001 34", "QUERY sku-1001 36", "MOVE SKU-2001 293 57", "QUERY SKU-1001 202", "QUERY SKU-1001 134", "QUERY SKU-1002 500", "QUERY SKU-1001 145", "QUERY SKU-2001 0", "QUERY sku-1001 431", "QUERY SKU-1001 142", "QUERY SKU-1002 362", "MOVE sku-1001 254 -30", "MOVE sku-1001 343 -42", "MOVE SKU-1002 411 -21", "MOVE SKU-1002 419 -22", "QUERY sku-1001 201", "MOVE SKU-1002 274 2", "MOVE SKU-1001 307 -25", "MOVE SKU-1002 220 41", "MOVE SKU-1001 256 46", "QUERY SKU-2001 101", "MOVE SKU-1002 323 58", "MOVE sku-1001 286 13", "MOVE SKU-2001 303 -26", "QUERY SKU-1002 156", "QUERY SKU-1001 32", "MOVE SKU-1001 27 -9", "MOVE SKU-2001 105 68", "MOVE SKU-2001 410 59", "QUERY sku-1001 106", "MOVE sku-1001 193 46", "MOVE SKU-1001 450 -33", "MOVE SKU-1001 474 34", "MOVE SKU-1002 375 35", "QUERY sku-1001 147", "MOVE sku-1001 271 20", "QUERY sku-1001 182", "MOVE SKU-2001 173 -11", "QUERY SKU-1001 307", "QUERY SKU-1001 491", "QUERY SKU-2001 55", "QUERY sku-1001 80", "MOVE SKU-2001 9 8", "MOVE SKU-2001 453 12", "QUERY SKU-1001 266", "QUERY SKU-2001 205", "QUERY SKU-1002 151", "QUERY sku-1001 418", "MOVE SKU-2001 113 59", "QUERY SKU-1001 322", "MOVE SKU-1001 65 -21", "MOVE SKU-1002 222 22", "MOVE SKU-1002 51 43", "MOVE SKU-2001 444 66", "QUERY SKU-1002 406", "QUERY SKU-2001 37", "QUERY SKU-1002 38", "MOVE sku-1001 327 -39", "MOVE SKU-1002 372 42", "QUERY sku-1001 144", "QUERY SKU-1002 287", "MOVE SKU-1002 248 -50", "MOVE SKU-2001 267 73", "QUERY SKU-1002 445", "QUERY sku-1001 118", "QUERY SKU-1002 1", "MOVE sku-1001 376 19", "MOVE SKU-1002 417 7", "MOVE SKU-1002 326 25", "MOVE SKU-1002 493 -5", "MOVE sku-1001 466 -40", "MOVE SKU-1002 10 -50", "MOVE SKU-1002 377 -44", "QUERY sku-1001 495", "QUERY SKU-1001 229", "MOVE SKU-2001 463 -16", "MOVE SKU-1001 99 -23", "QUERY SKU-1001 142", "QUERY SKU-1001 450", "MOVE SKU-2001 260 -39", "QUERY SKU-1001 175", "MOVE SKU-1001 421 71", "QUERY SKU-1001 247", "QUERY SKU-2001 33", "QUERY SKU-2001 516", "MOVE SKU-1002 44 2", "QUERY SKU-2001 322", "MOVE SKU-2001 386 7", "MOVE sku-1001 463 -42", "MOVE SKU-1001 167 51", "QUERY sku-1001 225", "QUERY SKU-1001 163", "MOVE SKU-1002 355 -22", "MOVE SKU-1001 340 -37", "MOVE sku-1001 198 -26", "MOVE SKU-1002 413 -5", "MOVE sku-1001 381 16", "MOVE SKU-1002 79 -15", "QUERY SKU-1002 381", "MOVE sku-1001 372 50", "MOVE SKU-1001 456 59", "QUERY SKU-1002 366", "MOVE SKU-1002 469 -43", "MOVE sku-1001 411 65", "MOVE sku-1001 234 39", "MOVE sku-1001 387 8", "QUERY SKU-2001 305", "QUERY SKU-2001 199", "MOVE SKU-1001 343 67", "QUERY SKU-2001 248", "MOVE SKU-1002 307 -41", "QUERY SKU-1001 382", "MOVE SKU-1001 285 -27", "MOVE SKU-1002 56 37", "MOVE SKU-1002 353 -21", "MOVE SKU-1002 65 13", "MOVE sku-1001 156 19", "MOVE SKU-1001 249 10", "QUERY SKU-1002 442", "MOVE SKU-2001 308 -5", "QUERY sku-1001 403", "MOVE sku-1001 443 -5", "MOVE sku-1001 63 -27", "MOVE SKU-1001 440 -3", "QUERY SKU-1001 130", "QUERY sku-1001 398", "QUERY SKU-2001 352", "MOVE sku-1001 179 3", "MOVE sku-1001 215 31", "MOVE sku-1001 59 54", "QUERY SKU-1002 19", "QUERY sku-1001 79", "QUERY SKU-1002 22", "MOVE sku-1001 121 -45", "QUERY SKU-1002 309", "MOVE SKU-2001 292 9", "MOVE sku-1001 58 77", "QUERY SKU-1002 425", "MOVE sku-1001 2 -2", "MOVE sku-1001 495 -31", "MOVE SKU-1001 353 -14", "MOVE SKU-1001 423 -39", "MOVE SKU-1001 348 -46", "QUERY SKU-1001 214", "MOVE SKU-2001 316 33", "MOVE SKU-2001 113 45", "MOVE SKU-1001 192 -48", "QUERY sku-1001 520", "MOVE SKU-1002 332 -20", "QUERY sku-1001 132", "QUERY sku-1001 302", "QUERY sku-1001 347", "QUERY SKU-1002 50", "MOVE SKU-2001 260 66", "MOVE SKU-1002 119 -4", "MOVE sku-1001 257 16", "MOVE SKU-2001 390 -35", "MOVE SKU-1001 229 17", "QUERY sku-1001 373", "QUERY SKU-2001 226", "QUERY SKU-2001 39", "QUERY SKU-1002 400", "QUERY sku-1001 72", "QUERY SKU-1001 444", "MOVE sku-1001 42 78", "MOVE sku-1001 290 -13", "MOVE SKU-2001 3 -46", "MOVE SKU-2001 22 76", "MOVE sku-1001 9 68", "MOVE SKU-1001 118 35", "MOVE SKU-1001 476 -34", "MOVE SKU-1002 337 13", "MOVE SKU-2001 356 66", "MOVE sku-1001 117 -24", "MOVE SKU-1002 156 34", "QUERY SKU-1002 330", "QUERY SKU-2001 462", "QUERY SKU-1001 140", "QUERY sku-1001 253", "QUERY SKU-1002 260", "QUERY SKU-1002 133", "MOVE sku-1001 154 11", "MOVE sku-1001 142 -40", "QUERY SKU-2001 421", "MOVE SKU-2001 10 5", "QUERY SKU-2001 52", "MOVE SKU-1002 86 -41", "MOVE sku-1001 354 -8", "MOVE SKU-1001 147 55", "MOVE sku-1001 320 70", "QUERY sku-1001 388", "QUERY sku-1001 315", "QUERY SKU-2001 69", "MOVE SKU-1001 57 41", "MOVE SKU-2001 7 30", "QUERY SKU-1002 494", "QUERY sku-1001 279", "MOVE SKU-2001 483 26", "QUERY SKU-1002 439", "MOVE SKU-1002 145 73", "MOVE SKU-1002 304 39", "MOVE sku-1001 376 5", "QUERY SKU-2001 512", "MOVE SKU-1002 416 -26", "MOVE SKU-1001 231 4", "MOVE SKU-1002 225 -50", "QUERY sku-1001 51", "MOVE SKU-1002 59 35", "MOVE SKU-1001 436 -47", "QUERY SKU-1002 272", "MOVE SKU-2001 147 75", "QUERY sku-1001 85", "QUERY SKU-1001 117", "MOVE SKU-2001 298 -9", "MOVE SKU-2001 178 25", "MOVE SKU-1001 82 24", "MOVE SKU-1002 243 -45", "MOVE sku-1001 413 36", "MOVE SKU-1001 376 47", "QUERY SKU-2001 293", "QUERY SKU-2001 372", "QUERY SKU-2001 139", "MOVE SKU-1002 97 38", "MOVE SKU-1001 104 4", "MOVE SKU-1001 318 9", "MOVE sku-1001 56 -13", "MOVE SKU-2001 349 -28", "MOVE SKU-2001 198 42", "QUERY sku-1001 12", "QUERY SKU-1002 10", "QUERY SKU-1002 438", "MOVE SKU-1002 234 -35", "QUERY SKU-1001 270", "MOVE SKU-1002 475 61", "MOVE sku-1001 463 40", "MOVE SKU-2001 316 -21", "MOVE SKU-1001 202 -8", "QUERY SKU-1002 485", "QUERY SKU-2001 345", "MOVE SKU-2001 123 -29", "MOVE SKU-1001 13 -18", "QUERY SKU-2001 467", "MOVE SKU-1002 397 -5", "MOVE SKU-1002 357 -33", "MOVE SKU-1001 100 1", "MOVE SKU-1001 70 -46", "QUERY SKU-2001 393", "QUERY SKU-1002 309", "MOVE SKU-2001 76 -7", "MOVE SKU-2001 252 71", "MOVE sku-1001 474 4", "QUERY sku-1001 483", "QUERY sku-1001 151", "QUERY sku-1001 340", "MOVE SKU-1002 299 25", "QUERY SKU-1001 401", "QUERY SKU-2001 415", "QUERY sku-1001 246", "MOVE SKU-2001 1 -25", "QUERY SKU-1001 26", "QUERY SKU-1001 89", "QUERY sku-1001 376", "MOVE SKU-1002 279 -20", "MOVE SKU-2001 2 1", "MOVE SKU-1001 15 10", "QUERY SKU-1001 299", "MOVE sku-1001 297 79", "MOVE sku-1001 270 18", "MOVE SKU-1002 128 -32", "MOVE SKU-1001 20 -24", "QUERY SKU-1002 369", "QUERY SKU-2001 438", "QUERY sku-1001 361", "MOVE SKU-1001 111 74", "QUERY sku-1001 2", "MOVE SKU-1002 100 -29", "QUERY SKU-1002 410", "MOVE SKU-1002 251 26", "QUERY sku-1001 445", "QUERY SKU-1002 508", "MOVE SKU-1001 197 -1", "MOVE SKU-1002 173 57", "QUERY SKU-1001 460", "MOVE SKU-2001 327 55", "QUERY SKU-1001 357", "MOVE sku-1001 269 56", "MOVE sku-1001 250 68", "MOVE sku-1001 164 24", "MOVE SKU-1001 225 -11", "MOVE SKU-1001 362 -12", "QUERY sku-1001 77", "QUERY sku-1001 140", "QUERY SKU-1001 349", "QUERY SKU-2001 139", "MOVE SKU-1002 168 76", "QUERY SKU-1001 95", "QUERY sku-1001 3", "MOVE SKU-1001 431 26", "MOVE SKU-2001 217 78", "QUERY sku-1001 203", "MOVE SKU-1002 198 72", "MOVE SKU-1001 54 -34", "QUERY SKU-1001 60", "MOVE SKU-2001 234 15", "QUERY SKU-1002 126", "MOVE sku-1001 394 25", "QUERY SKU-1001 489", "QUERY sku-1001 241", "MOVE SKU-1001 449 32", "MOVE SKU-2001 129 -46", "MOVE sku-1001 159 13", "QUERY SKU-2001 8", "QUERY SKU-1001 186", "MOVE sku-1001 453 -26", "MOVE SKU-2001 347 -6", "QUERY SKU-1001 27", "MOVE SKU-2001 466 28", "QUERY SKU-1001 346", "MOVE SKU-1002 253 18", "QUERY sku-1001 329", "MOVE sku-1001 3 54", "QUERY SKU-1002 217", "MOVE SKU-2001 155 69", "MOVE SKU-1002 378 5", "MOVE SKU-2001 224 18", "QUERY sku-1001 293", "QUERY SKU-1001 255", "MOVE SKU-2001 488 -21", "MOVE SKU-1002 391 42", "QUERY SKU-2001 368", "QUERY SKU-1002 510", "MOVE sku-1001 39 -36", "MOVE SKU-2001 454 -26", "QUERY sku-1001 203", "QUERY SKU-1001 131", "MOVE SKU-1001 37 -21", "QUERY sku-1001 245", "MOVE SKU-1001 394 -42", "MOVE SKU-1002 422 61", "QUERY SKU-2001 257", "MOVE SKU-1002 148 8", "MOVE sku-1001 390 30", "QUERY SKU-2001 340", "MOVE sku-1001 269 -37", "QUERY sku-1001 215", "QUERY SKU-2001 166", "MOVE SKU-2001 336 -28", "MOVE SKU-1001 178 43", "MOVE SKU-1001 491 42", "MOVE sku-1001 265 67", "MOVE sku-1001 368 -34", "QUERY SKU-1002 257", "MOVE SKU-1001 416 -47", "QUERY SKU-2001 314", "MOVE SKU-2001 494 -37", "MOVE SKU-1002 327 -48", "MOVE sku-1001 38 39", "MOVE SKU-1001 416 -7", "QUERY SKU-2001 17", "MOVE SKU-1002 469 79", "MOVE SKU-1001 189 40", "QUERY SKU-1001 352", "MOVE SKU-1002 94 -10", "MOVE SKU-1002 349 27", "MOVE SKU-1001 246 36", "MOVE SKU-2001 262 72", "MOVE SKU-2001 419 29", "MOVE SKU-1002 146 58", "MOVE SKU-2001 178 -15", "MOVE SKU-1001 266 -48", "QUERY SKU-1002 134", "MOVE sku-1001 303 47", "QUERY SKU-1002 251", "MOVE SKU-1001 359 63", "QUERY SKU-2001 59", "QUERY SKU-1002 372", "MOVE SKU-2001 216 -4", "QUERY SKU-1002 47", "MOVE SKU-1002 204 21", "QUERY SKU-1002 420", "MOVE sku-1001 405 -25", "QUERY SKU-1002 136", "MOVE sku-1001 296 -13", "MOVE SKU-1002 59 47", "MOVE SKU-1002 429 -3", "MOVE SKU-2001 105 -7", "MOVE SKU-1001 182 -36", "MOVE SKU-1001 314 -32", "MOVE sku-1001 429 73", "QUERY SKU-1002 243", "MOVE SKU-1001 444 66", "QUERY SKU-1001 497", "MOVE sku-1001 373 -42", "MOVE sku-1001 304 73", "MOVE sku-1001 4 -50", "MOVE SKU-2001 190 37", "QUERY SKU-1002 462", "QUERY SKU-1002 335", "MOVE SKU-2001 79 -31", "QUERY SKU-1002 219", "MOVE sku-1001 124 -29", "QUERY sku-1001 233", "QUERY SKU-1002 284", "MOVE sku-1001 331 56", "QUERY SKU-1001 340", "MOVE sku-1001 348 7", "MOVE SKU-1001 40 22", "QUERY SKU-2001 182", "QUERY SKU-2001 436", "MOVE SKU-1002 215 59", "MOVE SKU-1001 100 21", "QUERY SKU-2001 68", "MOVE SKU-2001 499 -39", "QUERY SKU-1002 396", "MOVE SKU-2001 226 -50", "MOVE sku-1001 210 19", "MOVE SKU-2001 449 32", "MOVE SKU-2001 83 59", "MOVE SKU-1001 280 -13", "QUERY SKU-1002 190", "QUERY SKU-2001 359", "QUERY sku-1001 382", "MOVE sku-1001 190 -50", "MOVE sku-1001 429 1", "MOVE SKU-2001 184 32", "QUERY SKU-2001 260", "MOVE sku-1001 225 62", "QUERY SKU-1002 136", "MOVE SKU-1001 379 -45", "MOVE SKU-1001 73 -17", "QUERY SKU-1002 321", "MOVE SKU-2001 277 31", "MOVE SKU-2001 138 15", "MOVE sku-1001 462 40", "QUERY SKU-1002 406", "MOVE SKU-1002 38 -38", "MOVE SKU-2001 59 16", "MOVE SKU-2001 419 -44", "MOVE SKU-1002 181 5", "QUERY SKU-1002 431", "QUERY SKU-1001 463", "MOVE SKU-2001 242 -44", "MOVE SKU-2001 392 16", "QUERY SKU-1001 404", "QUERY SKU-1001 380", "MOVE SKU-1002 343 24", "QUERY SKU-2001 315", "MOVE SKU-1002 278 0", "MOVE SKU-2001 316 -23", "MOVE SKU-1002 258 48", "QUERY SKU-1002 454", "MOVE SKU-2001 358 30", "QUERY SKU-2001 343", "QUERY SKU-1001 212", "QUERY SKU-1001 457", "MOVE SKU-2001 393 -21", "MOVE SKU-1001 267 67", "MOVE SKU-1001 167 59", "MOVE SKU-1001 264 -46", "MOVE SKU-1002 25 77", "MOVE SKU-2001 208 37", "QUERY SKU-2001 149", "MOVE sku-1001 10 2", "QUERY SKU-1002 322", "QUERY SKU-2001 347", "MOVE SKU-1002 349 -29", "QUERY sku-1001 64", "QUERY sku-1001 2", "MOVE sku-1001 394 65", "MOVE SKU-1001 491 -7", "QUERY SKU-1002 419", "QUERY SKU-2001 468", "QUERY SKU-2001 421", "QUERY sku-1001 79", "MOVE SKU-1001 20 -4", "MOVE sku-1001 89 33", "QUERY SKU-1001 116", "MOVE SKU-2001 156 20", "MOVE SKU-2001 272 70", "MOVE SKU-2001 41 63", "QUERY SKU-2001 347", "MOVE SKU-1001 334 68", "MOVE sku-1001 75 53", "QUERY sku-1001 412", "QUERY SKU-1001 475", "MOVE SKU-2001 224 -4", "MOVE SKU-1002 224 -48", "MOVE SKU-1001 2 44", "MOVE sku-1001 231 -8", "MOVE SKU-1002 110 72", "MOVE SKU-2001 159 -21", "QUERY SKU-1002 382", "MOVE SKU-1002 171 -39", "MOVE sku-1001 203 22", "QUERY sku-1001 326", "MOVE SKU-1001 361 27", "QUERY SKU-1002 392", "QUERY SKU-1001 508", "MOVE SKU-1001 339 59", "QUERY SKU-1002 322", "MOVE SKU-1002 441 42", "QUERY SKU-1001 96", "MOVE SKU-1002 128 -20", "QUERY SKU-1001 29", "MOVE SKU-1001 499 -32", "QUERY SKU-1001 333", "QUERY SKU-1001 31", "MOVE sku-1001 319 48", "MOVE SKU-1002 101 79", "QUERY SKU-2001 150", "MOVE SKU-1002 2 4", "MOVE SKU-1002 27 56", "QUERY sku-1001 492", "MOVE SKU-1001 391 56", "QUERY SKU-2001 299", "QUERY SKU-2001 158", "MOVE sku-1001 91 -4", "QUERY sku-1001 20", "QUERY SKU-2001 510", "QUERY sku-1001 445", "QUERY SKU-1001 60", "MOVE SKU-2001 464 10", "QUERY SKU-1001 13", "QUERY sku-1001 152", "MOVE SKU-1001 422 -20", "QUERY SKU-1002 198", "MOVE SKU-1002 445 -36", "MOVE SKU-2001 273 51", "QUERY SKU-2001 10", "MOVE SKU-1001 7 -36", "QUERY SKU-2001 406", "MOVE sku-1001 49 -23", "MOVE SKU-1001 71 60", "QUERY SKU-1001 223", "MOVE SKU-1001 491 35", "MOVE SKU-1002 182 -8", "QUERY SKU-2001 16", "QUERY SKU-1002 178", "QUERY SKU-1001 359", "MOVE sku-1001 123 -18", "MOVE SKU-1001 323 -39", "MOVE SKU-2001 288 -13", "QUERY SKU-1002 140", "MOVE SKU-2001 248 50", "QUERY SKU-1002 175", "MOVE SKU-1001 11 32", "QUERY SKU-1002 479", "MOVE SKU-1001 206 32", "MOVE sku-1001 273 19", "MOVE sku-1001 79 61", "QUERY SKU-1002 116", "QUERY SKU-1001 97", "QUERY sku-1001 229", "MOVE SKU-2001 16 -16", "MOVE SKU-1001 117 -35", "MOVE sku-1001 284 80", "QUERY SKU-1002 208", "QUERY SKU-2001 497", "MOVE SKU-1002 188 71", "QUERY SKU-1001 221", "QUERY SKU-2001 107", "MOVE sku-1001 183 60", "MOVE SKU-1002 452 -1", "QUERY SKU-1002 490", "MOVE sku-1001 332 46", "QUERY sku-1001 118", "QUERY sku-1001 89", "MOVE SKU-2001 317 -4", "QUERY SKU-2001 23", "QUERY SKU-1002 337", "MOVE SKU-2001 60 -24", "QUERY SKU-1002 309", "MOVE SKU-1001 409 41", "MOVE SKU-1001 77 76", "QUERY SKU-1002 313", "QUERY SKU-1002 405", "QUERY SKU-1002 243", "MOVE sku-1001 484 60", "MOVE SKU-2001 389 31", "MOVE SKU-1001 105 48", "MOVE sku-1001 32 4", "MOVE SKU-1002 248 71", "QUERY sku-1001 335", "MOVE SKU-2001 74 66", "QUERY SKU-1002 447", "QUERY sku-1001 30", "MOVE SKU-2001 268 -26", "MOVE SKU-2001 375 24", "QUERY SKU-2001 209", "MOVE SKU-1001 416 31", "QUERY sku-1001 205", "QUERY SKU-2001 475", "MOVE SKU-1001 332 76", "MOVE SKU-2001 289 -22", "MOVE SKU-1002 387 79", "QUERY SKU-1002 47", "MOVE SKU-1002 439 18", "MOVE SKU-2001 125 30", "MOVE SKU-2001 438 58", "MOVE sku-1001 10 -12", "MOVE SKU-1001 408 -37", "MOVE SKU-1002 9 -1", "MOVE sku-1001 377 70", "QUERY SKU-1001 87", "MOVE SKU-1001 461 24", "MOVE sku-1001 290 80", "MOVE SKU-2001 207 -29", "MOVE sku-1001 191 41", "QUERY sku-1001 200", "QUERY sku-1001 303", "MOVE SKU-2001 14 9", "QUERY sku-1001 255", "MOVE SKU-1002 103 -29", "MOVE SKU-2001 466 54", "MOVE SKU-2001 396 -22", "MOVE SKU-1001 496 55", "QUERY sku-1001 171", "QUERY SKU-2001 323", "QUERY SKU-1001 241", "QUERY SKU-1002 165", "MOVE sku-1001 285 -34", "QUERY sku-1001 266", "MOVE sku-1001 128 61", "MOVE SKU-1001 102 -23", "QUERY SKU-1002 312", "MOVE SKU-1002 112 -38", "MOVE SKU-1002 31 -48", "QUERY SKU-1002 210", "MOVE SKU-1002 452 57", "QUERY SKU-1002 3", "QUERY SKU-1002 305", "MOVE sku-1001 232 -33", "MOVE sku-1001 242 0", "QUERY SKU-2001 472", "MOVE SKU-1001 120 -1", "QUERY SKU-1001 245", "MOVE SKU-1002 380 61", "MOVE SKU-2001 102 -2", "QUERY SKU-1001 466", "QUERY SKU-1002 141", "QUERY sku-1001 207", "QUERY SKU-2001 504", "QUERY SKU-1001 508", "MOVE SKU-2001 210 -19", "MOVE SKU-2001 267 73", "QUERY SKU-1001 87", "QUERY SKU-1002 36", "QUERY SKU-2001 486", "QUERY SKU-1001 278", "MOVE SKU-2001 317 28", "QUERY SKU-1001 367", "MOVE SKU-1002 214 -18", "QUERY sku-1001 230", "MOVE SKU-2001 177 16", "MOVE SKU-1001 472 3", "QUERY sku-1001 484", "QUERY SKU-1002 209", "MOVE SKU-2001 432 60", "MOVE SKU-1002 189 2", "MOVE SKU-1002 208 18", "QUERY SKU-1001 471", "QUERY SKU-2001 380", "MOVE sku-1001 20 -1", "QUERY SKU-1001 32", "MOVE SKU-1002 250 -11", "MOVE SKU-1002 498 22", "QUERY SKU-1001 448", "MOVE SKU-2001 350 -30", "MOVE SKU-1001 150 -10", "MOVE SKU-1001 261 53", "QUERY SKU-1001 245", "MOVE SKU-2001 112 -8", "QUERY SKU-2001 473", "QUERY SKU-2001 217", "QUERY SKU-1002 133", "MOVE SKU-2001 119 77", "QUERY sku-1001 55", "MOVE SKU-2001 262 -28", "MOVE sku-1001 194 -12", "QUERY SKU-1001 200", "MOVE sku-1001 447 -28", "QUERY SKU-1001 181", "MOVE SKU-2001 297 45", "MOVE sku-1001 87 -35", "MOVE SKU-2001 498 60", "MOVE SKU-2001 57 18", "MOVE SKU-1002 479 54", "MOVE SKU-1001 453 -29", "QUERY SKU-2001 428", "MOVE SKU-2001 6 -28", "MOVE sku-1001 138 -17", "MOVE SKU-1002 131 60", "MOVE SKU-1002 113 53", "QUERY SKU-1001 445", "QUERY SKU-1001 342", "MOVE sku-1001 326 -38", "QUERY SKU-2001 418", "MOVE SKU-1001 266 -25", "MOVE SKU-1001 172 8", "QUERY SKU-2001 52", "MOVE SKU-2001 484 -48", "QUERY SKU-1001 238", "MOVE SKU-1001 383 3", "MOVE SKU-1002 47 80", "MOVE SKU-2001 114 77"]], expected: [0, 0, 66, 0, 0, 66, 66, 0, 0, 66, 0, 28, 0, 0, 40, 125, 24, 84, 7, 59, -6, 11, -6, 81, 22, 65, 64, 32, 44, 219, -16, 239, 83, 22, 65, 65, 135, 0, 65, 135, 503, 51, 292, 140, 57, 51, 57, 90, 205, 382, 113, 0, 292, 133, 110, 205, 0, 93, 205, 110, 65, 95, 90, 113, 23, 11, 65, 394, 516, 43, 16, 329, 120, 73, 100, 394, 311, 65, 68, 11, 248, 260, 23, 0, 40, 262, 152, 438, 236, 239, 65, 337, 224, 111, 180, 199, 166, 224, 179, 159, 552, 146, 186, 80, 159, 187, -50, 43, -50, 144, 146, 290, 243, 68, 223, 202, 20, 225, 224, 65, 163, 118, 473, 257, 569, 115, 356, 213, 99, 521, 86, 435, 319, 86, 80, 319, 128, 614, 161, 230, 271, 121, 535, 587, 406, 66, -50, 192, 478, 175, 517, 643, 523, 188, 485, 137, 397, 592, 675, 314, 18, 104, 378, 480, 131, 621, 401, -2, 130, 620, 102, 659, 468, 251, 177, 471, 346, 90, -2, 268, 99, 102, 628, 338, -40, 412, -5, 498, 655, 449, 539, 375, 774, 372, 299, 147, 369, 556, 717, 330, 365, 384, 682, -27, 499, 60, 414, 92, 428, 20, 415, 60, 506, 717, 520, 520, 573, 290, 482, 413, 299, 857, 92, 593, 430, 782, 731, 604, 107, 564, 588, 546, 643, 565, 607, 793, 618, 777, 407, 643, 427, 656, 808, 261, -2, 608, 1007, 941, 260, 113, 961, 1066, 821, 662, 942, 665, 893, 641, 80, 35, 583, 112, 490, 1209, 989, 542, 72, 1064, 1229, 140, 62, 199, 698, -27, 1076, 530, -27, 621, 752, 337, 621, 865, 393, 136, 447, 769, 1185, 559, 289, 935, 363, 391, 90, 851, 823, 823, 842, 776, 1232, 910, 72, 625, 399, 1284, 119, 212, 406, 1027, 609, 332, 1004, 693, 497, 692, 864, 724, 4, 819, 1362, 669, 1202, 221, 489, 1289, 1295, 212, 106, 1440, 734, 1010, 601, 1667, 724, 1202, 1221, 108, 1120, 659, 1480, 696, 221, 138, 625, 670, 1314, 1163, 906, 1331, 120, 667], description: "800 mixed operations over four SKUs (two differing only by case)"}
+expected_concepts:
+  - "prefix sums over time with point updates (dynamic prefix sums)"
+  - "Fenwick tree (binary indexed tree) or segment tree"
+  - "offline coordinate compression of event times per SKU"
+  - "processing operations in arrival order so queries only see earlier movements"
+  - "upper-bound binary search for an inclusive time limit"
+  - "64-bit accumulation"
+optimal_complexity: {time: "O(n log n)", space: "O(n)"}
+rubric:
+  excellent: "Reads all operations first to compress each SKU's movement times, keeps one Fenwick tree per SKU, applies movements and answers queries in arrival order with an upper-bound search for the inclusive limit, uses 64-bit sums, and explains why a sorted structure alone is not enough when movements are backdated."
+  good: "Correct answers with a slower but reasoned structure, such as a sorted list per SKU with insertion and a prefix scan, or a single global Fenwick tree keyed by (sku, time) after a hint about compression."
+  weak: "Scans every earlier movement for each query without discussing a faster approach, sorts all operations by time and so lets queries see later movements, or treats the time limit as exclusive."
+  criteria:
+    correctness: "All tests pass, including backdated movements, same-time movements, unknown SKUs, case-sensitive SKUs and large totals."
+    efficiency: "O(log n) per operation after O(n log n) preprocessing; recognises the quadratic baseline."
+    code_quality: "Parsing, compression and the Fenwick tree are separate and small; per-SKU state is grouped clearly."
+    edge_cases: "No operations, a query before any movement, negative stock, time 0, the maximum time and SKUs that differ only by case."
+    communication: "Explains the offline idea and why arrival order must still drive the simulation."
+hints:
+  - "Each query is a sum over one SKU's movements up to a time limit, but movements keep arriving with arbitrary times, so the set you are summing over changes between queries."
+  - "You need a structure that supports adding a value at a time position and asking for the total up to a position, both quickly. Since you can read every operation before answering, you know all the time positions in advance for each SKU."
+  - "First collect the distinct movement times of each SKU and sort them so every time maps to a small index. Then replay the operations in their original order with one Fenwick tree per SKU: a movement adds its delta at its time's index, and a query counts how many known times are at most t with a binary search and returns the tree's prefix sum up to that count, or zero for a SKU without movements."
+followups:
+  - "How would you answer the queries online, without reading the operations ahead of time?"
+  - "How would you support a query for the total stock across all SKUs at time t?"
+  - "In a real database, how would you model backdated movements so that stock-at-time queries stay fast?"
+  - "How would you also report the earliest time at which a SKU's stock went negative?"
+common_errors:
+  - "Sorting all operations by event time, which lets a query see movements received after it."
+  - "Using a strict comparison so a movement exactly at time t is excluded."
+  - "Keeping a single running total per SKU, which ignores the time limit of the query."
+  - "Accumulating in 32-bit integers and overflowing on large totals."
+  - "Treating SKUs case-insensitively."

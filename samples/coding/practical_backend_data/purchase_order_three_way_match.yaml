@@ -1,0 +1,204 @@
+version: 1
+slug: purchase_order_three_way_match
+title: Three-Way Match for Purchase Orders
+difficulty: medium
+competency_keys: [data_structures, problem_solving, code_quality]
+role_tags: [backend, business_analyst, data_analyst, data]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Three-Way Match for Purchase Orders
+
+  Before the accounts-payable team pays a supplier, the procurement system runs a **three-way match**:
+  for every purchase-order (PO) line it compares what was **ordered**, what the warehouse **received**
+  and what the supplier **invoiced**. You are given three lists whose entries are all strings:
+
+  - `po_lines`: `[line_id, ordered_qty, unit_price_cents]`, line ids are distinct.
+  - `receipts`: `[line_id, qty]`, goods receipts; a line can have any number of receipts.
+  - `invoices`: `[line_id, qty, unit_price_cents]`, invoice lines; a line can have any number of them.
+
+  For each PO line, let `received` be the total receipt quantity and `invoiced` the total invoice
+  quantity for that line (0 when there are none). An invoice has a **price variance** when its price
+  differs from the PO price by more than `tolerance_pct` percent of the PO price, that is when
+  `|invoice_price - po_price| * 100 > tolerance_pct * po_price`.
+
+  The line's status is the **first** rule that applies, checked in this order:
+
+  1. `BILLED_NOT_RECEIVED` - `invoiced > received`
+  2. `PRICE_VARIANCE` - at least one invoice for the line has a price variance
+  3. `OPEN` - `received < ordered_qty`
+  4. `OVER_RECEIVED` - `received > ordered_qty`
+  5. `AWAITING_INVOICE` - `invoiced < received`
+  6. `MATCHED` - otherwise
+
+  Return one string `"<line_id>:<STATUS>"` per PO line in the order of `po_lines`, followed by
+  `"<line_id>:ORPHAN"` for every **distinct** line id that appears in `receipts` or `invoices` but not in
+  `po_lines`, sorted by line id in plain character-code (ASCII) order.
+
+  ### Example 1
+  ```
+  Input:  po_lines = [["10", "5", "1000"], ["20", "3", "250"], ["30", "4", "999"], ["40", "2", "100"]],
+          receipts = [["10", "5"], ["20", "2"], ["30", "4"], ["40", "2"], ["99", "1"]],
+          invoices = [["10", "3", "1000"], ["10", "2", "1000"], ["20", "2", "250"], ["30", "4", "1050"],
+                      ["40", "1", "100"], ["77", "1", "5"]],
+          tolerance_pct = 2
+  Output: ["10:MATCHED", "20:OPEN", "30:PRICE_VARIANCE", "40:AWAITING_INVOICE", "77:ORPHAN", "99:ORPHAN"]
+  Explanation: line 30 was invoiced at 1050 against 999, a 51 cent difference, more than 2% of 999.
+  ```
+
+  ### Example 2
+  ```
+  Input:  po_lines = [["A1", "10", "500"], ["A2", "10", "500"], ["A3", "10", "500"]],
+          receipts = [["A2", "12"], ["A3", "10"]],
+          invoices = [["A1", "1", "900"], ["A2", "12", "505"], ["A3", "10", "510"]],
+          tolerance_pct = 1
+  Output: ["A1:BILLED_NOT_RECEIVED", "A2:OVER_RECEIVED", "A3:PRICE_VARIANCE"]
+  Explanation: A1 is billed but nothing arrived, which outranks its price variance. A2's 5 cent
+  difference is exactly 1% and therefore within tolerance.
+  ```
+
+  ### Constraints
+  - `0 <= po_lines.length, receipts.length, invoices.length <= 10^4`
+  - Line ids are non-empty strings of printable ASCII characters without `:`.
+  - All quantities and prices are decimal integers without signs or leading zeros:
+    `1 <= ordered_qty, qty <= 10^9`, `1 <= unit_price_cents <= 10^9`.
+  - `0 <= tolerance_pct <= 100`
+  - Totals and the variance products can exceed the 32-bit integer range.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: match_po_lines
+  params:
+    - {name: po_lines, type: "string[][]"}
+    - {name: receipts, type: "string[][]"}
+    - {name: invoices, type: "string[][]"}
+    - {name: tolerance_pct, type: int}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def match_po_lines(po_lines: list[list[str]], receipts: list[list[str]], invoices: list[list[str]], tolerance_pct: int) -> list[str]:
+        price = {line[0]: int(line[2]) for line in po_lines}
+        received: dict[str, int] = {}
+        invoiced: dict[str, int] = {}
+        variance: set[str] = set()
+        orphans: set[str] = set()
+        for line_id, qty in receipts:
+            if line_id not in price:
+                orphans.add(line_id)
+                continue
+            received[line_id] = received.get(line_id, 0) + int(qty)
+        for line_id, qty, unit_price in invoices:
+            if line_id not in price:
+                orphans.add(line_id)
+                continue
+            invoiced[line_id] = invoiced.get(line_id, 0) + int(qty)
+            po_price = price[line_id]
+            if abs(int(unit_price) - po_price) * 100 > tolerance_pct * po_price:
+                variance.add(line_id)
+        result: list[str] = []
+        for line_id, ordered, _ in po_lines:
+            got = received.get(line_id, 0)
+            billed = invoiced.get(line_id, 0)
+            ordered_qty = int(ordered)
+            if billed > got:
+                status = "BILLED_NOT_RECEIVED"
+            elif line_id in variance:
+                status = "PRICE_VARIANCE"
+            elif got < ordered_qty:
+                status = "OPEN"
+            elif got > ordered_qty:
+                status = "OVER_RECEIVED"
+            elif billed < got:
+                status = "AWAITING_INVOICE"
+            else:
+                status = "MATCHED"
+            result.append(f"{line_id}:{status}")
+        result.extend(f"{line_id}:ORPHAN" for line_id in sorted(orphans))
+        return result
+  javascript: |
+    function matchPoLines(poLines, receipts, invoices, tolerancePct) {
+      // BigInt keeps totals and variance products exact beyond 2^53.
+      const price = new Map(poLines.map((l) => [l[0], BigInt(l[2])]));
+      const received = new Map();
+      const invoiced = new Map();
+      const variance = new Set();
+      const orphans = new Set();
+      for (const [id, qty] of receipts) {
+        if (!price.has(id)) {
+          orphans.add(id);
+          continue;
+        }
+        received.set(id, (received.get(id) ?? 0n) + BigInt(qty));
+      }
+      const tol = BigInt(tolerancePct);
+      for (const [id, qty, unitPrice] of invoices) {
+        if (!price.has(id)) {
+          orphans.add(id);
+          continue;
+        }
+        invoiced.set(id, (invoiced.get(id) ?? 0n) + BigInt(qty));
+        const po = price.get(id);
+        let diff = BigInt(unitPrice) - po;
+        if (diff < 0n) diff = -diff;
+        if (diff * 100n > tol * po) variance.add(id);
+      }
+      const result = [];
+      for (const [id, ordered] of poLines) {
+        const got = received.get(id) ?? 0n;
+        const billed = invoiced.get(id) ?? 0n;
+        const want = BigInt(ordered);
+        let status;
+        if (billed > got) status = "BILLED_NOT_RECEIVED";
+        else if (variance.has(id)) status = "PRICE_VARIANCE";
+        else if (got < want) status = "OPEN";
+        else if (got > want) status = "OVER_RECEIVED";
+        else if (billed < got) status = "AWAITING_INVOICE";
+        else status = "MATCHED";
+        result.push(id + ":" + status);
+      }
+      const extra = [...orphans].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      for (const id of extra) result.push(id + ":ORPHAN");
+      return result;
+    }
+tests:
+  - {"id": "t1", "args": [[["10", "5", "1000"], ["20", "3", "250"], ["30", "4", "999"], ["40", "2", "100"]], [["10", "5"], ["20", "2"], ["30", "4"], ["40", "2"], ["99", "1"]], [["10", "3", "1000"], ["10", "2", "1000"], ["20", "2", "250"], ["30", "4", "1050"], ["40", "1", "100"], ["77", "1", "5"]], 2], "expected": ["10:MATCHED", "20:OPEN", "30:PRICE_VARIANCE", "40:AWAITING_INVOICE", "77:ORPHAN", "99:ORPHAN"], "description": "Example 1"}
+  - {"id": "t2", "args": [[["A1", "10", "500"], ["A2", "10", "500"], ["A3", "10", "500"]], [["A2", "12"], ["A3", "10"]], [["A1", "1", "900"], ["A2", "12", "505"], ["A3", "10", "510"]], 1], "expected": ["A1:BILLED_NOT_RECEIVED", "A2:OVER_RECEIVED", "A3:PRICE_VARIANCE"], "description": "Example 2 - precedence and exact tolerance boundary"}
+  - {"id": "t3", "hidden": true, "args": [[], [["x", "1"], ["b", "2"], ["x", "3"]], [["b", "1", "1"], ["a", "1", "1"]], 5], "expected": ["a:ORPHAN", "b:ORPHAN", "x:ORPHAN"], "description": "No PO lines - only distinct, sorted orphans (an id in both lists appears once)"}
+  - {"id": "t4", "hidden": true, "args": [[["L1", "4", "100"], ["L2", "4", "100"]], [], [], 0], "expected": ["L1:OPEN", "L2:OPEN"], "description": "No receipts or invoices - every line is OPEN"}
+  - {"id": "t5", "hidden": true, "args": [[["L1", "6", "200"], ["L2", "6", "200"], ["L3", "6", "200"]], [["L1", "2"], ["L1", "4"], ["L2", "6"], ["L3", "6"]], [["L1", "3", "200"], ["L1", "3", "200"], ["L2", "6", "199"], ["L3", "5", "200"], ["L3", "1", "201"]], 0], "expected": ["L1:MATCHED", "L2:PRICE_VARIANCE", "L3:PRICE_VARIANCE"], "description": "Zero tolerance - any price difference is a variance, including one cent below and on a second invoice"}
+  - {"id": "t6", "hidden": true, "args": [[["S", "10", "1000"], ["T", "10", "1000"]], [["S", "10"], ["T", "4"]], [["S", "10", "900"], ["T", "4", "1100"]], 10], "expected": ["S:MATCHED", "T:OPEN"], "description": "Price 10% below and 10% above with 10% tolerance are both within tolerance"}
+  - {"id": "t7", "hidden": true, "args": [[["P", "5", "100"], ["Q", "5", "100"]], [["P", "7"], ["Q", "5"]], [["P", "5", "100"], ["Q", "6", "100"]], 3], "expected": ["P:OVER_RECEIVED", "Q:BILLED_NOT_RECEIVED"], "description": "OVER_RECEIVED outranks AWAITING_INVOICE; invoiced above received is BILLED_NOT_RECEIVED even when received equals ordered"}
+  - {"id": "t8", "hidden": true, "args": [[["9", "1", "1"], ["100", "1", "1"]], [["9", "1"], ["100", "1"], ["10", "1"], ["2", "1"]], [["9", "1", "1"], ["100", "1", "1"], ["1000", "1", "1"]], 0], "expected": ["9:MATCHED", "100:MATCHED", "10:ORPHAN", "1000:ORPHAN", "2:ORPHAN"], "description": "Numeric-looking orphan ids sort in character-code order, not numeric"}
+  - {"id": "t9", "hidden": true, "args": [[["BIG", "3000000000", "1000000000"]], [["BIG", "1000000000"], ["BIG", "1000000000"], ["BIG", "1000000000"]], [["BIG", "1000000000", "1000000000"], ["BIG", "1000000000", "1"], ["BIG", "999999999", "1000000000"]], 100], "expected": ["BIG:AWAITING_INVOICE"], "description": "Totals and variance products beyond 32 bits; 100% tolerance still flags nothing below double price"}
+  - {"id": "t10", "hidden": true, "args": [[["PO-0", "11", "94"], ["PO-1", "13", "110"], ["PO-2", "2", "92"], ["PO-3", "18", "93"], ["PO-4", "12", "108"], ["PO-5", "2", "106"], ["PO-6", "7", "91"], ["PO-7", "3", "103"], ["PO-8", "14", "92"], ["PO-9", "8", "92"], ["PO-10", "18", "103"], ["PO-11", "2", "108"], ["PO-12", "4", "97"], ["PO-13", "19", "91"], ["PO-14", "19", "108"], ["PO-15", "13", "91"], ["PO-16", "8", "91"], ["PO-17", "18", "94"], ["PO-18", "10", "103"], ["PO-19", "5", "107"], ["PO-20", "4", "108"], ["PO-21", "10", "107"], ["PO-22", "6", "93"], ["PO-23", "19", "108"], ["PO-24", "7", "101"]], [["PO-3", "2"], ["PO-18", "1"], ["PO-19", "4"], ["PO-15", "7"], ["PO-24", "6"], ["PO-14", "8"], ["PO-11", "5"], ["PO-7", "3"], ["PO-22", "4"], ["PO-2", "5"], ["PO-16", "8"], ["PO-10", "8"], ["PO-9", "2"], ["PO-3", "7"], ["PO-5", "6"], ["PO-4", "8"], ["PO-13", "1"], ["PO-21", "2"], ["PO-24", "6"], ["PO-10", "6"], ["PO-19", "8"], ["PO-18", "8"], ["PO-2", "2"], ["PO-8", "8"], ["PO-22", "2"], ["PO-1", "5"], ["PO-20", "8"], ["PO-9", "7"], ["PO-21", "6"], ["PO-0", "8"], ["PO-11", "3"], ["PO-19", "2"], ["PO-15", "1"], ["PO-6", "5"], ["PO-4", "4"], ["PO-12", "7"], ["PO-27", "8"], ["PO-2", "3"], ["PO-14", "7"], ["PO-17", "5"], ["PO-4", "7"], ["PO-27", "5"], ["PO-22", "7"], ["PO-11", "7"], ["PO-7", "3"]], [["PO-2", "2", "92"], ["PO-7", "6", "103"], ["PO-0", "4", "100"], ["PO-18", "2", "103"], ["PO-9", "1", "92"], ["PO-13", "5", "91"], ["PO-19", "5", "107"], ["PO-4", "6", "114"], ["PO-16", "5", "89"], ["PO-21", "6", "107"], ["PO-14", "6", "114"], ["PO-17", "4", "94"], ["PO-12", "4", "97"], ["PO-15", "6", "91"], ["PO-1", "2", "110"], ["PO-6", "4", "91"], ["PO-3", "3", "94"], ["PO-1", "1", "110"], ["PO-18", "2", "104"], ["PO-3", "3", "94"], ["PO-0", "1", "100"], ["PO-6", "5", "91"], ["PO-4", "6", "108"], ["PO-11", "5", "108"], ["PO-15", "1", "91"], ["PO-27", "4", "100"], ["PO-15", "4", "91"], ["PO-2", "2", "92"], ["PO-23", "3", "106"], ["PO-8", "4", "98"], ["PO-22", "2", "94"], ["PO-0", "2", "95"], ["PO-11", "2", "106"], ["PO-17", "1", "100"], ["PO-16", "3", "89"], ["PO-27", "1", "98"], ["PO-27", "3", "101"], ["PO-11", "2", "108"], ["PO-24", "2", "102"], ["PO-17", "5", "94"], ["PO-20", "2", "109"], ["PO-25", "2", "106"], ["PO-7", "4", "101"], ["PO-25", "2", "100"], ["PO-16", "4", "91"]], 4], "expected": ["PO-0:PRICE_VARIANCE", "PO-1:OPEN", "PO-2:OVER_RECEIVED", "PO-3:OPEN", "PO-4:PRICE_VARIANCE", "PO-5:OVER_RECEIVED", "PO-6:BILLED_NOT_RECEIVED", "PO-7:BILLED_NOT_RECEIVED", "PO-8:PRICE_VARIANCE", "PO-9:OVER_RECEIVED", "PO-10:OPEN", "PO-11:OVER_RECEIVED", "PO-12:OVER_RECEIVED", "PO-13:BILLED_NOT_RECEIVED", "PO-14:PRICE_VARIANCE", "PO-15:BILLED_NOT_RECEIVED", "PO-16:BILLED_NOT_RECEIVED", "PO-17:BILLED_NOT_RECEIVED", "PO-18:OPEN", "PO-19:OVER_RECEIVED", "PO-20:OVER_RECEIVED", "PO-21:OPEN", "PO-22:OVER_RECEIVED", "PO-23:BILLED_NOT_RECEIVED", "PO-24:OVER_RECEIVED", "PO-25:ORPHAN", "PO-27:ORPHAN"], "description": "Stress - 25 PO lines with random receipts and invoices, some for unknown lines"}
+expected_concepts:
+  - aggregating quantities per key with hash maps
+  - rule precedence implemented as an ordered if-else chain
+  - integer-only percentage comparison (no floating point)
+  - set of distinct orphan ids with a deterministic sort
+  - 64-bit arithmetic for totals and products
+optimal_complexity: {time: O(P + R + I + K log K) where K is the number of orphan ids, space: O(P + K)}
+rubric:
+  excellent: Aggregates receipts and invoices in one pass each with hash maps, encodes the six rules as an ordered chain that mirrors the specification, compares prices with integer arithmetic, uses 64-bit totals and returns distinct sorted orphans.
+  good: Correct statuses for most lines but needs a nudge on one detail such as rule order, the exact-tolerance boundary, distinct orphans or 32-bit overflow.
+  weak: Rescans all receipts and invoices for every PO line, compares prices with floating point that misjudges the boundary, or reports orphans per occurrence or unsorted.
+  criteria:
+    correctness: All tests pass, including precedence between rules, the tolerance boundary and orphan handling.
+    efficiency: Linear aggregation with hash maps plus a sort of the orphan ids.
+    code_quality: Rule chain that reads like the specification; parsing of string fields done once.
+    edge_cases: Lines with no activity, zero tolerance, prices below the PO price, orphans that appear in both lists, totals above 32 bits.
+    communication: Explains why the order of checks matters with a line that matches several rules.
+hints:
+  - Each PO line needs only a few aggregated facts. Which totals and flags would you like to have ready before deciding any status?
+  - Build maps from line id to total received and total invoiced quantity, and remember which lines had at least one invoice outside the tolerance. Ids that are not on the PO go into a set of orphans.
+  - Check the price with integers - multiply the absolute difference by 100 and compare with tolerance_pct times the PO price - then walk po_lines in order and apply the six rules as an if-else chain in exactly the listed order. Finally sort the orphan set and append the ORPHAN entries.
+followups:
+  - How would you return the amount in cents that is safe to pay for each line?
+  - How would you support partial invoices that should be matched against specific receipts?
+  - What changes if the tolerance is an absolute amount per line rather than a percentage?
+  - How would you run this match incrementally as receipts and invoices stream in during the day?
+common_errors:
+  - Applying the rules in a different order, for example reporting OPEN before PRICE_VARIANCE.
+  - Using floating-point percentages, which misjudges differences exactly at the tolerance.
+  - Comparing only the first invoice's price instead of every invoice for the line.
+  - Reporting an orphan id once per occurrence or in input order instead of distinct and sorted.
+  - Summing quantities in 32-bit integers.

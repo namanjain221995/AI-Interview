@@ -1,0 +1,259 @@
+version: 1
+slug: order_count_distribution
+title: "Order Count Distribution"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, product_manager, data]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Order Count Distribution
+
+  Product analytics wants a histogram of engagement for a business account dashboard: how many
+  accounts made zero purchases, how many made exactly one, exactly two, and so on.
+
+  Table `customers`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | account_name | VARCHAR(100) | display label only |
+
+  Table `orders`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | customer_id | INTEGER | buying account, a `customers.id`; **NULL for anonymous purchases** |
+  | total_cents | INTEGER | order value in cents (unused by this report) |
+
+  An account's **order count** is how many `orders` rows carry its `id` in `customer_id`
+  (0 when it bought nothing). Anonymous purchases belong to no account and are left out of all counts.
+
+  Produce a row for each order count that occurs, with the columns:
+
+  - `order_count`
+  - `customers`: how many accounts reach exactly that order count
+
+  Sort by `order_count` ascending. Counts that no account reaches are **not** listed (no zero
+  lines for gaps). With an empty `customers` table the result is empty.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  customers
+  +----+--------------+
+  | id | account_name |
+  +----+--------------+
+  | 1  | Acme         |
+  | 2  | Birchwood    |
+  | 3  | Cobalt       |
+  | 4  | Dunmore      |
+  | 5  | Ember        |
+  +----+--------------+
+
+  orders
+  +----+-------------+-------------+
+  | id | customer_id | total_cents |
+  +----+-------------+-------------+
+  | 1  | 1           | 1000        |
+  | 2  | 3           | 2750        |
+  | 3  | 1           | 1750        |
+  | 4  | 2           | 3500        |
+  | 5  | 3           | 2500        |
+  +----+-------------+-------------+
+
+  Output
+  +-------------+-----------+
+  | order_count | customers |
+  +-------------+-----------+
+  | 0           | 2         |
+  | 1           | 1         |
+  | 2           | 2         |
+  +-------------+-----------+
+  Acme and Cobalt placed 2 orders, Birchwood 1, Dunmore and Ember none.
+  ```
+
+  ### Example 2
+  ```
+  customers
+  +----+--------------+
+  | id | account_name |
+  +----+--------------+
+  | 1  | Acme         |
+  | 2  | Birchwood    |
+  | 3  | Cobalt       |
+  +----+--------------+
+
+  orders
+  +----+-------------+-------------+
+  | id | customer_id | total_cents |
+  +----+-------------+-------------+
+  | 1  | NULL        | 1000        |
+  | 2  | NULL        | 2750        |
+  | 3  | 2           | 1750        |
+  | 4  | 2           | 3500        |
+  | 5  | 2           | 2500        |
+  +----+-------------+-------------+
+
+  Output
+  +-------------+-----------+
+  | order_count | customers |
+  +-------------+-----------+
+  | 0           | 2         |
+  | 3           | 1         |
+  +-------------+-----------+
+  Birchwood placed 3 orders; Acme and Cobalt none. The two guest orders belong to nobody.
+  ```
+
+  ### Constraints
+  - `0 <= rows in customers, orders <= 10^5`
+  - A non-NULL `orders.customer_id` always matches an existing customer.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return order_count and the number of customers with exactly that many orders.
+    SELECT 0 AS order_count, COUNT(*) AS customers
+    FROM customers
+    ORDER BY order_count;
+reference_solutions:
+  sql: |
+    SELECT order_count, COUNT(*) AS customers
+    FROM (
+      SELECT c.id, COUNT(o.id) AS order_count
+      FROM customers c
+      LEFT JOIN orders o ON o.customer_id = c.id
+      GROUP BY c.id
+    ) per_customer
+    GROUP BY order_count
+    ORDER BY order_count;
+sql_setup: |
+  CREATE TABLE customers (
+    id INTEGER PRIMARY KEY,
+    account_name VARCHAR(100) NOT NULL
+  );
+  CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER REFERENCES customers (id),
+    total_cents INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - customers with 0, 1 and 2 orders"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customers (id, account_name) VALUES
+        (1, 'Acme'), (2, 'Birchwood'), (3, 'Cobalt'), (4, 'Dunmore'), (5, 'Ember');
+      INSERT INTO orders (id, customer_id, total_cents) VALUES
+        (1, 1, 1000), (2, 3, 2750), (3, 1, 1750), (4, 2, 3500), (5, 3, 2500);
+    expected_rows: [[0, 2], [1, 1], [2, 2]]
+  - id: t2
+    description: "Example 2 - guest orders (NULL customer_id) are not counted; gaps 1 and 2 are not listed"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customers (id, account_name) VALUES (1, 'Acme'), (2, 'Birchwood'), (3, 'Cobalt');
+      INSERT INTO orders (id, customer_id, total_cents) VALUES
+        (1, NULL, 1000), (2, NULL, 2750), (3, 2, 1750), (4, 2, 3500), (5, 2, 2500);
+    expected_rows: [[0, 2], [3, 1]]
+  - id: t3
+    hidden: true
+    description: "Empty tables return no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Customers but no orders - a single row (0, n); inner join or COUNT(*) loses or miscounts them"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customers (id, account_name) VALUES (1, 'Acme'), (2, 'Birchwood'), (3, 'Cobalt'), (4, 'Dunmore');
+    expected_rows: [[0, 4]]
+  - id: t5
+    hidden: true
+    description: "Only guest orders - every customer still has 0 and no NULL group appears"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customers (id, account_name) VALUES (1, 'Acme'), (2, 'Birchwood'), (3, 'Cobalt');
+      INSERT INTO orders (id, customer_id, total_cents) VALUES
+        (1, NULL, 1000), (2, NULL, 2750), (3, NULL, 1750), (4, NULL, 3500);
+    expected_rows: [[0, 3]]
+  - id: t6
+    hidden: true
+    description: "Every customer has exactly one order - no 0 row"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customers (id, account_name) VALUES
+        (1, 'Acme'), (2, 'Birchwood'), (3, 'Cobalt'), (4, 'Dunmore'), (5, 'Ember'), (6, 'Fjord');
+      INSERT INTO orders (id, customer_id, total_cents) VALUES
+        (1, 6, 1000), (2, 5, 2750), (3, 4, 1750), (4, 3, 3500), (5, 2, 2500), (6, 1, 1500);
+    expected_rows: [[1, 6]]
+  - id: t7
+    hidden: true
+    description: "One heavy customer with 12 orders and large gaps in between"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customers (id, account_name) VALUES (1, 'Acme'), (2, 'Birchwood'), (3, 'Cobalt'), (4, 'Dunmore');
+      INSERT INTO orders (id, customer_id, total_cents) VALUES
+        (1, 2, 1000), (2, 2, 2750), (3, 2, 1750), (4, 2, 3500), (5, 2, 2500), (6, 2, 1500), (7, 2, 3250),
+        (8, 2, 2250), (9, 2, 1250), (10, 2, 3000), (11, 2, 2000), (12, 2, 1000), (13, 4, 2750);
+    expected_rows: [[0, 2], [1, 1], [12, 1]]
+  - id: t8
+    hidden: true
+    description: "Single customer with no orders - (0, 1), not (1, 1) from COUNT(*) on a LEFT JOIN"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customers (id, account_name) VALUES (1, 'Acme');
+    expected_rows: [[0, 1]]
+  - id: t9
+    hidden: true
+    description: "Larger randomised data - 40 customers, shuffled orders and a few guest orders"
+    ordered: true
+    setup_sql: |
+      INSERT INTO customers (id, account_name) VALUES
+        (1, 'Acme'), (2, 'Birchwood'), (3, 'Cobalt'), (4, 'Dunmore'), (5, 'Ember'), (6, 'Fjord'),
+        (7, 'Granite'), (8, 'Harbor'), (9, 'Ironleaf'), (10, 'Juniper'), (11, 'Acme1'), (12, 'Birchwood1'),
+        (13, 'Cobalt1'), (14, 'Dunmore1'), (15, 'Ember1'), (16, 'Fjord1'), (17, 'Granite1'), (18, 'Harbor1'),
+        (19, 'Ironleaf1'), (20, 'Juniper1'), (21, 'Acme2'), (22, 'Birchwood2'), (23, 'Cobalt2'),
+        (24, 'Dunmore2'), (25, 'Ember2'), (26, 'Fjord2'), (27, 'Granite2'), (28, 'Harbor2'), (29, 'Ironleaf2'),
+        (30, 'Juniper2'), (31, 'Acme3'), (32, 'Birchwood3'), (33, 'Cobalt3'), (34, 'Dunmore3'), (35, 'Ember3'),
+        (36, 'Fjord3'), (37, 'Granite3'), (38, 'Harbor3'), (39, 'Ironleaf3'), (40, 'Juniper3');
+      INSERT INTO orders (id, customer_id, total_cents) VALUES
+        (1, 28, 1000), (2, 28, 2750), (3, 22, 1750), (4, 40, 3500), (5, 22, 2500), (6, 7, 1500), (7, 30, 3250),
+        (8, 39, 2250), (9, NULL, 1250), (10, 36, 3000), (11, 32, 2000), (12, 39, 1000), (13, 36, 2750),
+        (14, 1, 1750), (15, 22, 3500), (16, 33, 2500), (17, 19, 1500), (18, 4, 3250), (19, 10, 2250),
+        (20, 39, 1250), (21, 38, 3000), (22, 5, 2000), (23, 29, 1000), (24, 6, 2750), (25, 32, 1750),
+        (26, 7, 3500), (27, 22, 2500), (28, 11, 1500), (29, 20, 3250), (30, 19, 2250), (31, 15, 1250),
+        (32, 38, 3000), (33, 31, 2000), (34, 7, 1000), (35, 12, 2750), (36, 9, 1750), (37, 24, 3500),
+        (38, 22, 2500), (39, 14, 1500), (40, NULL, 3250), (41, 12, 2250), (42, NULL, 1250), (43, NULL, 3000),
+        (44, 15, 2000), (45, 38, 1000), (46, 34, 2750), (47, 34, 1750), (48, 12, 3500), (49, 24, 2500),
+        (50, 5, 1500), (51, 20, 3250), (52, 7, 2250), (53, 6, 1250), (54, 7, 3000), (55, 26, 2000),
+        (56, 8, 1000), (57, 23, 2750), (58, 37, 1750), (59, 31, 3500), (60, 15, 2500), (61, 23, 1500),
+        (62, 8, 3250), (63, 36, 2250), (64, 19, 1250);
+    expected_rows: [[0, 10], [1, 12], [2, 10], [3, 6], [5, 2]]
+expected_concepts:
+  - "LEFT JOIN to keep rows without matches"
+  - "COUNT(column) versus COUNT(*) on outer joins"
+  - "aggregating an aggregate through a derived table or CTE"
+  - "NULL foreign keys do not join"
+optimal_complexity: {time: "O(n + m) with hash aggregation (O((n + m) log(n + m)) with sorting)", space: "O(n) for n customers"}
+rubric:
+  excellent: "Counts orders per customer with a LEFT JOIN and COUNT(o.id) in a derived table, groups that result again by the count, orders by order_count, and explains why COUNT(*) would turn customers without orders into a count of 1."
+  good: "Reaches the correct two-level query after a hint about customers with no orders or about COUNT(*) on the outer join."
+  weak: "Groups only the orders table (losing zero-order customers and creating a NULL group for guests), or counts joined rows with COUNT(*)."
+  criteria:
+    correctness: "All tests pass, including customers without orders and guest orders."
+    efficiency: "Two set-based aggregations; no correlated subquery per customer is required."
+    code_quality: "Readable derived table or CTE with meaningful aliases."
+    edge_cases: "Empty tables, no orders at all, only guest orders and very active customers."
+    communication: "Explains the outer join and the difference between counting rows and counting matches."
+hints:
+  - "Solve it in two steps: first find how many orders each customer placed, then count how many customers share each of those numbers."
+  - "Customers without orders must still produce a count of 0, so start from the customers table with an outer join, and count something that is NULL when there is no match."
+  - "In a derived table, left join customers to orders, group by the customer id and count the order id (not every row); then group that derived table by its count, count its rows, and order by the count ascending."
+followups:
+  - "How would you also list the missing counts between 0 and the maximum with a zero?"
+  - "How would you bucket counts into 0, 1, 2-4 and 5 or more?"
+  - "Why might a correlated subquery that counts orders per customer be slower or faster than the join on a large table?"
+common_errors:
+  - "Grouping the orders table by customer_id, which never sees customers without orders and adds a group for NULL guests."
+  - "Using COUNT(*) after the LEFT JOIN, which counts the unmatched customer row and reports 1 instead of 0."
+  - "Using an inner join, which drops every customer without orders."

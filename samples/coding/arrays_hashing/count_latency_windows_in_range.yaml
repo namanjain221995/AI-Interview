@@ -1,0 +1,155 @@
+version: 1
+slug: count_latency_windows_in_range
+title: Windows With Total in a Target Band
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [backend, sre, data]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Windows With Total in a Target Band
+
+  An SRE dashboard records, for every second, how much the p99 latency of a service moved compared with
+  the previous second: `values[i]` is the change in milliseconds at second `i` and can be negative. The
+  total drift over a window of consecutive seconds is the sum of the changes in that window.
+
+  Given an inclusive band `[low, high]`, count the **contiguous, non-empty windows** whose total drift lies
+  in the band, that is `low <= sum(values[i..j]) <= high` for `i <= j`.
+
+  Return the count as a 64-bit integer.
+
+  **Goal:** better than checking every window; aim for `O(n log n)`.
+
+  ### Example 1
+  ```
+  Input:  values = [3, -1, 2], low = 1, high = 3
+  Output: 4
+  Explanation: Windows [3], [2], [3, -1] and [-1, 2] have totals 3, 2, 2 and 1; [-1] and [3, -1, 2] fall outside.
+  ```
+
+  ### Example 2
+  ```
+  Input:  values = [5, -5, 5, -5], low = 0, high = 0
+  Output: 4
+  Explanation: The zero-total windows are [5, -5] (twice), [-5, 5] and the whole array.
+  ```
+
+  ### Constraints
+  - `1 <= values.length <= 10^5`
+  - `-10^9 <= values[i] <= 10^9`
+  - `-10^9 <= low <= high <= 10^9`
+  - Window totals can exceed the 32-bit range.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: count_latency_windows_in_range
+  params:
+    - {name: values, type: "int[]"}
+    - {name: low, type: "int"}
+    - {name: high, type: "int"}
+  return_type: "long"
+  comparison: exact
+reference_solutions:
+  python: |
+    def count_latency_windows_in_range(values: list[int], low: int, high: int) -> int:
+        prefix = [0]
+        for v in values:
+            prefix.append(prefix[-1] + v)
+
+        def count(lo: int, hi: int) -> int:
+            # Counts pairs i < j in prefix[lo:hi] with low <= prefix[j] - prefix[i] <= high,
+            # and leaves prefix[lo:hi] sorted.
+            if hi - lo <= 1:
+                return 0
+            mid = (lo + hi) // 2
+            total = count(lo, mid) + count(mid, hi)
+            start = end = mid
+            for i in range(lo, mid):
+                while start < hi and prefix[start] - prefix[i] < low:
+                    start += 1
+                while end < hi and prefix[end] - prefix[i] <= high:
+                    end += 1
+                total += end - start
+            merged = []
+            a, b = lo, mid
+            while a < mid and b < hi:
+                if prefix[a] <= prefix[b]:
+                    merged.append(prefix[a])
+                    a += 1
+                else:
+                    merged.append(prefix[b])
+                    b += 1
+            merged.extend(prefix[a:mid])
+            merged.extend(prefix[b:hi])
+            prefix[lo:hi] = merged
+            return total
+
+        return count(0, len(prefix))
+  javascript: |
+    function countLatencyWindowsInRange(values, low, high) {
+      const prefix = [0];
+      for (const v of values) prefix.push(prefix[prefix.length - 1] + v);
+      const buffer = new Array(prefix.length);
+
+      function count(lo, hi) {
+        if (hi - lo <= 1) return 0;
+        const mid = (lo + hi) >> 1;
+        let total = count(lo, mid) + count(mid, hi);
+        let start = mid;
+        let end = mid;
+        for (let i = lo; i < mid; i++) {
+          while (start < hi && prefix[start] - prefix[i] < low) start++;
+          while (end < hi && prefix[end] - prefix[i] <= high) end++;
+          total += end - start;
+        }
+        let a = lo;
+        let b = mid;
+        let k = lo;
+        while (a < mid && b < hi) buffer[k++] = prefix[a] <= prefix[b] ? prefix[a++] : prefix[b++];
+        while (a < mid) buffer[k++] = prefix[a++];
+        while (b < hi) buffer[k++] = prefix[b++];
+        for (let t = lo; t < hi; t++) prefix[t] = buffer[t];
+        return total;
+      }
+
+      return count(0, prefix.length);
+    }
+tests:
+  - {id: t1, args: [[3, -1, 2], 1, 3], expected: 4, description: "Example 1"}
+  - {id: t2, args: [[5, -5, 5, -5], 0, 0], expected: 4, description: "Example 2 - zero-width band"}
+  - {id: t3, hidden: true, args: [[4], 4, 4], expected: 1, description: "Single element exactly on the band"}
+  - {id: t4, hidden: true, args: [[4], 5, 9], expected: 0, description: "Single element outside the band"}
+  - {id: t5, hidden: true, args: [[-2, -3, -1, -4], -6, -3], expected: 6, description: "All negative values with a negative band"}
+  - {id: t6, hidden: true, args: [[1000000000, 1000000000, 1000000000, -1000000000], 1000000000, 1000000000], expected: 4, description: "Totals beyond 32 bits; only windows totalling exactly 10^9 count"}
+  - {id: t7, hidden: true, args: [[1, 2, 3, 4, 5, 6, 7, 8], -1000000000, 1000000000], expected: 36, description: "Band covers everything: n(n+1)/2 windows"}
+  - {id: t8, hidden: true, args: [[0, 0, 0, 0, 0, 0], 0, 0], expected: 21, description: "All zeros with zero band; equal prefix values (ties)"}
+  - {id: t9, hidden: true, args: [[7, -3, 2, -8, 5, 1, -1, 4, -6, 3], -2, 2], expected: 20, description: "Mixed signs, symmetric band"}
+  - {id: t10, hidden: true, args: [[-41, -11, 5, -19, 50, 7, -13, -18, 50, 21, -38, 45, 13, -27, 9, 16, -34, 50, 41, -42, 41, -4, 43, -29, 2, 43, 40, 8, 31, 14, -47, 17, -36, -1, -33, -3, -47, -49, 40, -24, 39, 9, 28, -24, 35, -10, 27, 11, -11, -25, -13, -42, -25, 46, -9, 35, -5, 1, -41, -11, -39, 1, -16, -48, 28, -35, -6, 10, 27, 3, -43, 33, 0, 21, 40, -38, 44, 27, 4, -10, 11, -3, -4, 42, -23, -27, -50, -10, -11, -49, -14, 10, -9, 24, 45, 8, -7, -46, 27, 16, 30, -28, 44, -14, -8, -37, -7, -43, 49, -4, -36, -48, 0, -47, -29, 49, -31, 20, 36, 34, 39, -27, 48, 43, -38, 18, 4, -38, 21, -38, -12, 39, -1, 22, 26, -21, -42, 44, 49, -43, 13, 49, 35, -39, -28, 21, 11, -3, -23, 27, -38, -17, 5, 40, -23, -16, 3, -40, -6, 46, -29, 1, -29, 36, -23, 42, -32, 22, -19, -41, 49, -49, -35, 25, 0, 46, -35, 20, 29, -30, 25, -16, 45, 16, 21, -2, 3, 46, -21, 38, 49, -37, -10, -7, -11, 38, -12, -15, -48, 40, -40, 1, 42, 12, 16, 42, -4, 20, 32, -38, -25, -25, -24, 35, 49, 2, 20, -16, -4, 48, 27, -19, 18, 1, -23, 37, 46, -41, 5, -35, -12, 40, -13, 42, 47, -22, -26, 21, -30, 18, -9, 34, 40, -29, 46, -15, -32, -5, -12, -42, -2, 47, 47, 31, 6, -10, 19, 40, -1, 36, 16, 7, 23, 44, 40, 22, 3, 45, -39, 18, -45, -22, 17, 14, 24, 7, 23, -46, 32, 44, -33, -27, 1, -10, -16, -18, 36, -25, 4, 0, -40, 11, -40, 46, -10, 11, -16, -13, -40, -44, -37, 18, -46, 28, -10, 47, 28, 13, 16, -25, 47, 41, -48, -12, -49, 23, 21, 29, 17, -9, 33, -15, 18, -27, -7, 31, 0, -32, -24, -11, 50, -7, 14, 21, 46, 2, 45, -31, 33, 26, 14, -45, 30, 49, 38, 32, -19, -46, -3, 43, -25, 24, -26, -33, -47, 35, -18, -3, 22, -24, -20, -4, 12, -50, 17, -6, 25, -31, -40, 31, 29, 5, -35, -14, 18, -21, -11, 31, 6, 6, -9, 28, -25, -50, -24, -29, 16, -24, 38, 47, 50, 3, -31, -16, 18, 12, -19, -38, 33, 8, -29, 36, -44, -48, -10, 9, 26, -47, -38, 19, -1, 1, -35, -10, -49, 17, 36, -13, 50, -38, 36, -30, -50, -27, 1, 38, -18, -45, -11, 47, 46, -11, -35, 29, -33, 9, -39, 36, 6, 12, 48, -1, -10, 13, -36, -34, -43, 12, -32, 23, 9, -47, 2, -2, 40, 41, 49, 22, -5, 27, 26, 43, -46, 15, 15, 3, 22, 24, -23, -4, -48, 0, 25, 8, 20, -19, -32, -26, 37, -17, -28, -13, -18, 15, -10, 22, 28, 2, -33, 33, 44, 41, -50, -10, 0, 41, -15, 44, 30, 13, 50, 34, 10, -30, -18, 8, -23, 9, -40, -28, 47, 25, 37, -5, 25, 25, 21, 28, -39, -28, -10, -39, -29, -1, 33, -15, 23, 21, 23, -49, -1, 34, -40, -14, 37, -34, 10, -11, -8, -1, 20, -47, -40, -28, 3, 26, 19, 11, 24, 34, -49, 5, 27, -2, -8, -3, -45, 47, -18, 30, -19, 26, -45, -38, -15, 42, 1, -2, 4, -20, 50, 0, 36, 17, 0, 16, -20, -36, -39, 18, -43, 0, -40, 44, 37, -22, 38, -13, -44, -1, 17, 44, -17, 29, -26, 37, -16, 30, -16, -23, -20, -29, 13, -3, 17, -1, 16, -42, -4, 13, -40, -46, -43, 38, -10, 18, -14, 34, -30, 12, -19, 31, 16, -34, -44, -33, 41, -1, -25, 20, -10, 50, 27, -42, -9, 34, 31, -49, -13, 9, -22, 28, 42, 19, -5, 25, 6, -2, 47, 2, 50, -13, -33, -15, 17, 27, -18, -44, -11, 22, 8, 35, 20, -43, -29, 31, -2, 41, 48, 40, -37, -36, 2, 2, -26, 36, -3, -10, -2, -27, -13, -30, 49, -50, -3, 43, -39, -31, -5, 9, 50, -17, 6, -9, -14, -12, 14, 49, 38, 33, 32, 41, -20, -11, -5, 23, 20, 28, -9, 40, -27, -48, 36, 35, 46, 49, -36, -18, 16, 5, 31, -42, 37, 34, 14, -34, -4, 45, 10, -3, 9, 38, -11, -4, -3, 16, -14, -27, -39, 38, -36, 39, 3, 4, -44, 44, -10, -13, 34, -22, -46, 48, -37, -46, -13, 50, -39, -22, 25, 16, 38, 10, -22, 37, -30, -8, -7, 13, -18, -14, -37, -15, -23, 13, 42, -46, 30, -40, -22, -22, 19, 32, 49, 36, 44, 4, 40, 34, 34, -8, -31, 40, 21, 26, 31, 21, -35, -38, 42, 23, -24, 9, -3, -29, -24, 21, -8, -50, 1, 32, -32, 13, -8, -37, 41, 49, 45, -39, -6, 32, -45, 5, 17, -4, -34, 37, 10, 45, -35, 32, 8, -18, 35, 1, -39, -46, 19, 31, -14, -13, 10, 29, -29, 49, -14, 33, 7, 33, 2, 22, 0, -14, -17, -33, 45, -22, -40, 15, -19, 4, 32, 39, 40, -10, 9, 48, -8, 47, 7, 50, 20, 20, -18, -42, 44, -41, -25, 43, 35, 45, 3, -11, 47, 3, -20, -13, 31, 4, 1, -38, 26, -18, -6, 0, -21, 26, 35, 49, 25, -19, -8, 4, -7, -25, 38, 40, 27, 37, 44, 15, -13, 21, -44, -5, 48, 41, 24, 32, 7, -14, 37, 23, 6, 49, -4, 10, 38, -13, 34, 29, 28, -1, -43, 17, 0, -9, 13, -38, -45, -15, 50, -24, -11, 13, -33, -28, -1, -32, 21, -31, -14, 29, -8, -28, 44, -39, -32, 11, 13, -31, -1, -4, -16, 30, -20, 36, -35, 32, -39, -1, -42, -39, 45, 35, 0, -5, 20, 5, 0, 22, -26, -25, -35, -20, 38, 11, 42, -20, 40, -32, 19, -42, 12, -25, -40, 50, 36, -33, 38, -31], -40, 60], expected: 38768, description: "Stress - 1000 random deltas"}
+expected_concepts:
+  - "prefix sums turn window totals into differences of two prefixes"
+  - "counting pairs with a bounded difference"
+  - "merge-sort divide and conquer with two moving pointers (or a Fenwick tree over compressed prefixes)"
+  - "64-bit prefix sums and result"
+  - "O(n log n) versus the O(n^2) brute force"
+optimal_complexity: {time: "O(n log n)", space: "O(n)"}
+rubric:
+  excellent: "Reformulates the problem as counting prefix pairs with a bounded difference, implements merge-sort counting with two monotone pointers or a Fenwick tree with coordinate compression, uses 64-bit sums, and justifies O(n log n)."
+  good: "Correct O(n^2) prefix-sum solution with a clear plan for the O(n log n) version, or the fast version with minor bugs fixed through testing."
+  weak: "Recomputes window sums in O(n^3), uses a sliding window that assumes non-negative values, or overflows 32-bit sums."
+  criteria:
+    correctness: "All tests pass, including negative values, zero-width bands and large totals."
+    efficiency: "O(n log n) time; explains why the two pointers only move forward within a merge step."
+    code_quality: "The counting step and the merge step are clearly separated; inclusive bounds are handled consistently."
+    edge_cases: "Single element, all negatives, equal prefix values and bands that include every window."
+    communication: "Explains why a plain sliding window fails when values can be negative."
+hints:
+  - "Express the total of a window from i to j using running totals of the array."
+  - "A window total is the difference of two prefix sums, so the task becomes counting pairs of prefixes, one earlier and one later, whose difference lies in the band; sorting halves of the prefix list makes that counting fast."
+  - "Run a merge sort over the prefix sums; before merging two sorted halves, for each prefix in the left half advance two pointers through the right half, one to the first value at least the left value plus low and one past the last value at most the left value plus high, and add the gap between them to the count."
+followups:
+  - "How would you solve it with a Fenwick tree or an order-statistics tree instead?"
+  - "What if the values were all non-negative; is there a simpler linear approach?"
+  - "How would you handle a stream where windows are limited to the last k seconds?"
+common_errors:
+  - "Using a two-pointer sliding window that only works for non-negative values."
+  - "Storing prefix sums in 32-bit integers."
+  - "Forgetting the empty prefix (zero) at the start, which misses windows that begin at index 0."
+  - "Mixing strict and inclusive comparisons for low and high."

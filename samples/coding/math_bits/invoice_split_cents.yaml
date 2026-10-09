@@ -1,0 +1,268 @@
+version: 1
+slug: invoice_split_cents
+title: "Invoice Split in Cents"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [backend, data_analyst, dba, data]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Invoice Split in Cents
+
+  A shared-expenses feature stores each invoice once and lists who takes part in paying it.
+
+  Table `invoices`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | invoice_id | INTEGER | primary key |
+  | total_cents | INTEGER | invoice total in whole cents, `0 <= total_cents <= 2147483646` |
+
+  Table `invoice_participants`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | invoice_id | INTEGER | references `invoices.invoice_id` |
+  | participant_id | INTEGER | `(invoice_id, participant_id)` is the primary key |
+
+  Money must be split **without fractions of a cent and without losing a cent**. For an invoice with
+  `n` participants, every participant pays `total_cents / n` rounded **down**, and the leftover
+  `total_cents mod n` cents are assigned **one each** to the participants with the **smallest**
+  `participant_id` values of that invoice. The shares of an invoice therefore always add up to its total.
+
+  Return `invoice_id`, `participant_id` and `share_cents` for every participant of every invoice,
+  ordered by `invoice_id` ascending, then `participant_id` ascending. Invoices without participants
+  produce no rows.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite (integer arithmetic only - no floating
+  point and no rounding functions are needed).
+
+  ### Example 1
+  ```
+  invoices                        invoice_participants
+  +------------+-------------+    +------------+----------------+
+  | invoice_id | total_cents |    | invoice_id | participant_id |
+  +------------+-------------+    +------------+----------------+
+  | 1          | 1000        |    | 1          | 30             |
+  | 2          | 500         |    | 1          | 10             |
+  +------------+-------------+    | 1          | 20             |
+                                  | 2          | 7              |
+                                  | 2          | 3              |
+                                  +------------+----------------+
+
+  Output
+  +------------+----------------+-------------+
+  | invoice_id | participant_id | share_cents |
+  +------------+----------------+-------------+
+  | 1          | 10             | 334         |
+  | 1          | 20             | 333         |
+  | 1          | 30             | 333         |
+  | 2          | 3              | 250         |
+  | 2          | 7              | 250         |
+  +------------+----------------+-------------+
+  1000 cents over 3 participants is 333 each with 1 cent left over; it goes to participant 10,
+  the smallest id on invoice 1. Invoice 2 splits evenly.
+  ```
+
+  ### Example 2
+  ```
+  invoices                        invoice_participants
+  +------------+-------------+    +------------+----------------+
+  | invoice_id | total_cents |    | invoice_id | participant_id |
+  +------------+-------------+    +------------+----------------+
+  | 4          | 2           |    | 4          | 41             |
+  | 5          | 999         |    | 4          | 42             |
+  | 6          | 0           |    | 4          | 43             |
+  +------------+-------------+    | 6          | 1              |
+                                  | 6          | 2              |
+                                  +------------+----------------+
+
+  Output
+  +------------+----------------+-------------+
+  | invoice_id | participant_id | share_cents |
+  +------------+----------------+-------------+
+  | 4          | 41             | 1           |
+  | 4          | 42             | 1           |
+  | 4          | 43             | 0           |
+  | 6          | 1              | 0           |
+  | 6          | 2              | 0           |
+  +------------+----------------+-------------+
+  Invoice 4 has 2 leftover cents for participants 41 and 42. Invoice 5 has no participants, so
+  it produces no rows. Invoice 6 totals 0 cents.
+  ```
+
+  ### Constraints
+  - `0 <= rows in each table <= 10^5`
+  - `0 <= total_cents <= 2147483646`
+  - Every `invoice_participants.invoice_id` exists in `invoices`.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return invoice_id, participant_id and share_cents for every participant, ordered by invoice_id, participant_id.
+    SELECT p.invoice_id, p.participant_id, i.total_cents AS share_cents
+    FROM invoice_participants p
+    JOIN invoices i ON i.invoice_id = p.invoice_id
+    ORDER BY p.invoice_id, p.participant_id;
+reference_solutions:
+  sql: |
+    SELECT
+      invoice_id,
+      participant_id,
+      total_cents / participant_count
+        + CASE WHEN position_in_invoice <= total_cents % participant_count THEN 1 ELSE 0 END AS share_cents
+    FROM (
+      SELECT
+        p.invoice_id,
+        p.participant_id,
+        i.total_cents,
+        ROW_NUMBER() OVER (PARTITION BY p.invoice_id ORDER BY p.participant_id) AS position_in_invoice,
+        COUNT(*) OVER (PARTITION BY p.invoice_id) AS participant_count
+      FROM invoice_participants p
+      JOIN invoices i ON i.invoice_id = p.invoice_id
+    ) shares
+    ORDER BY invoice_id, participant_id;
+sql_setup: |
+  CREATE TABLE invoices (
+    invoice_id INTEGER PRIMARY KEY,
+    total_cents INTEGER NOT NULL
+  );
+  CREATE TABLE invoice_participants (
+    invoice_id INTEGER NOT NULL REFERENCES invoices (invoice_id),
+    participant_id INTEGER NOT NULL,
+    PRIMARY KEY (invoice_id, participant_id)
+  );
+tests:
+  - id: t1
+    description: "Example 1 - 1000 cents over three people gives the extra cent to the smallest id; even split for invoice 2"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoices (invoice_id, total_cents) VALUES (1, 1000), (2, 500);
+      INSERT INTO invoice_participants (invoice_id, participant_id) VALUES (1, 30), (1, 10), (1, 20), (2, 7), (2, 3);
+    expected_rows:
+      - [1, 10, 334]
+      - [1, 20, 333]
+      - [1, 30, 333]
+      - [2, 3, 250]
+      - [2, 7, 250]
+  - id: t2
+    description: "Example 2 - invoice without participants is absent; 2 cents over 3 people; zero total"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoices (invoice_id, total_cents) VALUES (4, 2), (5, 999), (6, 0);
+      INSERT INTO invoice_participants (invoice_id, participant_id) VALUES (4, 41), (4, 42), (4, 43), (6, 1), (6, 2);
+    expected_rows:
+      - [4, 41, 1]
+      - [4, 42, 1]
+      - [4, 43, 0]
+      - [6, 1, 0]
+      - [6, 2, 0]
+  - id: t3
+    hidden: true
+    description: "Empty tables"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Invoices exist but nobody participates - no rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoices (invoice_id, total_cents) VALUES (1, 100), (2, 250);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Single participant receives the whole total"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoices (invoice_id, total_cents) VALUES (8, 12345);
+      INSERT INTO invoice_participants (invoice_id, participant_id) VALUES (8, 5);
+    expected_rows: [[8, 5, 12345]]
+  - id: t6
+    hidden: true
+    description: "Remainder of n - 1 cents: all but the largest id get the extra cent; ids inserted out of order"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoices (invoice_id, total_cents) VALUES (3, 1003);
+      INSERT INTO invoice_participants (invoice_id, participant_id) VALUES (3, 900), (3, 15), (3, 402), (3, 77);
+    expected_rows:
+      - [3, 15, 251]
+      - [3, 77, 251]
+      - [3, 402, 251]
+      - [3, 900, 250]
+  - id: t7
+    hidden: true
+    description: "Same participant on several invoices - ranking restarts per invoice"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoices (invoice_id, total_cents) VALUES (10, 101), (11, 101), (12, 7);
+      INSERT INTO invoice_participants (invoice_id, participant_id) VALUES
+        (10, 1), (10, 2), (11, 2), (11, 3), (11, 1), (12, 2), (12, 9), (12, 1);
+    expected_rows:
+      - [10, 1, 51]
+      - [10, 2, 50]
+      - [11, 1, 34]
+      - [11, 2, 34]
+      - [11, 3, 33]
+      - [12, 1, 3]
+      - [12, 2, 2]
+      - [12, 9, 2]
+  - id: t8
+    hidden: true
+    description: "Total smaller than the number of participants - most shares are 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoices (invoice_id, total_cents) VALUES (20, 3);
+      INSERT INTO invoice_participants (invoice_id, participant_id) VALUES
+        (20, 6), (20, 5), (20, 4), (20, 3), (20, 2), (20, 1), (20, 7);
+    expected_rows:
+      - [20, 1, 1]
+      - [20, 2, 1]
+      - [20, 3, 1]
+      - [20, 4, 0]
+      - [20, 5, 0]
+      - [20, 6, 0]
+      - [20, 7, 0]
+  - id: t9
+    hidden: true
+    description: "Large total near the 32-bit limit split seven ways with 6 leftover cents - integer arithmetic only"
+    ordered: true
+    setup_sql: |
+      INSERT INTO invoices (invoice_id, total_cents) VALUES (30, 2147483645), (31, 1);
+      INSERT INTO invoice_participants (invoice_id, participant_id) VALUES
+        (30, 70), (30, 10), (30, 60), (30, 20), (30, 50), (30, 30), (30, 40), (31, 99);
+    expected_rows:
+      - [30, 10, 306783378]
+      - [30, 20, 306783378]
+      - [30, 30, 306783378]
+      - [30, 40, 306783378]
+      - [30, 50, 306783378]
+      - [30, 60, 306783378]
+      - [30, 70, 306783377]
+      - [31, 99, 1]
+expected_concepts:
+  - "integer division and modulo for exact money splitting"
+  - "ROW_NUMBER() window function partitioned by invoice to rank participants"
+  - "COUNT(*) as a window function to get participants per invoice without a separate GROUP BY"
+  - "deterministic ordering of the result"
+optimal_complexity: {time: "O(m log m) for the window sort, m = participant rows", space: "O(m)"}
+rubric:
+  excellent: "Ranks participants per invoice with ROW_NUMBER, counts them with a window COUNT, computes the floor share with integer division plus one cent for the first total mod n participants, orders the output and explains why no cent is lost and why floating point is avoided."
+  good: "Correct shares using a join to a grouped participant count and a correlated rank, or needs a hint about assigning the leftover cents."
+  weak: "Uses floating-point division or ROUND, gives the leftover to the wrong participants, loses or duplicates cents, or returns rows for invoices without participants."
+  criteria:
+    correctness: "All tests pass, including totals smaller than the participant count, zero totals and large totals."
+    efficiency: "Set-based window functions instead of per-row subqueries over the whole participant table."
+    code_quality: "Readable derived table with named columns such as position_in_invoice and participant_count."
+    edge_cases: "Empty tables, invoices without participants, single participant and remainder of n - 1."
+    communication: "Explains how the remainder is distributed and why the shares add up to the total."
+hints:
+  - "Start with one invoice: how much does each participant pay if you only use whole cents and round down, and how many cents are left over?"
+  - "The leftover is smaller than the number of participants, so it can be handed out one cent at a time. You need each participant's position when the participants of the same invoice are sorted by id, and the number of participants on that invoice."
+  - "In a derived table, join participants to their invoice and add a ROW_NUMBER partitioned by invoice and ordered by participant id, plus a COUNT over the same partition. In the outer query, the share is the total divided by the count using integer division, plus one when the position is at most the total modulo the count. Order by invoice id and participant id."
+followups:
+  - "How would you give the leftover cents to the participants who joined first (a timestamp column) instead of the smallest id?"
+  - "How would you split by weights such as 50/30/20 percent while still never losing a cent?"
+  - "Which index supports the window functions on a large participants table?"
+common_errors:
+  - "Using floating-point division or ROUND, which can lose or create a cent."
+  - "Giving the leftover to every participant, or only to the first one, instead of one cent each."
+  - "Numbering participants across all invoices instead of restarting per invoice."
+  - "Using a LEFT JOIN from invoices and returning rows for invoices that have no participants."

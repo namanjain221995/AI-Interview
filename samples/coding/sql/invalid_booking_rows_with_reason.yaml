@@ -1,0 +1,215 @@
+version: 1
+slug: invalid_booking_rows_with_reason
+title: Invalid Booking Rows
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [qa, data, backend]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Invalid Booking Rows
+
+  The meeting-room booking service is being migrated to a new system that rejects bad data. Before the
+  import, QA wants a report of every booking that would be rejected, with **one reason per booking**.
+
+  Table `bookings`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | room_id | INTEGER | |
+  | start_ts | TEXT | never NULL, formatted `YYYY-MM-DD HH:MM` (zero-padded) |
+  | end_ts | TEXT | same format, **may be NULL** |
+  | guests | INTEGER | **may be NULL** |
+
+  Check the rules **in this order** and report only the **first** rule a booking breaks:
+
+  1. `missing_end`: `end_ts` is NULL.
+  2. `end_not_after_start`: `end_ts` is not later than `start_ts` (a zero-length booking also fails).
+  3. `bad_guest_count`: `guests` is NULL, zero or negative.
+
+  Return `id` and `reason` for the invalid bookings only, ordered by `id` ascending. Valid bookings do
+  not appear.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  bookings
+  +----+---------+------------------+------------------+--------+
+  | id | room_id | start_ts         | end_ts           | guests |
+  +----+---------+------------------+------------------+--------+
+  | 1  | 10      | 2026-05-04 09:00 | 2026-05-04 10:00 | 4      |
+  | 2  | 10      | 2026-05-04 11:00 | NULL             | 2      |
+  | 3  | 11      | 2026-05-04 14:00 | 2026-05-04 13:30 | 0      |
+  | 4  | 12      | 2026-05-04 15:00 | 2026-05-04 16:00 | NULL   |
+  +----+---------+------------------+------------------+--------+
+
+  Output
+  +----+---------------------+
+  | id | reason              |
+  +----+---------------------+
+  | 2  | missing_end         |
+  | 3  | end_not_after_start |
+  | 4  | bad_guest_count     |
+  +----+---------------------+
+  Booking 3 also has 0 guests, but only its first failing rule is reported.
+  ```
+
+  ### Example 2
+  ```
+  bookings
+  +----+---------+------------------+------------------+--------+
+  | id | room_id | start_ts         | end_ts           | guests |
+  +----+---------+------------------+------------------+--------+
+  | 7  | 3       | 2026-06-01 08:00 | 2026-06-01 08:00 | 5      |
+  | 8  | 3       | 2026-06-01 09:00 | 2026-06-01 09:30 | 1      |
+  +----+---------+------------------+------------------+--------+
+
+  Output
+  +----+---------------------+
+  | id | reason              |
+  +----+---------------------+
+  | 7  | end_not_after_start |
+  +----+---------------------+
+  ```
+
+  ### Constraints
+  - Timestamps use the exact fixed-width format above, so comparing them as text compares them in time.
+  - A booking may break several rules; report only the first in the order given.
+  - The table may be empty.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return id and reason (first failing rule) for invalid bookings, ordered by id.
+    SELECT id, 'missing_end' AS reason
+    FROM bookings
+    WHERE end_ts IS NULL
+    ORDER BY id;
+reference_solutions:
+  sql: |
+    SELECT id, reason
+    FROM (
+      SELECT id,
+             CASE
+               WHEN end_ts IS NULL THEN 'missing_end'
+               WHEN end_ts <= start_ts THEN 'end_not_after_start'
+               WHEN guests IS NULL OR guests <= 0 THEN 'bad_guest_count'
+             END AS reason
+      FROM bookings
+    ) checked
+    WHERE reason IS NOT NULL
+    ORDER BY id;
+sql_setup: |
+  CREATE TABLE bookings (
+    id INTEGER PRIMARY KEY,
+    room_id INTEGER NOT NULL,
+    start_ts TEXT NOT NULL,
+    end_ts TEXT,
+    guests INTEGER
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - one booking per rule plus a valid one; booking 3 breaks two rules"
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_ts, end_ts, guests) VALUES
+        (1, 10, '2026-05-04 09:00', '2026-05-04 10:00', 4), (2, 10, '2026-05-04 11:00', NULL, 2),
+        (3, 11, '2026-05-04 14:00', '2026-05-04 13:30', 0), (4, 12, '2026-05-04 15:00', '2026-05-04 16:00', NULL);
+    expected_rows: [[2, "missing_end"], [3, "end_not_after_start"], [4, "bad_guest_count"]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - zero-length booking fails the duration rule"
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_ts, end_ts, guests) VALUES
+        (7, 3, '2026-06-01 08:00', '2026-06-01 08:00', 5), (8, 3, '2026-06-01 09:00', '2026-06-01 09:30', 1);
+    expected_rows: [[7, "end_not_after_start"]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "All bookings valid - no rows"
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_ts, end_ts, guests) VALUES
+        (1, 1, '2026-05-04 09:00', '2026-05-04 09:15', 1), (2, 1, '2026-05-04 23:30', '2026-05-05 00:30', 12);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Booking breaking all three rules reports missing_end only (NULL end must not fall through to later rules)"
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_ts, end_ts, guests) VALUES
+        (1, 1, '2026-05-04 09:00', NULL, NULL), (2, 1, '2026-05-04 09:00', NULL, -3);
+    expected_rows: [[1, "missing_end"], [2, "missing_end"]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Negative, zero and NULL guests all give bad_guest_count; a single guest is fine"
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_ts, end_ts, guests) VALUES
+        (1, 2, '2026-05-04 09:00', '2026-05-04 10:00', -1), (2, 2, '2026-05-04 10:00', '2026-05-04 11:00', 0),
+        (3, 2, '2026-05-04 11:00', '2026-05-04 12:00', NULL), (4, 2, '2026-05-04 12:00', '2026-05-04 13:00', 1);
+    expected_rows: [[1, "bad_guest_count"], [2, "bad_guest_count"], [3, "bad_guest_count"]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "End on an earlier day, and an end crossing midnight into the next day that is valid"
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_ts, end_ts, guests) VALUES
+        (1, 5, '2026-05-05 08:00', '2026-05-04 18:00', 3), (2, 5, '2026-05-04 23:00', '2026-05-05 01:00', 3),
+        (3, 5, '2026-12-31 23:00', '2027-01-01 00:30', 2);
+    expected_rows: [[1, "end_not_after_start"]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Output ordered by id even when inserted out of order, with ids that are not contiguous"
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_ts, end_ts, guests) VALUES
+        (40, 1, '2026-05-04 09:00', NULL, 2), (5, 1, '2026-05-04 09:00', '2026-05-04 09:00', 2),
+        (17, 1, '2026-05-04 09:00', '2026-05-04 10:00', 0), (23, 1, '2026-05-04 09:00', '2026-05-04 10:00', 8);
+    expected_rows: [[5, "end_not_after_start"], [17, "bad_guest_count"], [40, "missing_end"]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Larger mix - every combination of broken rules, first rule wins in each row"
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_ts, end_ts, guests) VALUES
+        (1, 1, '2026-07-01 09:00', '2026-07-01 10:00', 6), (2, 1, '2026-07-01 10:00', NULL, 6),
+        (3, 1, '2026-07-01 11:00', '2026-07-01 10:59', 6), (4, 1, '2026-07-01 12:00', '2026-07-01 13:00', 0),
+        (5, 2, '2026-07-01 09:00', NULL, 0), (6, 2, '2026-07-01 10:00', '2026-07-01 10:00', NULL),
+        (7, 2, '2026-07-01 11:00', '2026-07-01 12:00', NULL), (8, 2, '2026-07-01 12:00', '2026-07-01 12:01', 1),
+        (9, 3, '2026-07-01 09:00', '2026-07-01 08:00', -2), (10, 3, '2026-07-01 10:00', NULL, NULL),
+        (11, 3, '2026-07-01 11:00', '2026-07-01 11:30', 200), (12, 3, '2026-07-01 12:00', '2026-07-01 12:30', -5);
+    expected_rows: [[2, "missing_end"], [3, "end_not_after_start"], [4, "bad_guest_count"], [5, "missing_end"], [6, "end_not_after_start"], [7, "bad_guest_count"], [9, "end_not_after_start"], [10, "missing_end"], [12, "bad_guest_count"]]
+expected_concepts:
+  - "CASE evaluates branches in order and stops at the first match"
+  - "IS NULL checks before comparisons (three-valued logic)"
+  - "filtering on a derived column via a subquery or CTE"
+  - "comparing fixed-width text timestamps"
+optimal_complexity: {time: "O(n log n) for the final sort, O(n) for the checks", space: "O(n)"}
+rubric:
+  excellent: "Writes one CASE with the rules in the stated order, puts the NULL checks first, filters the derived reason in an outer query or CTE, orders by id, and explains why comparisons with NULL never match so the order of the branches matters."
+  good: "Correct query after a hint about rule order, NULL guests or zero-length bookings."
+  weak: "Unions three separate queries and reports some bookings twice, uses < instead of <= for the duration rule, or misses NULL guests."
+  criteria:
+    correctness: "All tests pass, including bookings that break several rules and zero-length bookings."
+    efficiency: "A single pass over the table."
+    code_quality: "Rules are readable in one CASE, with the exact reason strings."
+    edge_cases: "NULL end, NULL guests, zero and negative guests, midnight-crossing and empty tables."
+    communication: "Explains the first-match semantics and the role of NULL in each rule."
+hints:
+  - "Each booking needs a single label chosen by checking the rules one after another, which is exactly how one SQL expression evaluates its branches."
+  - "Use one conditional expression with the three rules as branches in the stated order, and remember that a comparison involving NULL is never true, so NULL needs its own explicit test."
+  - "In a subquery select id and a CASE that returns 'missing_end' when end_ts is null, then 'end_not_after_start' when end_ts <= start_ts, then 'bad_guest_count' when guests is null or not positive; in the outer query keep rows whose reason is not null and order by id."
+followups:
+  - "How would you also report bookings that overlap another booking for the same room?"
+  - "How would you turn these rules into CHECK constraints on the new table?"
+  - "How would you report every broken rule per booking instead of the first one?"
+common_errors:
+  - "Checking guests before end_ts, so the reported reason does not follow the stated order."
+  - "Using end_ts < start_ts, which lets zero-length bookings through."
+  - "Writing guests <= 0 without an IS NULL check, so NULL guests are missed."
+  - "Using UNION of three queries, which reports a booking once per broken rule."

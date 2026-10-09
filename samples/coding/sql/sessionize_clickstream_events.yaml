@@ -1,0 +1,237 @@
+version: 1
+slug: sessionize_clickstream_events
+title: Sessionize Clickstream Events
+difficulty: hard
+competency_keys: [sql, databases, problem_solving]
+role_tags: [data, data_analyst, product_manager]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Sessionize Clickstream Events
+
+  The web analytics pipeline stores every click on the product site in table `clicks`. The product
+  team wants clicks grouped into **sessions** so they can study session length and depth.
+
+  Table `clicks`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key; says nothing about time order |
+  | visitor_id | VARCHAR(40) | anonymous visitor identifier |
+  | ts | INTEGER | Unix time in whole seconds |
+
+  Sessions are built separately for every visitor, looking at that visitor's clicks in time order:
+
+  - A visitor's first click starts their session number 1.
+  - A click whose time is **more than 1800 seconds** after the visitor's previous click starts a new
+    session. A gap of **exactly 1800** seconds (or less) continues the current session.
+  - Every row is one click: two rows with the same visitor and the same `ts` are two clicks in the same
+    session.
+
+  Sessions are numbered `1, 2, 3, ...` per visitor in time order. Return one row per session with
+  columns `visitor_id`, `session_no`, `start_ts` (time of its first click), `end_ts` (time of its last
+  click) and `clicks` (number of rows in the session). Order the result by `visitor_id` ascending, then
+  `session_no` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  clicks
+  +----+------------+------+
+  | id | visitor_id | ts   |
+  +----+------------+------+
+  | 1  | v-17       | 1000 |
+  | 2  | v-17       | 1600 |
+  | 3  | v-42       | 500  |
+  | 4  | v-17       | 3400 |
+  | 5  | v-17       | 5300 |
+  | 6  | v-42       | 2400 |
+  | 7  | v-17       | 5350 |
+  +----+------------+------+
+
+  Output
+  +------------+------------+----------+--------+--------+
+  | visitor_id | session_no | start_ts | end_ts | clicks |
+  +------------+------------+----------+--------+--------+
+  | v-17       | 1          | 1000     | 3400   | 3      |
+  | v-17       | 2          | 5300     | 5350   | 2      |
+  | v-42       | 1          | 500      | 500    | 1      |
+  | v-42       | 2          | 2400     | 2400   | 1      |
+  +------------+------------+----------+--------+--------+
+  v-17: 1600 -> 3400 is exactly 1800 seconds, so the session continues; 3400 -> 5300 is 1900 seconds.
+  v-42: 500 -> 2400 is 1900 seconds, so the second click starts session 2.
+  ```
+
+  ### Example 2
+  ```
+  clicks
+  +----+------------+------+
+  | id | visitor_id | ts   |
+  +----+------------+------+
+  | 1  | web-a      | 7200 |
+  | 2  | web-a      | 7200 |
+  | 3  | web-a      | 100  |
+  | 4  | web-a      | 9001 |
+  +----+------------+------+
+
+  Output
+  +------------+------------+----------+--------+--------+
+  | visitor_id | session_no | start_ts | end_ts | clicks |
+  +------------+------------+----------+--------+--------+
+  | web-a      | 1          | 100      | 100    | 1      |
+  | web-a      | 2          | 7200     | 7200   | 2      |
+  | web-a      | 3          | 9001     | 9001   | 1      |
+  +------------+------------+----------+--------+--------+
+  Both clicks at 7200 belong to session 2; 7200 -> 9001 is 1801 seconds, which starts session 3.
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return visitor_id, session_no, start_ts, end_ts and clicks for every session,
+    -- ordered by visitor_id, then session_no.
+    SELECT visitor_id, 1 AS session_no, MIN(ts) AS start_ts, MAX(ts) AS end_ts, COUNT(*) AS clicks
+    FROM clicks
+    GROUP BY visitor_id
+    ORDER BY visitor_id;
+reference_solutions:
+  sql: |
+    WITH with_prev AS (
+      SELECT id,
+             visitor_id,
+             ts,
+             LAG(ts) OVER (PARTITION BY visitor_id ORDER BY ts, id) AS prev_ts
+      FROM clicks
+    ),
+    flagged AS (
+      SELECT id,
+             visitor_id,
+             ts,
+             CASE WHEN prev_ts IS NULL OR ts - prev_ts > 1800 THEN 1 ELSE 0 END AS is_new
+      FROM with_prev
+    ),
+    numbered AS (
+      SELECT visitor_id,
+             ts,
+             SUM(is_new) OVER (
+               PARTITION BY visitor_id ORDER BY ts, id
+               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+             ) AS session_no
+      FROM flagged
+    )
+    SELECT visitor_id,
+           session_no,
+           MIN(ts) AS start_ts,
+           MAX(ts) AS end_ts,
+           COUNT(*) AS clicks
+    FROM numbered
+    GROUP BY visitor_id, session_no
+    ORDER BY visitor_id, session_no;
+sql_setup: |
+  CREATE TABLE clicks (
+    id INTEGER PRIMARY KEY,
+    visitor_id VARCHAR(40) NOT NULL,
+    ts INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - two visitors interleaved, a gap of exactly 1800 continues the session"
+    setup_sql: |
+      INSERT INTO clicks (id, visitor_id, ts) VALUES
+        (1, 'v-17', 1000), (2, 'v-17', 1600), (3, 'v-42', 500), (4, 'v-17', 3400), (5, 'v-17', 5300),
+        (6, 'v-42', 2400), (7, 'v-17', 5350);
+    expected_rows: [["v-17", 1, 1000, 3400, 3], ["v-17", 2, 5300, 5350, 2], ["v-42", 1, 500, 500, 1], ["v-42", 2, 2400, 2400, 1]]
+    ordered: true
+  - id: t2
+    description: "Example 2 - duplicate timestamps and rows stored out of time order"
+    setup_sql: |
+      INSERT INTO clicks (id, visitor_id, ts) VALUES
+        (1, 'web-a', 7200), (2, 'web-a', 7200), (3, 'web-a', 100), (4, 'web-a', 9001);
+    expected_rows: [["web-a", 1, 100, 100, 1], ["web-a", 2, 7200, 7200, 2], ["web-a", 3, 9001, 9001, 1]]
+    ordered: true
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    expected_rows: []
+    ordered: true
+  - id: t4
+    hidden: true
+    description: "A single click is one session with start_ts = end_ts"
+    setup_sql: "INSERT INTO clicks (id, visitor_id, ts) VALUES (1, 'solo', 42);"
+    expected_rows: [["solo", 1, 42, 42, 1]]
+    ordered: true
+  - id: t5
+    hidden: true
+    description: "Chained 1800-second gaps keep one session longer than 1800 seconds; 1801 splits (gap-based, not window-from-start)"
+    setup_sql: |
+      INSERT INTO clicks (id, visitor_id, ts) VALUES
+        (1, 'chain', 0), (2, 'chain', 1800), (3, 'chain', 3600), (4, 'chain', 5401), (5, 'chain', 7201);
+    expected_rows: [["chain", 1, 0, 3600, 3], ["chain", 2, 5401, 7201, 2]]
+    ordered: true
+  - id: t6
+    hidden: true
+    description: "Visitor ids sort as strings (u-10 before u-9); session numbering restarts per visitor"
+    setup_sql: |
+      INSERT INTO clicks (id, visitor_id, ts) VALUES
+        (1, 'u-9', 100), (2, 'u-10', 100), (3, 'u-9', 5000), (4, 'u-10', 200), (5, 'u-10', 9000),
+        (6, 'u-9', 5100), (7, 'u-10', 20000);
+    expected_rows: [["u-10", 1, 100, 200, 2], ["u-10", 2, 9000, 9000, 1], ["u-10", 3, 20000, 20000, 1], ["u-9", 1, 100, 100, 1], ["u-9", 2, 5000, 5100, 2]]
+    ordered: true
+  - id: t7
+    hidden: true
+    description: "Realistic epoch seconds near 1.79e9 with duplicate clicks on both sides of a session break"
+    setup_sql: |
+      INSERT INTO clicks (id, visitor_id, ts) VALUES
+        (1, 'v-900', 1790000000), (2, 'v-900', 1790000000), (3, 'v-900', 1790001200),
+        (4, 'v-900', 1790005000), (5, 'v-900', 1790005000), (6, 'v-900', 1790005000),
+        (7, 'v-901', 1790002000);
+    expected_rows: [["v-900", 1, 1790000000, 1790001200, 3], ["v-900", 2, 1790005000, 1790005000, 3], ["v-901", 1, 1790002000, 1790002000, 1]]
+    ordered: true
+  - id: t8
+    hidden: true
+    description: "Ids in reverse time order across several sessions per visitor (ordering by id instead of ts is wrong)"
+    setup_sql: |
+      INSERT INTO clicks (id, visitor_id, ts) VALUES
+        (1, 'm-1', 90000), (2, 'm-1', 60000), (3, 'm-1', 59000), (4, 'm-1', 30000), (5, 'm-1', 1000),
+        (6, 'm-2', 4000), (7, 'm-2', 2000), (8, 'm-2', 0);
+    expected_rows: [["m-1", 1, 1000, 1000, 1], ["m-1", 2, 30000, 30000, 1], ["m-1", 3, 59000, 60000, 2], ["m-1", 4, 90000, 90000, 1], ["m-2", 1, 0, 0, 1], ["m-2", 2, 2000, 2000, 1], ["m-2", 3, 4000, 4000, 1]]
+    ordered: true
+  - id: t9
+    hidden: true
+    description: "Stress - 800 clicks: bot-1 every 600s with a 2000s pause every 100th click, bot-2 every exactly 1800s (one long session)"
+    setup_sql: |
+      WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 500)
+      INSERT INTO clicks (id, visitor_id, ts)
+      SELECT n, 'bot-1', n * 600 + (n / 100) * 2000 FROM seq
+      UNION ALL
+      SELECT 1000 + n, 'bot-2', n * 1800 FROM seq WHERE n <= 300;
+    expected_rows: [["bot-1", 1, 600, 59400, 99], ["bot-1", 2, 62000, 121400, 100], ["bot-1", 3, 124000, 183400, 100], ["bot-1", 4, 186000, 245400, 100], ["bot-1", 5, 248000, 307400, 100], ["bot-1", 6, 310000, 310000, 1], ["bot-2", 1, 1800, 540000, 300]]
+    ordered: true
+expected_concepts:
+  - LAG window function to compare each click with the previous one
+  - new-session flag with a strict > 1800 comparison
+  - running SUM of flags to number sessions (gaps-and-islands)
+  - aggregating per (visitor, session) with a deterministic ORDER BY
+optimal_complexity: {time: "O(n log n) for the per-visitor sort", space: O(n)}
+rubric:
+  excellent: Uses LAG partitioned by visitor to flag session starts with ts - prev > 1800, turns flags into session numbers with a running SUM, aggregates per session and orders deterministically; explains why the window result must be computed in a CTE before grouping and mentions an index on (visitor_id, ts).
+  good: Reaches the gaps-and-islands structure but needs a hint about the running sum, the 1800 boundary or the per-visitor partition.
+  weak: Groups by fixed 30-minute buckets, measures from the session start instead of the previous click, or numbers sessions with ROW_NUMBER over clicks.
+  criteria:
+    correctness: All tests pass, including the exact-1800 boundary, duplicate timestamps and long chained sessions.
+    efficiency: One sort per visitor with window functions rather than a quadratic self-join.
+    code_quality: Readable CTE steps (previous click, flag, session number, aggregate).
+    edge_cases: Empty table, single clicks, duplicate timestamps and ids that do not follow time order.
+    communication: Explains the gaps-and-islands idea and why flags are summed rather than counted.
+hints:
+  - Decide for every click whether it starts a new session; that only depends on the same visitor's previous click.
+  - Once each click carries a 1 when it starts a session and 0 otherwise, a running total of those flags in time order gives every click its session number.
+  - Use LAG(ts) OVER (PARTITION BY visitor_id ORDER BY ts, id) to flag starts when there is no previous click or the gap is above 1800, then SUM the flag over the same window with a ROWS frame up to the current row, and finally GROUP BY visitor and session number taking MIN, MAX and COUNT.
+followups:
+  - How would you make the inactivity timeout configurable per product surface?
+  - How would you sessionize incrementally as new clicks arrive every hour?
+  - Which index or partitioning would you choose for billions of clicks?
+common_errors:
+  - Using >= 1800, which splits sessions at exactly 1800 seconds.
+  - Measuring the gap from the session start instead of from the previous click.
+  - Ordering the window by id instead of ts, which breaks when ids do not follow time order.
+  - Filtering or grouping on a window function in the same SELECT where it is computed.

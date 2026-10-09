@@ -1,0 +1,152 @@
+version: 1
+slug: hostname_pattern_expansion
+title: Hostname Pattern Expansion
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [devops, platform, sre, network]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Hostname Pattern Expansion
+
+  An infrastructure inventory describes fleets of machines with compact hostname patterns instead of
+  listing every host. Before a configuration rollout, the deploy tool must turn a pattern into the
+  exact list of target hostnames.
+
+  A pattern is a sequence of parts written one after another:
+
+  - a **literal** character: a lowercase letter, a digit, `-` or `.`;
+  - a **choice group** `{A,B,...}`: one or more alternatives separated by commas inside braces. Each
+    alternative is itself a pattern (it may contain literals and further groups, or be **empty**).
+
+  A group expands to the union of the expansions of its alternatives. Parts written one after another
+  combine by concatenation of every pairing: if the first part can produce `a` or `b` and the next part
+  can produce `1` or `2`, together they produce `a1`, `a2`, `b1` and `b2`.
+
+  Return every **distinct** hostname the pattern produces, sorted in ascending character-code order
+  (plain string comparison, so a string sorts before any longer string that starts with it).
+
+  ### Example 1
+  ```
+  Input:  pattern = "web{1,2}-{eu,us}"
+  Output: ["web1-eu", "web1-us", "web2-eu", "web2-us"]
+  ```
+
+  ### Example 2
+  ```
+  Input:  pattern = "lb{,-{eu,us}}"
+  Output: ["lb", "lb-eu", "lb-us"]
+  Explanation: the outer group's first alternative is empty, its second is "-" followed by a nested group
+  ```
+
+  ### Example 3
+  ```
+  Input:  pattern = "{app,ap{p,i}}{1,1}"
+  Output: ["api1", "app1"]
+  Explanation: "app1" can be produced four ways but is listed once
+  ```
+
+  ### Constraints
+  - `1 <= pattern.length <= 200`
+  - `pattern` contains only lowercase letters, digits, `-`, `.`, `{`, `}` and `,`, and is well formed:
+    braces are balanced and commas appear only directly inside a group.
+  - The number of expansions counted with repetition is at most `10^4`.
+  - Every expanded hostname is non-empty.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: expand_hostname_pattern
+  params:
+    - {name: pattern, type: string}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def expand_hostname_pattern(pattern: str) -> list[str]:
+        # Each frame keeps the enclosing group's finished alternatives and the strings built before the group.
+        stack: list[tuple[set[str], list[str]]] = []
+        alternatives: set[str] = set()
+        current: list[str] = [""]
+        for ch in pattern:
+            if ch == "{":
+                stack.append((alternatives, current))
+                alternatives, current = set(), [""]
+            elif ch == ",":
+                alternatives.update(current)
+                current = [""]
+            elif ch == "}":
+                alternatives.update(current)
+                options = sorted(alternatives)
+                alternatives, prefixes = stack.pop()
+                current = list({p + o for p in prefixes for o in options})
+            else:
+                current = [s + ch for s in current]
+        return sorted(set(current))
+  javascript: |
+    function expandHostnamePattern(pattern) {
+      // Each frame keeps the enclosing group's finished alternatives and the strings built before the group.
+      const stack = [];
+      let alternatives = new Set();
+      let current = [""];
+      for (const ch of pattern) {
+        if (ch === "{") {
+          stack.push([alternatives, current]);
+          alternatives = new Set();
+          current = [""];
+        } else if (ch === ",") {
+          for (const s of current) alternatives.add(s);
+          current = [""];
+        } else if (ch === "}") {
+          for (const s of current) alternatives.add(s);
+          const options = [...alternatives];
+          const [outerAlternatives, prefixes] = stack.pop();
+          const combined = new Set();
+          for (const p of prefixes) for (const o of options) combined.add(p + o);
+          alternatives = outerAlternatives;
+          current = [...combined];
+        } else {
+          current = current.map((s) => s + ch);
+        }
+      }
+      return [...new Set(current)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    }
+tests:
+  - {id: t1, args: ["web{1,2}-{eu,us}"], expected: ["web1-eu", "web1-us", "web2-eu", "web2-us"], description: "Example 1 - two groups multiply"}
+  - {id: t2, args: ["lb{,-{eu,us}}"], expected: ["lb", "lb-eu", "lb-us"], description: "Example 2 - empty alternative and nested group"}
+  - {id: t3, args: ["{app,ap{p,i}}{1,1}"], expected: ["api1", "app1"], description: "Example 3 - duplicates removed and output sorted"}
+  - {id: t4, hidden: true, args: ["db-primary.internal"], expected: ["db-primary.internal"], description: "No groups: the pattern is its own single expansion"}
+  - {id: t5, hidden: true, args: ["{a}"], expected: ["a"], description: "Group with a single alternative"}
+  - {id: t6, hidden: true, args: ["{x,{y,{z,w}}}"], expected: ["w", "x", "y", "z"], description: "Deeply nested alternatives flatten into one sorted list"}
+  - {id: t7, hidden: true, args: ["{{a,b}{c,d},e}"], expected: ["ac", "ad", "bc", "bd", "e"], description: "Concatenation inside an alternative before the comma"}
+  - {id: t8, hidden: true, args: ["a{-,.,0,z,}b"], expected: ["a-b", "a.b", "a0b", "ab", "azb"], description: "Character-code order of '-', '.', digits and letters plus a shorter string"}
+  - {id: t9, hidden: true, args: ["x{,a}{,a}"], expected: ["x", "xa", "xaa"], description: "Empty alternatives in several groups produce duplicates that must collapse"}
+  - {id: t10, hidden: true, args: ["{,}host{api,api-v2,ap}"], expected: ["hostap", "hostapi", "hostapi-v2"], description: "Group of only empty alternatives; prefix strings sort before longer ones"}
+  - {id: t11, hidden: true, args: ["n{0,1,2,3}{0,1,2,3,4}.dc{1,2}-{a,b,a}"], expected: ["n00.dc1-a", "n00.dc1-b", "n00.dc2-a", "n00.dc2-b", "n01.dc1-a", "n01.dc1-b", "n01.dc2-a", "n01.dc2-b", "n02.dc1-a", "n02.dc1-b", "n02.dc2-a", "n02.dc2-b", "n03.dc1-a", "n03.dc1-b", "n03.dc2-a", "n03.dc2-b", "n04.dc1-a", "n04.dc1-b", "n04.dc2-a", "n04.dc2-b", "n10.dc1-a", "n10.dc1-b", "n10.dc2-a", "n10.dc2-b", "n11.dc1-a", "n11.dc1-b", "n11.dc2-a", "n11.dc2-b", "n12.dc1-a", "n12.dc1-b", "n12.dc2-a", "n12.dc2-b", "n13.dc1-a", "n13.dc1-b", "n13.dc2-a", "n13.dc2-b", "n14.dc1-a", "n14.dc1-b", "n14.dc2-a", "n14.dc2-b", "n20.dc1-a", "n20.dc1-b", "n20.dc2-a", "n20.dc2-b", "n21.dc1-a", "n21.dc1-b", "n21.dc2-a", "n21.dc2-b", "n22.dc1-a", "n22.dc1-b", "n22.dc2-a", "n22.dc2-b", "n23.dc1-a", "n23.dc1-b", "n23.dc2-a", "n23.dc2-b", "n24.dc1-a", "n24.dc1-b", "n24.dc2-a", "n24.dc2-b", "n30.dc1-a", "n30.dc1-b", "n30.dc2-a", "n30.dc2-b", "n31.dc1-a", "n31.dc1-b", "n31.dc2-a", "n31.dc2-b", "n32.dc1-a", "n32.dc1-b", "n32.dc2-a", "n32.dc2-b", "n33.dc1-a", "n33.dc1-b", "n33.dc2-a", "n33.dc2-b", "n34.dc1-a", "n34.dc1-b", "n34.dc2-a", "n34.dc2-b"], description: "Larger product (120 combinations before dedupe, 80 distinct)"}
+expected_concepts:
+  - stack of open groups (or recursive descent) mirroring brace nesting
+  - Cartesian concatenation of the prefix set with a group's alternatives
+  - union of alternatives including empty alternatives
+  - de-duplication with a set and a final lexicographic sort
+  - output-sensitive complexity bounded by the number of expansions
+optimal_complexity: {time: O(n * E * L), space: O(E * L)}
+rubric:
+  excellent: "Defines the grammar clearly, implements a stack-based or recursive parser that keeps the strings built so far per nesting level, combines groups by Cartesian concatenation, handles empty alternatives and duplicates with a set, sorts once at the end and explains the output-sensitive cost."
+  good: "Reaches a correct recursive or stack solution with some prompting, for example after fixing empty alternatives or duplicate removal."
+  weak: "Only handles one level of braces, mixes up union and concatenation, or returns duplicates or unsorted output."
+  criteria:
+    correctness: "All tests pass, including nested groups, empty alternatives, duplicates and character-code ordering."
+    efficiency: "Work proportional to the strings actually produced; no repeated re-parsing of the pattern."
+    code_quality: "Clear separation of what happens on an opening brace, a comma, a closing brace and a literal."
+    edge_cases: "No groups at all, single-alternative group, group of only empty alternatives, deep nesting."
+    communication: "Explains why a comma closes one alternative and why a closing brace multiplies the outer prefix set."
+hints:
+  - "Think of the pattern as a tiny grammar: concatenation of parts, and groups that are unions of alternatives. What set of strings does each piece produce?"
+  - "While scanning left to right, keep the set of strings built so far for the current alternative; an opening brace starts a fresh context, so the contexts of the open groups form a stack."
+  - "On an opening brace push the finished alternatives of the outer group together with the current prefix set and start again from a set holding the empty string; a comma moves the current set into the group's alternatives; a closing brace does the same, then pops and pairs every saved prefix with every alternative; a literal is appended to every current string; finish with a set and a sort."
+followups:
+  - "How would you support numeric ranges such as {01..12} with zero padding?"
+  - "If the expansion could be millions of hosts, how would you stream them in sorted order without holding them all in memory?"
+  - "How would you validate a malformed pattern and point at the offending character?"
+common_errors:
+  - "Treating a comma as a separator at every nesting level instead of only inside the innermost open group."
+  - "Dropping empty alternatives, so patterns like lb{,-eu} lose the bare name."
+  - "Forgetting to remove duplicates produced by different paths through the pattern."
+  - "Sorting with a numeric or locale-aware comparison instead of plain character codes."

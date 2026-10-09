@@ -1,0 +1,191 @@
+version: 1
+slug: colocated_server_pairs
+title: Co-located Server Pairs
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [sre, network, devops]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Co-located Server Pairs
+
+  For a failure-domain review the SRE team wants to see which servers share a rack: if a rack loses
+  power or its top-of-rack switch, every server in it goes down together. List every **pair** of
+  servers that sit in the same rack.
+
+  Table `servers`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | hostname | VARCHAR(100) | unique, lower-case |
+  | rack | VARCHAR(20) | rack label; **NULL when the server is not racked yet** |
+
+  Return columns `rack`, `host_a`, `host_b` with one row per unordered pair of servers in the same rack.
+  Each pair appears **exactly once**, with `host_a` alphabetically **before** `host_b`; a server is never
+  paired with itself. Servers with a NULL rack are ignored (two unracked servers are not co-located).
+  Order the rows by `rack`, then `host_a`, then `host_b`.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  servers
+  +----+----------+------+
+  | id | hostname | rack |
+  +----+----------+------+
+  | 1  | db-01    | A1   |
+  | 2  | api-01   | A1   |
+  | 3  | api-02   | B4   |
+  | 4  | cache-01 | A1   |
+  | 5  | db-02    | B4   |
+  | 6  | web-01   | C2   |
+  +----+----------+------+
+
+  Output
+  +------+----------+----------+
+  | rack | host_a   | host_b   |
+  +------+----------+----------+
+  | A1   | api-01   | cache-01 |
+  | A1   | api-01   | db-01    |
+  | A1   | cache-01 | db-01    |
+  | B4   | api-02   | db-02    |
+  +------+----------+----------+
+  web-01 is alone in rack C2, so it forms no pair.
+  ```
+
+  ### Example 2
+  ```
+  servers
+  +----+----------+------+
+  | id | hostname | rack |
+  +----+----------+------+
+  | 1  | web-01   | NULL |
+  | 2  | web-02   | NULL |
+  | 3  | db-01    | D3   |
+  +----+----------+------+
+
+  Output
+  (no rows)
+  ```
+
+  ### Constraints
+  - Hostnames are unique and use lower-case letters, digits and hyphens with zero-padded numbers.
+  - Rack labels are an upper-case letter followed by digits.
+  - The table may be empty; a rack with `k` servers produces `k * (k - 1) / 2` pairs.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return rack, host_a, host_b for every pair of servers in the same rack (host_a < host_b).
+    SELECT a.rack, a.hostname AS host_a, b.hostname AS host_b
+    FROM servers a
+    JOIN servers b ON a.rack = b.rack;
+reference_solutions:
+  sql: |
+    SELECT a.rack, a.hostname AS host_a, b.hostname AS host_b
+    FROM servers a
+    JOIN servers b
+      ON a.rack = b.rack
+     AND a.hostname < b.hostname
+    ORDER BY a.rack, host_a, host_b;
+sql_setup: |
+  CREATE TABLE servers (
+    id INTEGER PRIMARY KEY,
+    hostname VARCHAR(100) NOT NULL UNIQUE,
+    rack VARCHAR(20)
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - a rack of three, a rack of two and a lone server"
+    setup_sql: |
+      INSERT INTO servers (id, hostname, rack) VALUES
+        (1, 'db-01', 'A1'), (2, 'api-01', 'A1'), (3, 'api-02', 'B4'), (4, 'cache-01', 'A1'), (5, 'db-02', 'B4'), (6, 'web-01', 'C2');
+    expected_rows: [["A1", "api-01", "cache-01"], ["A1", "api-01", "db-01"], ["A1", "cache-01", "db-01"], ["B4", "api-02", "db-02"]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - unracked servers never pair with each other"
+    setup_sql: |
+      INSERT INTO servers (id, hostname, rack) VALUES (1, 'web-01', NULL), (2, 'web-02', NULL), (3, 'db-01', 'D3');
+    expected_rows: []
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Every server alone in its rack - no rows (self-pairs must be excluded)"
+    setup_sql: |
+      INSERT INTO servers (id, hostname, rack) VALUES (1, 'api-01', 'A1'), (2, 'api-02', 'A2'), (3, 'api-03', 'A3');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Pair orientation follows hostnames, not ids - higher id with the earlier name is host_a"
+    setup_sql: |
+      INSERT INTO servers (id, hostname, rack) VALUES (1, 'web-02', 'B2'), (2, 'web-01', 'B2');
+    expected_rows: [["B2", "web-01", "web-02"]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Rack of four gives six pairs, each exactly once"
+    setup_sql: |
+      INSERT INTO servers (id, hostname, rack) VALUES
+        (1, 'kafka-04', 'E1'), (2, 'kafka-02', 'E1'), (3, 'kafka-03', 'E1'), (4, 'kafka-01', 'E1');
+    expected_rows: [["E1", "kafka-01", "kafka-02"], ["E1", "kafka-01", "kafka-03"], ["E1", "kafka-01", "kafka-04"], ["E1", "kafka-02", "kafka-03"], ["E1", "kafka-02", "kafka-04"], ["E1", "kafka-03", "kafka-04"]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Racked and unracked servers mixed - NULL rack servers neither pair nor appear"
+    setup_sql: |
+      INSERT INTO servers (id, hostname, rack) VALUES
+        (1, 'db-01', 'C1'), (2, 'db-02', NULL), (3, 'db-03', 'C1'), (4, 'db-04', NULL), (5, 'db-05', 'C2');
+    expected_rows: [["C1", "db-01", "db-03"]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Rows sorted by rack first, then host_a and host_b, across several racks inserted out of order"
+    setup_sql: |
+      INSERT INTO servers (id, hostname, rack) VALUES
+        (1, 'zk-01', 'B7'), (2, 'mq-01', 'A3'), (3, 'zk-02', 'A3'), (4, 'mq-02', 'B7'), (5, 'lb-01', 'B7'),
+        (6, 'lb-02', 'A3'), (7, 'git-01', 'C9');
+    expected_rows: [["A3", "lb-02", "mq-01"], ["A3", "lb-02", "zk-02"], ["A3", "mq-01", "zk-02"], ["B7", "lb-01", "mq-02"], ["B7", "lb-01", "zk-01"], ["B7", "mq-02", "zk-01"]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Larger inventory - racks of five, three, two and one plus unracked servers"
+    setup_sql: |
+      INSERT INTO servers (id, hostname, rack) VALUES
+        (1, 'node-05', 'R1'), (2, 'node-01', 'R1'), (3, 'node-03', 'R1'), (4, 'node-04', 'R1'), (5, 'node-02', 'R1'),
+        (6, 'store-01', 'R2'), (7, 'store-03', 'R2'), (8, 'store-02', 'R2'), (9, 'edge-01', 'R3'), (10, 'edge-02', 'R3'),
+        (11, 'mon-01', 'R4'), (12, 'spare-01', NULL), (13, 'spare-02', NULL), (14, 'spare-03', NULL);
+    expected_rows: [["R1", "node-01", "node-02"], ["R1", "node-01", "node-03"], ["R1", "node-01", "node-04"], ["R1", "node-01", "node-05"], ["R1", "node-02", "node-03"], ["R1", "node-02", "node-04"], ["R1", "node-02", "node-05"], ["R1", "node-03", "node-04"], ["R1", "node-03", "node-05"], ["R1", "node-04", "node-05"], ["R2", "store-01", "store-02"], ["R2", "store-01", "store-03"], ["R2", "store-02", "store-03"], ["R3", "edge-01", "edge-02"]]
+expected_concepts:
+  - "self-join on a shared attribute"
+  - "a strict inequality to emit each unordered pair once and drop self-pairs"
+  - "NULL never equals NULL in a join condition"
+  - "deterministic multi-column ORDER BY"
+optimal_complexity: {time: "O(n + p) with an index on rack, where p is the number of pairs (plus sorting the output)", space: "O(p) for the result"}
+rubric:
+  excellent: "Self-joins servers on equal rack with a.hostname < b.hostname, explains that the strict inequality removes both self-pairs and mirrored duplicates, notes that NULL racks drop out because NULL = NULL is unknown, and mentions the quadratic pair count per rack."
+  good: "Correct query after a hint about duplicate mirrored pairs or self-pairs."
+  weak: "Uses <> and returns each pair twice, compares ids so host_a can sort after host_b, or adds special handling that pairs NULL racks together."
+  criteria:
+    correctness: "All tests pass, including orientation by hostname, NULL racks and single-server racks."
+    efficiency: "One self-join on rack; no cross join followed by filtering in application code."
+    code_quality: "Clear aliases and output names exactly as specified."
+    edge_cases: "Empty table, lone servers, unracked servers and large racks."
+    communication: "Explains how the inequality turns ordered pairs into unordered ones."
+hints:
+  - "A pair needs two servers at once, so you will need to look at the table twice in the same query."
+  - "Join the table to itself on the rack; then think about which extra condition stops a server matching itself and stops each pair appearing in both orientations."
+  - "Alias servers as a and b, join on a.rack = b.rack and a.hostname < b.hostname, select the rack with both hostnames under the required names, and order by rack, host_a and host_b; NULL racks drop out of the equality join on their own."
+followups:
+  - "How would you list only racks that hold more than one server of the same service?"
+  - "How would you count pairs per rack without generating them?"
+  - "How would you extend the review to servers that share a power feed recorded in another table?"
+common_errors:
+  - "Using a.id <> b.id, which returns every pair twice."
+  - "Using a.id < b.id, which can put the alphabetically later hostname in host_a."
+  - "Treating unracked servers as one rack by joining with COALESCE or IS NOT DISTINCT FROM."

@@ -1,0 +1,171 @@
+version: 1
+slug: flatten_indented_config
+title: Flatten an Indented Config
+difficulty: medium
+competency_keys: [data_structures, problem_solving]
+role_tags: [devops, platform, backend]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Flatten an Indented Config
+
+  A deployment tool reads service settings from a small YAML-like config file and needs them as flat
+  **dotted keys** so they can be exported as environment overrides. You receive the file as a list of
+  `lines`.
+
+  How to read each line:
+
+  - A line is **skipped** when it is blank (empty or only spaces) or when its first non-space character
+    is `#` (a comment). Comment lines may be indented by any amount.
+  - Every other line starts with `2 * d` spaces, where `d` is its **nesting depth** (`0` for top level),
+    followed by a key, a colon `:` and an optional value. The key is everything before the **first**
+    colon.
+  - If the text after that first colon is empty or only spaces, the line **opens a section** named after
+    the key. The lines that follow at depth `d + 1` belong to that section, until a line at depth `d` or
+    less appears.
+  - Otherwise the line is a **leaf** and its value is the text after the first colon with leading and
+    trailing spaces removed. A value may itself contain colons, spaces or `#` characters; they are part
+    of the value.
+
+  The indentation is always consistent: a line at depth `d > 0` always belongs to a section opened at
+  depth `d - 1`, and leaves never contain other lines. Keys may repeat; a section may be empty.
+
+  Return one string `path=value` for every leaf, **in the order the leaves appear**, where `path` is the
+  names of all enclosing sections followed by the leaf key, joined with `.`.
+
+  ### Example 1
+  ```
+  Input:  lines = [
+            "server:",
+            "  host: 0.0.0.0",
+            "  port: 8080",
+            "  tls:",
+            "    enabled: true",
+            "log_level: info"
+          ]
+  Output: [
+            "server.host=0.0.0.0",
+            "server.port=8080",
+            "server.tls.enabled=true",
+            "log_level=info"
+          ]
+  ```
+
+  ### Example 2
+  ```
+  Input:  lines = [
+            "# payments service",
+            "database:",
+            "",
+            "  url: postgres://db:5432/pay",
+            "  pool:",
+            "    # tuned for peak hour",
+            "    max: 20",
+            "cache:",
+            "  ttl_seconds:   300  "
+          ]
+  Output: [
+            "database.url=postgres://db:5432/pay",
+            "database.pool.max=20",
+            "cache.ttl_seconds=300"
+          ]
+  Explanation: Comments and the blank line are skipped. Only the first colon separates the key from the value,
+               and the value of ttl_seconds is trimmed.
+  ```
+
+  ### Constraints
+  - `0 <= lines.length <= 1000`
+  - Each line has at most 120 printable ASCII characters (no tabs).
+  - Keys are non-empty and consist of letters, digits, `_` and `-`.
+  - Nesting depth is at most 10.
+
+  **Follow-up:** how would you report a line whose indentation is *not* consistent (for example 3 spaces, or two levels deeper than its parent)?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: flatten_indented_config
+  params:
+    - {name: lines, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def flatten_indented_config(lines: list[str]) -> list[str]:
+        path: list[str] = []
+        result: list[str] = []
+        for line in lines:
+            content = line.lstrip(" ")
+            if content.strip() == "" or content.startswith("#"):
+                continue
+            depth = (len(line) - len(content)) // 2
+            key, _, rest = content.partition(":")
+            value = rest.strip()
+            del path[depth:]
+            if value == "":
+                path.append(key)
+            else:
+                result.append(".".join(path + [key]) + "=" + value)
+        return result
+  javascript: |
+    function flattenIndentedConfig(lines) {
+      const path = [];
+      const result = [];
+      for (const line of lines) {
+        let indent = 0;
+        while (indent < line.length && line[indent] === " ") indent++;
+        const content = line.slice(indent);
+        if (content.trim() === "" || content.startsWith("#")) continue;
+        const depth = Math.floor(indent / 2);
+        const colon = content.indexOf(":");
+        const key = content.slice(0, colon);
+        const value = content.slice(colon + 1).trim();
+        path.length = depth;
+        if (value === "") {
+          path.push(key);
+        } else {
+          result.push([...path, key].join(".") + "=" + value);
+        }
+      }
+      return result;
+    }
+tests:
+  - {id: t1, args: [["server:", "  host: 0.0.0.0", "  port: 8080", "  tls:", "    enabled: true", "log_level: info"]], expected: ["server.host=0.0.0.0", "server.port=8080", "server.tls.enabled=true", "log_level=info"], description: "Example 1 - one nested section and a top-level leaf after dedenting"}
+  - {id: t2, args: [["# payments service", "database:", "", "  url: postgres://db:5432/pay", "  pool:", "    # tuned for peak hour", "    max: 20", "cache:", "  ttl_seconds:   300  "]], expected: ["database.url=postgres://db:5432/pay", "database.pool.max=20", "cache.ttl_seconds=300"], description: "Example 2 - comments, a blank line, a value containing colons and a padded value"}
+  - {id: t3, hidden: true, args: [[]], expected: [], description: "Empty file"}
+  - {id: t4, hidden: true, args: [["# only comments", "", "   ", "    # indented comment"]], expected: [], description: "Only comments and blank lines produce nothing"}
+  - {id: t5, hidden: true, args: [["a: 1", "b: two words", "c: x=y"]], expected: ["a=1", "b=two words", "c=x=y"], description: "Top-level leaves only; value with spaces and an equals sign"}
+  - {id: t6, hidden: true, args: [["l1:", "  l2:", "    l3:", "      l4:", "        l5:", "          l6: deep", "  back: two", "top: one"]], expected: ["l1.l2.l3.l4.l5.l6=deep", "l1.back=two", "top=one"], description: "Six levels deep then dedent by several levels at once"}
+  - {id: t7, hidden: true, args: [["empty:", "filled:", "  k: v", "empty2:   ", "z: last"]], expected: ["filled.k=v", "z=last"], description: "Empty sections (including one with trailing spaces after the colon) produce no output and do not leak into later paths"}
+  - {id: t8, hidden: true, args: [["alerts:", "  channel: #ops-oncall", "  window: 09:00-17:30", "  # muted: true", "  url: https://hooks.example.com/a?b=c"]], expected: ["alerts.channel=#ops-oncall", "alerts.window=09:00-17:30", "alerts.url=https://hooks.example.com/a?b=c"], description: "Values starting with # or containing several colons are values, not comments"}
+  - {id: t9, hidden: true, args: [["env:", "  name: a", "env:", "  name: b", "  extra:", "    name: c", "  name: d"]], expected: ["env.name=a", "env.name=b", "env.extra.name=c", "env.name=d"], description: "Repeated section and leaf keys are all reported in input order"}
+  - {id: t10, hidden: true, args: [["service1:", "  limits:", "    cpu: 250m", "    memory: 128Mi", "  # replicas follow", "  replicas: 2", "service2:", "  limits:", "    cpu: 500m", "    memory: 256Mi", "  # replicas follow", "  replicas: 3", "service3:", "  limits:", "    cpu: 750m", "    memory: 384Mi", "  # replicas follow", "  replicas: 1", "service4:", "  limits:", "    cpu: 1000m", "    memory: 512Mi", "  # replicas follow", "  replicas: 2", "service5:", "  limits:", "    cpu: 1250m", "    memory: 640Mi", "  # replicas follow", "  replicas: 3", "service6:", "  limits:", "    cpu: 1500m", "    memory: 768Mi", "  # replicas follow", "  replicas: 1", "service7:", "  limits:", "    cpu: 1750m", "    memory: 896Mi", "  # replicas follow", "  replicas: 2", "service8:", "  limits:", "    cpu: 2000m", "    memory: 1024Mi", "  # replicas follow", "  replicas: 3"]], expected: ["service1.limits.cpu=250m", "service1.limits.memory=128Mi", "service1.replicas=2", "service2.limits.cpu=500m", "service2.limits.memory=256Mi", "service2.replicas=3", "service3.limits.cpu=750m", "service3.limits.memory=384Mi", "service3.replicas=1", "service4.limits.cpu=1000m", "service4.limits.memory=512Mi", "service4.replicas=2", "service5.limits.cpu=1250m", "service5.limits.memory=640Mi", "service5.replicas=3", "service6.limits.cpu=1500m", "service6.limits.memory=768Mi", "service6.replicas=1", "service7.limits.cpu=1750m", "service7.limits.memory=896Mi", "service7.replicas=2", "service8.limits.cpu=2000m", "service8.limits.memory=1024Mi", "service8.replicas=3"], description: "Larger file: 8 services with nested limits and comments"}
+expected_concepts:
+  - "stack of section names indexed by depth"
+  - "truncate the path when indentation decreases"
+  - "split on the first colon only"
+  - "skip blank and comment lines before computing depth"
+  - "single pass, O(total characters)"
+optimal_complexity: {time: "O(n * d)", space: "O(d)"}
+rubric:
+  excellent: "Keeps a path stack indexed by depth, truncates it on every non-skipped line, splits on the first colon only, trims values, and handles comments, blank lines, empty sections and multi-level dedents without special cases."
+  good: "Correct stack-based solution that needs a nudge for one detail such as values containing colons, empty sections or trailing spaces after a section colon."
+  weak: "Tracks only the previous line's indentation, splits on every colon, treats '#' inside values as a comment, or leaks a closed section into later keys."
+  criteria:
+    correctness: "All tests pass, including multi-level dedents, empty sections and repeated keys."
+    efficiency: "One pass over the lines; each output costs time proportional to its path length."
+    code_quality: "Clear separation of line classification (skip, section, leaf) from path maintenance; no regex trickery that hides the rules."
+    edge_cases: "Empty input, comment-only files, values with colons or '#', trailing spaces after a section colon, dedent by several levels."
+    communication: "Explains why the path is truncated to the current depth before the line is handled."
+hints:
+  - "For each line you need to know how deep it is and which sections enclose it; think about what changes when the indentation goes back up."
+  - "Keep the names of the currently open sections in a list where position i holds the section at depth i; when a line arrives at depth d, everything at depth d or deeper is no longer open."
+  - "Skip blank and comment lines first. For any other line, compute depth as leading spaces divided by two, cut the open-section list down to that depth, split the rest at the first colon, and either push the key as a new section (empty value) or emit the joined path plus key with the trimmed value."
+followups:
+  - "How would you detect and report inconsistent indentation with a line number?"
+  - "How would you support list items written as '- value' under a key?"
+  - "What would you change to produce environment variable names such as SERVER_TLS_ENABLED?"
+  - "How would you merge two such files where the second overrides the first?"
+common_errors:
+  - "Splitting the line on every colon, which breaks URLs and times in values."
+  - "Treating a '#' inside a value as the start of a comment."
+  - "Only popping one section when the indentation decreases by several levels."
+  - "Forgetting that a section opened with trailing spaces after the colon is still a section."
+  - "Computing the depth of comment lines and letting them change the open sections."

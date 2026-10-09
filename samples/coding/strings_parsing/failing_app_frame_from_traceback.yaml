@@ -1,0 +1,163 @@
+version: 1
+slug: failing_app_frame_from_traceback
+title: "Failing App Frame from a Traceback"
+difficulty: easy
+competency_keys: [debugging, problem_solving]
+role_tags: [backend, sre, support_engineer, qa]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Failing App Frame from a Traceback
+
+  When an alert fires, the on-call engineer usually wants to jump straight to the deepest point in **their
+  own code** where the failure passed through, skipping framework and library frames. Write a helper that
+  finds that point in a Python-style traceback.
+
+  The traceback is given as a list of lines, `trace`. A line is a **frame line** if, after removing any
+  leading spaces, it has exactly this shape:
+
+  ```
+  File "<path>", line <number>, in <function>
+  ```
+
+  More precisely, the line (after its leading spaces) must start with `File "`, the path runs up to the next
+  double quote, and that quote must be immediately followed by `, line ` and **one or more digits**. Whatever
+  comes after the digits does not matter. Every other line (source code, exception messages, blank lines,
+  separators between chained tracebacks) is ignored, even if it contains text that looks like a frame
+  somewhere in the middle.
+
+  Your own code is identified by `prefix`: a frame belongs to your code if its path **starts with** `prefix`
+  (a plain string prefix, case-sensitive; an empty prefix matches every path).
+
+  Return `"<path>:<number>"` for the **last** frame line in `trace` whose path starts with `prefix`, using the
+  digits exactly as written. Return an empty string `""` if no frame line matches.
+
+  ### Example 1
+  ```
+  Input:  trace = [
+            "Traceback (most recent call last):",
+            '  File "app/api/routes.py", line 88, in create_charge',
+            "    return billing.charge(order)",
+            '  File "app/billing/charge.py", line 42, in charge',
+            "    receipt = gateway.submit(payload)",
+            '  File "lib/payments/gateway.py", line 310, in submit',
+            "    raise GatewayTimeout(self.url)",
+            "payments.errors.GatewayTimeout: https://pay.example.test",
+          ], prefix = "app/"
+  Output: "app/billing/charge.py:42"
+  Explanation: Three frame lines; the last one whose path starts with app/ is app/billing/charge.py at line 42.
+  ```
+
+  ### Example 2
+  ```
+  Input:  trace = [
+            "Traceback (most recent call last):",
+            '  File "lib/worker/loop.py", line 12, in run',
+            "    job()",
+            "ValueError: empty batch",
+          ], prefix = "app/"
+  Output: ""
+  ```
+
+  ### Constraints
+  - `0 <= trace.length <= 10^4`
+  - `0 <= trace[i].length <= 500`
+  - `0 <= prefix.length <= 100`
+  - All strings consist of printable ASCII characters; paths in frame lines contain no double quotes
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: failing_app_frame
+  params:
+    - {name: trace, type: "string[]"}
+    - {name: prefix, type: "string"}
+  return_type: "string"
+  comparison: exact
+reference_solutions:
+  python: |
+    def failing_app_frame(trace: list[str], prefix: str) -> str:
+        marker = 'File "'
+        result = ""
+        for line in trace:
+            text = line.lstrip(" ")
+            if not text.startswith(marker):
+                continue
+            close = text.find('"', len(marker))
+            if close < 0:
+                continue
+            path = text[len(marker):close]
+            rest = text[close + 1:]
+            if not rest.startswith(", line "):
+                continue
+            end = len(", line ")
+            while end < len(rest) and "0" <= rest[end] <= "9":
+                end += 1
+            if end == len(", line "):
+                continue
+            if path.startswith(prefix):
+                result = path + ":" + rest[len(", line "):end]
+        return result
+  javascript: |
+    function failingAppFrame(trace, prefix) {
+      const marker = 'File "';
+      const lineTag = ", line ";
+      let result = "";
+      for (const line of trace) {
+        let start = 0;
+        while (start < line.length && line[start] === " ") start++;
+        const text = line.slice(start);
+        if (!text.startsWith(marker)) continue;
+        const close = text.indexOf('"', marker.length);
+        if (close < 0) continue;
+        const path = text.slice(marker.length, close);
+        const rest = text.slice(close + 1);
+        if (!rest.startsWith(lineTag)) continue;
+        let end = lineTag.length;
+        while (end < rest.length && rest[end] >= "0" && rest[end] <= "9") end++;
+        if (end === lineTag.length) continue;
+        if (path.startsWith(prefix)) result = path + ":" + rest.slice(lineTag.length, end);
+      }
+      return result;
+    }
+tests:
+  - {id: t1, args: [["Traceback (most recent call last):", "  File \"app/api/routes.py\", line 88, in create_charge", "    return billing.charge(order)", "  File \"app/billing/charge.py\", line 42, in charge", "    receipt = gateway.submit(payload)", "  File \"lib/payments/gateway.py\", line 310, in submit", "    raise GatewayTimeout(self.url)", "payments.errors.GatewayTimeout: https://pay.example.test"], "app/"], expected: "app/billing/charge.py:42", description: "Example 1 - deepest app frame sits above a library frame"}
+  - {id: t2, args: [["Traceback (most recent call last):", "  File \"lib/worker/loop.py\", line 12, in run", "    job()", "ValueError: empty batch"], "app/"], expected: "", description: "Example 2 - no frame belongs to the application"}
+  - {id: t3, hidden: true, args: [[], "app/"], expected: "", description: "Empty trace"}
+  - {id: t4, hidden: true, args: [["File \"app/main.py\", line 1, in <module>"], "app/"], expected: "app/main.py:1", description: "Single frame line without leading spaces"}
+  - {id: t5, hidden: true, args: [["Traceback (most recent call last):", "  File \"app/cache/redis_client.py\", line 57, in get", "    return self.conn.get(key)", "  File \"lib/redis/client.py\", line 1210, in get", "    raise ConnectionError()", "redis.ConnectionError", "", "During handling of the above exception, another exception occurred:", "", "Traceback (most recent call last):", "  File \"app/api/profile.py\", line 23, in show", "    data = cache.get(user_key)", "  File \"app/cache/redis_client.py\", line 61, in get", "    raise CacheUnavailable() from None", "app.cache.CacheUnavailable"], "app/"], expected: "app/cache/redis_client.py:61", description: "Chained tracebacks: the last matching frame of the whole list wins"}
+  - {id: t6, hidden: true, args: [["Traceback (most recent call last):", "  File \"app/jobs/export.py\", line 9, in export", "    log.error('File \"app/fake.py\", line 1, in nope')", "ValueError: File \"app/also_fake.py\", line 2", "File \"app/report/render.py\" line 77, in render", "File \"app/report/render.py\", line , in render", "File \"app/report/render.py, line 15, in render"], "app/"], expected: "app/jobs/export.py:9", description: "Decoys: frame-like text inside code and messages, missing comma, missing digits, unclosed quote"}
+  - {id: t7, hidden: true, args: [["Traceback (most recent call last):", "  File \"app/api/routes.py\", line 88, in create_charge", "    return billing.charge(order)", "  File \"app/billing/charge.py\", line 42, in charge", "    receipt = gateway.submit(payload)", "  File \"lib/payments/gateway.py\", line 310, in submit", "    raise GatewayTimeout(self.url)", "payments.errors.GatewayTimeout: https://pay.example.test"], ""], expected: "lib/payments/gateway.py:310", description: "Empty prefix matches every frame, so the library frame is returned"}
+  - {id: t8, hidden: true, args: [["  File \"application/server.py\", line 5, in boot", "  File \"lib/x.py\", line 6, in y"], "app"], expected: "application/server.py:5", description: "Plain string prefix: app matches application/"}
+  - {id: t9, hidden: true, args: [["  File \"App/Main.py\", line 3, in run", "  File \"<string>\", line 1, in <module>"], "app/"], expected: "", description: "Prefix is case-sensitive; pseudo-file frames do not match"}
+  - {id: t10, hidden: true, args: [["  File \"app/tail.py\", line 7, in g", "  ^^^^^^^^", "    File \"app/deep.py\", line 0042"], "app/"], expected: "app/deep.py:0042", description: "Line with nothing after the digits still counts; digits kept as written"}
+  - {id: t11, hidden: true, args: [["Traceback (most recent call last):", "  File \"app/pipeline/stage_0.py\", line 100, in step_0", "    next_stage_0(ctx)", "  File \"lib/framework/stage_1.py\", line 101, in step_1", "    next_stage_1(ctx)", "  File \"lib/framework/stage_2.py\", line 102, in step_2", "    next_stage_2(ctx)", "  File \"app/pipeline/stage_3.py\", line 103, in step_3", "    next_stage_3(ctx)", "  File \"lib/framework/stage_4.py\", line 104, in step_4", "    next_stage_4(ctx)", "  File \"lib/framework/stage_5.py\", line 105, in step_5", "    next_stage_5(ctx)", "  File \"app/pipeline/stage_6.py\", line 106, in step_6", "    next_stage_6(ctx)", "  File \"lib/framework/stage_7.py\", line 107, in step_7", "    next_stage_7(ctx)", "  File \"lib/framework/stage_8.py\", line 108, in step_8", "    next_stage_8(ctx)", "  File \"app/pipeline/stage_9.py\", line 109, in step_9", "    next_stage_9(ctx)", "  File \"lib/framework/stage_10.py\", line 110, in step_10", "    next_stage_10(ctx)", "  File \"lib/framework/stage_11.py\", line 111, in step_11", "    next_stage_11(ctx)", "  File \"app/pipeline/stage_12.py\", line 112, in step_12", "    next_stage_12(ctx)", "  File \"lib/framework/stage_13.py\", line 113, in step_13", "    next_stage_13(ctx)", "  File \"lib/framework/stage_14.py\", line 114, in step_14", "    next_stage_14(ctx)", "  File \"app/pipeline/stage_15.py\", line 115, in step_15", "    next_stage_15(ctx)", "  File \"lib/framework/stage_16.py\", line 116, in step_16", "    next_stage_16(ctx)", "  File \"lib/framework/stage_17.py\", line 117, in step_17", "    next_stage_17(ctx)", "  File \"app/pipeline/stage_18.py\", line 118, in step_18", "    next_stage_18(ctx)", "  File \"lib/framework/stage_19.py\", line 119, in step_19", "    next_stage_19(ctx)", "  File \"lib/framework/stage_20.py\", line 120, in step_20", "    next_stage_20(ctx)", "  File \"app/pipeline/stage_21.py\", line 121, in step_21", "    next_stage_21(ctx)", "  File \"lib/framework/stage_22.py\", line 122, in step_22", "    next_stage_22(ctx)", "  File \"lib/framework/stage_23.py\", line 123, in step_23", "    next_stage_23(ctx)", "  File \"app/pipeline/stage_24.py\", line 124, in step_24", "    next_stage_24(ctx)", "  File \"lib/framework/stage_25.py\", line 125, in step_25", "    next_stage_25(ctx)", "  File \"lib/framework/stage_26.py\", line 126, in step_26", "    next_stage_26(ctx)", "  File \"app/pipeline/stage_27.py\", line 127, in step_27", "    next_stage_27(ctx)", "  File \"lib/framework/stage_28.py\", line 128, in step_28", "    next_stage_28(ctx)", "  File \"lib/framework/stage_29.py\", line 129, in step_29", "    next_stage_29(ctx)", "RuntimeError: stage failed"], "app/pipeline/"], expected: "app/pipeline/stage_27.py:127", description: "Stress: 30 frames alternating between app and framework code"}
+expected_concepts:
+  - "line-by-line parsing with explicit format checks"
+  - "anchoring a pattern at the start of the line after stripping indentation"
+  - "extracting a quoted field and a run of digits"
+  - "keeping the last match while scanning"
+  - "string prefix test"
+optimal_complexity: {time: "O(total length of trace)", space: "O(1) beyond the output"}
+rubric:
+  excellent: "Parses each line with explicit, anchored checks (strip leading spaces, File quote, closing quote, the line tag, at least one digit), keeps the last match, handles the empty prefix and chained tracebacks, and explains why searching anywhere in the line is wrong."
+  good: "Correct after one fix such as anchoring the match or requiring digits; clear code and correct complexity."
+  weak: "Searches for File anywhere in the line, returns the first match instead of the last, or splits on commas in a way that breaks on unusual lines."
+  criteria:
+    correctness: "All tests pass, including decoy lines, chained tracebacks and an empty prefix."
+    efficiency: "Single pass over the lines with work proportional to their length."
+    code_quality: "Named constants for the markers and a small helper or clear block for parsing one line."
+    edge_cases: "Empty trace, no matching frame, malformed frame lines, case-sensitive prefix."
+    communication: "Restates the exact frame-line grammar and how ambiguous lines are treated before coding."
+hints:
+  - "Look at each line on its own and ask a yes-or-no question first: is this a frame line at all?"
+  - "After removing leading spaces, a frame line must begin with the word File and an opening quote. Pull out the path up to the closing quote, then check that the expected line tag and at least one digit follow."
+  - "Scan the lines in order and keep the latest answer. For each line, strip leading spaces and skip it unless it starts with File followed by a double quote; find the next double quote to cut out the path; skip the line unless the text right after that quote is a comma, a space, the word line and a space, followed by one or more digits. If the path starts with the prefix, remember the path, a colon and those digits. After the loop, return what you remembered, or an empty string."
+followups:
+  - "How would you also return the function name of the frame?"
+  - "How would you support JavaScript or Java stack trace formats with the same interface?"
+  - "How would you let users configure several prefixes and exclude test helpers inside the app directory?"
+  - "Why might the deepest app frame not be where the bug actually is?"
+common_errors:
+  - "Searching for File anywhere in the line, so frame-like text inside a log message or exception is picked up."
+  - "Returning the first matching frame (the outermost call) instead of the last."
+  - "Splitting on commas or spaces and crashing on lines with unexpected shapes."
+  - "Accepting a frame line with no digits after the line tag."
+  - "Comparing the prefix case-insensitively or against the whole line instead of the path."

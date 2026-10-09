@@ -1,0 +1,152 @@
+version: 1
+slug: decision_stump_gini_split
+title: Best Gini Split for a Churn Stump
+difficulty: hard
+competency_keys: [machine_learning, algorithms, problem_solving]
+role_tags: [ml, data_scientist, data]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Best Gini Split for a Churn Stump
+
+  The growth team wants a one-question rule ("does the account have at most `t` active seats?") that best
+  separates accounts that cancelled their subscription from those that stayed. Each account is a row of
+  integer usage metrics, `features[r]` (every row has the same length `d`), and `labels[r]` is `1` if the
+  account churned and `0` otherwise.
+
+  A **split** `(f, t)` sends row `r` to the **left** side when `features[r][f] <= t` and to the **right**
+  side otherwise. A split is **valid** only when `t` is one of the values that occur in column `f` and
+  **both sides are non-empty**.
+
+  For a side holding `n_s` rows of which `p_s` churned, its Gini impurity is
+  `1 - (p_s / n_s)^2 - ((n_s - p_s) / n_s)^2`. The **cost** of a split is
+  `n_left * Gini_left + n_right * Gini_right`. Return `[f, t]` for the valid split with the **lowest**
+  cost. Costs must be compared **exactly** (they are rational numbers, and floating-point rounding can
+  misorder splits whose costs are equal). Break ties by the **lower feature index**, then the **lower
+  threshold**. Return `[-1, -1]` when no valid split exists.
+
+  ### Example 1
+  ```
+  Input:  features = [[3, 9], [24, 2], [6, 7], [30, 1], [12, 5], [18, 6]], labels = [1, 0, 1, 0, 1, 0]
+  Output: [0, 12]
+  Explanation: seats <= 12 sends the three churned accounts left and the three retained ones right, so both sides are pure (cost 0)
+  ```
+
+  ### Example 2
+  ```
+  Input:  features = [[5, 2], [5, 2], [5, 2]], labels = [0, 1, 1]
+  Output: [-1, -1]
+  Explanation: every column holds a single value, so any threshold puts all rows on the left
+  ```
+
+  ### Constraints
+  - `1 <= n <= 2000` rows, `1 <= d <= 20` features per row
+  - `-10^9 <= features[r][f] <= 10^9`
+  - `labels[r]` is `0` or `1`
+
+  **Follow-up:** checking every threshold by rescanning the rows costs `O(d * n^2)`; reach
+  `O(d * n log n)`.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: best_gini_split
+  params:
+    - {name: features, type: "int[][]"}
+    - {name: labels, type: "int[]"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def best_gini_split(features: list[list[int]], labels: list[int]) -> list[int]:
+        n = len(labels)
+        total_pos = sum(labels)
+        best = [-1, -1]
+        best_num, best_den = 0, 0  # best cost / 2 == best_num / best_den
+        for f in range(len(features[0])):
+            order = sorted(range(n), key=lambda r: features[r][f])
+            left_pos = 0
+            for pos, r in enumerate(order):
+                left_pos += labels[r]
+                left_n = pos + 1
+                # A threshold is only valid at the last row of a run of equal values and not at the maximum.
+                if left_n == n or features[order[pos + 1]][f] == features[r][f]:
+                    continue
+                right_n = n - left_n
+                right_pos = total_pos - left_pos
+                # n_s * Gini_s = 2 * p_s * (n_s - p_s) / n_s, so cost / 2 = num / den
+                num = left_pos * (left_n - left_pos) * right_n + right_pos * (right_n - right_pos) * left_n
+                den = left_n * right_n
+                if best[0] == -1 or num * best_den < best_num * den:
+                    best, best_num, best_den = [f, features[r][f]], num, den
+        return best
+  javascript: |
+    function bestGiniSplit(features, labels) {
+      const n = labels.length;
+      let best = [-1, -1];
+      let bestNum = 0;
+      let bestDen = 0;
+      let totalPos = 0;
+      for (const y of labels) totalPos += y;
+      for (let f = 0; f < features[0].length; f++) {
+        const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => features[a][f] - features[b][f]);
+        let leftPos = 0;
+        for (let pos = 0; pos < n; pos++) {
+          const r = order[pos];
+          leftPos += labels[r];
+          const leftN = pos + 1;
+          if (leftN === n || features[order[pos + 1]][f] === features[r][f]) continue;
+          const rightN = n - leftN;
+          const rightPos = totalPos - leftPos;
+          // n_s * Gini_s = 2 * p_s * (n_s - p_s) / n_s, so cost / 2 = num / den (all values stay below 2^53)
+          const num = leftPos * (leftN - leftPos) * rightN + rightPos * (rightN - rightPos) * leftN;
+          const den = leftN * rightN;
+          if (best[0] === -1 || num * bestDen < bestNum * den) {
+            best = [f, features[r][f]];
+            bestNum = num;
+            bestDen = den;
+          }
+        }
+      }
+      return best;
+    }
+tests:
+  - {id: t1, args: [[[3, 9], [24, 2], [6, 7], [30, 1], [12, 5], [18, 6]], [1, 0, 1, 0, 1, 0]], expected: [0, 12], description: "Example 1"}
+  - {id: t2, args: [[[5, 2], [5, 2], [5, 2]], [0, 1, 1]], expected: [-1, -1], description: "Example 2 - identical rows, no valid split"}
+  - {id: t3, hidden: true, args: [[[7, 1]], [1]], expected: [-1, -1], description: "Single row - no split leaves both sides non-empty"}
+  - {id: t4, hidden: true, args: [[[1, 8], [2, 3], [3, 9], [4, 2]], [1, 0, 1, 0]], expected: [1, 3], description: "Only the second feature separates the classes perfectly"}
+  - {id: t5, hidden: true, args: [[[0, 3], [4, 5], [4, 0], [3, 4]], [0, 0, 1, 1]], expected: [0, 0], description: "Exact tie between features - the lower feature wins (floating point picks feature 1)"}
+  - {id: t6, hidden: true, args: [[[10], [20], [50], [20]], [0, 1, 1, 0]], expected: [0, 10], description: "Exact tie between thresholds 10 and 20 - floating-point Gini misorders them"}
+  - {id: t7, hidden: true, args: [[[1, 5], [2, 5], [3, 5]], [1, 1, 1]], expected: [0, 1], description: "All labels equal - every split is pure, so the first valid split wins"}
+  - {id: t8, hidden: true, args: [[[-5, 0], [-5, 0], [-1, 0], [0, 0], [3, 0]], [1, 1, 1, 0, 0]], expected: [0, -1], description: "Negative values and duplicated thresholds; second feature is constant"}
+  - {id: t9, hidden: true, args: [[[4, 1], [4, 2], [4, 3], [4, 4]], [0, 0, 1, 1]], expected: [1, 2], description: "First feature constant - only the second feature can split"}
+  - {id: t10, hidden: true, args: [[[0, -11, 0], [31, 6, 13], [62, 0, 26], [93, -6, 39], [27, 11, 2], [58, 5, 15], [89, -1, 28], [23, -7, 41], [54, 10, 4], [85, 4, 17], [19, -2, 30], [50, -8, 43], [81, 9, 6], [15, 3, 19], [46, -3, 32], [77, -9, 45], [11, 8, 8], [42, 2, 21], [73, -4, 34], [7, -10, 47], [38, 7, 10], [69, 1, 23], [3, -5, 36], [34, -11, 49], [65, 6, 12], [96, 0, 25], [30, -6, 38], [61, 11, 1], [92, 5, 14], [26, -1, 27], [57, -7, 40], [88, 10, 3], [22, 4, 16], [53, -2, 29], [84, -8, 42], [18, 9, 5], [49, 3, 18], [80, -3, 31], [14, -9, 44], [45, 8, 7], [76, 2, 20], [10, -4, 33], [41, -10, 46], [72, 7, 9], [6, 1, 22], [37, -5, 35], [68, -11, 48], [2, 6, 11], [33, 0, 24], [64, -6, 37], [95, 11, 0], [29, 5, 13], [60, -1, 26], [91, -7, 39], [25, 10, 2], [56, 4, 15], [87, -2, 28], [21, -8, 41], [52, 9, 4], [83, 3, 17], [17, -3, 30], [48, -9, 43], [79, 8, 6], [13, 2, 19], [44, -4, 32], [75, -10, 45], [9, 7, 8], [40, 1, 21], [71, -5, 34], [5, -11, 47], [36, 6, 10], [67, 0, 23], [1, -6, 36], [32, 11, 49], [63, 5, 12], [94, -1, 25], [28, -7, 38], [59, 10, 1], [90, 4, 14], [24, -2, 27], [55, -8, 40], [86, 9, 3], [20, 3, 16], [51, -3, 29], [82, -9, 42], [16, 8, 5], [47, 2, 18], [78, -4, 31], [12, -10, 44], [43, 7, 7], [74, 1, 20], [8, -5, 33], [39, -11, 46], [70, 6, 9], [4, 0, 22], [35, -6, 35], [66, 11, 48], [0, 5, 11], [31, -1, 24], [62, -7, 37], [93, 10, 0], [27, 4, 13], [58, -2, 26], [89, -8, 39], [23, 9, 2], [54, 3, 15], [85, -3, 28], [19, -9, 41], [50, 8, 4], [81, 2, 17], [15, -4, 30], [46, -10, 43], [77, 7, 6], [11, 1, 19], [42, -5, 32], [73, -11, 45], [7, 6, 8], [38, 0, 21], [69, -6, 34], [3, 11, 47], [34, 5, 10], [65, -1, 23], [96, -7, 36], [30, 10, 49], [61, 4, 12], [92, -2, 25], [26, -8, 38], [57, 9, 1], [88, 3, 14], [22, -3, 27], [53, -9, 40], [84, 8, 3], [18, 2, 16], [49, -4, 29], [80, -10, 42], [14, 7, 5], [45, 1, 18], [76, -5, 31], [10, -11, 44], [41, 6, 7], [72, 0, 20], [6, -6, 33], [37, 11, 46], [68, 5, 9], [2, -1, 22], [33, -7, 35], [64, 10, 48], [95, 4, 11], [29, -2, 24], [60, -8, 37], [91, 9, 0], [25, 3, 13], [56, -3, 26], [87, -9, 39], [21, 8, 2], [52, 2, 15], [83, -4, 28], [17, -10, 41], [48, 7, 4], [79, 1, 17], [13, -5, 30], [44, -11, 43], [75, 6, 6], [9, 0, 19], [40, -6, 32], [71, 11, 45], [5, 5, 8], [36, -1, 21], [67, -7, 34], [1, 10, 47], [32, 4, 10], [63, -2, 23], [94, -8, 36], [28, 9, 49], [59, 3, 12], [90, -3, 25], [24, -9, 38], [55, 8, 1], [86, 2, 14], [20, -4, 27], [51, -10, 40], [82, 7, 3], [16, 1, 16], [47, -5, 29], [78, -11, 42], [12, 6, 5], [43, 0, 18], [74, -6, 31], [8, 11, 44], [39, 5, 7], [70, -1, 20], [4, -7, 33], [35, 10, 46], [66, 4, 9], [0, -2, 22], [31, -8, 35], [62, 9, 48], [93, 3, 11], [27, -3, 24], [58, -9, 37], [89, 8, 0], [23, 2, 13], [54, -4, 26], [85, -10, 39], [19, 7, 2], [50, 1, 15], [81, -5, 28], [15, -11, 41], [46, 6, 4], [77, 0, 17], [11, -6, 30], [42, 11, 43], [73, 5, 6], [7, -1, 19], [38, -7, 32], [69, 10, 45], [3, 4, 8], [34, -2, 21], [65, -8, 34], [96, 9, 47], [30, 3, 10], [61, -3, 23], [92, -9, 36], [26, 8, 49], [57, 2, 12], [88, -4, 25], [22, -10, 38], [53, 7, 1], [84, 1, 14], [18, -5, 27], [49, -11, 40], [80, 6, 3], [14, 0, 16], [45, -6, 29], [76, 11, 42], [10, 5, 5], [41, -1, 18], [72, -7, 31], [6, 10, 44], [37, 4, 7], [68, -2, 20], [2, -8, 33], [33, 9, 46], [64, 3, 9], [95, -3, 22], [29, -9, 35], [60, 8, 48], [91, 2, 11], [25, -4, 24], [56, -10, 37], [87, 7, 0], [21, 1, 13], [52, -5, 26], [83, -11, 39], [17, 6, 2], [48, 0, 15], [79, -6, 28], [13, 11, 41], [44, 5, 4], [75, -1, 17], [9, -7, 30], [40, 10, 43], [71, 4, 6], [5, -2, 19], [36, -8, 32], [67, 9, 45], [1, 3, 8], [32, -3, 21], [63, -9, 34], [94, 8, 47], [28, 2, 10], [59, -4, 23], [90, -10, 36], [24, 7, 49], [55, 1, 12], [86, -5, 25], [20, -11, 38], [51, 6, 1], [82, 0, 14], [16, -6, 27], [47, 11, 40], [78, 5, 3], [12, -1, 16], [43, -7, 29], [74, 10, 42], [8, 4, 5], [39, -2, 18], [70, -8, 31], [4, 9, 44], [35, 3, 7], [66, -3, 20], [0, -9, 33], [31, 8, 46], [62, 2, 9], [93, -4, 22], [27, -10, 35], [58, 7, 48], [89, 1, 11], [23, -5, 24], [54, -11, 37]], [1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0]], expected: [0, 61], description: "300 rows with three features"}
+expected_concepts:
+  - "Gini impurity and the weighted cost of a binary split"
+  - "sorting each feature and sweeping prefix label counts"
+  - "only thresholds at the end of a run of equal values are distinct splits"
+  - "exact rational comparison by cross-multiplication"
+  - "deterministic tie-breaking on feature then threshold"
+optimal_complexity: {time: "O(d * n log n)", space: "O(n)"}
+rubric:
+  excellent: "Sorts each feature once and sweeps prefix churn counts, evaluates thresholds only after the last of equal values and never at the column maximum, simplifies n_s * Gini_s to 2 p (n - p) / n, compares costs exactly by cross-multiplication within 64-bit range, and applies the tie-break order."
+  good: "Correct results with an O(d * n^2) rescan, or the sweep with a hint about duplicate values, exact comparison or tie-breaking."
+  weak: "Compares floating-point Gini values, splits between equal values, allows an empty side, uses unweighted Gini or ignores the tie-break order."
+  criteria:
+    correctness: "All tests pass, including exact ties between features and thresholds, constant columns and single rows."
+    efficiency: "O(d * n log n) with a sort and a prefix sweep per feature."
+    code_quality: "Clear prefix counters and a single comparison function for costs."
+    edge_cases: "No valid split, duplicate values, negative values, all labels equal and constant features."
+    communication: "Explains why floating point can misorder equal costs and how the integer form avoids it."
+hints:
+  - "For a fixed feature, sorting the rows by that feature turns every threshold into a prefix of the sorted rows; only the churn count of that prefix matters."
+  - "Sweep the sorted rows keeping the number of rows and churned rows on the left; a threshold is valid only after the last row of a run of equal values and never at the largest value. Write n_s * Gini_s as 2 * p_s * (n_s - p_s) / n_s so the cost is a sum of two fractions."
+  - "Represent each cost as an integer numerator over the denominator n_left * n_right and compare two costs by cross-multiplying; scan features in increasing order and thresholds in increasing order, replacing the best only on a strictly smaller cost, and return [-1, -1] if nothing was valid."
+followups:
+  - "How would you extend this to grow a full decision tree, and when would you stop splitting?"
+  - "How would entropy (information gain) change the chosen split on this data?"
+  - "How would you handle a categorical feature such as the subscription plan?"
+  - "With millions of rows, how would histogram binning speed up the search, and what does it cost in accuracy?"
+common_errors:
+  - "Comparing floating-point Gini values, which can break exact ties in the wrong direction."
+  - "Evaluating a threshold between two equal values, which is not a real split."
+  - "Allowing the threshold equal to the column maximum, which leaves the right side empty."
+  - "Averaging the two Gini values without weighting them by side size."
+  - "Replacing the best split on equal cost, which breaks the lower-feature, lower-threshold tie rule."

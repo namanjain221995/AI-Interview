@@ -1,0 +1,265 @@
+version: 1
+slug: outage_streaks
+title: Consecutive Outage Streaks
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [sre, data_analyst, dba]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Consecutive Outage Streaks
+
+  The reliability team keeps a daily outage register in table `outages`. A service gets one row for
+  every day on which it had at least one outage:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | service | VARCHAR(40) | service name |
+  | day_number | INTEGER | day index since the register started; `(service, day_number)` is the primary key |
+
+  An **outage streak** is a maximal run of consecutive days `d, d + 1, ..., d + n - 1` on which the same
+  service had an outage. A day without a row ends the streak. A single isolated outage day is a streak
+  of length 1. Days of different services never form a streak together.
+
+  Return one row per streak with:
+
+  - `service`;
+  - `streak_start`: the first day of the streak;
+  - `streak_end`: the last day of the streak;
+  - `streak_length`: the number of days in the streak.
+
+  Order the result by `service` ascending, then by `streak_start` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite (no date functions are needed).
+
+  ### Example 1
+  ```
+  outages
+  +---------+------------+
+  | service | day_number |
+  +---------+------------+
+  | api     | 3          |
+  | api     | 4          |
+  | api     | 5          |
+  | api     | 9          |
+  | billing | 1          |
+  | billing | 2          |
+  | search  | 7          |
+  +---------+------------+
+
+  Output
+  +---------+--------------+------------+---------------+
+  | service | streak_start | streak_end | streak_length |
+  +---------+--------------+------------+---------------+
+  | api     | 3            | 5          | 3             |
+  | api     | 9            | 9          | 1             |
+  | billing | 1            | 2          | 2             |
+  | search  | 7            | 7          | 1             |
+  +---------+--------------+------------+---------------+
+  ```
+
+  ### Example 2
+  ```
+  outages
+  +---------+------------+
+  | service | day_number |
+  +---------+------------+
+  | cache   | 12         |
+  | auth    | 2          |
+  | cache   | 10         |
+  | cache   | 15         |
+  | cache   | 11         |
+  | cache   | 14         |
+  +---------+------------+
+
+  Output
+  +---------+--------------+------------+---------------+
+  | service | streak_start | streak_end | streak_length |
+  +---------+--------------+------------+---------------+
+  | auth    | 2            | 2          | 1             |
+  | cache   | 10           | 12         | 3             |
+  | cache   | 14           | 15         | 2             |
+  +---------+--------------+------------+---------------+
+  Rows can be stored in any order; day 13 is missing, so cache has two streaks.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `0 <= day_number <= 2 * 10^9`
+  - Service names are lowercase letters.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return service, streak_start, streak_end and streak_length for every run of consecutive outage days.
+    SELECT service, MIN(day_number) AS streak_start, MAX(day_number) AS streak_end, COUNT(*) AS streak_length
+    FROM outages
+    GROUP BY service
+    ORDER BY service, streak_start;
+reference_solutions:
+  sql: |
+    WITH numbered AS (
+      SELECT
+        service,
+        day_number,
+        day_number - ROW_NUMBER() OVER (PARTITION BY service ORDER BY day_number) AS island
+      FROM outages
+    )
+    SELECT
+      service,
+      MIN(day_number) AS streak_start,
+      MAX(day_number) AS streak_end,
+      COUNT(*) AS streak_length
+    FROM numbered
+    GROUP BY service, island
+    ORDER BY service, streak_start;
+sql_setup: |
+  CREATE TABLE outages (
+    service VARCHAR(40) NOT NULL,
+    day_number INTEGER NOT NULL,
+    PRIMARY KEY (service, day_number)
+  );
+tests:
+  - id: t1
+    description: "Example 1 - runs of 3, 1, 2 and 1 days across three services"
+    ordered: true
+    setup_sql: |
+      INSERT INTO outages (service, day_number) VALUES
+        ('api', 3), ('api', 4), ('api', 5), ('api', 9), ('billing', 1), ('billing', 2),
+        ('search', 7);
+    expected_rows:
+      - ["api", 3, 5, 3]
+      - ["api", 9, 9, 1]
+      - ["billing", 1, 2, 2]
+      - ["search", 7, 7, 1]
+  - id: t2
+    description: "Example 2 - rows inserted out of order still form two streaks"
+    ordered: true
+    setup_sql: |
+      INSERT INTO outages (service, day_number) VALUES
+        ('cache', 12), ('auth', 2), ('cache', 10), ('cache', 15), ('cache', 11), ('cache', 14);
+    expected_rows:
+      - ["auth", 2, 2, 1]
+      - ["cache", 10, 12, 3]
+      - ["cache", 14, 15, 2]
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single outage day is a streak of length 1"
+    ordered: true
+    setup_sql: |
+      INSERT INTO outages (service, day_number) VALUES
+        ('queue', 0);
+    expected_rows: [["queue", 0, 0, 1]]
+  - id: t5
+    hidden: true
+    description: "Thirty consecutive days form one streak"
+    ordered: true
+    setup_sql: |
+      INSERT INTO outages (service, day_number) VALUES
+        ('ledger', 100), ('ledger', 101), ('ledger', 102), ('ledger', 103), ('ledger', 104), ('ledger', 105),
+        ('ledger', 106), ('ledger', 107), ('ledger', 108), ('ledger', 109), ('ledger', 110), ('ledger', 111),
+        ('ledger', 112), ('ledger', 113), ('ledger', 114), ('ledger', 115), ('ledger', 116), ('ledger', 117),
+        ('ledger', 118), ('ledger', 119), ('ledger', 120), ('ledger', 121), ('ledger', 122), ('ledger', 123),
+        ('ledger', 124), ('ledger', 125), ('ledger', 126), ('ledger', 127), ('ledger', 128), ('ledger', 129);
+    expected_rows: [["ledger", 100, 129, 30]]
+  - id: t6
+    hidden: true
+    description: "Consecutive days across different services must not be joined"
+    ordered: true
+    setup_sql: |
+      INSERT INTO outages (service, day_number) VALUES
+        ('api', 1), ('api', 2), ('billing', 3), ('billing', 4), ('cache', 5);
+    expected_rows:
+      - ["api", 1, 2, 2]
+      - ["billing", 3, 4, 2]
+      - ["cache", 5, 5, 1]
+  - id: t7
+    hidden: true
+    description: "Outages every other day - every streak has length 1"
+    ordered: true
+    setup_sql: |
+      INSERT INTO outages (service, day_number) VALUES
+        ('mail', 0), ('mail', 2), ('mail', 4), ('mail', 6), ('mail', 8), ('mail', 10),
+        ('mail', 12), ('mail', 14), ('mail', 16), ('mail', 18);
+    expected_rows:
+      - ["mail", 0, 0, 1]
+      - ["mail", 2, 2, 1]
+      - ["mail", 4, 4, 1]
+      - ["mail", 6, 6, 1]
+      - ["mail", 8, 8, 1]
+      - ["mail", 10, 10, 1]
+      - ["mail", 12, 12, 1]
+      - ["mail", 14, 14, 1]
+      - ["mail", 16, 16, 1]
+      - ["mail", 18, 18, 1]
+  - id: t8
+    hidden: true
+    description: "Same day numbers on several services, interleaved inserts"
+    ordered: true
+    setup_sql: |
+      INSERT INTO outages (service, day_number) VALUES
+        ('search', 5), ('api', 5), ('search', 6), ('api', 7), ('search', 7), ('api', 6),
+        ('api', 9), ('search', 9);
+    expected_rows:
+      - ["api", 5, 7, 3]
+      - ["api", 9, 9, 1]
+      - ["search", 5, 7, 3]
+      - ["search", 9, 9, 1]
+  - id: t9
+    hidden: true
+    description: "Day 0 and very large day numbers with a one-day gap"
+    ordered: true
+    setup_sql: |
+      INSERT INTO outages (service, day_number) VALUES
+        ('archive', 0), ('archive', 1), ('archive', 2000000000), ('archive', 1999999999), ('archive', 1999999997);
+    expected_rows:
+      - ["archive", 0, 1, 2]
+      - ["archive", 1999999997, 1999999997, 1]
+      - ["archive", 1999999999, 2000000000, 2]
+  - id: t10
+    hidden: true
+    description: "Several streaks of different lengths on one service, longest last"
+    ordered: true
+    setup_sql: |
+      INSERT INTO outages (service, day_number) VALUES
+        ('dns', 1), ('dns', 2), ('dns', 4), ('dns', 5), ('dns', 6), ('dns', 8),
+        ('dns', 10), ('dns', 11), ('dns', 12), ('dns', 13), ('dns', 14), ('dns', 15);
+    expected_rows:
+      - ["dns", 1, 2, 2]
+      - ["dns", 4, 6, 3]
+      - ["dns", 8, 8, 1]
+      - ["dns", 10, 15, 6]
+expected_concepts:
+  - "gaps-and-islands with ROW_NUMBER"
+  - "day minus per-service row number is constant inside a streak"
+  - "PARTITION BY service so services never merge"
+  - "grouping by the island key to get start, end and length"
+  - "deterministic ORDER BY on service and start"
+optimal_complexity: {time: "O(n log n) for the per-service sort", space: "O(n)"}
+rubric:
+  excellent: "Numbers each service's days with ROW_NUMBER, groups by service and day minus row number, returns start, end and count with the required ordering, and explains why the difference is constant within a streak and changes after a gap."
+  good: "Reaches a correct gaps-and-islands query after a hint, or builds streaks with LAG and a running sum of streak breaks."
+  weak: "Aggregates per service without detecting gaps, joins days across services, or uses a self-join that only checks pairs of neighbouring days."
+  criteria:
+    correctness: "All tests pass, including single-day streaks, out-of-order inserts and shared day numbers across services."
+    efficiency: "One window pass plus one aggregation; no correlated subquery per row."
+    code_quality: "A named CTE for the numbered rows and clear output aliases."
+    edge_cases: "Empty table, isolated days, very large day numbers and services with identical days."
+    communication: "Explains the island key and why it must be computed per service."
+hints:
+  - "Look at one service at a time and think about what all the days of an unbroken streak have in common compared with days of other streaks."
+  - "If you number a service's outage days in order, the difference between the day and its number stays the same for every day of one streak and changes after any missing day."
+  - "Compute day_number minus ROW_NUMBER() over a window partitioned by service and ordered by day_number in a CTE, then group by service and that difference, selecting the minimum day, maximum day and count, and order by service and the minimum day."
+followups:
+  - "How would you return only each service's longest streak, breaking ties by the earliest start?"
+  - "How would you solve it with LAG and a running sum instead of ROW_NUMBER?"
+  - "What changes if one quiet day inside a streak should be tolerated?"
+  - "Which index helps this query on a register with years of data for thousands of services?"
+common_errors:
+  - "Grouping by service only, which merges separate streaks into one."
+  - "Numbering rows without PARTITION BY service, so islands leak across services."
+  - "Using a self-join on day plus one, which finds neighbouring pairs but not whole streaks."
+  - "Forgetting the ORDER BY or ordering by streak length instead of start."

@@ -1,0 +1,135 @@
+import { BriefcaseBusiness, CalendarClock, Copy, Ellipsis, FileText, Layers, MessagesSquare, RefreshCcw, Timer, UserRound } from "lucide-react";
+import type { ReactNode } from "react";
+import { Link, useNavigate } from "react-router";
+
+import { StatusBadge } from "@/components/domain/StatusBadge";
+import { Avatar } from "@/components/ui/Avatar";
+import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
+import { Button } from "@/components/ui/Button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/DropdownMenu";
+import { toast } from "@/components/ui/Toaster";
+import { usePermission } from "@/lib/auth";
+import { formatDateTime, formatMinutes, pluralize } from "@/lib/format";
+import { labelFor, ROUND_TYPE_LABELS, SESSION_END_REASON_LABELS } from "@/lib/labels";
+
+import { useRecomputeScores } from "../api/hooks";
+import { useSessionContext } from "./context";
+
+function MetaItem({ icon, children, label }: { icon: ReactNode; children: ReactNode; label: string }) {
+  return (
+    <li className="flex min-w-0 items-center gap-1.5 text-[13px] text-fg-muted">
+      <span className="shrink-0 text-fg-subtle [&_svg]:size-4" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="sr-only">{label}: </span>
+      <span className="min-w-0 truncate">{children}</span>
+    </li>
+  );
+}
+
+export function SessionHeader() {
+  const { session, inProgress, live, watchable, durationSeconds, plannedSeconds, questions, sessionId, nav } = useSessionContext();
+  const navigate = useNavigate();
+  const canRecompute = usePermission("reviews:write");
+  const canSeeCandidates = usePermission("candidates:read");
+  const recompute = useRecomputeScores(sessionId);
+  const name = session.candidate?.full_name ?? "Candidate";
+  const round = session.round;
+  const questionCount = session.question_count ?? session.state_digest?.question_count ?? questions.length;
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      toast.success("Link copied");
+    } catch {
+      toast.error("Couldn't copy the link");
+    }
+  };
+
+  return (
+    <header className="flex flex-col gap-4 pb-6">
+      <Breadcrumbs items={[{ label: "Sessions", to: "/app/sessions" }, { label: name }]} />
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3.5">
+          <Avatar name={name} size="xl" />
+          <div className="grid grid-cols-1 min-w-0 gap-1.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 className="min-w-0 text-title text-fg">{name}</h1>
+              <StatusBadge kind="session" value={session.status} />
+            </div>
+            <ul className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+              {session.job ? (
+                <MetaItem icon={<BriefcaseBusiness />} label="Job">
+                  <Link to={`/app/jobs/${session.job.id}`} className="rounded-xs hover:text-fg hover:underline">
+                    {session.job.title}
+                  </Link>
+                </MetaItem>
+              ) : null}
+              {round ? (
+                <MetaItem icon={<Layers />} label="Round">
+                  {round.name}
+                  {labelFor(ROUND_TYPE_LABELS, round.round_type).toLowerCase() !== round.name.toLowerCase() ? (
+                    <span className="text-fg-subtle"> ({labelFor(ROUND_TYPE_LABELS, round.round_type)})</span>
+                  ) : null}
+                </MetaItem>
+              ) : null}
+              <MetaItem icon={<CalendarClock />} label="Started">
+                {session.started_at ? formatDateTime(session.started_at) : "Not started yet"}
+              </MetaItem>
+              <MetaItem icon={<Timer />} label="Duration">
+                {live ? `${formatMinutes(durationSeconds)} so far` : formatMinutes(durationSeconds)}
+                {plannedSeconds ? <span className="text-fg-subtle"> of {formatMinutes(plannedSeconds)} planned</span> : null}
+              </MetaItem>
+              <MetaItem icon={<MessagesSquare />} label="Questions">
+                {pluralize(questionCount, "question")}
+              </MetaItem>
+            </ul>
+            {session.end_reason && !inProgress ? <p className="text-xs text-fg-subtle">{labelFor(SESSION_END_REASON_LABELS, session.end_reason)}</p> : null}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {watchable ? (
+            nav.tab !== "live" ? (
+              <Button variant="outline" onClick={() => nav.go({ tab: "live" })} leftIcon={<span className="size-2 rounded-full bg-signal animate-pulse-soft" />}>
+                Watch live
+              </Button>
+            ) : null
+          ) : (
+            <Button variant="outline" leftIcon={<FileText />} asChild>
+              <Link to={`/app/reports/${sessionId}`}>{inProgress ? "Draft report" : "Open report"}</Link>
+            </Button>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="size-9 px-0" aria-label="More session actions">
+                <Ellipsis />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              {canSeeCandidates ? (
+                <DropdownMenuItem onSelect={() => navigate(`/app/candidates/${session.candidate_id}`)}>
+                  <UserRound />
+                  View candidate profile
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuItem onSelect={() => void copyLink()}>
+                <Copy />
+                Copy link to this session
+              </DropdownMenuItem>
+              {canRecompute && !inProgress ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem disabled={recompute.isPending} onSelect={() => recompute.mutate()}>
+                    <RefreshCcw />
+                    Recompute scores from evidence
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+    </header>
+  );
+}

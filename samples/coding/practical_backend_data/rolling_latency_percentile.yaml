@@ -1,0 +1,171 @@
+version: 1
+slug: rolling_latency_percentile
+title: Rolling Latency Percentile
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [sre, backend, platform, data]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Rolling Latency Percentile
+
+  A service dashboard plots a **rolling percentile** of request latency: after every new sample it
+  shows, for example, the p99 of the last 1,000 requests. You are given the latency samples in
+  arrival order and must produce the series the dashboard draws.
+
+  Use the **nearest-rank** definition. For a window of `window` samples and a percentile `p`, sort the
+  window's samples in ascending order (duplicates kept) and take the sample at **1-based rank**
+
+  ```
+  rank = ceil(p * window / 100)
+  ```
+
+  Return one value for every full window, from the window ending at index `window - 1` to the window
+  ending at the last index, so the result has `n - window + 1` values.
+
+  ### Example 1
+  ```
+  Input:  latencies = [120, 80, 95, 300, 110, 90, 400, 85], window = 4, percentile = 50
+  Output: [95, 95, 95, 110, 90]
+  Explanation: rank = ceil(50 * 4 / 100) = 2. The first window [120, 80, 95, 300] sorted is
+  [80, 95, 120, 300], so its value is 95. The last window [110, 90, 400, 85] sorted is
+  [85, 90, 110, 400], giving 90.
+  ```
+
+  ### Example 2
+  ```
+  Input:  latencies = [5, 1, 4, 2, 3], window = 3, percentile = 90
+  Output: [5, 4, 4]
+  Explanation: rank = ceil(2.7) = 3, the largest value of each window.
+  ```
+
+  ### Example 3
+  ```
+  Input:  latencies = [7, 3, 9], window = 1, percentile = 50
+  Output: [7, 3, 9]
+  ```
+
+  ### Constraints
+  - `1 <= latencies.length <= 10^5`
+  - `0 <= latencies[i] <= 10^9`
+  - `1 <= window <= latencies.length`
+  - `1 <= percentile <= 100`
+  - aim for better than sorting every window, which is `O(n * window log window)`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: rolling_percentile
+  params:
+    - {name: latencies, type: "int[]"}
+    - {name: window, type: int}
+    - {name: percentile, type: int}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def rolling_percentile(latencies: list[int], window: int, percentile: int) -> list[int]:
+        values = sorted(set(latencies))                 # coordinate compression
+        position = {v: i + 1 for i, v in enumerate(values)}
+        size = len(values)
+        tree = [0] * (size + 1)                         # Fenwick tree of counts
+
+        def add(i: int, delta: int) -> None:
+            while i <= size:
+                tree[i] += delta
+                i += i & -i
+
+        top_bit = 1
+        while top_bit * 2 <= size:
+            top_bit *= 2
+
+        def kth(k: int) -> int:
+            # Smallest compressed position whose prefix count reaches k.
+            pos, bit = 0, top_bit
+            while bit:
+                nxt = pos + bit
+                if nxt <= size and tree[nxt] < k:
+                    pos = nxt
+                    k -= tree[nxt]
+                bit >>= 1
+            return pos + 1
+
+        rank = (percentile * window + 99) // 100        # exact integer ceil
+        result: list[int] = []
+        for i, value in enumerate(latencies):
+            add(position[value], 1)
+            if i >= window:
+                add(position[latencies[i - window]], -1)
+            if i >= window - 1:
+                result.append(values[kth(rank) - 1])
+        return result
+  javascript: |
+    function rollingPercentile(latencies, window, percentile) {
+      const values = [...new Set(latencies)].sort((a, b) => a - b);
+      const position = new Map(values.map((v, i) => [v, i + 1]));
+      const size = values.length;
+      const tree = new Array(size + 1).fill(0);
+      const add = (i, delta) => {
+        for (; i <= size; i += i & -i) tree[i] += delta;
+      };
+      let topBit = 1;
+      while (topBit * 2 <= size) topBit *= 2;
+      const kth = (k) => {
+        let pos = 0;
+        for (let bit = topBit; bit > 0; bit >>= 1) {
+          const next = pos + bit;
+          if (next <= size && tree[next] < k) {
+            pos = next;
+            k -= tree[next];
+          }
+        }
+        return pos + 1;
+      };
+      const rank = Math.floor((percentile * window + 99) / 100);
+      const result = [];
+      for (let i = 0; i < latencies.length; i++) {
+        add(position.get(latencies[i]), 1);
+        if (i >= window) add(position.get(latencies[i - window]), -1);
+        if (i >= window - 1) result.push(values[kth(rank) - 1]);
+      }
+      return result;
+    }
+tests:
+  - {id: t1, args: [[120, 80, 95, 300, 110, 90, 400, 85], 4, 50], expected: [95, 95, 95, 110, 90], description: "Example 1 - rolling median (rank 2 of 4)"}
+  - {id: t2, args: [[5, 1, 4, 2, 3], 3, 90], expected: [5, 4, 4], description: "Example 2 - p90 of 3 samples rounds up to rank 3 (window maximum)"}
+  - {id: t3, args: [[7, 3, 9], 1, 50], expected: [7, 3, 9], description: "Example 3 - window of 1 echoes the input"}
+  - {id: t4, hidden: true, args: [[42, 17, 99, 17, 5, 63], 6, 50], expected: [17], description: "Window equals n - a single result; duplicate values counted separately"}
+  - {id: t5, hidden: true, args: [[250, 250, 250, 250, 250], 2, 99], expected: [250, 250, 250, 250], description: "All samples equal"}
+  - {id: t6, hidden: true, args: [[9, 8, 7, 6, 5, 4, 3, 2, 1], 4, 1], expected: [6, 5, 4, 3, 2, 1], description: "p1 is always the window minimum (rank 1); strictly decreasing input"}
+  - {id: t7, hidden: true, args: [[1000000000, 0, 999999999, 1, 1000000000, 2], 3, 100], expected: [1000000000, 999999999, 1000000000, 1000000000], description: "Extreme values 0 and 10^9, p100 is the window maximum"}
+  - {id: t8, hidden: true, args: [[1010, 52, 48, 53, 48, 42, 55, 40, 57, 1147, 51, 47, 60, 42, 60, 41, 40, 47, 1041, 40, 59, 44, 47, 44, 55, 43, 58, 1168, 54, 48, 51, 45, 59, 59, 43, 45, 1044, 43, 58, 40, 49, 58, 52, 52, 46, 951, 58, 60, 47, 43, 49, 59, 43, 58, 999, 51, 57, 53, 51, 42, 56, 60, 50, 1051, 53, 55, 43, 53, 51, 60, 54, 44, 1016, 45, 56, 60, 48, 59, 57, 55, 54, 1084, 58, 48, 50, 47, 42, 48, 54, 47, 991, 58, 59, 52, 50, 40, 55, 50, 45, 1054, 46, 51, 48, 50, 48, 59, 48, 57, 907, 56, 46, 42, 47, 53, 55, 57, 47, 1173, 60, 55, 54, 40, 42, 49, 47, 52, 964, 49, 58, 51, 55, 57, 56, 51, 53, 1040, 50, 51, 54, 48, 49, 48, 47, 43, 923, 50, 43, 57, 45, 46], 100, 7], expected: [42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 43, 43, 43, 43, 43, 43, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43], description: "Rank must be computed with integers - 7/100*100 in floating point ceils to 8 instead of 7"}
+  - {id: t9, hidden: true, args: [[3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 7, 7, 6, 3, 2, 3, 8, 4], 20, 95], expected: [8], description: "Exact rank boundary - 95 * 20 / 100 = 19, not 20"}
+  - {id: t10, hidden: true, args: [[1310, 229, 52, 1519, 564, 502, 458, 286, 1509, 210, 1386, 1517, 1828, 1117, 179, 1210, 865, 66, 62, 192, 448, 477, 1035, 1233, 55, 1150, 408, 1467, 1331, 1437, 1117, 860, 452, 920, 1207, 570, 1658, 1781, 14, 1555, 1651, 327, 1430, 866, 697, 570, 319, 441, 1961, 1564, 690, 210, 190, 779, 199, 736, 1736, 705, 1237, 542, 1653, 89, 1495, 941, 1099, 256, 1993, 1889, 776, 162, 1131, 601, 1699, 1288, 1267, 1814, 1765, 741, 1183, 394, 1443, 143, 94, 1355, 467, 1584, 593, 164, 1752, 477, 1775, 207, 779, 570, 929, 1302, 1709, 748, 334, 759, 728, 430, 1373, 547, 1438, 1919, 1400, 1328, 147, 1248, 1301, 351, 1094, 1494, 502, 335, 947, 778, 553, 1896, 1311, 1410, 1141, 450, 1403, 665, 1727, 1574, 1590, 115, 470, 1684, 66, 1649, 647, 822, 549, 136, 433, 1871, 1932, 1162, 1795, 1471, 645, 436, 1343, 1023, 811, 1812, 1873, 1317, 940, 293, 543, 286, 506, 1526, 1150, 1104, 539, 1530, 1198, 878, 1839, 1196, 818, 742, 450, 284, 1044, 1011, 187, 1548, 97, 1764, 225, 314, 1286, 328, 1623, 1394, 865, 1222, 131, 789, 782, 1221, 959, 1084, 515, 1989, 1134, 1763, 1931, 24, 1394, 1477, 235, 1397, 1813, 1100, 1538, 547, 1575, 1313, 697, 229, 602, 891, 324, 930, 7, 1954, 1479, 1794, 1474, 540, 1991, 1026, 1561, 366, 1040, 1870, 218, 1783, 1281, 612, 1724, 1309, 1040, 1248, 408, 314, 766, 1562, 331, 1105, 1953, 1595, 1890, 1087, 1882, 2, 1227, 664, 1001, 40, 230, 1903, 744, 1800, 1704, 1653, 630, 491, 119, 494, 1799, 1162, 1940, 162, 176, 1499, 996, 1672, 142, 1558, 1091, 1569, 258, 263, 1352, 974, 1940, 1126, 339, 543, 1081, 1787, 1243, 867, 1976, 434, 1903, 1105, 1547, 1495, 1413, 412, 1461, 639, 818, 1376, 1331, 765, 898, 1843, 1060, 925, 248, 508, 461, 132, 693, 44, 1205, 1135, 472, 1206, 452, 15, 146, 1450, 1293, 121, 469, 139, 1855, 65, 1761, 677, 146, 1053, 488, 571, 1371, 995, 439, 1105, 271, 1482, 1916, 1808, 1170, 1181, 969, 498, 1607, 969, 1654, 834, 390, 194, 199, 1350, 883, 726, 868, 842, 957, 1770, 1494, 111, 1380, 1339, 1324, 202, 125, 825, 1492, 695, 1640, 1765, 224, 510, 393, 390, 1099, 919, 288, 865, 376, 571, 948, 512, 1791, 1891, 155, 908, 1655, 1765, 1754, 1128, 201, 104, 1336, 1108, 1713, 31, 1985, 192, 1898, 1544, 1739, 485, 341, 833, 995, 986, 438, 1771, 822, 1849, 121, 338, 777, 5, 800, 544, 1898, 1606, 1608, 932, 585, 867, 1427, 1961, 1497, 1605, 1139, 1356, 1472, 997, 318, 389, 608, 446, 1984, 120, 1187, 1507, 1111, 125, 1532, 643, 118, 103, 1197, 977, 1030, 1883, 1747, 1088, 323, 117, 1968, 1041, 165, 1744, 381, 141, 1219, 140, 1383, 1766, 482, 827, 246, 1929, 1824, 1167, 505, 1186, 1218, 82, 1269, 168, 859, 1347, 1196, 1158, 1071, 648, 1915, 535, 419, 1372, 1467, 644, 489, 544, 811, 269, 1376, 1322, 615, 937, 648, 1903, 1540, 1917, 149, 20, 939, 1273, 1154, 205, 151, 1102, 437, 1037, 544, 272, 1912, 715, 1805, 141, 1801, 501, 757, 584, 324, 898, 1708, 1113, 1441, 620, 1253, 1653, 1340, 1084, 17, 1368, 1674, 1136, 614, 1909, 1359, 213, 1923, 1799, 276, 542, 237, 1823, 220, 1521, 1134, 319, 558, 578, 1239, 432, 1470, 703, 417, 1408, 1299, 1747, 541, 1036, 1001, 515, 1855, 1860, 1733, 105, 190, 1300, 868, 1699, 567, 91, 8, 684, 1580, 268, 1305, 537, 331, 1519, 905, 1130, 1446, 876, 1149, 20, 230, 155, 1936, 1809, 1416, 1852, 306, 1118, 74, 1710, 757, 1193, 1132, 304, 881, 262, 86, 632, 747, 1842, 1911, 1631, 1992, 1763, 82, 1841, 733, 431, 1397, 512, 1366, 211, 725, 1598, 1147, 1811, 1792, 833, 1995, 1272, 1535, 317, 1896, 1905, 485, 1771, 333, 2000, 1639, 1661, 363, 1806, 845, 51, 368, 1509, 1894, 681, 1603, 1907, 844, 1643, 1372, 1770, 1506, 1661, 509, 547, 327, 1613, 1437, 222, 784, 1787, 80, 1759, 964, 456, 409, 1673, 1881, 943, 717, 626, 1681, 1629, 1785, 467, 457, 49, 1352, 396, 817, 673, 571, 1771, 143, 1981, 1584, 572, 720, 1314, 1044, 819, 1392, 1728, 1099, 679, 1924, 57, 237, 1797, 1988, 535, 366, 1190, 1972, 544, 79, 223, 1222, 890, 708, 1493, 1611, 643, 894, 1242, 1048, 237, 789, 1843, 1181, 390, 522, 91, 1452, 894, 4, 1065, 1896, 1652, 1103, 1407, 1474, 1926, 1520, 1510, 1374, 404, 746, 884, 144, 1944, 1361, 1886, 677, 1277, 643, 1359, 1737, 256, 1475, 1844, 616, 1039, 634, 1366, 837, 669, 825, 1428, 606, 1136, 261, 393, 862, 1362, 1926, 777, 1388, 1533, 1849, 357, 1261, 1166, 617, 832, 1123, 1708, 1, 623, 588, 431, 881, 1610, 1188, 1243, 1341, 660, 953, 905, 906, 1384, 438, 1047, 970, 1626, 1846, 1966, 1631, 1508, 348, 1350, 174, 582, 1056, 1360, 1297, 1269, 687, 192, 1677, 1950, 1539, 482, 1378, 636, 461, 1652, 408, 302, 51, 95, 502, 974, 1252, 1741, 1574, 150, 933, 849, 1815, 1290, 1179, 399, 1472, 1427, 787, 1013, 819, 500, 303, 1344, 1409, 12, 1829, 1538, 1763, 1578, 1814, 219, 1595, 871, 449, 361, 1647, 1962, 1426, 1061, 952, 103, 1142, 511, 1879, 1738, 249, 935, 274, 1642, 952, 1368, 1088, 1145, 1220, 650, 1946, 1547, 1826, 907, 1255, 1670, 1474, 1827, 1034, 874, 1702, 1858, 1123, 914, 1838, 326, 1524, 1765, 973, 922, 531, 1540, 507, 1721, 1306, 568, 1569, 1593, 1068, 993, 1284, 490, 563, 901, 159, 1462, 586, 481, 557, 688, 655, 1829, 1107, 166, 284, 309, 474, 785, 1422, 313, 1447, 439, 132, 850, 835, 678, 1112, 955, 852, 128, 424, 1706, 861, 798, 1854, 1577, 1197, 1938, 1425, 41, 1755, 1804, 1568, 1180, 780, 977, 13, 1931, 721, 612, 1544, 799, 1748, 1827, 1953, 1712, 859, 1103, 1531, 1505, 1119, 1639, 1236, 1839, 452, 1000, 450, 559, 893, 995, 60, 797, 689, 1370, 1391, 1635, 829, 1484, 339, 1722, 958, 1884, 262, 1275, 1094, 56, 1858, 807, 1213, 1156, 1358, 56, 172, 1317, 878, 278, 1776, 946, 373, 103, 533, 777, 671, 434, 932, 670], 100, 99], expected: [1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1919, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1932, 1954, 1954, 1954, 1954, 1954, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1989, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1976, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1953, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1940, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1903, 1903, 1891, 1891, 1891, 1891, 1891, 1891, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1916, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1961, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1984, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1968, 1929, 1929, 1929, 1929, 1929, 1929, 1929, 1929, 1929, 1929, 1929, 1929, 1929, 1929, 1929, 1929, 1929, 1929, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1917, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1923, 1936, 1936, 1936, 1936, 1936, 1936, 1936, 1936, 1936, 1936, 1936, 1936, 1936, 1936, 1936, 1936, 1992, 1992, 1992, 1992, 1992, 1992, 1992, 1992, 1992, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1995, 1988, 1988, 1988, 1988, 1988, 1988, 1988, 1988, 1988, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1981, 1972, 1972, 1972, 1972, 1972, 1972, 1972, 1972, 1972, 1972, 1972, 1972, 1972, 1972, 1972, 1966, 1966, 1966, 1966, 1944, 1944, 1944, 1944, 1944, 1944, 1944, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1962, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1950, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1938, 1938, 1938, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1946, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938, 1938], description: "1000 samples with duplicates, window 100, p99 - re-sorting each window is slow but passes; checks correctness at scale"}
+expected_concepts:
+  - sliding window with insertions and deletions
+  - order statistic (k-th smallest) queries
+  - Fenwick tree over compressed values, or two heaps with lazy deletion, or an order-statistic tree
+  - exact integer ceiling for the nearest rank
+  - coordinate compression
+optimal_complexity: {time: O(n log n), space: O(n)}
+rubric:
+  excellent: Derives the integer rank once, explains why re-sorting each window is too slow, and implements an O(n log n) structure (Fenwick tree with compressed values and a binary-lifting k-th query, two balanced heaps with lazy deletion, or a sorted multiset), handling duplicates and the window of 1 or n.
+  good: Correct results with a sorted window maintained by binary search insertion and deletion (O(n * window) worst case), or a correct heap-based approach that needs help with lazy deletion.
+  weak: Re-sorts every window without discussing the cost, computes the rank with floating point and gets off-by-one ranks, or removes the wrong duplicate when the window slides.
+  criteria:
+    correctness: All tests pass, including duplicates, p1 and p100, window 1 and window n, and exact rank boundaries.
+    efficiency: O(log n) work per slide with a Fenwick tree, heaps or an order-statistic tree; the cost of simpler options is stated.
+    code_quality: The window bookkeeping (add new sample, remove expired sample, query) is clearly separated.
+    edge_cases: Equal values, extreme values, window equal to the input length and integer rank computation.
+    communication: Compares the candidate data structures and their trade-offs for a live dashboard.
+hints:
+  - Compute the 1-based rank once with integer arithmetic; as the window slides, exactly one sample enters and one leaves, so you need a structure that supports insert, delete and "k-th smallest" quickly.
+  - Keeping the window sorted with binary-search insertion works but each insert or delete still shifts elements; a counting structure indexed by value rank, or two heaps split at the rank with delayed removal, makes every step logarithmic.
+  - Compress the distinct latencies to positions 1 to m, keep a Fenwick tree of how many samples of each position are in the window, add the new sample and subtract the expired one on each step, then find the smallest position whose prefix count reaches the rank by descending the tree from its highest power of two, and map it back to the latency.
+followups:
+  - How would you support several percentiles (p50, p95, p99) over the same window at once?
+  - What changes if the window is defined by time (the last 60 seconds) rather than by count?
+  - When would you accept an approximate answer, and which sketch (t-digest, HDR histogram) would you use?
+  - How would you merge percentiles computed on several hosts?
+common_errors:
+  - Computing the rank as ceil(percentile / 100 * window) in floating point, which gives rank 8 instead of 7 for 7 percent of 100 samples.
+  - Using a 0-based rank, or rounding to the nearest integer instead of up.
+  - Removing every copy of the expired value from the window instead of one.
+  - Re-sorting each window, which is O(n * window log window) and too slow for large windows.

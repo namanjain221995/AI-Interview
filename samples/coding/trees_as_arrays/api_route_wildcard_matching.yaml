@@ -1,0 +1,157 @@
+version: 1
+slug: api_route_wildcard_matching
+title: "API Route Wildcard Matching"
+difficulty: medium
+competency_keys: [data_structures, algorithms, problem_solving]
+role_tags: [backend, fullstack, platform, devops]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## API Route Wildcard Matching
+
+  An API gateway forwards each incoming request to a backend chosen by its **route table**. Every route
+  and every request path is written as `/` followed by one or more **segments** separated by `/`, for
+  example `/users/42/orders` has the segments `users`, `42`, `orders`.
+
+  In a route, a segment that is exactly `*` is a **wildcard** that matches any single request segment;
+  every other route segment matches only the identical request segment. A route matches a request only
+  when both have the **same number of segments** and every segment matches.
+
+  Several routes can match the same request. The gateway picks the **most specific** one: compare two
+  matching routes segment by segment from the left, and at the first position where they differ, the route
+  with a literal segment beats the route with `*`. (Two different routes that both match a request can only
+  differ in this way, so the winner is always unique.)
+
+  For each request in `requests`, return the **index** in `routes` of the route the gateway picks, or `-1`
+  when no route matches. Answers are returned in the order of `requests`.
+
+  ### Example 1
+  ```
+  Input:  routes   = ["/users/*/orders", "/users/me/orders", "/users/*", "/health"]
+          requests = ["/users/me/orders", "/users/42/orders", "/users/42", "/users/42/carts", "/health"]
+  Output: [1, 0, 2, -1, 3]
+  Explanation: "/users/me/orders" matches routes 0 and 1; they first differ at the second segment, where
+  route 1 is literal. "/users/42/carts" has three segments but no three-segment route ends in carts.
+  ```
+
+  ### Example 2
+  ```
+  Input:  routes   = ["/*/status/live", "/teams/*/*"]
+          requests = ["/teams/status/live", "/ops/status/live", "/teams/status"]
+  Output: [1, 0, -1]
+  Explanation: for "/teams/status/live" both routes match. Route 0 has more literal segments, but route 1
+  is literal at the first position where they differ, so route 1 wins.
+  ```
+
+  ### Constraints
+  - `1 <= routes.length <= 10^4`, `0 <= requests.length <= 10^4`
+  - Every route and request has between 1 and 20 segments and at most 200 characters in total.
+  - Request segments are non-empty and use lowercase letters, digits, `-`, `_` and `.`; route segments use
+    the same characters or are exactly `*`.
+  - Routes are distinct.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: api_route_wildcard_matching
+  params:
+    - {name: routes, type: "string[]"}
+    - {name: requests, type: "string[]"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def api_route_wildcard_matching(routes: list[str], requests: list[str]) -> list[int]:
+        # Each trie node: [literal children, wildcard child, route index ending here]
+        root: list = [{}, None, -1]
+        for index, route in enumerate(routes):
+            node = root
+            for seg in route[1:].split("/"):
+                if seg == "*":
+                    if node[1] is None:
+                        node[1] = [{}, None, -1]
+                    node = node[1]
+                else:
+                    node = node[0].setdefault(seg, [{}, None, -1])
+            node[2] = index
+
+        def best(node: list, segs: list[str], pos: int) -> int:
+            if pos == len(segs):
+                return node[2]
+            literal = node[0].get(segs[pos])
+            if literal is not None:
+                found = best(literal, segs, pos + 1)
+                if found != -1:
+                    return found
+            if node[1] is not None:
+                return best(node[1], segs, pos + 1)
+            return -1
+
+        return [best(root, request[1:].split("/"), 0) for request in requests]
+  javascript: |
+    function apiRouteWildcardMatching(routes, requests) {
+      const makeNode = () => ({ literal: new Map(), wild: null, index: -1 });
+      const root = makeNode();
+      routes.forEach((route, index) => {
+        let node = root;
+        for (const seg of route.slice(1).split("/")) {
+          if (seg === "*") {
+            if (node.wild === null) node.wild = makeNode();
+            node = node.wild;
+          } else {
+            if (!node.literal.has(seg)) node.literal.set(seg, makeNode());
+            node = node.literal.get(seg);
+          }
+        }
+        node.index = index;
+      });
+      const best = (node, segs, pos) => {
+        if (pos === segs.length) return node.index;
+        const literal = node.literal.get(segs[pos]);
+        if (literal !== undefined) {
+          const found = best(literal, segs, pos + 1);
+          if (found !== -1) return found;
+        }
+        return node.wild === null ? -1 : best(node.wild, segs, pos + 1);
+      };
+      return requests.map((request) => best(root, request.slice(1).split("/"), 0));
+    }
+tests:
+  - {id: t1, args: [["/users/*/orders", "/users/me/orders", "/users/*", "/health"], ["/users/me/orders", "/users/42/orders", "/users/42", "/users/42/carts", "/health"]], expected: [1, 0, 2, -1, 3], description: "Example 1 - literal beats wildcard, segment counts must agree"}
+  - {id: t2, args: [["/*/status/live", "/teams/*/*"], ["/teams/status/live", "/ops/status/live", "/teams/status"]], expected: [1, 0, -1], description: "Example 2 - the leftmost difference decides, not the number of literals"}
+  - {id: t3, hidden: true, args: [["/api/v1/users", "/api/*/orders"], ["/api/v1/orders", "/api/v1/users", "/api/v2/users"]], expected: [1, 0, -1], description: "Backtracking - the literal v1 branch dead-ends for orders, so the wildcard branch must be tried"}
+  - {id: t4, hidden: true, args: [["/a/b/c/x", "/a/b/*/y", "/a/*/c/z", "/*/b/c/w"], ["/a/b/c/w", "/a/b/c/z", "/a/b/c/y", "/a/b/c/x", "/a/b/c/v"]], expected: [3, 2, 1, 0, -1], description: "Multi-level backtracking - each request is decided by a different depth of fallback"}
+  - {id: t5, hidden: true, args: [["/files/*"], ["/files/a/b", "/files", "/files/report.pdf"]], expected: [-1, -1, 0], description: "A wildcard matches exactly one segment - neither zero nor two"}
+  - {id: t6, hidden: true, args: [["/user", "/users", "/*"], ["/users", "/user", "/userx"]], expected: [1, 0, 2], description: "Literal segments compared whole, not by prefix; the catch-all takes the rest"}
+  - {id: t7, hidden: true, args: [["/*/*/*", "/*/*/c", "/*/b/*"], ["/a/b/c", "/x/y/c", "/x/y/z", "/x/y"]], expected: [2, 1, 0, -1], description: "Only wildcards at the start - /*/b/* beats /*/*/c because position 2 differs first"}
+  - {id: t8, hidden: true, args: [["/v1/items"], []], expected: [], description: "No requests - empty result"}
+  - {id: t9, hidden: true, args: [["/svc_a/health.json", "/svc-a/*"], ["/svc-a/health.json", "/svc_a/health.json", "/svc_a/ready"]], expected: [1, 0, -1], description: "Segments with '-', '_' and '.' are matched literally"}
+  - {id: t10, hidden: true, args: [["/api/*/items", "/me/me/*/v2", "/*/*/admin", "/admin/me/admin", "/users/*/users/*", "/admin/users/*", "/admin/v1/items/api", "/*/v2/*/*", "/api/me/users/v2", "/me", "/admin/me/*", "/*/*/admin/admin", "/orders/admin/v2/*", "/me/*/v1", "/*/*/admin/*", "/*/*/orders/*", "/*/v1/admin", "/*/items/orders/*", "/me/v2/api/orders", "/me/v2", "/*/users", "/admin/v1/users/api", "/v2/admin/users", "/api/*/orders", "/*/me/orders/users", "/*/*/v1/users", "/items/users/v1/orders", "/*/*/api/v1", "/users/v2/*", "/v1/v1/v1/admin", "/users/*/items", "/admin/v2/v1", "/v2/me/orders", "/*/items/v1", "/*/me/*", "/v2/users", "/items/orders", "/admin", "/items/*/*/v1", "/v2/*/users/*", "/me/*/me", "/v2/orders", "/orders/api/orders/*", "/items/*", "/*/me", "/orders/*/users/api", "/api/*/*", "/items/me/admin", "/me/users/v2", "/admin/me/v2/items", "/v2/me/me", "/*/v1/*", "/*/*/orders", "/admin/items/users/v1", "/*/*/*/v2", "/orders/orders/users", "/me/me/*/items", "/*/v1/items", "/*/*/items/orders", "/*/me/v1/me", "/v2/me", "/users/users/*", "/*/api/*/*", "/v2/items", "/admin/admin/items/orders", "/v2/items/*", "/admin/v1", "/items/items/v2/*", "/*/v1/items/*", "/*/v1/v2", "/orders/v1/*", "/api/*/*/orders", "/*/orders/users/orders", "/*/v2/*/users", "/v2/*", "/*/v1/admin/*", "/v2/me/items", "/*/*/me", "/v2/me/*", "/v2/me/users/*", "/*/users/admin", "/v1/*/orders/api", "/*/v1/users", "/*/users/v1", "/*/*/users", "/admin/*/v1", "/me/api/*/v1", "/*/orders/v2", "/v1/items/api/*", "/users", "/orders/admin/*/api", "/*/*", "/api/*", "/*", "/users/users/orders/orders", "/admin/orders/*", "/v2/users/v1/items", "/users/admin", "/*/api/v2", "/api/users/v1/api", "/items/*/*/items", "/me/*/*/admin", "/admin/*", "/api", "/*/*/api/*", "/api/v1/me/admin", "/users/*/me", "/admin/*/admin", "/*/admin/orders/*", "/v2/me/items/*", "/api/users", "/*/v1/v1/users", "/orders/api/*", "/admin/me", "/me/items/items", "/v1/users/v2/admin", "/*/me/api/*", "/admin/me/*/v2", "/me/*/*/*", "/v1/orders", "/admin/*/*/v2", "/v1/users", "/*/*/users/api", "/me/v1", "/v2/api", "/me/me/users", "/*/*/v1/orders", "/users/*", "/v1/admin/*", "/v2", "/admin/*/*/v1", "/me/*/*/v2", "/orders/users/*", "/*/orders/me", "/v1/admin/v2/*", "/me/*/me/*", "/*/v2/admin/items", "/*/orders/api/items", "/*/v1/v1", "/admin/v2", "/*/*/v2/*", "/users/*/v2", "/items/*/v1/me", "/v2/me/*/v2", "/v1/*", "/v1/*/api/api", "/*/me/api", "/me/api/*/users", "/*/admin/*/items", "/*/*/api", "/orders/v2/v1/users", "/v1/*/admin", "/orders/me/api/orders", "/admin/orders/admin/items", "/orders/items/admin/orders", "/v2/v1/api/v2", "/v1/items", "/admin/api/admin", "/items/admin/me", "/v1/v1", "/admin/*/*/admin", "/*/orders/*/orders", "/api/items", "/v1/users/*/api", "/v2/*/v1", "/*/users/items/*", "/*/orders", "/me/items", "/admin/api/items/admin", "/users/orders/me", "/*/users/me/*", "/items/*/api", "/*/v1", "/*/users/*/*", "/me/users/orders/v2", "/v1/orders/*", "/users/*/v2/*", "/admin/admin/v2/*", "/admin/*/me", "/api/v1", "/me/items/api/*", "/admin/orders", "/*/orders/*/*", "/*/v2", "/me/v1/*/items", "/v1/users/orders", "/me/admin/v2", "/orders/orders", "/*/v2/*/me", "/admin/api/users", "/me/*", "/v1/api", "/v2/admin", "/*/admin/me", "/users/users/me", "/me/admin/orders/*", "/*/*/*/items", "/orders/admin", "/*/*/*/*", "/*/*/v2", "/users/admin/v2", "/api/v2/*/v1", "/v1/me/users/admin", "/v1/orders/me/*", "/*/v2/me/orders", "/items/*/orders/v1", "/admin/*/admin/orders", "/admin/users/*/items", "/orders/*", "/users/me/*/*", "/users/items/items/orders", "/items/admin/orders", "/items/v2/users", "/users/*/*", "/*/users/*", "/*/v2/*/v2", "/items/orders/v1/*", "/v2/*/me/items", "/users/api/*/*", "/admin/users/admin/*", "/users/v1/api", "/me/admin", "/*/*/*/me", "/items/items", "/items/me/*/*", "/items", "/v1/*/users", "/users/me/*", "/orders/orders/orders", "/v2/*/*/v1", "/me/api/*/*", "/v1/items/admin", "/api/*/admin/*", "/users/api/*", "/*/orders/*", "/*/orders/api/api", "/v2/*/*", "/*/*/v1", "/v1/me/v2/*", "/api/orders/*", "/api/me/orders", "/api/*/users/*", "/users/v2/*/api", "/*/admin/*", "/orders/me/*", "/me/users/v1/*", "/v1/v1/*/orders", "/*/items", "/v2/api/admin/*", "/items/orders/*/*", "/api/*/v1", "/v1/users/v2/orders", "/v2/orders/*/*", "/items/v2/v2", "/users/api/me/orders", "/users/admin/*", "/admin/*/v1/users", "/me/*/v2/*", "/users/*/v1/v2", "/v2/v1/*/*", "/api/orders", "/v2/v1/api/orders", "/orders/*/admin/api", "/v1", "/admin/api/v2/*", "/orders/v2", "/v2/*/admin/users", "/admin/v1/items", "/*/admin", "/v2/me/*/v1", "/users/items/v2/v2", "/v1/me", "/orders/*/items", "/*/*/*", "/admin/*/*", "/*/items/me", "/items/me", "/orders", "/v1/v2/*", "/*/users/api", "/*/items/users", "/admin/*/v2/v1", "/*/api", "/me/*/api", "/*/v2/orders/v1", "/*/admin/v1/*", "/admin/users/v2/admin", "/users/orders/*", "/orders/items/v2/*", "/me/orders/*", "/v2/admin/v1/*", "/*/api/admin/items", "/*/*/orders/v2", "/me/*/*", "/items/v2/*/*", "/users/api/orders", "/orders/api", "/*/v1/orders/*", "/orders/users", "/admin/v2/v2"], ["/v1", "/me/x-1/x-1", "/admin/v1/items/v1/v1", "/orders", "/orders/orders/orders/x-1/me", "/v2/me/api/orders/admin", "/items/v2/x-1/users/api", "/v2/v2/admin", "/v1/x-1/42/items", "/v1/v2/admin/admin/users", "/v1/v1/users", "/v1/me/api", "/items/items/42/v2", "/admin/api", "/items/admin", "/users/v1/v1", "/x-1/me", "/admin/users", "/x-1", "/admin/v1/42/42/me", "/items/admin", "/me/x-1/users/users", "/v2/x-1/api", "/42", "/v1", "/me", "/users/items/admin/api/users", "/42/v2/v2/x-1", "/admin/x-1/api/orders/x-1", "/x-1/x-1/api/v2/items", "/me/v1/v2/v1", "/me/admin/admin/42", "/api/admin/v2/items/me", "/users/me", "/users/me", "/v2/42", "/v2", "/items/orders/orders/v1/items", "/orders", "/users/x-1/42/orders", "/v2", "/api", "/v2/api/admin/admin/v2", "/x-1/api/me", "/users", "/admin/42/admin", "/items/v2", "/api/orders/orders/42", "/v1/admin/api/v2", "/v2/users/api", "/me/items/api/admin", "/api/api", "/v1/admin/42/orders/v2", "/x-1", "/admin/items/admin/x-1", "/v1", "/v2", "/v2/users", "/admin/me/v1/admin", "/items/users", "/orders/v2/x-1", "/items/v2", "/orders/x-1/me/items/items", "/admin/me/items/api", "/x-1/42/42/x-1/orders", "/api/42/me/42", "/orders/me/orders/items/api", "/orders/42/admin/admin", "/v1/users", "/users/items", "/v2/api", "/v1/v2", "/api", "/users/api/42/v2", "/admin/users/x-1", "/v2/api/me/42", "/admin/api", "/x-1/api/x-1/42/me", "/me/42/me", "/x-1/admin", "/api", "/items/v1/api", "/api/me", "/v1/42/orders/x-1", "/v1/users/v2", "/v1/api/me", "/orders/users/api/api", "/me/users/v1", "/orders/v1/x-1", "/x-1/42", "/v1/users/admin/me/items", "/users/orders", "/items/admin/items/orders/me", "/x-1", "/api/x-1", "/v2/users/items", "/orders/users/admin/me/x-1", "/42/42/x-1", "/admin/admin/admin/items", "/items", "/v1/x-1", "/me", "/admin", "/v2/x-1", "/users", "/v2/v2/v2/admin", "/42/users/users/admin/v1", "/api/v2/42", "/orders", "/items", "/x-1/orders/api", "/me", "/items/42/x-1/42", "/v1", "/users", "/v2/x-1/v1/admin/x-1", "/users", "/users/orders/admin/users/admin", "/admin/v2", "/v2/x-1", "/orders/admin", "/me/users/admin", "/v2/v2", "/items/api/me/items", "/x-1/42/users", "/users/v1", "/users/me", "/me/items/api", "/42/admin", "/42/v1/me/items", "/admin/api/42/v1", "/api", "/users", "/v1/42/me/42", "/me", "/42/42/api", "/me/orders/v2", "/users/items", "/42/orders/42/items/api", "/x-1/42", "/v1", "/items/items", "/users", "/items/me", "/admin", "/v2/items", "/v1", "/admin", "/42", "/items/x-1/me/x-1/api", "/x-1/x-1", "/x-1/v2/items/me", "/api/api/x-1/items", "/api", "/me/me/api/api/x-1", "/items/v2", "/x-1/v2", "/orders/users/api", "/me", "/x-1/v2/x-1/users/v2", "/admin/users/users/items", "/users/items", "/42/me", "/api/users/me/me", "/api", "/api/x-1/me", "/api", "/admin/v2", "/me/x-1/admin", "/users/v1", "/users/x-1/me/v2/x-1", "/v1/items", "/me", "/42", "/admin/users/orders", "/me", "/me/v1/42/v1/orders", "/v2/users/admin/v2/orders", "/v2/users/admin", "/admin", "/users/me/api", "/admin/orders/v1", "/admin/v2/me/me", "/v2/admin/v2/api", "/x-1/items/42/users/v2", "/users/api", "/admin/x-1/orders/items/users", "/items/x-1/api", "/orders", "/api/42/v1/me/items", "/orders/admin", "/42", "/api/v2", "/users/x-1/orders/admin/admin", "/orders/v1/v2/x-1/orders", "/me/v2/orders", "/admin/x-1/users/42", "/admin", "/api", "/api/api", "/items/v2/42", "/api/v1/admin/me", "/items/api/users/users/me", "/admin/42/v1/42/api", "/v2/orders/api/v1", "/admin/42/orders", "/items/v2/orders/api", "/42/x-1/admin/admin/x-1", "/admin/orders/x-1", "/items", "/v1", "/admin/v1/orders", "/v2/me", "/v2", "/api/42/orders/orders", "/items", "/items/items/v1", "/items/v2/users", "/v1/api/orders/v1/42", "/users/v1", "/me/v2/users", "/me/x-1/me", "/admin", "/42/me/me", "/items/orders/v1/me", "/me/orders/api/users/users", "/admin/v1/orders/v1", "/users/v1", "/v1/users/v2/v1/orders", "/api/v2/api/orders", "/admin/api/me/items", "/42/me/42", "/me/admin/items", "/42/orders/admin/x-1", "/items", "/v1/42", "/users/users/v1", "/orders/42/v1/api/v1", "/42/users/me/42", "/me/orders/users/v1", "/orders/me", "/api/me", "/42/users", "/admin/v1", "/items/items/items/v1", "/orders/api/items/items", "/items/admin/orders/me", "/items", "/users/users/v1", "/admin/42", "/admin", "/users/v1", "/admin/admin/42", "/items/x-1/42/items", "/items", "/me", "/api/orders/api", "/v2/users/v2/users", "/me", "/api/v1/x-1/v1", "/admin/me/42/x-1/v1", "/me/v2/42", "/orders/me/api/admin", "/items", "/v2/admin/x-1/v1/users", "/me/me/users", "/items/42/42/items/orders", "/api/v2", "/api/api/v1", "/me", "/items/users/api/orders/x-1", "/items/orders/api/api", "/x-1/42/v1/orders/orders", "/v1", "/me/42/orders", "/42/v1/42/items/42", "/orders", "/api/orders/items/x-1", "/orders", "/users/admin", "/42", "/users/42/api/items", "/v2/orders/x-1/users/v2", "/me/api/api/x-1", "/orders/items/items/x-1/v1", "/v2/admin", "/42/v2/orders/x-1", "/v1/users/me", "/v1/users", "/items/v1/admin/me", "/me/v1/admin/me/users", "/users/v2/v1/42", "/users/orders/42", "/me", "/v2", "/users/orders", "/orders/me", "/v1/admin", "/admin/me/me/x-1/v1", "/x-1/users"]], expected: [263, 293, -1, 277, -1, -1, -1, 236, 196, -1, 226, 146, 54, 102, 43, 213, 44, 102, 93, -1, 43, 118, 236, 93, 263, 9, -1, 7, -1, -1, 257, 118, -1, 127, 127, 74, 129, -1, 277, 198, 129, 103, -1, 77, 89, 107, 43, 182, 104, 236, 180, 92, -1, 93, 14, 263, 129, 35, 160, 43, 273, 43, -1, 198, -1, 198, -1, 11, 121, 127, 124, 144, 103, 218, 5, 62, 102, -1, 40, 268, 103, 171, 92, 15, 214, 77, 173, 13, 70, 91, -1, 127, -1, 93, 92, 236, -1, 273, 148, 225, 144, 9, 37, 74, 89, 7, -1, 46, 277, 225, 234, 9, 198, 263, 89, -1, 89, -1, 139, 74, 197, 293, 74, 100, 84, 127, 127, 283, 268, 196, 130, 103, 89, 198, 9, 149, 289, 127, -1, 91, 263, 223, 89, 276, 37, 63, 263, 37, 93, -1, 91, 188, 62, 103, -1, 43, 183, 132, 9, -1, 207, 127, 44, 170, 103, 46, 103, 139, 293, 127, -1, 156, 9, 93, 5, 9, -1, -1, 236, 37, 227, 95, 188, 140, -1, 127, -1, 171, 277, -1, 197, 93, 92, -1, -1, 293, 198, 37, 103, 92, 273, 232, -1, -1, 252, 274, 294, -1, 95, 225, 263, 274, 60, 129, 71, 225, 33, 212, -1, 127, 293, 40, 37, 34, 216, -1, 130, 127, -1, 71, 62, 34, 293, 182, 225, 144, 61, -1, 170, 118, 208, 92, 20, 66, 38, 62, 108, 225, 61, 102, 37, 127, 274, 100, 225, 9, 239, 173, 9, 198, -1, 293, 116, 225, -1, 125, -1, 92, 250, 9, -1, 249, -1, 263, 293, -1, 277, 182, 277, 97, 93, 104, -1, 230, -1, 192, 7, 214, 121, 75, -1, 7, 287, 9, 129, 127, 208, 144, -1, 20], description: "300 generated routes (about a third of segments are wildcards) and 300 requests of 1-5 segments; stress"}
+expected_concepts:
+  - "trie keyed by path segment with a separate wildcard child"
+  - "depth-first search with backtracking (literal child first, then wildcard)"
+  - "lexicographic specificity order and why the first full match found is the best"
+  - "matching only at the exact segment depth"
+  - "alternative: sort matching candidates by a per-segment specificity key"
+optimal_complexity: {time: "O(total route length) to build; per request O(s) typically, O(2^s) in the worst case of a dense wildcard table", space: "O(total route length)"}
+rubric:
+  excellent: "Builds a segment trie with literal children and one wildcard child, answers each request with a DFS that tries the literal child before the wildcard and backtracks when a branch dead-ends, argues that this visits routes in specificity order so the first complete match is the answer, and discusses the worst case."
+  good: "Correct results with minor prompting, for example scanning all routes per request and comparing specificity keys, or a trie that needs a hint about backtracking."
+  weak: "Greedily follows the literal child without backtracking, prefers the route with the most literals, lets a wildcard match several segments, or compares segments as prefixes."
+  criteria:
+    correctness: "All tests pass, including backtracking cases, the leftmost-difference rule and segment count mismatches."
+    efficiency: "Uses a trie (or an equally selective index) so a request does not compare against every route in typical tables."
+    code_quality: "Clear node structure, a small recursive helper and no string concatenation in the hot path."
+    edge_cases: "No requests, catch-all routes, requests longer or shorter than every route, special characters in segments."
+    communication: "Explains the specificity order and why DFS order matches it."
+hints:
+  - "Think of the routes as a tree whose levels are path segments. At each level a request can continue through an identical literal segment or through the wildcard."
+  - "Because a literal beats a wildcard at the first difference, explore the literal branch before the wildcard branch. But a literal branch can fail deeper down, so you must be able to come back."
+  - "Insert every route into a trie with a map of literal children plus one wildcard child and store the route index at its last node. For a request, run a DFS that tries the literal child, then the wildcard child, and returns the first index found exactly at the request's last segment; return -1 if both branches fail."
+followups:
+  - "What is the worst case for the backtracking search, and how could you bound it?"
+  - "How would you support a trailing '**' wildcard that matches one or more remaining segments?"
+  - "How would you extract the values captured by each '*' (path parameters) for the chosen route?"
+  - "Routes are hot-reloaded while traffic flows; how would you swap the table safely?"
+common_errors:
+  - "Following the literal branch greedily and returning -1 when it dead-ends instead of trying the wildcard."
+  - "Ranking matching routes by their total number of literal segments."
+  - "Accepting a route with fewer segments than the request (prefix matching)."
+  - "Splitting on '/' and forgetting the empty string before the leading slash."

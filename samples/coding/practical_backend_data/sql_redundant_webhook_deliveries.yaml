@@ -1,0 +1,199 @@
+version: 1
+slug: sql_redundant_webhook_deliveries
+title: "Redundant Webhook Deliveries (SQL)"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [backend, data, dba, fullstack]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Redundant Webhook Deliveries
+
+  A payment provider sends webhooks with **at-least-once** delivery: when it does not see an
+  acknowledgement in time it retries, so the same event can reach the ingestion service several
+  times. Every delivery is stored in table `webhook_deliveries`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key, assigned by the ingestion worker that stored the row |
+  | event_key | VARCHAR(80) | the provider's event identifier (case-sensitive) |
+  | received_at | INTEGER | arrival time in milliseconds since the epoch |
+
+  Several workers write concurrently, so a smaller `id` does **not** guarantee an earlier
+  `received_at`.
+
+  For each `event_key`, the **original** delivery is the one with the earliest `received_at`; if
+  several deliveries of that key arrived at the same millisecond, the one with the **smaller `id`** is
+  the original. Every other delivery of the key is **redundant**.
+
+  Return one row per redundant delivery with columns `id`, `event_key` and `original_id` (the `id` of
+  that key's original delivery). Order the result by `id` ascending. Keys delivered only once produce
+  no rows.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  webhook_deliveries
+  +----+-----------+-------------+
+  | id | event_key | received_at |
+  +----+-----------+-------------+
+  | 1  | evt_a     | 1000        |
+  | 2  | evt_b     | 1005        |
+  | 3  | evt_a     | 1600        |
+  | 4  | evt_a     | 2900        |
+  | 5  | evt_c     | 3000        |
+  +----+-----------+-------------+
+
+  Output
+  +----+-----------+-------------+
+  | id | event_key | original_id |
+  +----+-----------+-------------+
+  | 3  | evt_a     | 1           |
+  | 4  | evt_a     | 1           |
+  +----+-----------+-------------+
+  ```
+
+  ### Example 2
+  ```
+  webhook_deliveries
+  +----+-----------+-------------+
+  | id | event_key | received_at |
+  +----+-----------+-------------+
+  | 10 | evt_x     | 500         |
+  | 11 | evt_x     | 400         |
+  | 12 | evt_y     | 700         |
+  | 13 | evt_y     | 700         |
+  +----+-----------+-------------+
+
+  Output
+  +----+-----------+-------------+
+  | id | event_key | original_id |
+  +----+-----------+-------------+
+  | 10 | evt_x     | 11          |
+  | 13 | evt_y     | 12          |
+  +----+-----------+-------------+
+  Row 11 arrived first even though its id is larger. Rows 12 and 13 tie, so the smaller id (12) is
+  the original.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `0 <= received_at <= 10^13` (fits in a 64-bit integer)
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return id, event_key and original_id for every redundant delivery, ordered by id.
+    SELECT id, event_key, MIN(id) AS original_id
+    FROM webhook_deliveries
+    GROUP BY id, event_key
+    ORDER BY id;
+reference_solutions:
+  sql: |
+    WITH ranked AS (
+      SELECT
+        id,
+        event_key,
+        ROW_NUMBER() OVER (PARTITION BY event_key ORDER BY received_at, id) AS rn
+      FROM webhook_deliveries
+    )
+    SELECT r.id, r.event_key, o.id AS original_id
+    FROM ranked r
+    JOIN ranked o ON o.event_key = r.event_key AND o.rn = 1
+    WHERE r.rn > 1
+    ORDER BY r.id;
+sql_setup: |
+  CREATE TABLE webhook_deliveries (
+    id INTEGER PRIMARY KEY,
+    event_key VARCHAR(80) NOT NULL,
+    received_at BIGINT NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - two retries of evt_a, other keys delivered once"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhook_deliveries (id, event_key, received_at) VALUES
+        (1, 'evt_a', 1000), (2, 'evt_b', 1005), (3, 'evt_a', 1600), (4, 'evt_a', 2900), (5, 'evt_c', 3000);
+    expected_rows: [[3, "evt_a", 1], [4, "evt_a", 1]]
+  - id: t2
+    description: "Example 2 - original has the larger id; same-millisecond tie broken by smaller id"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhook_deliveries (id, event_key, received_at) VALUES
+        (10, 'evt_x', 500), (11, 'evt_x', 400), (12, 'evt_y', 700), (13, 'evt_y', 700);
+    expected_rows: [[10, "evt_x", 11], [13, "evt_y", 12]]
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Every key delivered exactly once - no rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhook_deliveries (id, event_key, received_at) VALUES (1, 'k1', 5), (2, 'k2', 5), (3, 'k3', 1);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "MIN(id) trap - original is the latest-numbered row; output still ordered by id"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhook_deliveries (id, event_key, received_at) VALUES
+        (1, 'evt_p', 900), (2, 'evt_p', 800), (3, 'evt_p', 700), (4, 'evt_p', 100);
+    expected_rows: [[1, "evt_p", 4], [2, "evt_p", 4], [3, "evt_p", 4]]
+  - id: t6
+    hidden: true
+    description: "Keys differing only in case are different events"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhook_deliveries (id, event_key, received_at) VALUES
+        (1, 'EVT_1', 10), (2, 'evt_1', 20), (3, 'evt_1', 30), (4, 'EVT_1', 5);
+    expected_rows: [[1, "EVT_1", 4], [3, "evt_1", 2]]
+  - id: t7
+    hidden: true
+    description: "Three-way tie at the earliest millisecond plus a later retry"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhook_deliveries (id, event_key, received_at) VALUES
+        (8, 'evt_t', 300), (5, 'evt_t', 300), (9, 'evt_t', 300), (2, 'evt_t', 301);
+    expected_rows: [[2, "evt_t", 5], [8, "evt_t", 5], [9, "evt_t", 5]]
+  - id: t8
+    hidden: true
+    description: "Interleaved keys with large epoch-millisecond timestamps"
+    ordered: true
+    setup_sql: |
+      INSERT INTO webhook_deliveries (id, event_key, received_at) VALUES
+        (1, 'ord_1', 1735689600000), (2, 'ord_2', 1735689600001), (3, 'ord_1', 1735689601000),
+        (4, 'ord_3', 1735689602000), (5, 'ord_2', 1735689599999), (6, 'ord_1', 1735689600000),
+        (7, 'ord_3', 1735689602500), (8, 'ord_2', 1735689700000);
+    expected_rows: [[2, "ord_2", 5], [3, "ord_1", 1], [6, "ord_1", 1], [7, "ord_3", 4], [8, "ord_2", 5]]
+expected_concepts:
+  - "ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...) for per-group ordering"
+  - "deterministic tie-breaking with a secondary sort key"
+  - "self-join or window function to attach the original id"
+  - "idempotent webhook processing and at-least-once delivery"
+optimal_complexity: {time: "O(n log n) for the window sort, or O(n) with an index on (event_key, received_at, id)", space: "O(n)"}
+rubric:
+  excellent: "Ranks deliveries per key by (received_at, id) with ROW_NUMBER, joins back to the rank-1 row to report original_id, orders by id and explains why MIN(id) or RANK are wrong here."
+  good: "Correct query after a hint about ties or about id order not matching arrival order."
+  weak: "Uses MIN(id) as the original, uses RANK so tied rows are all treated as originals, or omits the ORDER BY."
+  criteria:
+    correctness: "All tests pass, including same-millisecond ties and originals with a larger id."
+    efficiency: "One window pass or an indexed correlated lookup; no per-row procedural code."
+    code_quality: "Named CTEs and clear aliases for the delivery and its original."
+    edge_cases: "Empty table, unique keys, multi-way ties and case-sensitive keys."
+    communication: "Relates the query to deduplicating webhooks with an idempotency key in the application."
+hints:
+  - "Within each event_key, put the deliveries in arrival order; the first one is the original and the rest are redundant."
+  - "A plain MIN(received_at) is not enough when two deliveries share a millisecond, and MIN(id) ignores arrival time; you need a total order on (received_at, id)."
+  - "Number the rows with ROW_NUMBER() OVER (PARTITION BY event_key ORDER BY received_at, id), then join each row with number above 1 to the row of the same key numbered 1 and order by id."
+followups:
+  - "How would you prevent these duplicates at write time instead of finding them afterwards?"
+  - "Why does RANK() break this query while ROW_NUMBER() works?"
+  - "Which index would make this fast on a table with hundreds of millions of rows?"
+  - "How would you delete the redundant rows safely while new deliveries keep arriving?"
+common_errors:
+  - "Treating the smallest id as the original, which is wrong when workers store rows out of order."
+  - "Using RANK or comparing only received_at, so tied deliveries are all considered originals."
+  - "Grouping by event_key and returning one row per key instead of one row per redundant delivery."

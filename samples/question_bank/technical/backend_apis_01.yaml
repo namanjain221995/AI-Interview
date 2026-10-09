@@ -1,0 +1,654 @@
+# Curated questions: backend API design (HTTP semantics, resource modelling, caching and payloads).
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend]
+questions:
+  - external_key: technical.backend_apis.put_patch_post_choice
+    competency_key: api_design
+    topic: Choosing POST, PUT or PATCH
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Walk me through how you decide between POST, PUT and PATCH when you design an endpoint that changes
+      data. What does each one promise to the client?
+    expected_concepts:
+      - POST creates a resource or triggers a non-idempotent action
+      - PUT replaces the full representation and is idempotent
+      - PATCH applies a partial change and is not automatically idempotent
+      - difference between safe and idempotent methods
+      - what each choice means for client retries
+    rubric:
+      excellent: Explains full replacement versus partial update, ties idempotency to safe retries, and gives a concrete example such as creating versus updating a profile, including what PUT does to omitted fields.
+      good: Correctly separates creation, replacement and partial update with a reasonable example.
+      weak: Treats the methods as interchangeable or picks them by habit without explaining the semantics.
+    followups:
+      - What should happen to fields a client leaves out of a PUT body?
+      - When would you allow PUT to create a resource?
+    common_errors:
+      - Using PUT for partial updates and silently wiping omitted fields.
+
+  - external_key: technical.backend_apis.unsafe_get_side_effect
+    competency_key: api_design
+    topic: Side effects in GET requests
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A teammate adds a GET endpoint that marks a notification as read whenever the client fetches it. How
+      would you respond in code review, and what would you suggest instead?
+    expected_concepts:
+      - "GET must be safe: no state changes the client did not ask for"
+      - prefetchers, crawlers, caches and retries can trigger GETs unexpectedly
+      - use POST or PATCH on a read-state field or sub-resource
+      - separating fetching from acknowledging
+      - explaining the concrete risk rather than citing the rule alone
+    rubric:
+      excellent: Explains why safety matters with concrete triggers such as link prefetching, caching or automatic retries, and proposes a clear alternative like PATCH on a read flag or a POST to a read-receipt resource.
+      good: Says GET should not change state and suggests using POST or PATCH.
+      weak: Sees no problem, or objects without giving a reason or an alternative.
+    followups:
+      - How would you mark many notifications as read in one call?
+      - Are there any side effects you would accept on a GET, such as access logging?
+    common_errors:
+      - Arguing only from convention without naming a real failure it would cause.
+
+  - external_key: technical.backend_apis.error_response_shape
+    competency_key: api_design
+    topic: Error response design
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you design error responses so that client developers can actually handle them in code?
+      Describe the shape you'd use and why.
+    expected_concepts:
+      - meaningful HTTP status codes
+      - stable machine-readable error codes separate from the message
+      - field-level details for validation failures
+      - a request or correlation id in the response
+      - one consistent format across endpoints, for example problem details (RFC 9457)
+      - no stack traces or internal details
+    rubric:
+      excellent: Proposes a consistent error body with a stable code, human message, per-field details and a request id, explains how clients branch on codes rather than messages, and keeps internals out.
+      good: Uses proper status codes and a consistent JSON error body with a message and a code.
+      weak: Returns free-text messages or 200 responses with an error flag and no structure.
+    followups:
+      - Why shouldn't clients parse the human-readable message?
+      - How do you keep the format consistent across many teams' services?
+    common_errors:
+      - Leaking exception messages or stack traces to callers.
+
+  - external_key: technical.backend_apis.status_codes_signup_failures
+    competency_key: api_design
+    topic: Choosing status codes for failures
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A create-account request can fail because the JSON is malformed, because the email address is
+      invalid, or because that email is already registered. Which status codes would you return for each,
+      and how would you explain the differences to a client developer?
+    expected_concepts:
+      - 400 for a malformed or unparsable request
+      - 400 or 422 for semantic validation failures, applied consistently
+      - 409 for a conflict with existing state
+      - documented team-wide convention
+      - risk of revealing which emails are registered
+    rubric:
+      excellent: Maps each case to a defensible code with reasons, mentions applying one convention across the API, and notices that confirming an existing email can enable account enumeration and suggests a mitigation.
+      good: Gives sensible codes such as 400, 422 and 409 with brief reasoning.
+      weak: Returns 500 or 200 for these cases, or cannot distinguish client errors from conflicts.
+    followups:
+      - How would you avoid revealing whether an email is already registered?
+      - What would you return if the same request arrived twice at the same moment?
+    common_errors:
+      - Returning 500 for validation failures.
+      - Using 403 for a duplicate resource.
+
+  - external_key: technical.backend_apis.modelling_non_crud_actions
+    competency_key: api_design
+    topic: Modelling actions that are not CRUD
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your product team wants an API for approving invoices, resending invoice emails and voiding
+      invoices. These don't map neatly to create, read, update and delete. How would you model them?
+    expected_concepts:
+      - state change through PATCH on a status field
+      - action or sub-resource endpoints such as POST /invoices/{id}/approval
+      - server-side validation of allowed transitions
+      - 409 when the action is invalid for the current state
+      - idempotency of repeated actions
+      - audit trail of who performed the action
+    rubric:
+      excellent: Compares state-field updates with action sub-resources, picks per case with reasons (for example resend is a command, approve is a transition), and covers transition validation, idempotency and auditing.
+      good: Proposes a consistent approach such as action sub-resources and validates state.
+      weak: Adds verb URLs ad hoc with GET or without considering state rules.
+    followups:
+      - What should happen if someone approves an invoice that is already approved?
+      - How would a client discover which actions are currently allowed?
+    common_errors:
+      - Allowing any status value through a generic PATCH without transition checks.
+
+  - external_key: technical.backend_apis.nested_vs_flat_resources
+    competency_key: api_design
+    topic: Nested versus flat resource URLs
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you decide when to nest resources in URLs, such as customers, then orders, then items, versus
+      keeping them flat at the top level?
+    expected_concepts:
+      - nesting expresses ownership or scoping
+      - keep nesting shallow, usually one level
+      - globally unique ids allow flat access
+      - query parameters for filtering across parents
+      - authorization checks on the parent relationship
+    rubric:
+      excellent: Explains when nesting adds meaning versus noise, recommends shallow nesting with examples, and points out that nested URLs still require checking that the child belongs to the parent.
+      good: Prefers shallow nesting with a sensible example.
+      weak: Nests everything deeply or has no principle for deciding.
+    followups:
+      - How would you list all orders across customers for an admin view?
+      - What breaks if a child resource can move between parents?
+    common_errors:
+      - Trusting the parent id in the URL without checking that the child belongs to it.
+
+  - external_key: technical.backend_apis.lost_update_prevention
+    competency_key: api_design
+    topic: Preventing lost updates
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Two support agents open the same customer record, both edit it and both save, and the first agent's
+      change silently disappears. How would you change the API to prevent lost updates?
+    expected_concepts:
+      - ETag or version number on the resource
+      - If-Match conditional requests
+      - 412 Precondition Failed on a mismatch
+      - 428 Precondition Required to force clients to send a version
+      - compare-and-set update in the database
+      - client experience for refreshing or merging
+    rubric:
+      excellent: "Designs optimistic concurrency end to end: version exposed as an ETag, If-Match on writes, an atomic conditional update in storage, 412 on conflict, and a sensible client flow for resolving it."
+      good: Adds a version field checked on update and returns a conflict error.
+      weak: Suggests locking the record for the whole edit session or accepts last write wins without discussion.
+    followups:
+      - How do you make the version check atomic in the database?
+      - When would pessimistic locking be the better choice?
+    common_errors:
+      - Reading the version, comparing in code and then writing, which still races.
+
+  - external_key: technical.backend_apis.cache_friendly_catalogue
+    competency_key: api_design
+    topic: HTTP caching for read-heavy APIs
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you make a read-heavy product catalogue API cache-friendly for browsers and a CDN, without
+      serving stale prices for too long?
+    expected_concepts:
+      - Cache-Control with max-age and s-maxage
+      - validators such as ETag or Last-Modified with 304 responses
+      - stale-while-revalidate
+      - Vary for headers that change the response
+      - short time-to-live or purging for price changes
+      - private or no-store for personalised responses
+    rubric:
+      excellent: Uses distinct browser and CDN lifetimes, revalidation with ETags, stale-while-revalidate and explicit purging on price changes, and keeps personalised data out of shared caches.
+      good: Sets Cache-Control and ETags with a reasonable time-to-live.
+      weak: Relies on caching without any invalidation plan, or does not know the relevant headers.
+    followups:
+      - Prices change a few times a day — how do you push those changes out quickly?
+      - What does a 304 response save, and what does it not save?
+    common_errors:
+      - Caching personalised responses in a shared cache.
+
+  - external_key: technical.backend_apis.cdn_cached_private_data
+    competency_key: security
+    topic: Private data leaked through a cache
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      After a CDN is placed in front of your API, a customer reports seeing another customer's account
+      details. What probably went wrong, and how would you fix it and make sure it can't happen again?
+    expected_concepts:
+      - authenticated responses cached because of missing private or no-store
+      - cache key ignoring the Authorization header or cookies
+      - CDN configuration that overrides origin headers
+      - immediate purge and containment
+      - default no-store for authenticated routes
+      - automated tests asserting cache headers
+    rubric:
+      excellent: Pinpoints shared caching of authenticated responses, contains the incident first (purge, bypass), fixes both origin headers and CDN rules, and adds guardrails such as default no-store and header tests.
+      good: Identifies cache headers as the cause and fixes them.
+      weak: Blames the client or the CDN vendor without a concrete mechanism or fix.
+    followups:
+      - How would you work out which customers were affected?
+      - How could you still cache parts of authenticated responses safely?
+    common_errors:
+      - Fixing the header but forgetting to purge what is already cached.
+
+  - external_key: technical.backend_apis.patch_null_semantics
+    competency_key: api_design
+    topic: Partial update semantics
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A client tries to clear a customer's middle name by sending null in a PATCH request, but your API
+      treats null the same as a missing field and ignores it. How would you design partial updates so that
+      leaving a field alone and clearing it are clearly different?
+    expected_concepts:
+      - JSON Merge Patch, where null removes a value
+      - JSON Patch with explicit operations
+      - field masks as used in gRPC APIs
+      - deserialisation that preserves absent versus null
+      - validating the resulting state rather than the patch alone
+    rubric:
+      excellent: Compares merge patch, JSON Patch and field masks, explains how to keep absent and null distinct in the code, and validates the merged result before saving.
+      good: Knows a standard approach such as merge patch and explains null handling.
+      weak: Cannot distinguish missing from null, or replaces the full object on PATCH.
+    followups:
+      - How would your language's JSON library tell you a field was absent?
+      - How do you patch one item inside an array?
+    common_errors:
+      - Using typed request objects where absent and null both become null.
+
+  - external_key: technical.backend_apis.list_filtering_sorting
+    competency_key: api_design
+    topic: Filtering and sorting list endpoints
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you design filtering and sorting for a list endpoint that client teams keep asking to
+      extend with new criteria?
+    expected_concepts:
+      - consistent query parameter conventions
+      - allow-list of filterable and sortable fields
+      - indexes that support the allowed combinations
+      - stable ordering with a unique tie-breaker
+      - avoiding an arbitrary query language that maps straight to SQL
+      - a separate search endpoint or engine when needs grow
+    rubric:
+      excellent: Defines a consistent, documented convention, limits fields to what storage can serve efficiently, guarantees stable ordering, and knows when to move to a dedicated search capability.
+      good: Proposes query parameters with an allow-list and sensible defaults.
+      weak: Exposes arbitrary filters or raw SQL fragments with no thought about performance or safety.
+    followups:
+      - How do you add a new sortable field without hurting database performance?
+      - How would you express a filter like 'created in the last week and status is open or pending'?
+    common_errors:
+      - Allowing sort on unindexed columns for large tables.
+
+  - external_key: technical.backend_apis.unbounded_list_endpoint
+    competency_key: api_design
+    topic: Unbounded list responses
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A list endpoint returns everything when the client doesn't pass a limit, and one client just pulled
+      two hundred thousand records in a single call. What would you change, and how would you roll it out
+      without breaking existing clients?
+    expected_concepts:
+      - default page size and an enforced maximum
+      - pagination metadata or a next link
+      - finding which clients rely on unbounded responses
+      - advance communication and a staged rollout
+      - memory, timeout and database cost of large responses
+    rubric:
+      excellent: Adds defaults and caps with pagination, measures who depends on the old behaviour, communicates and stages the change, and explains the operational risk being removed.
+      good: Adds a default and maximum limit with pagination.
+      weak: Adds a limit immediately without considering existing clients, or sees no problem.
+    followups:
+      - How would you pick the default and maximum page sizes?
+      - What would you tell a client who genuinely needs all the data?
+    common_errors:
+      - Silently truncating results without telling the client there is more.
+
+  - external_key: technical.backend_apis.bulk_create_partial_failure
+    competency_key: api_design
+    topic: Bulk endpoints and partial failure
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A partner wants to create five thousand products in one call instead of one at a time. How would you
+      design a bulk endpoint, and what happens when some items succeed and others fail?
+    expected_concepts:
+      - maximum batch size
+      - all-or-nothing versus per-item outcomes as an explicit choice
+      - per-item status and errors in the response
+      - asynchronous job for very large batches
+      - idempotency for retrying the batch or individual items
+      - database transaction size and lock impact
+    rubric:
+      excellent: Makes the atomicity choice explicit with reasons, returns per-item results with ids and errors, caps or offloads large batches to an async job, and makes retries safe.
+      good: Designs a batch endpoint with per-item results and a size limit.
+      weak: Loops over items in one huge transaction or returns a single error for the whole batch with no detail.
+    followups:
+      - How does the client safely retry only the failed items?
+      - Which status code would you return when half the items fail?
+    common_errors:
+      - Returning success for the batch while hiding item failures.
+
+  - external_key: technical.backend_apis.long_running_requests
+    competency_key: api_design
+    topic: Long-running operations
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your report-generation endpoint takes several minutes, and clients keep timing out while holding the
+      connection open. How would you redesign the API?
+    expected_concepts:
+      - 202 Accepted with an operation or job resource
+      - Location header and status polling with Retry-After
+      - webhook or callback when the job completes
+      - job states including failure and cancellation
+      - idempotent job submission
+      - retention and expiry of results
+    rubric:
+      excellent: Turns the request into a job resource with clear states, polling guidance and optional callbacks, handles duplicate submission and cancellation, and defines how long results stay available.
+      good: Moves to an asynchronous job with a status endpoint.
+      weak: Simply raises timeouts or suggests the client wait longer.
+    followups:
+      - How would the client cancel a job that is no longer needed?
+      - Where would the generated report live, and for how long?
+    common_errors:
+      - Not handling duplicate submissions when the client retries the initial POST.
+
+  - external_key: technical.backend_apis.content_negotiation_formats
+    competency_key: api_design
+    topic: Content negotiation
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How does a client tell your API which response format it wants, for example JSON versus CSV, and how
+      have you handled requests for formats you don't support?
+    expected_concepts:
+      - Accept request header
+      - Content-Type on requests and responses
+      - 406 Not Acceptable for unsupported response formats
+      - 415 Unsupported Media Type for unsupported request bodies
+      - a sensible default format
+      - Accept-Encoding for compression
+    rubric:
+      excellent: Explains Accept and Content-Type clearly, uses 406 and 415 correctly, chooses a default, and mentions caching implications such as Vary on Accept.
+      good: Knows Accept and Content-Type and returns an error for unsupported formats.
+      weak: Uses file extensions or query flags inconsistently without understanding the headers.
+    followups:
+      - Would you ever put the format in the URL instead, and why?
+      - What changes for caching when the response depends on the Accept header?
+    common_errors:
+      - Confusing Accept with Content-Type.
+
+  - external_key: technical.backend_apis.public_identifiers
+    competency_key: api_design
+    topic: Identifiers in public APIs
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What kind of identifiers do you expose in a public API — auto-incrementing numbers, UUIDs or
+      something else — and what drives that decision?
+    expected_concepts:
+      - sequential ids reveal volume and enable enumeration
+      - UUIDs or ULIDs for unguessable, globally unique ids
+      - time-ordered ids for index locality
+      - type prefixes that make ids self-describing
+      - keeping internal database keys separate from public ids
+    rubric:
+      excellent: Weighs enumeration, information leakage, uniqueness across systems and index performance, and recommends a concrete scheme such as prefixed time-ordered ids with reasons.
+      good: Prefers UUIDs for public use with a sound reason.
+      weak: Exposes raw auto-increment ids without seeing any downside.
+    followups:
+      - Do random UUIDs cause any problems for database indexes?
+      - Why might ids like ord_ followed by random characters help developers?
+    common_errors:
+      - Treating unguessable ids as a substitute for authorization checks.
+
+  - external_key: technical.backend_apis.money_and_time_fields
+    competency_key: api_design
+    topic: Money and timestamps in payloads
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Clients of your orders API report totals that are off by a cent and orders showing up on the wrong
+      day. How would you represent money and timestamps in the API so this doesn't happen?
+    expected_concepts:
+      - no binary floating point for money
+      - integer minor units or decimal strings
+      - explicit ISO 4217 currency code
+      - RFC 3339 timestamps with an offset, usually UTC
+      - separate representation for calendar dates versus instants
+      - documenting rounding and precision
+    rubric:
+      excellent: Explains floating-point rounding and time-zone ambiguity, proposes minor units or decimal strings with currency codes and RFC 3339 timestamps, and separates local dates from instants.
+      good: Uses integers or decimals for money and UTC ISO timestamps.
+      weak: Uses floats for money or local timestamps without offsets.
+    followups:
+      - How would you represent a delivery date that has no time of day?
+      - How do you handle currencies with no minor unit or three decimal places?
+    common_errors:
+      - Assuming every currency has exactly two decimal places.
+
+  - external_key: technical.backend_apis.resumable_large_uploads
+    competency_key: api_design
+    topic: Large and resumable uploads
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Users upload video files of several gigabytes through your API, and uploads over slow networks keep
+      failing near the end. How would you redesign the upload flow?
+    expected_concepts:
+      - chunked or resumable uploads with an upload session resource
+      - resuming from the last received offset
+      - per-chunk checksums and final integrity check
+      - uploading directly to object storage with short-lived signed URLs
+      - size and type validation
+      - asynchronous processing and cleanup of abandoned uploads
+    rubric:
+      excellent: Designs a resumable session with offsets and checksums, keeps large bodies off the application servers, validates content, processes asynchronously and cleans up incomplete uploads.
+      good: Splits uploads into chunks that can be retried.
+      weak: Only raises request size and timeout limits.
+    followups:
+      - How does the client find out where to resume after a crash?
+      - When would you scan or transcode the file, and how is the client told?
+    common_errors:
+      - Restarting the entire upload after any network error.
+
+  - external_key: technical.backend_apis.oversized_json_mobile
+    competency_key: api_design
+    topic: Payload size for mobile clients
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Mobile clients complain that one of your endpoints is slow on poor connections, and you find it
+      returns a two-megabyte JSON response. What would you look at and change?
+    expected_concepts:
+      - measuring what clients actually use (over-fetching)
+      - sparse fieldsets or field selection
+      - expand or include parameters instead of always embedding
+      - pagination
+      - gzip or Brotli compression via Accept-Encoding
+      - caching and conditional requests
+    rubric:
+      excellent: Starts by measuring which data is used, trims the default representation, adds field selection, expansion and pagination, enables compression and validates the improvement with real numbers.
+      good: Suggests compression and pagination or removing unused fields.
+      weak: Blames the network or only suggests a faster server.
+    followups:
+      - How do you remove fields that some old clients might still use?
+      - What does compression cost on the server side?
+    common_errors:
+      - Compressing a bloated payload without addressing over-fetching.
+
+  - external_key: technical.backend_apis.realtime_updates_choice
+    competency_key: api_design
+    topic: Choosing a real-time delivery mechanism
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      An operations dashboard needs to show order status changes within a couple of seconds. How would you
+      choose between polling, server-sent events, WebSockets and webhooks for this?
+    expected_concepts:
+      - polling is simple but costly and laggy
+      - server-sent events for one-way streams over HTTP with automatic reconnect
+      - WebSockets for bidirectional, low-latency traffic
+      - webhooks are server-to-server, not for browsers
+      - connection limits, load balancers and proxies
+      - catching up on missed events after a reconnect
+    rubric:
+      excellent: Matches the mechanism to direction, scale and infrastructure, recommends a concrete option with reasons, and covers reconnects, missed events and connection scaling.
+      good: Chooses SSE or WebSockets sensibly and contrasts with polling.
+      weak: Picks WebSockets by default with no trade-off discussion, or suggests webhooks to a browser.
+    followups:
+      - How does a client catch up on events it missed while disconnected?
+      - What changes when you have fifty thousand open connections?
+    common_errors:
+      - Ignoring proxy and load balancer idle timeouts for long-lived connections.
+
+  - external_key: technical.backend_apis.read_after_write_replicas
+    competency_key: distributed_systems
+    topic: Read-your-writes consistency
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A client creates an order with POST, immediately calls GET on it, and sometimes gets a 404 because
+      reads go to a lagging replica. How would you fix this in the API layer and the data layer?
+    expected_concepts:
+      - read-your-writes consistency
+      - returning the full representation in the 201 response
+      - routing a client's reads to the primary shortly after a write
+      - consistency tokens such as a log position the replica must reach
+      - monitoring replica lag
+      - why client-side retries are not a real fix
+    rubric:
+      excellent: Explains the replication-lag cause, combines API fixes (return the created resource, consistency tokens) with data-layer routing, and discusses the cost of each option.
+      good: Returns the created object and routes some reads to the primary.
+      weak: Suggests adding sleeps or client retries as the fix.
+    followups:
+      - How would you implement a consistency token with PostgreSQL replicas?
+      - Which other endpoints might have the same problem without anyone noticing?
+    common_errors:
+      - Sending every read to the primary and losing the benefit of replicas.
+
+  - external_key: technical.backend_apis.lifecycle_state_api
+    competency_key: api_design
+    topic: APIs for resources with a strict lifecycle
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How do you design an API around a resource with a strict lifecycle — say a loan application that
+      moves from draft to submitted, under review, approved or rejected — so clients can't push it into an
+      invalid state?
+    expected_concepts:
+      - explicit transition endpoints or commands
+      - server-side state machine validation
+      - 409 with the current state when a transition is invalid
+      - optimistic concurrency on transitions
+      - exposing the actions currently allowed
+      - history of transitions and emitted events
+    rubric:
+      excellent: Models transitions as first-class operations backed by a server-side state machine, handles concurrent transitions, returns informative conflicts, and keeps an auditable history.
+      good: Validates transitions on the server and returns a clear error for invalid ones.
+      weak: Lets clients set the status field directly with no validation.
+    followups:
+      - Two reviewers approve and reject at the same moment — what happens?
+      - How would you add a new state later without breaking clients?
+    common_errors:
+      - Encoding the lifecycle rules only in the client.
+
+  - external_key: technical.backend_apis.intermittent_502_504
+    competency_key: debugging
+    topic: Intermittent gateway errors
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A request passes through a CDN, a load balancer, an API gateway and your service. Clients
+      occasionally see 502 and 504 errors, yet your service logs show those requests succeeding. How would
+      you investigate?
+    expected_concepts:
+      - correlating each hop's logs with a request id
+      - timeouts that are longer downstream than upstream
+      - keep-alive idle timeout mismatches causing reused dead connections
+      - the service finishing after an upstream layer has already given up
+      - aligning timeouts so they shrink toward the client edge
+      - metrics per hop
+    rubric:
+      excellent: Traces requests hop by hop, explains how mismatched request and keep-alive timeouts produce 502s and 504s while the service logs success, and proposes aligned timeouts with evidence to confirm.
+      good: Suspects timeout configuration between layers and checks each layer's logs.
+      weak: Concludes the errors are client-side because the service logs look fine.
+    followups:
+      - Why does a backend keep-alive shorter than the load balancer's cause 502s?
+      - How would you reproduce this reliably?
+    common_errors:
+      - Raising every timeout to a very large value.
+
+  - external_key: technical.backend_apis.api_design_review
+    competency_key: api_design
+    topic: Reviewing an API design
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      When you review someone else's API design before it ships, what do you look at first, and which
+      problems do you most often catch?
+    expected_concepts:
+      - consistent naming and resource modelling
+      - error model and status codes
+      - pagination and limits on collections
+      - retries, idempotency and concurrency
+      - "room to evolve: objects not bare arrays, open enums"
+      - authorization on every resource
+    rubric:
+      excellent: Has a prioritised, experience-backed checklist that weighs hard-to-reverse decisions (contracts, ids, evolution) above cosmetic ones, and gives real examples of issues they caught.
+      good: Covers several important areas with at least one real example.
+      weak: Focuses only on naming or style, or has no structured approach.
+    followups:
+      - Which mistakes are hardest to fix after launch?
+      - How do you give design feedback when the author disagrees?
+    common_errors:
+      - Spending review time on cosmetic naming while missing compatibility risks.
+
+  - external_key: technical.backend_apis.designing_for_extension
+    competency_key: api_design
+    topic: Designing payloads that can grow
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What design choices early in an API's life make it easier to add things later without breaking
+      clients? Give me examples from APIs you've built or used.
+    expected_concepts:
+      - return objects rather than top-level arrays
+      - enums documented as open-ended
+      - avoiding booleans that later need a third state
+      - envelopes or metadata for collections
+      - optional fields with sensible defaults
+      - telling clients to ignore unknown fields
+    rubric:
+      excellent: Gives several concrete design choices with real examples of what went wrong without them, and explains the client-side expectations that make additive change safe.
+      good: Names a few forward-compatible patterns with an example.
+      weak: Only mentions putting a version number in the URL.
+    followups:
+      - Can you think of a field you designed that you later regretted?
+      - How do you make sure client developers handle unknown enum values?
+    common_errors:
+      - Returning a bare JSON array that cannot take pagination metadata later.

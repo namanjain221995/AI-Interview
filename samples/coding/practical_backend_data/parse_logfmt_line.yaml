@@ -1,0 +1,217 @@
+version: 1
+slug: parse_logfmt_line
+title: Parse a logfmt Line
+difficulty: medium
+competency_keys: [problem_solving, code_quality, debugging]
+role_tags: [sre, backend, platform, devops]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Parse a logfmt Line
+
+  Your services write structured logs in the *logfmt* style, one event per line, for example
+  `level=warn msg="disk almost full" mount=/data pct=91 alert`. The log shipper needs a function that
+  turns one line into an ordered list of `[key, value]` pairs.
+
+  A line is a sequence of **tokens** separated by one or more spaces (leading and trailing spaces are
+  allowed and ignored). Every token starts with a **key**: one or more characters from `A-Z`, `a-z`,
+  `0-9`, `_`, `.` and `-`. What follows the key decides the value:
+
+  - **Bare key** (the key is followed by a space or the end of the line): the value is `"true"`.
+  - **`key=` followed by a space or the end of the line**: the value is the empty string.
+  - **`key=` followed by a character other than `"`**: an unquoted value made of every character up to
+    the next space or the end of the line. Inside an unquoted value, `=` and `"` are ordinary characters.
+  - **`key="`**: a quoted value that runs until the next unescaped `"`. Inside it, `\"` stands for a
+    `"` and `\\` stands for a `\`; every other character, including spaces and `=`, is taken literally.
+
+  **Repeated keys**: when a key appears again, its value is replaced by the newer one, but the pair keeps
+  the position where the key **first** appeared.
+
+  **Broken lines**: logs are sometimes cut off mid-write. If a quoted value is never closed, stop: ignore
+  that token and return the pairs parsed before it.
+
+  Return the pairs in order of first appearance; return an empty list for a line with no tokens. In the
+  examples, strings are written as string literals, so `\"` is a quote and `\\` is one backslash.
+
+  ### Example 1
+  ```
+  Input:  line = "level=info msg=\"user login\" user_id=42 cached"
+  Output: [["level", "info"], ["msg", "user login"], ["user_id", "42"], ["cached", "true"]]
+  ```
+
+  ### Example 2
+  ```
+  Input:  line = "status=200  retry= status=503 note=\"said \\\"ok\\\"\""
+  Output: [["status", "503"], ["retry", ""], ["note", "said \"ok\""]]
+  Explanation: status is replaced by 503 but stays first; retry has an empty value; the quoted note
+  contains two escaped quotes.
+  ```
+
+  ### Example 3
+  ```
+  Input:  line = "svc=api err=\"timeout after 30s"
+  Output: [["svc", "api"]]
+  Explanation: the quoted value of err is never closed, so err is dropped.
+  ```
+
+  ### Constraints
+  - `0 <= line.length <= 10^5`
+  - `line` contains printable ASCII characters only (no tabs or newlines).
+  - Apart from a possibly unclosed final quoted value, every line is well formed: each token starts with
+    a valid key followed by a space, `=` or the end of the line; a closing quote is always followed by a
+    space or the end of the line; and inside quotes a backslash is always followed by `"` or `\`, unless
+    the line is cut off right after the backslash.
+  - Keys are case-sensitive (`Level` and `level` are different keys).
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: parse_logfmt
+  params:
+    - {name: line, type: string}
+  return_type: "string[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def parse_logfmt(line: str) -> list[list[str]]:
+        pairs: list[list[str]] = []
+        position: dict[str, int] = {}
+        i, n = 0, len(line)
+        while i < n:
+            if line[i] == " ":
+                i += 1
+                continue
+            start = i
+            while i < n and line[i] != " " and line[i] != "=":
+                i += 1
+            key = line[start:i]
+            if i < n and line[i] == "=":
+                i += 1
+                if i < n and line[i] == '"':
+                    i += 1
+                    chars: list[str] = []
+                    closed = False
+                    while i < n:
+                        ch = line[i]
+                        if ch == "\\" and i + 1 < n:
+                            chars.append(line[i + 1])
+                            i += 2
+                        elif ch == '"':
+                            closed = True
+                            i += 1
+                            break
+                        else:
+                            chars.append(ch)
+                            i += 1
+                    if not closed:
+                        break  # cut-off line: drop this token and stop
+                    value = "".join(chars)
+                else:
+                    value_start = i
+                    while i < n and line[i] != " ":
+                        i += 1
+                    value = line[value_start:i]
+            else:
+                value = "true"
+            if key in position:
+                pairs[position[key]][1] = value
+            else:
+                position[key] = len(pairs)
+                pairs.append([key, value])
+        return pairs
+  javascript: |
+    function parseLogfmt(line) {
+      const pairs = [];
+      const position = new Map();
+      let i = 0;
+      const n = line.length;
+      while (i < n) {
+        if (line[i] === " ") {
+          i++;
+          continue;
+        }
+        const start = i;
+        while (i < n && line[i] !== " " && line[i] !== "=") i++;
+        const key = line.slice(start, i);
+        let value;
+        if (i < n && line[i] === "=") {
+          i++;
+          if (i < n && line[i] === '"') {
+            i++;
+            let text = "";
+            let closed = false;
+            while (i < n) {
+              const ch = line[i];
+              if (ch === "\\" && i + 1 < n) {
+                text += line[i + 1];
+                i += 2;
+              } else if (ch === '"') {
+                closed = true;
+                i++;
+                break;
+              } else {
+                text += ch;
+                i++;
+              }
+            }
+            if (!closed) break;
+            value = text;
+          } else {
+            const valueStart = i;
+            while (i < n && line[i] !== " ") i++;
+            value = line.slice(valueStart, i);
+          }
+        } else {
+          value = "true";
+        }
+        if (position.has(key)) {
+          pairs[position.get(key)][1] = value;
+        } else {
+          position.set(key, pairs.length);
+          pairs.push([key, value]);
+        }
+      }
+      return pairs;
+    }
+tests:
+  - {"id": "t1", "args": ["level=info msg=\"user login\" user_id=42 cached"], "expected": [["level", "info"], ["msg", "user login"], ["user_id", "42"], ["cached", "true"]], "description": "Example 1"}
+  - {"id": "t2", "args": ["status=200  retry= status=503 note=\"said \\\"ok\\\"\""], "expected": [["status", "503"], ["retry", ""], ["note", "said \"ok\""]], "description": "Example 2 - repeated key keeps first position, empty value, escaped quotes"}
+  - {"id": "t3", "args": ["svc=api err=\"timeout after 30s"], "expected": [["svc", "api"]], "description": "Example 3 - unterminated quote drops the last token"}
+  - {"id": "t4", "hidden": true, "args": [""], "expected": [], "description": "Empty line gives no pairs"}
+  - {"id": "t5", "hidden": true, "args": ["     "], "expected": [], "description": "Only spaces gives no pairs"}
+  - {"id": "t6", "hidden": true, "args": ["  http.status-code=500   q=a=b   etag=W/\"x1\"  "], "expected": [["http.status-code", "500"], ["q", "a=b"], ["etag", "W/\"x1\""]], "description": "Leading, trailing and repeated spaces; key with dot and dash; = and quotes inside unquoted values"}
+  - {"id": "t7", "hidden": true, "args": ["path=\"C:\\\\logs\\\\\" empty=\"\" eq=\"a=b c\" debug debug=false"], "expected": [["path", "C:\\logs\\"], ["empty", ""], ["eq", "a=b c"], ["debug", "false"]], "description": "Escaped backslashes before the closing quote, quoted empty value, quoted = and space, bare key later overwritten"}
+  - {"id": "t8", "hidden": true, "args": ["a=1 b=2 a=\"3"], "expected": [["a", "1"], ["b", "2"]], "description": "Repeated key inside the cut-off token must not overwrite the earlier value"}
+  - {"id": "t9", "hidden": true, "args": ["a=1 b=\"ends with \\\""], "expected": [["a", "1"]], "description": "Line cut off right after an escaped quote is still unterminated"}
+  - {"id": "t10", "hidden": true, "args": ["a=1 b=\"trailing\\"], "expected": [["a", "1"]], "description": "Line cut off right after a backslash"}
+  - {"id": "t11", "hidden": true, "args": ["Level=warn level=info LEVEL"], "expected": [["Level", "warn"], ["level", "info"], ["LEVEL", "true"]], "description": "Keys are case-sensitive - three distinct pairs"}
+  - {"id": "t12", "hidden": true, "args": ["k0=v0 flag1 q2=\"a b \\\"2\\\" c\\\\\" e3= k4=x=y\"4 k5=v5 flag6 q7=\"a b \\\"7\\\" c\\\\\" e8= k9=x=y\"9 k10=v10 flag4 q12=\"a b \\\"12\\\" c\\\\\" e13= k14=x=y\"14 k15=v15 flag2 q17=\"a b \\\"17\\\" c\\\\\" e18= k2=x=y\"19 k3=v20 flag0 q22=\"a b \\\"22\\\" c\\\\\" e23= k7=x=y\"24 k8=v25 flag5 q27=\"a b \\\"27\\\" c\\\\\" e28= k12=x=y\"29 k13=v30 flag3 q32=\"a b \\\"32\\\" c\\\\\" e33= k0=x=y\"34 k1=v35 flag1 q37=\"a b \\\"37\\\" c\\\\\" e38= k5=x=y\"39 k6=v40 flag6 q42=\"a b \\\"42\\\" c\\\\\" e43= k10=x=y\"44 k11=v45 flag4 q47=\"a b \\\"47\\\" c\\\\\" e48= k15=x=y\"49 k16=v50 flag2 q52=\"a b \\\"52\\\" c\\\\\" e53= k3=x=y\"54 k4=v55 flag0 q57=\"a b \\\"57\\\" c\\\\\" e58= k8=x=y\"59 k9=v60 flag5 q62=\"a b \\\"62\\\" c\\\\\" e63= k13=x=y\"64 k14=v65 flag3 q67=\"a b \\\"67\\\" c\\\\\" e68= k1=x=y\"69 k2=v70 flag1 q72=\"a b \\\"72\\\" c\\\\\" e73= k6=x=y\"74 k7=v75 flag6 q77=\"a b \\\"77\\\" c\\\\\" e78= k11=x=y\"79 k12=v80 flag4 q82=\"a b \\\"82\\\" c\\\\\" e83= k16=x=y\"84 k0=v85 flag2 q87=\"a b \\\"87\\\" c\\\\\" e88= k4=x=y\"89"], "expected": [["k0", "v85"], ["flag1", "true"], ["q2", "a b \"2\" c\\"], ["e3", ""], ["k4", "x=y\"89"], ["k5", "x=y\"39"], ["flag6", "true"], ["q7", "a b \"7\" c\\"], ["e8", ""], ["k9", "v60"], ["k10", "x=y\"44"], ["flag4", "true"], ["q12", "a b \"12\" c\\"], ["e13", ""], ["k14", "v65"], ["k15", "x=y\"49"], ["flag2", "true"], ["q17", "a b \"17\" c\\"], ["e18", ""], ["k2", "v70"], ["k3", "x=y\"54"], ["flag0", "true"], ["q22", "a b \"22\" c\\"], ["e23", ""], ["k7", "v75"], ["k8", "x=y\"59"], ["flag5", "true"], ["q27", "a b \"27\" c\\"], ["e28", ""], ["k12", "v80"], ["k13", "x=y\"64"], ["flag3", "true"], ["q32", "a b \"32\" c\\"], ["e33", ""], ["k1", "x=y\"69"], ["q37", "a b \"37\" c\\"], ["e38", ""], ["k6", "x=y\"74"], ["q42", "a b \"42\" c\\"], ["e43", ""], ["k11", "x=y\"79"], ["q47", "a b \"47\" c\\"], ["e48", ""], ["k16", "x=y\"84"], ["q52", "a b \"52\" c\\"], ["e53", ""], ["q57", "a b \"57\" c\\"], ["e58", ""], ["q62", "a b \"62\" c\\"], ["e63", ""], ["q67", "a b \"67\" c\\"], ["e68", ""], ["q72", "a b \"72\" c\\"], ["e73", ""], ["q77", "a b \"77\" c\\"], ["e78", ""], ["q82", "a b \"82\" c\\"], ["e83", ""], ["q87", "a b \"87\" c\\"], ["e88", ""]], "description": "Stress - 90 tokens with many repeated keys, quoted escapes and empty values"}
+expected_concepts:
+  - single-pass tokenizer with an index instead of splitting on spaces
+  - quoted values with backslash escapes
+  - distinguishing bare keys, empty values, unquoted and quoted values
+  - hash map from key to its first position for in-place overwrites
+  - graceful handling of a truncated final token
+optimal_complexity: {time: O(n), space: O(n)}
+rubric:
+  excellent: Writes a one-pass tokenizer that handles all four value forms, escapes inside quotes, multiple spaces, repeated keys kept at their first position and a cut-off quoted value, and explains why splitting on spaces or on = fails.
+  good: Correct tokenizer for the common forms that needs a nudge on one rule such as repeated-key ordering, empty values or the backslash at the end of a cut-off line.
+  weak: Splits the line on spaces or on =, so quoted values with spaces or values containing = break, or appends repeated keys as new pairs.
+  criteria:
+    correctness: All tests pass, including quoted spaces, escapes, repeated keys and truncated lines.
+    efficiency: Linear in the line length with no repeated rescans or quadratic list searches for keys.
+    code_quality: Clear separation between reading a key and reading each value form; readable escape handling.
+    edge_cases: Empty or all-space line, bare keys, key= at the end, = and quotes inside unquoted values, a line cut off after a backslash.
+    communication: States the grammar back before coding and walks through Example 2 including the escapes.
+hints:
+  - Splitting on spaces breaks quoted values that contain spaces. Walk through the line with an index and decide what to do based on the character you are looking at.
+  - After reading a key, look at the next character. A space or the end means a bare key, an equals sign means a value follows, and the character after the equals sign tells you whether that value is empty, unquoted or quoted.
+  - Keep a map from key to its index in the result list so a repeated key updates the existing pair. For a quoted value, collect characters until an unescaped quote, replacing a backslash plus the next character by that character; if you reach the end first, stop and return what you have.
+followups:
+  - How would you emit an error with the column of the problem instead of silently stopping?
+  - How would you format pairs back into a logfmt line so that parsing the output gives the same pairs?
+  - What would you change to support \n and \t escapes inside quoted values?
+  - How would you parse a 2 GB log file of these lines with bounded memory?
+common_errors:
+  - Splitting the line on spaces, which breaks quoted values that contain spaces.
+  - Splitting each token on every = instead of only the first one.
+  - Appending a repeated key as a new pair or moving it to the position of its last occurrence.
+  - Treating an escaped quote as the closing quote.
+  - Keeping the half-parsed token when the line is cut off inside quotes.

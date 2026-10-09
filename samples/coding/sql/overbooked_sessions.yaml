@@ -1,0 +1,262 @@
+version: 1
+slug: overbooked_sessions
+title: "Overbooked Workshop Sessions"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [backend, business_analyst, project_manager]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Overbooked Workshop Sessions
+
+  The internal academy runs hands-on workshops with a fixed number of lab seats. A bug in the
+  booking form let people confirm seats after a session was already full, so the coordinators need
+  a report of sessions that are **overbooked**.
+
+  Table `sessions`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | title | VARCHAR(80) | unique |
+  | capacity | INTEGER | number of lab seats, `>= 0` |
+
+  Table `registrations`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | session_id | INTEGER | references `sessions.id` |
+  | status | VARCHAR(12) | `'confirmed'`, `'waitlisted'` or `'cancelled'` |
+
+  Only `'confirmed'` registrations take a seat. A session is overbooked when its number of
+  confirmed registrations is **greater than** its capacity.
+
+  For every overbooked session return `title`, `capacity`, `confirmed` (the number of confirmed
+  registrations) and `overflow` (`confirmed - capacity`). Order by `overflow` descending, then by
+  `title` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  sessions
+  +----+-----------------+----------+
+  | id | title           | capacity |
+  +----+-----------------+----------+
+  | 1  | Docker Basics   | 2        |
+  | 2  | Kubernetes Lab  | 3        |
+  | 3  | Terraform Intro | 1        |
+  | 4  | Git Workflows   | 2        |
+  | 5  | Linux Shell     | 1        |
+  +----+-----------------+----------+
+
+  registrations
+  +----+------------+------------+
+  | id | session_id | status     |
+  +----+------------+------------+
+  | 1  | 1          | confirmed  |
+  | 2  | 1          | confirmed  |
+  | 3  | 1          | confirmed  |
+  | 4  | 1          | cancelled  |
+  | 5  | 2          | confirmed  |
+  | 6  | 2          | confirmed  |
+  | 7  | 2          | confirmed  |
+  | 8  | 2          | waitlisted |
+  | 9  | 2          | waitlisted |
+  | 10 | 3          | confirmed  |
+  | 11 | 3          | confirmed  |
+  | 12 | 3          | confirmed  |
+  | 13 | 4          | confirmed  |
+  | 14 | 5          | confirmed  |
+  | 15 | 5          | confirmed  |
+  +----+------------+------------+
+
+  Output
+  +-----------------+----------+-----------+----------+
+  | title           | capacity | confirmed | overflow |
+  +-----------------+----------+-----------+----------+
+  | Terraform Intro | 1        | 3         | 2        |
+  | Docker Basics   | 2        | 3         | 1        |
+  | Linux Shell     | 1        | 2         | 1        |
+  +-----------------+----------+-----------+----------+
+  ```
+  Kubernetes Lab has 3 confirmed seats for 3 places (the waitlisted rows do not count) and Docker
+  Basics' cancelled registration is ignored. Docker Basics and Linux Shell tie at an overflow of 1,
+  so they are ordered by title.
+
+  ### Example 2
+  ```
+  sessions
+  +----+----------------+----------+
+  | id | title          | capacity |
+  +----+----------------+----------+
+  | 1  | Python Testing | 10       |
+  | 2  | SQL Tuning     | 5        |
+  +----+----------------+----------+
+
+  registrations
+  +----+------------+--------+
+  | id | session_id | status |
+  +----+------------+--------+
+  +----+------------+--------+
+
+  Output: no rows
+  ```
+
+  ### Constraints
+  - `0 <= rows in sessions <= 10^4`, `0 <= rows in registrations <= 10^6`
+  - Titles are unique.
+  - The output order is part of the answer.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Sessions with more confirmed registrations than seats, ordered by overflow DESC, title.
+    SELECT s.title, s.capacity, 0 AS confirmed, 0 AS overflow
+    FROM sessions s
+    ORDER BY overflow DESC, s.title;
+reference_solutions:
+  sql: |
+    SELECT s.title,
+           s.capacity,
+           COUNT(*) AS confirmed,
+           COUNT(*) - s.capacity AS overflow
+    FROM sessions s
+    JOIN registrations r ON r.session_id = s.id
+    WHERE r.status = 'confirmed'
+    GROUP BY s.id, s.title, s.capacity
+    HAVING COUNT(*) > s.capacity
+    ORDER BY overflow DESC, s.title;
+sql_setup: |
+  CREATE TABLE sessions (
+    id INTEGER PRIMARY KEY,
+    title VARCHAR(80) NOT NULL UNIQUE,
+    capacity INTEGER NOT NULL
+  );
+  CREATE TABLE registrations (
+    id INTEGER PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES sessions (id),
+    status VARCHAR(12) NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - two-way tie on overflow broken by title; cancelled and waitlisted ignored"
+    setup_sql: |
+      INSERT INTO sessions (id, title, capacity) VALUES
+        (1, 'Docker Basics', 2), (2, 'Kubernetes Lab', 3), (3, 'Terraform Intro', 1), (4, 'Git Workflows', 2),
+        (5, 'Linux Shell', 1);
+      INSERT INTO registrations (id, session_id, status) VALUES
+        (1, 1, 'confirmed'), (2, 1, 'confirmed'), (3, 1, 'confirmed'), (4, 1, 'cancelled'),
+        (5, 2, 'confirmed'), (6, 2, 'confirmed'), (7, 2, 'confirmed'), (8, 2, 'waitlisted'),
+        (9, 2, 'waitlisted'), (10, 3, 'confirmed'), (11, 3, 'confirmed'), (12, 3, 'confirmed'),
+        (13, 4, 'confirmed'), (14, 5, 'confirmed'), (15, 5, 'confirmed');
+    expected_rows: [["Terraform Intro", 1, 3, 2], ["Docker Basics", 2, 3, 1], ["Linux Shell", 1, 2, 1]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - sessions without any registrations"
+    setup_sql: |
+      INSERT INTO sessions (id, title, capacity) VALUES
+        (1, 'Python Testing', 10), (2, 'SQL Tuning', 5);
+    expected_rows: []
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty tables"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Exactly at capacity is not overbooked"
+    setup_sql: |
+      INSERT INTO sessions (id, title, capacity) VALUES
+        (1, 'Ansible Basics', 3);
+      INSERT INTO registrations (id, session_id, status) VALUES
+        (1, 1, 'confirmed'), (2, 1, 'confirmed'), (3, 1, 'confirmed');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Capacity 0 with confirmed seats - overflow equals the confirmed count"
+    setup_sql: |
+      INSERT INTO sessions (id, title, capacity) VALUES
+        (1, 'Canary Releases', 0), (2, 'Blue Green Deploys', 0);
+      INSERT INTO registrations (id, session_id, status) VALUES
+        (1, 1, 'confirmed'), (2, 1, 'confirmed'), (3, 2, 'waitlisted'), (4, 2, 'waitlisted'),
+        (5, 2, 'waitlisted'), (6, 2, 'waitlisted');
+    expected_rows: [["Canary Releases", 0, 2, 2]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Many cancelled and waitlisted rows beyond capacity do not count"
+    setup_sql: |
+      INSERT INTO sessions (id, title, capacity) VALUES
+        (1, 'Incident Drills', 1);
+      INSERT INTO registrations (id, session_id, status) VALUES
+        (1, 1, 'confirmed'), (2, 1, 'cancelled'), (3, 1, 'cancelled'), (4, 1, 'cancelled'),
+        (5, 1, 'cancelled'), (6, 1, 'cancelled'), (7, 1, 'waitlisted'), (8, 1, 'waitlisted'),
+        (9, 1, 'waitlisted'), (10, 1, 'waitlisted'), (11, 1, 'waitlisted'), (12, 1, 'waitlisted');
+    expected_rows: []
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Three-way tie on overflow ordered by title, plus a larger overflow first"
+    setup_sql: |
+      INSERT INTO sessions (id, title, capacity) VALUES
+        (1, 'Zero Trust', 1), (2, 'Alerting', 1), (3, 'Message Queues', 1), (4, 'Observability', 2);
+      INSERT INTO registrations (id, session_id, status) VALUES
+        (1, 1, 'confirmed'), (2, 1, 'confirmed'), (3, 2, 'confirmed'), (4, 2, 'confirmed'),
+        (5, 3, 'confirmed'), (6, 3, 'confirmed'), (7, 4, 'confirmed'), (8, 4, 'confirmed'),
+        (9, 4, 'confirmed'), (10, 4, 'confirmed'), (11, 4, 'confirmed'), (12, 4, 'confirmed');
+    expected_rows:
+      - ["Observability", 2, 6, 4]
+      - ["Alerting", 1, 2, 1]
+      - ["Message Queues", 1, 2, 1]
+      - ["Zero Trust", 1, 2, 1]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Stress - 40 registrations across four sessions with mixed statuses"
+    setup_sql: |
+      INSERT INTO sessions (id, title, capacity) VALUES
+        (1, 'Rust Primer', 10), (2, 'Go Concurrency', 8), (3, 'Helm Charts', 12), (4, 'Vault Secrets', 5);
+      INSERT INTO registrations (id, session_id, status) VALUES
+        (1, 1, 'confirmed'), (2, 1, 'confirmed'), (3, 1, 'confirmed'), (4, 1, 'confirmed'),
+        (5, 1, 'confirmed'), (6, 1, 'confirmed'), (7, 1, 'confirmed'), (8, 1, 'confirmed'),
+        (9, 1, 'confirmed'), (10, 1, 'confirmed'), (11, 1, 'confirmed'), (12, 2, 'confirmed'),
+        (13, 2, 'confirmed'), (14, 2, 'confirmed'), (15, 2, 'confirmed'), (16, 2, 'confirmed'),
+        (17, 2, 'confirmed'), (18, 2, 'confirmed'), (19, 2, 'confirmed'), (20, 3, 'cancelled'),
+        (21, 3, 'cancelled'), (22, 3, 'cancelled'), (23, 3, 'confirmed'), (24, 3, 'confirmed'),
+        (25, 3, 'confirmed'), (26, 3, 'confirmed'), (27, 3, 'confirmed'), (28, 3, 'confirmed'),
+        (29, 3, 'confirmed'), (30, 4, 'confirmed'), (31, 4, 'confirmed'), (32, 4, 'confirmed'),
+        (33, 4, 'confirmed'), (34, 4, 'confirmed'), (35, 4, 'confirmed'), (36, 4, 'confirmed'),
+        (37, 4, 'confirmed'), (38, 4, 'confirmed'), (39, 4, 'waitlisted'), (40, 4, 'waitlisted');
+    expected_rows: [["Vault Secrets", 5, 9, 4], ["Rust Primer", 10, 11, 1]]
+expected_concepts:
+  - "JOIN plus GROUP BY to count child rows"
+  - "filtering rows in WHERE before counting"
+  - "HAVING to compare an aggregate with a column"
+  - "multi-key ORDER BY with a descending key and a tie-breaker"
+optimal_complexity: {time: "O(r + s log s) with an index on registrations(session_id)", space: "O(s)"}
+rubric:
+  excellent: "Joins sessions to confirmed registrations, groups by the session, keeps groups whose count exceeds capacity with HAVING, computes overflow, orders by overflow DESC then title and mentions an index on (session_id, status)."
+  good: "Correct after a hint about counting only confirmed rows or about tie-breaking."
+  weak: "Counts all registrations regardless of status, uses >= capacity, filters an aggregate in WHERE or omits the tie-breaker."
+  criteria:
+    correctness: "All tests pass, including exact-capacity sessions, capacity zero and ties on overflow."
+    efficiency: "One join and one grouping pass; no correlated subquery per session required."
+    code_quality: "Groups by the session key, uses clear aliases and output names that match the contract."
+    edge_cases: "Empty tables, sessions with no registrations, non-confirmed rows beyond capacity."
+    communication: "Explains where the status filter belongs and why HAVING is needed for the aggregate comparison."
+hints:
+  - "First work out, for each session, how many seats are actually taken, remembering that not every registration takes a seat."
+  - "Join the sessions to their registrations, restrict to confirmed rows before grouping, and then compare the per-session count with that session's capacity; a condition on an aggregate cannot go in WHERE."
+  - "GROUP BY the session id, title and capacity with WHERE status = 'confirmed', keep groups with HAVING COUNT(*) > capacity, select COUNT(*) - capacity as overflow and ORDER BY overflow DESC, title."
+followups:
+  - "How would you list sessions with free seats, including sessions without any registration?"
+  - "How would you prevent overbooking at write time under concurrent requests?"
+  - "Which index makes this report cheap on millions of registrations?"
+common_errors:
+  - "Counting every registration instead of only confirmed ones."
+  - "Using >= so sessions that are exactly full are reported."
+  - "Putting COUNT(*) > capacity in WHERE, which is invalid."
+  - "Ordering only by overflow, so ties come back in an arbitrary order."

@@ -1,0 +1,345 @@
+# promtool unit tests for rules/alerts.yml
+#   make prom-check
+#   docker run --rm --entrypoint promtool -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
+#     prom/prometheus:v3.2.1 test rules /etc/prometheus/tests/alerts_test.yml
+rule_files:
+  - ../rules/alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # --------------------------------------------------------------- availability
+  - name: api down fires after one minute
+    interval: 1m
+    input_series:
+      - series: 'up{job="interview-api", instance="127.0.0.1:8200", service="api"}'
+        values: "1 1 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: InterviewApiDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: InterviewApiDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: api
+              job: interview-api
+              instance: 127.0.0.1:8200
+              service: api
+            exp_annotations:
+              summary: Interview API is down
+              description: 127.0.0.1:8200 has not answered /metrics for 1 minute. Candidates cannot start or resume interviews.
+
+  - name: sandbox down fires after two minutes, tts stays quiet while up
+    interval: 1m
+    input_series:
+      - series: 'up{job="interview-sandbox", instance="127.0.0.1:8220", service="sandbox"}'
+        values: "0 0 0 0"
+      - series: 'up{job="interview-tts", instance="127.0.0.1:8210", service="tts"}'
+        values: "1 1 1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: InterviewSandboxDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: InterviewSandboxDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: sandbox
+              job: interview-sandbox
+              instance: 127.0.0.1:8220
+              service: sandbox
+            exp_annotations:
+              summary: Code execution sandbox is down
+              description: 127.0.0.1:8220 is unreachable. Coding rounds cannot run candidate code.
+      - eval_time: 3m
+        alertname: InterviewTtsDown
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- latency SLOs
+  - name: turn latency p95 above 3 s with traffic fires after 5 minutes
+    interval: 1m
+    input_series:
+      - series: 'interview_turn_latency_seconds_bucket{job="interview-api", instance="a", le="1.0"}'
+        values: "0+0x20"
+      - series: 'interview_turn_latency_seconds_bucket{job="interview-api", instance="a", le="3.0"}'
+        values: "0+0x20"
+      - series: 'interview_turn_latency_seconds_bucket{job="interview-api", instance="a", le="4.0"}'
+        values: "0+10x20"
+      - series: 'interview_turn_latency_seconds_bucket{job="interview-api", instance="a", le="+Inf"}'
+        values: "0+10x20"
+      - series: 'interview_turn_latency_seconds_count{job="interview-api", instance="a"}'
+        values: "0+10x20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: TurnLatencyP95High
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: TurnLatencyP95High
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: realtime
+            exp_annotations:
+              summary: Interviewer response latency p95 above 3 s
+              description: p95 from candidate end-of-turn to first interviewer audio is 3.95 s (target < 3 s).
+
+  - name: healthy turn latency does not fire
+    interval: 1m
+    input_series:
+      - series: 'interview_turn_latency_seconds_bucket{job="interview-api", le="0.5"}'
+        values: "0+0x20"
+      - series: 'interview_turn_latency_seconds_bucket{job="interview-api", le="1.0"}'
+        values: "0+10x20"
+      - series: 'interview_turn_latency_seconds_bucket{job="interview-api", le="+Inf"}'
+        values: "0+10x20"
+      - series: 'interview_turn_latency_seconds_count{job="interview-api"}'
+        values: "0+10x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TurnLatencyP95High
+        exp_alerts: []
+
+  - name: a few slow turns on an idle system do not fire
+    interval: 1m
+    input_series:
+      - series: 'interview_turn_latency_seconds_bucket{job="interview-api", le="3.0"}'
+        values: "0+0x20"
+      - series: 'interview_turn_latency_seconds_bucket{job="interview-api", le="4.0"}'
+        values: "0+0.1x20"
+      - series: 'interview_turn_latency_seconds_bucket{job="interview-api", le="+Inf"}'
+        values: "0+0.1x20"
+      - series: 'interview_turn_latency_seconds_count{job="interview-api"}'
+        values: "0+0.1x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TurnLatencyP95High
+        exp_alerts: []
+
+  - name: time to first audio p95 above 2 s fires
+    interval: 1m
+    input_series:
+      - series: 'interview_time_to_first_audio_seconds_bucket{job="interview-api", le="2.0"}'
+        values: "0+0x20"
+      - series: 'interview_time_to_first_audio_seconds_bucket{job="interview-api", le="2.5"}'
+        values: "0+12x20"
+      - series: 'interview_time_to_first_audio_seconds_bucket{job="interview-api", le="+Inf"}'
+        values: "0+12x20"
+      - series: 'interview_time_to_first_audio_seconds_count{job="interview-api"}'
+        values: "0+12x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TimeToFirstAudioP95High
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: realtime
+            exp_annotations:
+              summary: Time to first interviewer audio p95 above 2 s
+              description: p95 from utterance start to the first TTS chunk sent is 2.48 s (target < 2 s).
+
+  # ---------------------------------------------------------------------- AI
+  - name: llm failure ratio above 5 percent fires per endpoint
+    interval: 1m
+    input_series:
+      - series: 'interview_llm_request_seconds_count{job="interview-api", endpoint="main", task="turn_decision", status="ok"}'
+        values: "0+90x20"
+      - series: 'interview_llm_request_seconds_count{job="interview-api", endpoint="main", task="turn_decision", status="timeout"}'
+        values: "0+10x20"
+      - series: 'interview_llm_request_seconds_count{job="interview-api", endpoint="vision", task="frame_analysis", status="ok"}'
+        values: "0+50x20"
+      - series: 'interview_llm_request_seconds_count{job="interview-api", endpoint="vision", task="frame_analysis", status="cancelled"}'
+        values: "0+50x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LlmFailureRatioHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: ai
+              endpoint: main
+            exp_annotations:
+              summary: LLM failure ratio above 5% on endpoint main
+              description: 10% of LLM requests to main failed (error, timeout or open circuit) over 5 minutes.
+
+  - name: whisper failures above 3 per minute fire, occasional embedding failures do not
+    interval: 1m
+    input_series:
+      - series: 'interview_model_call_failures_total{job="interview-api", endpoint="whisper", task="stt_final", reason="timeout"}'
+        values: "0+5x30"
+      - series: 'interview_model_call_failures_total{job="interview-worker", endpoint="embedding", task="question_bank_embed", reason="error"}'
+        values: "0+1x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ModelEndpointFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: ai
+              endpoint: whisper
+              reason: timeout
+            exp_annotations:
+              summary: whisper calls failing (timeout)
+              description: 5.0 failed whisper calls per minute (timeout) for 10 minutes.
+
+  - name: main llm endpoint unreachable is critical
+    interval: 1m
+    input_series:
+      - series: 'up{job="vllm", endpoint="main", instance="127.0.0.1:8000"}'
+        values: "0 0 0 0"
+      - series: 'up{job="vllm", endpoint="vision", instance="127.0.0.1:8002"}'
+        values: "1 1 1 1"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: MainLlmEndpointDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: ai
+              job: vllm
+              endpoint: main
+              instance: 127.0.0.1:8000
+            exp_annotations:
+              summary: Main LLM endpoint is unreachable
+              description: vLLM at 127.0.0.1:8000 has not answered /metrics for 2 minutes. Interview turns run on the 8B fallback or fail.
+      - eval_time: 3m
+        alertname: AuxModelEndpointDown
+        exp_alerts: []
+
+  - name: vllm queueing fires after five minutes
+    interval: 1m
+    input_series:
+      - series: 'vllm:num_requests_waiting{job="vllm", endpoint="main", instance="127.0.0.1:8000", engine="0", model_name="m"}'
+        values: "6x10"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: LlmRequestsQueueing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: ai
+              endpoint: main
+            exp_annotations:
+              summary: Requests queueing on vLLM endpoint main
+              description: 6 requests have been waiting for 5 minutes; the shared model server is saturated and turn latency will rise.
+
+  # ----------------------------------------------------------------- workers
+  - name: growing queue fires, dead-letter stream is excluded from growth alerts
+    interval: 1m
+    input_series:
+      - series: 'interview_queue_depth{job="interview-worker", queue="jobs:resume.process"}'
+        values: "0+3x40"
+      - series: 'interview_queue_depth{job="interview-worker", queue="jobs:dead"}'
+        values: "0+3x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: QueueDepthGrowing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: QueueDepthGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: worker
+              queue: jobs:resume.process
+            exp_annotations:
+              summary: Job queue jobs:resume.process keeps growing
+              description: "90 pending messages and still rising after 15 minutes: workers are not keeping up."
+      - eval_time: 30m
+        alertname: QueueBacklogHigh
+        exp_alerts: []
+
+  - name: dead letters from the worker counter or the redis stream fire
+    interval: 1m
+    input_series:
+      - series: 'interview_jobs_total{job="interview-worker", type="report.generate", status="dead"}'
+        values: "0 0 1 1 1 1"
+      - series: 'redis_stream_length{job="redis", db="db0", stream="jobs:dead"}'
+        values: "0 0 0 1 1 1"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DeadLetterJobs
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: worker
+              type: report.generate
+            exp_annotations:
+              summary: Jobs moved to the dead-letter stream (report.generate)
+              description: Jobs exhausted their retries in the last 30 minutes. Inspect jobs:dead (XRANGE) and the background_jobs table.
+          - exp_labels:
+              severity: warning
+              component: worker
+              type: unknown
+            exp_annotations:
+              summary: Jobs moved to the dead-letter stream (unknown)
+              description: Jobs exhausted their retries in the last 30 minutes. Inspect jobs:dead (XRANGE) and the background_jobs table.
+
+  # ------------------------------------------------------------------ coding
+  - name: sandbox errors fire per language, candidate test failures do not
+    interval: 1m
+    input_series:
+      - series: 'interview_coding_executions_total{job="interview-api", language="python", status="sandbox_error"}'
+        values: "0+5x20"
+      - series: 'interview_coding_executions_total{job="interview-api", language="java", status="error"}'
+        values: "0+5x20"
+      - series: 'interview_coding_executions_total{job="interview-api", language="python", status="passed"}'
+        values: "0+5x20"
+      - series: 'interview_coding_executions_total{job="interview-api", language="java", status="failed"}'
+        values: "0+5x20"
+      - series: 'interview_coding_executions_total{job="interview-api", language="java", status="compile_error"}'
+        values: "0+5x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: CodingExecutionErrorsHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: sandbox
+              language: python
+            exp_annotations:
+              summary: Sandbox errors for python executions
+              description: 50% of python runs ended in sandbox_error/rejected (not candidate failures). Check runtime images (make sandbox-images) and sandbox logs.
+
+  # ------------------------------------------------------------------ errors
+  - name: api 5xx ratio above 5 percent fires
+    interval: 1m
+    input_series:
+      - series: 'interview_http_requests_total{job="interview-api", method="GET", route="/api/v1/jobs", status="500"}'
+        values: "0+10x20"
+      - series: 'interview_http_requests_total{job="interview-api", method="GET", route="/api/v1/jobs", status="200"}'
+        values: "0+90x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HttpServerErrorRatioHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: api
+            exp_annotations:
+              summary: API 5xx ratio above 5%
+              description: 10% of API requests returned 5xx over 5 minutes.
+
+  # ---------------------------------------------------------------- security
+  - name: refresh token reuse fires immediately
+    interval: 1m
+    input_series:
+      - series: 'interview_auth_events_total{job="interview-api", event="refresh_reuse_detected"}'
+        values: "0 0 1 1"
+      - series: 'interview_auth_events_total{job="interview-api", event="login_failed"}'
+        values: "0+20x3"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RefreshTokenReuseDetected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: auth
+            exp_annotations:
+              summary: Refresh token reuse detected
+              description: A rotated refresh token was presented again (possible token theft). The affected auth session was revoked; review the audit log.
+      - eval_time: 3m
+        alertname: AccountLockoutSpike
+        exp_alerts: []

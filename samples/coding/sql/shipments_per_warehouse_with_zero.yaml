@@ -1,0 +1,236 @@
+version: 1
+slug: shipments_per_warehouse_with_zero
+title: "Shipments Per Warehouse, Idle Sites Included"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [backend, data_analyst, business_analyst]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Shipments Per Warehouse, Idle Sites Included
+
+  The logistics operations dashboard has a tile that shows how many shipments have left each
+  warehouse. A site that has not shipped anything yet (a newly opened warehouse, or one paused for a
+  stock count) must still be listed with a count of `0`; otherwise the team cannot tell an idle site
+  from one that is missing from the report.
+
+  Table `warehouses`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | code | VARCHAR(10) | unique site code made of upper-case letters and digits |
+
+  Table `shipments`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | warehouse_id | INTEGER | references `warehouses.id`; never NULL |
+  | shipped_at | VARCHAR(19) | `'YYYY-MM-DD HH:MM:SS'`; every recorded shipment counts, whatever its date |
+
+  Return one row per warehouse with the columns `code` and `shipment_count` (the number of shipments
+  that left that warehouse, `0` when there are none). Order the result by `shipment_count` descending,
+  then by `code` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  warehouses
+  +----+------+
+  | id | code |
+  +----+------+
+  | 1  | LIS  |
+  | 2  | AMS  |
+  | 3  | BER  |
+  | 4  | OSL  |
+  +----+------+
+
+  shipments
+  +----+--------------+---------------------+
+  | id | warehouse_id | shipped_at          |
+  +----+--------------+---------------------+
+  | 1  | 1            | 2026-02-02 08:15:00 |
+  | 2  | 2            | 2026-02-02 09:40:00 |
+  | 3  | 1            | 2026-02-03 11:05:00 |
+  | 4  | 3            | 2026-02-03 14:30:00 |
+  | 5  | 2            | 2026-02-04 07:55:00 |
+  +----+--------------+---------------------+
+
+  Output
+  +------+----------------+
+  | code | shipment_count |
+  +------+----------------+
+  | AMS  | 2              |
+  | LIS  | 2              |
+  | BER  | 1              |
+  | OSL  | 0              |
+  +------+----------------+
+  AMS and LIS tie on 2 shipments and are ordered by code. OSL shipped nothing and
+  is still listed with 0.
+  ```
+
+  ### Example 2
+  ```
+  warehouses
+  +----+------+
+  | id | code |
+  +----+------+
+  | 1  | DUB  |
+  | 2  | CPH  |
+  +----+------+
+
+  shipments
+  +----+--------------+------------+
+  | id | warehouse_id | shipped_at |
+  +----+--------------+------------+
+  +----+--------------+------------+
+
+  Output
+  +------+----------------+
+  | code | shipment_count |
+  +------+----------------+
+  | CPH  | 0              |
+  | DUB  | 0              |
+  +------+----------------+
+  ```
+
+  ### Constraints
+  - At most `10^4` warehouses and `10^6` shipments; either table may be empty.
+  - Every `shipments.warehouse_id` matches an existing warehouse.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return code and shipment_count for every warehouse (0 when idle),
+    -- ordered by shipment_count descending, then code.
+    SELECT w.code, COUNT(*) AS shipment_count
+    FROM warehouses w
+    JOIN shipments s ON s.warehouse_id = w.id
+    GROUP BY w.code
+    ORDER BY shipment_count DESC, w.code;
+reference_solutions:
+  sql: |
+    SELECT w.code, COUNT(s.id) AS shipment_count
+    FROM warehouses w
+    LEFT JOIN shipments s ON s.warehouse_id = w.id
+    GROUP BY w.id, w.code
+    ORDER BY shipment_count DESC, w.code;
+sql_setup: |
+  CREATE TABLE warehouses (
+    id INTEGER PRIMARY KEY,
+    code VARCHAR(10) NOT NULL UNIQUE
+  );
+  CREATE TABLE shipments (
+    id INTEGER PRIMARY KEY,
+    warehouse_id INTEGER NOT NULL REFERENCES warehouses (id),
+    shipped_at VARCHAR(19) NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - tie at 2 broken by code, idle OSL listed with 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO warehouses (id, code) VALUES (1, 'LIS'), (2, 'AMS'), (3, 'BER'), (4, 'OSL');
+      INSERT INTO shipments (id, warehouse_id, shipped_at) VALUES
+        (1, 1, '2026-02-02 08:15:00'), (2, 2, '2026-02-02 09:40:00'), (3, 1, '2026-02-03 11:05:00'),
+        (4, 3, '2026-02-03 14:30:00'), (5, 2, '2026-02-04 07:55:00');
+    expected_rows: [["AMS", 2], ["LIS", 2], ["BER", 1], ["OSL", 0]]
+  - id: t2
+    description: "Example 2 - no shipments at all, every site listed with 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO warehouses (id, code) VALUES (1, 'DUB'), (2, 'CPH');
+    expected_rows: [["CPH", 0], ["DUB", 0]]
+  - id: t3
+    hidden: true
+    description: "Empty tables - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "COUNT(*) trap - the idle site must show 0, not 1, and sort last"
+    ordered: true
+    setup_sql: |
+      INSERT INTO warehouses (id, code) VALUES (1, 'MAD'), (2, 'ROM'), (3, 'VIE');
+      INSERT INTO shipments (id, warehouse_id, shipped_at) VALUES
+        (1, 2, '2026-01-05 10:00:00'), (2, 3, '2026-01-05 11:00:00'), (3, 3, '2026-01-06 09:00:00'),
+        (4, 3, '2026-01-07 16:20:00');
+    expected_rows: [["VIE", 3], ["ROM", 1], ["MAD", 0]]
+  - id: t5
+    hidden: true
+    description: "All sites busy with distinct counts - ordered by count, not by id or code"
+    ordered: true
+    setup_sql: |
+      INSERT INTO warehouses (id, code) VALUES (1, 'ATH'), (2, 'BRU'), (3, 'GVA'), (4, 'ZRH');
+      INSERT INTO shipments (id, warehouse_id, shipped_at) VALUES
+        (1, 1, '2026-03-01 08:00:00'), (2, 2, '2026-03-01 08:05:00'), (3, 2, '2026-03-01 08:10:00'),
+        (4, 2, '2026-03-01 08:15:00'), (5, 2, '2026-03-01 08:20:00'), (6, 3, '2026-03-01 09:00:00'),
+        (7, 3, '2026-03-01 09:05:00'), (8, 4, '2026-03-01 10:00:00'), (9, 4, '2026-03-01 10:05:00'),
+        (10, 4, '2026-03-01 10:10:00');
+    expected_rows: [["BRU", 4], ["ZRH", 3], ["GVA", 2], ["ATH", 1]]
+  - id: t6
+    hidden: true
+    description: "All counts tie - ordered by code as text (WH1, WH10, WH2, WH9)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO warehouses (id, code) VALUES (1, 'WH9'), (2, 'WH10'), (3, 'WH2'), (4, 'WH1');
+      INSERT INTO shipments (id, warehouse_id, shipped_at) VALUES
+        (1, 1, '2026-02-01 07:00:00'), (2, 2, '2026-02-01 07:30:00'), (3, 3, '2026-02-01 08:00:00'),
+        (4, 4, '2026-02-01 08:30:00');
+    expected_rows: [["WH1", 1], ["WH10", 1], ["WH2", 1], ["WH9", 1]]
+  - id: t7
+    hidden: true
+    description: "One very busy site (12 shipments) and two idle ones"
+    ordered: true
+    setup_sql: |
+      INSERT INTO warehouses (id, code) VALUES (1, 'PRG'), (2, 'KRK'), (3, 'BUD');
+      INSERT INTO shipments (id, warehouse_id, shipped_at) VALUES
+        (1, 1, '2026-04-01 12:00:00'), (2, 1, '2026-04-02 12:00:00'), (3, 1, '2026-04-03 12:00:00'),
+        (4, 1, '2026-04-04 12:00:00'), (5, 1, '2026-04-05 12:00:00'), (6, 1, '2026-04-06 12:00:00'),
+        (7, 1, '2026-04-07 12:00:00'), (8, 1, '2026-04-08 12:00:00'), (9, 1, '2026-04-09 12:00:00'),
+        (10, 1, '2026-04-10 12:00:00'), (11, 1, '2026-04-11 12:00:00'), (12, 1, '2026-04-12 12:00:00');
+    expected_rows: [["PRG", 12], ["BUD", 0], ["KRK", 0]]
+  - id: t8
+    hidden: true
+    description: "Sparse ids, code order differs from id order, idle sites tie at 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO warehouses (id, code) VALUES (10, 'TLL'), (20, 'RIX'), (30, 'VNO'), (40, 'HEL');
+      INSERT INTO shipments (id, warehouse_id, shipped_at) VALUES
+        (100, 30, '2026-05-02 06:00:00'), (101, 30, '2026-05-02 06:45:00');
+    expected_rows: [["VNO", 2], ["HEL", 0], ["RIX", 0], ["TLL", 0]]
+  - id: t9
+    hidden: true
+    description: "Single idle warehouse - one row with 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO warehouses (id, code) VALUES (7, 'OPO');
+    expected_rows: [["OPO", 0]]
+expected_concepts:
+  - "LEFT JOIN to keep rows without matches"
+  - "COUNT(column) ignores NULL while COUNT(*) counts the padded row"
+  - "GROUP BY with aggregate functions"
+  - "ORDER BY with a descending key and a tie-breaker"
+optimal_complexity: {time: "O(n + m) with an index on shipments.warehouse_id, plus O(w log w) to sort the result", space: "O(w) for the grouped result"}
+rubric:
+  excellent: "Uses a LEFT JOIN from warehouses and counts the shipment id, explains why COUNT(*) would report 1 for an idle site, and orders by count descending with code as the tie-breaker."
+  good: "Correct query after a hint about idle sites disappearing or about COUNT(*) counting the NULL-padded row."
+  weak: "Uses an inner join that drops idle warehouses, counts with COUNT(*) after a LEFT JOIN, or omits the tie-breaking order."
+  criteria:
+    correctness: "All tests pass, including idle sites, all-idle data and ties."
+    efficiency: "A single join and aggregation; mentions an index on shipments.warehouse_id."
+    code_quality: "Clear aliases and readable output column names."
+    edge_cases: "Empty tables, warehouses with no shipments, ties on count and codes containing digits."
+    communication: "Explains the difference between COUNT(*) and COUNT(column) after an outer join."
+hints:
+  - "Start from the table that must contribute every row to the output, and only then bring in the shipments."
+  - "An inner join drops warehouses that have no shipment; an outer join keeps them, but the missing side is filled with NULLs, so think about what you count."
+  - "Left join shipments to warehouses on the warehouse id, group by the warehouse, count the shipment id rather than every row so idle sites get 0, and order by that count descending and then by code."
+followups:
+  - "How would you restrict the count to shipments from the last seven days while still listing idle sites?"
+  - "Which index makes this query fast with millions of shipments?"
+  - "How would you also show the time of each warehouse's latest shipment?"
+common_errors:
+  - "Using an inner join, which removes warehouses that have no shipments."
+  - "Using COUNT(*) after a LEFT JOIN, which reports 1 instead of 0 for idle sites."
+  - "Ordering only by count, which leaves ties in an unpredictable order."

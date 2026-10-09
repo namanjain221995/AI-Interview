@@ -1,0 +1,195 @@
+version: 1
+slug: category_sales_with_grand_total
+title: Category Sales with Grand Total
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, business_analyst, data]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Category Sales with Grand Total
+
+  The weekly trading report shows revenue per product category followed by a grand-total line. The
+  reporting tool runs on several databases, so vendor extensions such as `ROLLUP` or `GROUPING SETS`
+  are not allowed: build the total line yourself.
+
+  Table `sales`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | category | VARCHAR(50) | never NULL, never the literal `TOTAL` |
+  | amount_cents | INTEGER | revenue in cents; **refunds are negative** |
+
+  Return two columns, `category` and `total_cents`:
+
+  - one row per category with the sum of its `amount_cents`, categories in **alphabetical order**;
+  - then **one final row** with `category = 'TOTAL'` and the sum over all sales.
+
+  The `TOTAL` row is **always last**, even when a category name sorts after it alphabetically. When the
+  table is empty, return only the `TOTAL` row with `total_cents = 0`.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  sales
+  +----+-------------+--------------+
+  | id | category    | amount_cents |
+  +----+-------------+--------------+
+  | 1  | Garden      | 2500         |
+  | 2  | Books       | 1200         |
+  | 3  | Garden      | 4000         |
+  | 4  | Books       | -200         |
+  | 5  | Electronics | 15000        |
+  +----+-------------+--------------+
+
+  Output
+  +-------------+-------------+
+  | category    | total_cents |
+  +-------------+-------------+
+  | Books       | 1000        |
+  | Electronics | 15000       |
+  | Garden      | 6500        |
+  | TOTAL       | 22500       |
+  +-------------+-------------+
+  ```
+
+  ### Example 2
+  ```
+  sales
+  +----+----------+--------------+
+  | id | category | amount_cents |
+  +----+----------+--------------+
+  | 1  | Toys     | 800          |
+  | 2  | Apparel  | 1500         |
+  +----+----------+--------------+
+
+  Output
+  +----------+-------------+
+  | category | total_cents |
+  +----------+-------------+
+  | Apparel  | 1500        |
+  | Toys     | 800         |
+  | TOTAL    | 2300        |
+  +----------+-------------+
+  Toys sorts after TOTAL alphabetically, but the TOTAL row still comes last.
+  ```
+
+  ### Constraints
+  - Category names start with an upper-case letter followed by lower-case letters.
+  - Totals fit in a 64-bit integer; a category total may be zero or negative after refunds.
+  - The table may be empty.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return category and total_cents per category (alphabetical), then a final 'TOTAL' row.
+    SELECT category, SUM(amount_cents) AS total_cents
+    FROM sales
+    GROUP BY category
+    ORDER BY category;
+reference_solutions:
+  sql: |
+    SELECT category, total_cents
+    FROM (
+      SELECT category, SUM(amount_cents) AS total_cents, 0 AS sort_group
+      FROM sales
+      GROUP BY category
+      UNION ALL
+      SELECT 'TOTAL', COALESCE(SUM(amount_cents), 0), 1
+      FROM sales
+    ) report
+    ORDER BY sort_group, category;
+sql_setup: |
+  CREATE TABLE sales (
+    id INTEGER PRIMARY KEY,
+    category VARCHAR(50) NOT NULL,
+    amount_cents INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - three categories with a refund, total last"
+    setup_sql: |
+      INSERT INTO sales (id, category, amount_cents) VALUES
+        (1, 'Garden', 2500), (2, 'Books', 1200), (3, 'Garden', 4000), (4, 'Books', -200), (5, 'Electronics', 15000);
+    expected_rows: [["Books", 1000], ["Electronics", 15000], ["Garden", 6500], ["TOTAL", 22500]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - a category that sorts after TOTAL alphabetically"
+    setup_sql: |
+      INSERT INTO sales (id, category, amount_cents) VALUES (1, 'Toys', 800), (2, 'Apparel', 1500);
+    expected_rows: [["Apparel", 1500], ["Toys", 800], ["TOTAL", 2300]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table - only the TOTAL row with 0, not NULL and not zero rows"
+    expected_rows: [["TOTAL", 0]]
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Single sale"
+    setup_sql: |
+      INSERT INTO sales (id, category, amount_cents) VALUES (1, 'Books', 999);
+    expected_rows: [["Books", 999], ["TOTAL", 999]]
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Refunds cancel a category to zero and push another negative; grand total includes them"
+    setup_sql: |
+      INSERT INTO sales (id, category, amount_cents) VALUES
+        (1, 'Garden', 3000), (2, 'Garden', -3000), (3, 'Kitchen', 500), (4, 'Kitchen', -1700), (5, 'Books', 4000);
+    expected_rows: [["Books", 4000], ["Garden", 0], ["Kitchen", -1200], ["TOTAL", 2800]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Several categories sorting after TOTAL (Toys, Watches, Zoo) stay above the TOTAL row"
+    setup_sql: |
+      INSERT INTO sales (id, category, amount_cents) VALUES
+        (1, 'Zoo', 100), (2, 'Watches', 200), (3, 'Toys', 300), (4, 'Audio', 400), (5, 'Tools', 500);
+    expected_rows: [["Audio", 400], ["Tools", 500], ["Toys", 300], ["Watches", 200], ["Zoo", 100], ["TOTAL", 1500]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Large amounts - category and grand totals exceed the 32-bit range"
+    setup_sql: |
+      INSERT INTO sales (id, category, amount_cents) VALUES
+        (1, 'Furniture', 2000000000), (2, 'Furniture', 2000000000), (3, 'Appliances', 1500000000), (4, 'Appliances', 1500000000);
+    expected_rows: [["Appliances", 3000000000], ["Furniture", 4000000000], ["TOTAL", 7000000000]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Many rows per category inserted interleaved - grouping and alphabetical order"
+    setup_sql: |
+      INSERT INTO sales (id, category, amount_cents) VALUES
+        (1, 'Sports', 120), (2, 'Beauty', 340), (3, 'Music', 560), (4, 'Sports', 780), (5, 'Beauty', 910),
+        (6, 'Music', 230), (7, 'Sports', 450), (8, 'Office', 670), (9, 'Beauty', 890), (10, 'Music', 110),
+        (11, 'Office', 330), (12, 'Sports', 550), (13, 'Pets', 770), (14, 'Pets', 990), (15, 'Office', -60);
+    expected_rows: [["Beauty", 2140], ["Music", 900], ["Office", 940], ["Pets", 1760], ["Sports", 1900], ["TOTAL", 7640]]
+expected_concepts:
+  - "GROUP BY with SUM"
+  - "UNION ALL to append a summary row"
+  - "a helper sort column to control row placement"
+  - "COALESCE for an aggregate over an empty table"
+optimal_complexity: {time: "O(n log k) for n sales and k categories (two scans of the table)", space: "O(k)"}
+rubric:
+  excellent: "Combines the grouped query and a total query with UNION ALL, adds a sort key so TOTAL is always last, wraps the grand total in COALESCE, and mentions ROLLUP or GROUPING SETS as the vendor alternative and why they were avoided here."
+  good: "Correct query after a hint about ordering the TOTAL row or the empty-table case."
+  weak: "Orders only by category so TOTAL lands between categories, uses UNION and risks merging rows, or returns no rows or NULL for an empty table."
+  criteria:
+    correctness: "All tests pass, including categories after TOTAL alphabetically, refunds and the empty table."
+    efficiency: "At most two passes over sales; no per-category subqueries."
+    code_quality: "Clear derived-table alias, sort key kept out of the output columns."
+    edge_cases: "Empty table, single sale, zero and negative totals and large sums."
+    communication: "Explains why sorting by the label alone cannot keep TOTAL last."
+hints:
+  - "The report is really two result sets stacked on top of each other: the per-category lines and one summary line."
+  - "Stack them with a set operator that keeps every row, and give each part an extra marker value so the summary can be sorted after the categories regardless of its label."
+  - "In a derived table, UNION ALL the grouped query (with marker 0) and a query selecting 'TOTAL' with COALESCE of the overall sum and 0 (with marker 1); in the outer query select only category and total_cents and order by the marker, then by category."
+followups:
+  - "How would you write this with GROUPING SETS on PostgreSQL, and what would the TOTAL label look like?"
+  - "How would you add a subtotal per department above the categories?"
+  - "Why is UNION ALL preferable to UNION here?"
+common_errors:
+  - "Ordering only by category, so TOTAL sorts between categories such as Books and Toys."
+  - "Returning NULL for the grand total or no rows at all on an empty table."
+  - "Using UNION instead of UNION ALL, which can silently collapse identical rows."

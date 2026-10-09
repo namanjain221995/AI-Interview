@@ -1,0 +1,180 @@
+version: 1
+slug: mask_card_numbers_in_logs
+title: Mask Card Numbers in Support Logs
+difficulty: easy
+competency_keys: [algorithms, problem_solving, code_quality]
+role_tags: [security, backend, support_engineer, fullstack]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Mask Card Numbers in Support Logs
+
+  Support engineers attach application log lines to tickets, and some of those lines accidentally
+  contain payment card numbers. Before a line is shared, every card number in it must be masked so
+  that only its last four digits remain readable.
+
+  Scan the line for **digit groups**. A digit group is a maximal run of text that starts with a digit,
+  ends with a digit and in which consecutive digits are either adjacent or separated by **exactly one**
+  space `' '` or **exactly one** hyphen `'-'`. "Maximal" means the group cannot be extended on either
+  side: a digit group is found no matter which characters surround it (letters, punctuation, other
+  separators), and two spaces or a separator followed by a non-digit end the group.
+
+  A digit group is treated as a card number when **both** hold:
+
+  1. it contains between **13 and 19 digits** in total (separators do not count), and
+  2. its digits pass the **Luhn checksum**: starting from the rightmost digit and moving left, double
+     every second digit (the second-from-right, the fourth-from-right, ...); when a doubled value is
+     greater than 9, subtract 9 from it; the number passes when the sum of all resulting digits is a
+     multiple of 10.
+
+  In every card number, replace each digit except the **last four digits** with `*`, leaving the
+  separators where they are. All other characters, including digit groups that fail either check, are
+  returned unchanged.
+
+  ### Example 1
+  ```
+  Input:  line = "Customer paid with 4111 1111 1111 1111 at 10:42"
+  Output: "Customer paid with **** **** **** 1111 at 10:42"
+  ```
+
+  ### Example 2
+  ```
+  Input:  line = "Refund to 5555-5555-5555-4444 failed, retry ref 4111111111111112"
+  Output: "Refund to ****-****-****-4444 failed, retry ref 4111111111111112"
+  Explanation: the second group has 16 digits but fails the Luhn checksum.
+  ```
+
+  ### Example 3
+  ```
+  Input:  line = "Ticket 12345 escalated after 3 calls"
+  Output: "Ticket 12345 escalated after 3 calls"
+  ```
+
+  ### Constraints
+  - `0 <= line.length <= 10^4`
+  - `line` contains printable ASCII characters only (codes `32` to `126`).
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: mask_card_numbers
+  params:
+    - {name: line, type: string}
+  return_type: string
+  comparison: exact
+reference_solutions:
+  python: |
+    def mask_card_numbers(line: str) -> str:
+        def is_digit(ch: str) -> bool:
+            return "0" <= ch <= "9"
+
+        def luhn_ok(digits: list[int]) -> bool:
+            total = 0
+            for i, d in enumerate(reversed(digits)):
+                if i % 2 == 1:
+                    d *= 2
+                    if d > 9:
+                        d -= 9
+                total += d
+            return total % 10 == 0
+
+        out = list(line)
+        n, i = len(line), 0
+        while i < n:
+            if not is_digit(line[i]):
+                i += 1
+                continue
+            positions = [i]
+            j = i
+            while True:
+                if j + 1 < n and is_digit(line[j + 1]):
+                    j += 1
+                elif j + 2 < n and line[j + 1] in " -" and is_digit(line[j + 2]):
+                    j += 2
+                else:
+                    break
+                positions.append(j)
+            digits = [ord(line[p]) - 48 for p in positions]
+            if 13 <= len(digits) <= 19 and luhn_ok(digits):
+                for p in positions[:-4]:
+                    out[p] = "*"
+            i = j + 1
+        return "".join(out)
+  javascript: |
+    function maskCardNumbers(line) {
+      const isDigit = (ch) => ch >= "0" && ch <= "9";
+      const luhnOk = (digits) => {
+        let total = 0;
+        for (let k = 0; k < digits.length; k++) {
+          let d = digits[digits.length - 1 - k];
+          if (k % 2 === 1) {
+            d *= 2;
+            if (d > 9) d -= 9;
+          }
+          total += d;
+        }
+        return total % 10 === 0;
+      };
+      const out = line.split("");
+      const n = line.length;
+      let i = 0;
+      while (i < n) {
+        if (!isDigit(line[i])) {
+          i++;
+          continue;
+        }
+        const positions = [i];
+        let j = i;
+        for (;;) {
+          if (j + 1 < n && isDigit(line[j + 1])) j += 1;
+          else if (j + 2 < n && (line[j + 1] === " " || line[j + 1] === "-") && isDigit(line[j + 2])) j += 2;
+          else break;
+          positions.push(j);
+        }
+        const digits = positions.map((p) => line.charCodeAt(p) - 48);
+        if (digits.length >= 13 && digits.length <= 19 && luhnOk(digits)) {
+          for (const p of positions.slice(0, -4)) out[p] = "*";
+        }
+        i = j + 1;
+      }
+      return out.join("");
+    }
+tests:
+  - {id: t1, args: ["Customer paid with 4111 1111 1111 1111 at 10:42"], expected: "Customer paid with **** **** **** 1111 at 10:42", description: "Example 1 - spaced card number masked, separators kept"}
+  - {id: t2, args: ["Refund to 5555-5555-5555-4444 failed, retry ref 4111111111111112"], expected: "Refund to ****-****-****-4444 failed, retry ref 4111111111111112", description: "Example 2 - valid hyphenated card masked; Luhn failure kept"}
+  - {id: t3, args: ["Ticket 12345 escalated after 3 calls"], expected: "Ticket 12345 escalated after 3 calls", description: "Example 3 - short digit groups untouched"}
+  - {id: t4, hidden: true, args: [""], expected: "", description: "Empty line"}
+  - {id: t5, hidden: true, args: ["zeros 000000000000 and 0000000000000"], expected: "zeros 000000000000 and *********0000", description: "12 zeros pass Luhn but are too short; 13 zeros pass both checks"}
+  - {id: t6, hidden: true, args: ["amex:378282246310005.ok"], expected: "amex:***********0005.ok", description: "15-digit card glued to punctuation and letters"}
+  - {id: t7, hidden: true, args: ["4111  1111 1111 1111"], expected: "4111  1111 1111 1111", description: "Double space splits the group - neither part is long enough"}
+  - {id: t8, hidden: true, args: ["order 12 4111111111111111 shipped"], expected: "order 12 4111111111111111 shipped", description: "Maximal group swallows the order number (18 digits) and fails Luhn - unchanged"}
+  - {id: t9, hidden: true, args: ["a 4222222222222 b 6221260000000000001 c 12345678901234567890"], expected: "a *********2222 b ***************0001 c 12345678901234567890", description: "13-digit and 19-digit cards masked; 20-digit group too long"}
+  - {id: t10, hidden: true, args: ["pay 6011-1111 1111-1117- then 4111111111111111-"], expected: "pay ****-**** ****-1117- then ************1111-", description: "Mixed separators; trailing hyphens are not part of the group"}
+expected_concepts:
+  - linear scan that extends a group across single separators with one character of lookahead
+  - recording digit positions so separators survive masking
+  - Luhn checksum computed from the rightmost digit
+  - combining a length filter and a checksum to limit false positives
+optimal_complexity: {time: O(n), space: O(n)}
+rubric:
+  excellent: Scans the line once, grows each group only across a single separator followed by a digit, keeps the positions of the digits, applies the length and Luhn checks to the whole maximal group, masks all but the last four digits in place and explains why the checksum reduces false positives on order ids and timestamps.
+  good: Correct masking for well-formed card numbers with readable code; may need a test run to fix group boundaries such as a trailing hyphen or a double space.
+  weak: Masks every long digit run without the Luhn check, removes or changes separators, masks the wrong digits, or uses a regular expression that splits maximal groups so different digits get checked.
+  criteria:
+    correctness: All tests pass, including 13 and 19 digit cards, mixed separators and groups that fail length or checksum.
+    efficiency: A single linear pass over the line plus a linear checksum per group.
+    code_quality: Separate helpers for group scanning, the checksum and masking; the output is built from a mutable copy rather than repeated string slicing.
+    edge_cases: Empty line, double separators, separators at the edge of a group, digits glued to letters or punctuation.
+    communication: Explains the security purpose (data minimisation in support tooling) and the limits of pattern-based masking.
+hints:
+  - First find the stretches of the line that could be a card number - runs of digits that may contain single spaces or hyphens between digits - and only then decide whether each stretch should be masked.
+  - While scanning a stretch, a separator belongs to it only when the next character after that single separator is again a digit; remember where each digit sits so you can mask it later without touching the separators.
+  - For each maximal stretch collect its digits and their positions, accept it when the digit count is between 13 and 19 and the Luhn sum (every second digit from the right doubled, minus 9 when above 9) is divisible by 10, then replace the characters at all digit positions except the last four with an asterisk in a copy of the line.
+followups:
+  - How would you extend the scanner to mask other secrets such as API keys or bearer tokens?
+  - Where in the logging pipeline should masking happen so that unmasked data never reaches storage?
+  - What false positives or false negatives remain, and how would you measure them on real logs?
+  - How would you process a multi-gigabyte log file as a stream?
+common_errors:
+  - Skipping the Luhn check and masking order numbers or timestamps.
+  - Treating two consecutive separators or a trailing separator as part of the group.
+  - Running the checksum from the left instead of from the rightmost digit.
+  - Masking the last four characters instead of the last four digits, or dropping the separators.
+  - Splitting a long maximal group into a card-sized window instead of checking the whole group.

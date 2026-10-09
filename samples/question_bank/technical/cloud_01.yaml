@@ -1,0 +1,659 @@
+# Cloud engineering (technical.cloud), part 1: cloud networking — address planning, VPC/VNet
+# connectivity, private endpoints, egress, load balancing and segmentation on AWS, Azure and GCP.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [cloud]
+questions:
+  # ------------------------------------------------------------- address planning and basics
+  - external_key: technical.cloud.cidr_planning
+    competency_key: networking
+    topic: IP address planning for cloud networks
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you're choosing IP ranges for a new set of VPCs or VNets, what do you think about up front so
+      the plan still works two or three years later?
+    expected_concepts:
+      - no overlap with on-premises, partner and other cloud ranges
+      - headroom for growth and new regions
+      - a central IP address register or IPAM tool
+      - subnet sizing per availability zone and per tier
+      - addresses the provider reserves in each subnet
+      - extra ranges for Kubernetes pods and services
+    rubric:
+      excellent: Plans ranges centrally to avoid overlap with every network that may ever connect, leaves room for growth and new regions, and accounts for reserved addresses and container IP consumption.
+      good: Knows to avoid overlapping ranges and to leave room to grow, with sensible subnet sizes.
+      weak: Picks a default range per network without considering future connectivity or growth.
+    followups:
+      - How much space would you give a subnet that hosts a managed Kubernetes node pool, and why?
+      - What would you do if two networks you must connect already overlap?
+    common_errors:
+      - Using the same default range in every account, which blocks peering later.
+      - Forgetting that pods can consume far more addresses than nodes.
+
+  - external_key: technical.cloud.stateful_stateless_filtering
+    competency_key: networking
+    topic: Security groups, NSGs and network ACLs
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Cloud providers give you stateful filters like security groups or NSGs and, on AWS, stateless network
+      ACLs as well. How do you decide where to enforce traffic rules, and what practical difference does
+      stateful versus stateless filtering make?
+    expected_concepts:
+      - stateful rules allow return traffic automatically
+      - stateless rules need explicit return and ephemeral port ranges
+      - security groups attach to interfaces or instances, NACLs to subnets
+      - referencing other security groups instead of IP ranges
+      - NACLs as a coarse subnet-level backstop
+      - rule evaluation order and default deny
+    rubric:
+      excellent: Explains connection tracking and ephemeral ports clearly, uses instance-level groups that reference each other as the main control, and keeps subnet ACLs as a coarse backstop with a clear reason.
+      good: Correctly distinguishes stateful and stateless filtering and where each applies.
+      weak: Cannot explain why return traffic is or is not allowed, or opens wide ranges to make things work.
+    followups:
+      - Why does a stateless ACL sometimes break outbound connections that look allowed?
+      - What's the benefit of referencing a security group rather than a CIDR in a rule?
+    common_errors:
+      - Forgetting ephemeral return ports in a network ACL.
+      - Opening 0.0.0.0/0 on a security group to fix a connectivity issue.
+
+  - external_key: technical.cloud.private_instance_access
+    competency_key: security
+    topic: Administrative access to private instances
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A developer launched a VM in a private subnet and now can't SSH into it from their laptop. How would
+      you help them get access, and what would you avoid doing?
+    expected_concepts:
+      - identity-based access such as Session Manager, Azure Bastion or IAP TCP forwarding
+      - a hardened bastion host or VPN as alternatives
+      - not exposing port 22 or 3389 to the internet
+      - checking security group and route configuration
+      - access tied to user identity with audit logging
+    rubric:
+      excellent: Recommends identity-aware access with no inbound ports and full session logging, explains the alternatives, and refuses to put a public IP on the instance.
+      good: Suggests a bastion or VPN and avoids opening SSH publicly.
+      weak: Suggests adding a public IP and opening port 22 to everyone.
+    followups:
+      - How would you give access without distributing SSH keys at all?
+      - What would you log so you can tell who ran which commands?
+    common_errors:
+      - Opening SSH to 0.0.0.0/0 temporarily and forgetting to close it.
+
+  - external_key: technical.cloud.vpc_flow_logs
+    competency_key: networking
+    topic: Using flow logs for troubleshooting
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What do VPC flow logs or NSG flow logs actually tell you, and can you describe a problem you'd use them
+      to solve?
+    expected_concepts:
+      - source, destination, ports, protocol and accept or reject
+      - metadata only, no packet payload
+      - finding which rule or layer drops traffic
+      - security investigations and unexpected destinations
+      - delivery delay and sampling or aggregation intervals
+      - storage cost and retention choices
+    rubric:
+      excellent: Describes what a record contains and its limits, gives a concrete troubleshooting or security example, and mentions delay and cost considerations.
+      good: Knows flow logs show accepted and rejected connections and gives a reasonable use.
+      weak: Thinks flow logs capture packet contents or cannot name a use.
+    followups:
+      - A connection is rejected in the flow log; how do you tell whether it was the security group or the network ACL?
+      - How would you keep flow log costs reasonable across a large estate?
+    common_errors:
+      - Expecting to see HTTP paths or payloads in flow logs.
+
+  - external_key: technical.cloud.internal_api_exposure
+    competency_key: networking
+    topic: Exposing an internal-only service
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A team wants to expose a new internal API to other services in the same cloud environment but never to
+      the internet. How would you set that up?
+    expected_concepts:
+      - internal load balancer with private IPs only
+      - private DNS name for discovery
+      - security rules that admit only known callers
+      - TLS even on internal traffic
+      - service-level authentication
+    rubric:
+      excellent: Uses an internal load balancer and private DNS, restricts callers by security group or identity, and still applies TLS and authentication rather than relying on the network alone.
+      good: Proposes an internal load balancer with restricted security groups.
+      weak: Uses a public load balancer with an IP allow-list or relies only on obscurity.
+    followups:
+      - How would services in another VPC or account reach it?
+      - Why bother with authentication if the network is private?
+    common_errors:
+      - Treating private network placement as sufficient authentication.
+
+  - external_key: technical.cloud.vpn_vs_dedicated_link
+    competency_key: networking
+    topic: Site-to-site VPN versus dedicated connectivity
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What's the practical difference between a site-to-site VPN and a dedicated link like Direct Connect,
+      ExpressRoute or Cloud Interconnect, and how would you decide which one an office or data centre needs?
+    expected_concepts:
+      - VPN runs encrypted over the internet with variable latency
+      - dedicated links give predictable bandwidth and latency
+      - lead time and provisioning through a partner
+      - cost model including port and data transfer pricing
+      - dedicated links are not encrypted by default
+      - VPN as a backup path for a dedicated link
+    rubric:
+      excellent: Compares bandwidth, latency, cost and lead time, notes that dedicated links need their own encryption, and proposes VPN as backup for the dedicated path.
+      good: Explains the internet versus private path difference and picks sensibly by bandwidth needs.
+      weak: Assumes a dedicated link is always better or does not know the trade-offs.
+    followups:
+      - How would you make the connection redundant?
+      - Data on the dedicated link must be encrypted; what are your options?
+    common_errors:
+      - Assuming traffic on a dedicated circuit is encrypted automatically.
+
+  - external_key: technical.cloud.peering_or_transit_hub
+    competency_key: networking
+    topic: VPC peering versus a transit hub
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When would you connect networks with plain VPC or VNet peering, and at what point would you move to a
+      transit gateway or a hub-and-spoke design instead?
+    expected_concepts:
+      - peering is not transitive
+      - the number of peerings grows quadratically with networks
+      - central inspection and shared services in a hub
+      - route table and peering limits
+      - transit hubs add per-gigabyte processing cost
+      - peering is cheaper and lower latency for a few heavy pairs
+    rubric:
+      excellent: Explains non-transitivity and scaling limits, weighs hub processing costs against operational simplicity and central inspection, and would keep direct peering for heavy high-traffic pairs.
+      good: Knows peering doesn't scale to many networks and that a hub centralises routing.
+      weak: Thinks peering is transitive or treats both options as identical.
+    followups:
+      - How would you keep two spokes from talking to each other through the hub?
+      - What changes in cost when high-volume traffic moves from peering to a transit gateway?
+    common_errors:
+      - Expecting traffic to flow A to C through B over two peerings.
+
+  - external_key: technical.cloud.private_service_access
+    competency_key: networking
+    topic: Private access to managed services
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you let workloads in a private network reach managed services like object storage or a
+      managed database without traffic going over the public internet? Compare the options you'd consider.
+    expected_concepts:
+      - gateway endpoints for S3 and DynamoDB versus interface endpoints (PrivateLink)
+      - Azure Private Endpoint versus service endpoints
+      - GCP Private Google Access and Private Service Connect
+      - private DNS so service names resolve to private addresses
+      - endpoint policies to restrict which resources are reachable
+      - endpoint hourly and data processing costs
+    rubric:
+      excellent: Compares route-based and interface-based endpoints on at least one provider, covers DNS resolution and endpoint policies, and mentions cost at scale.
+      good: Knows about private endpoints and that DNS must resolve privately.
+      weak: Relies on a NAT gateway and calls it private, or does not know the options exist.
+    followups:
+      - How would you stop someone using the endpoint to copy data into a bucket in another account?
+      - How do on-premises clients reach the same private endpoint?
+    common_errors:
+      - Creating an interface endpoint but leaving clients resolving the public address.
+
+  - external_key: technical.cloud.private_endpoint_dns_failure
+    competency_key: azure
+    topic: Private endpoint DNS resolution
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You've created a private endpoint for an Azure storage account, but applications still resolve its
+      public IP, and connections fail once public access is disabled. How would you work through that?
+    expected_concepts:
+      - privatelink private DNS zone with the correct record
+      - linking the zone to the virtual networks that need it
+      - custom DNS servers forwarding to the Azure-provided resolver
+      - conditional forwarders for on-premises clients
+      - testing resolution from the workload itself
+      - cached DNS answers and TTLs
+    rubric:
+      excellent: Traces resolution from the client, identifies missing zone links or forwarding through custom DNS, and fixes it centrally so new endpoints work too.
+      good: Knows the private DNS zone must exist and be linked to the network.
+      weak: Hard-codes the private IP in hosts files or re-enables public access.
+    followups:
+      - How would you manage these private DNS zones across many subscriptions?
+      - What changes if the clients are on premises?
+    common_errors:
+      - Editing hosts files as a permanent fix.
+
+  - external_key: technical.cloud.egress_control
+    competency_key: security
+    topic: Controlling outbound traffic
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Security wants workloads in your cloud networks to reach only approved external destinations. How
+      would you design egress control so it's enforceable but doesn't make every new integration a fight?
+    expected_concepts:
+      - centralised egress through a firewall or proxy
+      - domain-based filtering such as Network Firewall, Azure Firewall or Cloud NGFW rules
+      - private endpoints to remove internet paths to cloud services
+      - DNS filtering and logging
+      - a fast self-service request process for new destinations
+      - logging and alerting on denied connections
+    rubric:
+      excellent: Designs central egress with domain filtering and logging, removes internet paths where private endpoints exist, and builds a lightweight approval workflow so teams aren't blocked.
+      good: Proposes a central firewall or proxy with an allow-list.
+      weak: Relies on security groups with IP lists for SaaS endpoints whose addresses change.
+    followups:
+      - How do you handle a SaaS provider whose IP addresses change constantly?
+      - What does egress filtering do about data exfiltration over DNS?
+    common_errors:
+      - Allow-listing IP addresses for services behind CDNs.
+
+  - external_key: technical.cloud.nat_resilience_cost
+    competency_key: aws
+    topic: NAT design across availability zones
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you design NAT for private subnets spread across several availability zones, and what are
+      you trading off between resilience and cost?
+    expected_concepts:
+      - one NAT gateway per zone avoids a cross-zone single point of failure
+      - cross-zone data transfer charges
+      - per-gigabyte NAT processing charges
+      - gateway endpoints to keep S3 and DynamoDB traffic off NAT
+      - centralised egress through a transit hub
+      - IPv6 with an egress-only gateway
+    rubric:
+      excellent: Chooses per-zone NAT for production with reasons, quantifies processing and cross-zone costs, and removes avoidable NAT traffic with endpoints.
+      good: Knows per-zone NAT is more resilient and that NAT has data charges.
+      weak: Uses a single NAT for all zones without recognising the failure or cost implications.
+    followups:
+      - Where would you look to find which workloads drive NAT processing costs?
+      - When is a shared central egress VPC worth it?
+    common_errors:
+      - Routing heavy S3 traffic through NAT instead of a gateway endpoint.
+
+  - external_key: technical.cloud.lb_intermittent_502
+    competency_key: networking
+    topic: Intermittent errors behind a load balancer
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Users report intermittent 502 errors from an application behind a cloud load balancer, yet the
+      instances pass their health checks. How would you investigate?
+    expected_concepts:
+      - load balancer access logs and target status codes
+      - backend keep-alive timeout shorter than the load balancer idle timeout
+      - deregistration delay during deployments
+      - targets closing or resetting connections
+      - correlating errors with deploys and scaling events
+    rubric:
+      excellent: Uses access logs to separate load balancer from target errors, checks keep-alive versus idle timeout mismatch and deploy-time draining, and correlates with scaling events.
+      good: Checks logs and suspects deployments or timeouts.
+      weak: Restarts instances or blames the load balancer without evidence.
+    followups:
+      - Why does a backend keep-alive shorter than the load balancer idle timeout cause 502s?
+      - How would you make deployments drain connections cleanly?
+    common_errors:
+      - Only looking at application logs, where the failed requests never appear.
+
+  - external_key: technical.cloud.cdn_waf_tuning
+    competency_key: security
+    topic: CDN and WAF in front of public applications
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What role do a CDN and a web application firewall play in front of a public application, and how would
+      you tune the WAF so it blocks attacks without breaking legitimate users?
+    expected_concepts:
+      - edge caching and origin offload
+      - absorbing volumetric DDoS at the edge
+      - managed rule sets plus custom rules
+      - starting in count or detection mode
+      - rate limiting
+      - locking the origin so only the CDN can reach it
+    rubric:
+      excellent: Explains caching and DDoS benefits, rolls WAF rules out in detection mode and reviews logs for false positives, and locks the origin down so the edge cannot be bypassed.
+      good: Knows the WAF uses managed rules and should be tested before blocking.
+      weak: Turns on every rule in block mode or leaves the origin publicly reachable.
+    followups:
+      - How would you stop attackers going around the CDN straight to your origin?
+      - A rule is blocking a legitimate API client; how do you handle it?
+    common_errors:
+      - Leaving the origin load balancer open to the internet.
+
+  - external_key: technical.cloud.pod_ip_exhaustion
+    competency_key: networking
+    topic: Subnet exhaustion in managed Kubernetes
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your managed Kubernetes cluster suddenly can't start new pods because its subnet has run out of IP
+      addresses. What's likely happened, and how would you fix it now and for the long term?
+    expected_concepts:
+      - VPC-native CNIs give each pod a real network address
+      - warm IP pools reserving addresses per node
+      - prefix delegation or larger secondary ranges
+      - overlay modes such as Azure CNI Overlay
+      - custom networking with pods in a separate range
+      - sizing pod ranges at cluster creation in GKE
+    rubric:
+      excellent: Explains why pods consume network addresses, offers a short-term fix such as adding a secondary range, and a durable design such as prefix delegation, overlay networking or a dedicated pod range.
+      good: Identifies pod address consumption and proposes adding address space.
+      weak: Only suggests adding nodes, which makes it worse.
+    followups:
+      - What do you give up with an overlay network compared with VPC-native pod addresses?
+      - How would you size address space for a cluster that may reach five hundred nodes?
+    common_errors:
+      - Adding nodes to a cluster that is out of IP addresses.
+
+  - external_key: technical.cloud.gcp_shared_vpc
+    competency_key: gcp
+    topic: Shared VPC on GCP
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      In GCP, how does Shared VPC work, and when would you choose it over giving every project its own VPC
+      and peering them together?
+    expected_concepts:
+      - host project and attached service projects
+      - central network team owns subnets, routes and firewall
+      - subnet-level network user permissions for service projects
+      - VPC peering limits and non-transitivity
+      - hierarchical firewall policies
+      - global VPC with regional subnets
+    rubric:
+      excellent: Describes the host and service project model, separation of network administration from workload ownership, subnet-level grants, and the limits that make peering-everything unattractive.
+      good: Knows Shared VPC centralises the network while projects keep their own resources.
+      weak: Confuses Shared VPC with peering or cannot explain who controls what.
+    followups:
+      - How would you stop one team deploying into another team's subnet?
+      - What's awkward about Shared VPC when a team wants full control of its network?
+    common_errors:
+      - Granting network user on the whole host project instead of specific subnets.
+
+  - external_key: technical.cloud.azure_hub_or_vwan
+    competency_key: azure
+    topic: Azure hub-and-spoke versus Virtual WAN
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      On Azure, how would you choose between building your own hub-and-spoke network with VNet peering and
+      using Virtual WAN?
+    expected_concepts:
+      - self-managed hub with Azure Firewall or appliances and user-defined routes
+      - Virtual WAN managed hub routing
+      - gateway transit for on-premises connectivity
+      - number of branches and regions
+      - routing intent for forcing traffic through a firewall
+      - cost and flexibility trade-offs
+    rubric:
+      excellent: Weighs control and custom routing in a self-built hub against Virtual WAN's managed routing at scale, considering branches, regions, firewall insertion and cost.
+      good: Knows both are hub designs and that Virtual WAN manages routing for you.
+      weak: Cannot describe how traffic gets between spokes in either design.
+    followups:
+      - How do you make spoke-to-spoke traffic pass through a firewall in each design?
+      - What do user-defined routes do that system routes don't?
+    common_errors:
+      - Forgetting that spoke-to-spoke traffic needs explicit routing through the hub.
+
+  # ------------------------------------------------------------- advanced networking
+  - external_key: technical.cloud.ipv6_adoption
+    competency_key: networking
+    topic: Adopting IPv6 in the cloud
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your organisation is running out of private IPv4 space across hundreds of cloud networks. How would you
+      approach adopting IPv6, and what problems would you expect along the way?
+    expected_concepts:
+      - dual-stack before IPv6-only
+      - egress-only internet gateways instead of NAT
+      - security rules written separately for IPv6
+      - managed services and tools without IPv6 support
+      - NAT64 and DNS64 for IPv6-only workloads
+      - application, logging and monitoring readiness
+    rubric:
+      excellent: Proposes a phased dual-stack plan, starting with workloads that benefit most, covers security rule parity and egress, and anticipates service and tooling gaps.
+      good: Knows dual-stack and that security rules need IPv6 equivalents.
+      weak: Expects to flip to IPv6 everywhere at once or ignores security implications.
+    followups:
+      - What security mistake is common when instances first get IPv6 addresses?
+      - Where would IPv6 relieve pressure most quickly, for example in Kubernetes?
+    common_errors:
+      - Assuming instances with IPv6 addresses are still unreachable because they sit in a private subnet.
+
+  - external_key: technical.cloud.private_saas_endpoint
+    competency_key: networking
+    topic: Exposing a service privately to customer networks
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      You run a service that customers need to reach privately from their own cloud accounts, and many of
+      them use the same IP ranges you do. How would you expose it?
+    expected_concepts:
+      - PrivateLink endpoint services, Private Service Connect or Azure Private Link Service
+      - no dependency on non-overlapping CIDRs
+      - network load balancer in front of the service
+      - allow-listing and approving consumer accounts
+      - multi-zone availability of the endpoint service
+      - DNS names for consumers
+    rubric:
+      excellent: Chooses a private link style service because it avoids routing and overlap, covers consumer approval, zonal availability and DNS, and contrasts it with peering or VPN.
+      good: Identifies PrivateLink or an equivalent as the right tool.
+      weak: Proposes peering with every customer despite overlapping ranges.
+    followups:
+      - How does your service see the customer's source IP through PrivateLink?
+      - How would you support a customer in a region where you don't run?
+    common_errors:
+      - Choosing peering, which fails on overlapping ranges and exposes whole networks.
+
+  - external_key: technical.cloud.tiered_segmentation
+    competency_key: security
+    topic: Network segmentation for regulated workloads
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How would you design network segmentation for a regulated workload in the cloud, so that a compromise
+      in one tier can't easily reach the others?
+    expected_concepts:
+      - separate subnets or accounts per tier and environment
+      - default deny with rules referencing security groups or tags
+      - no direct internet path for data tiers
+      - private endpoints for managed services
+      - east-west inspection where required
+      - flow log monitoring and alerting on unexpected paths
+    rubric:
+      excellent: Layers account, subnet and identity boundaries with default deny, keeps data tiers off the internet, and adds detection so policy violations are noticed, explaining why each layer exists.
+      good: Separates tiers by subnet with restrictive security groups.
+      weak: Relies on one flat network and host firewalls.
+    followups:
+      - When would you put a tier in its own account rather than its own subnet?
+      - How would you prove to an auditor that the segmentation works?
+    common_errors:
+      - Segmenting by subnet but allowing all traffic between them inside the VPC.
+
+  - external_key: technical.cloud.dns_failover_delay
+    competency_key: networking
+    topic: Slow DNS-based regional failover
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      During a regional failover test, traffic took twenty minutes to move to the secondary region even
+      though the DNS record has a sixty second TTL. What could explain that, and how would you redesign it?
+    expected_concepts:
+      - resolvers and clients that ignore or extend TTLs
+      - runtime DNS caching such as in the JVM
+      - long-lived pooled connections to the old region
+      - health check thresholds delaying the switch
+      - anycast or global load balancers that avoid DNS changes
+      - CDN origin failover
+    rubric:
+      excellent: Breaks the delay into detection, DNS propagation and client connection reuse, gives specific causes for each, and proposes a design that does not depend on clients re-resolving DNS.
+      good: Identifies client caching and long-lived connections as causes.
+      weak: Simply suggests lowering the TTL further.
+    followups:
+      - How would you measure each part of the failover delay?
+      - How would you make clients drop connections to an unhealthy region?
+    common_errors:
+      - Assuming every client honours the TTL.
+
+  - external_key: technical.cloud.hybrid_dns_resolution
+    competency_key: networking
+    topic: Hybrid DNS between on-premises and cloud
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      After connecting your data centre to the cloud, on-premises servers can reach cloud VMs by IP but not
+      by name, and cloud workloads can't resolve internal corporate hostnames. How would you fix DNS in both
+      directions?
+    expected_concepts:
+      - inbound resolver endpoints for on-premises queries into the cloud
+      - outbound resolver endpoints with forwarding rules for corporate domains
+      - conditional forwarders on the on-premises DNS servers
+      - Route 53 Resolver, Azure DNS Private Resolver or Cloud DNS forwarding zones
+      - sharing forwarding rules across accounts or networks
+      - redundancy of resolver endpoints across zones
+    rubric:
+      excellent: Designs forwarding in both directions with managed resolver endpoints, shares rules centrally across networks, and makes the endpoints redundant.
+      good: Knows conditional forwarding is needed both ways and names the provider feature.
+      weak: Proposes copying records into hosts files or running ad hoc DNS servers on VMs without redundancy.
+    followups:
+      - How would every new VPC or VNet get the same forwarding rules automatically?
+      - What happens to name resolution if the link to the data centre goes down?
+    common_errors:
+      - Pointing cloud workloads directly at on-premises DNS, which breaks provider-internal names.
+
+  - external_key: technical.cloud.private_dns_zones
+    competency_key: networking
+    topic: Private DNS zones for internal services
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do private DNS zones work in the cloud, and how would you name and organise them for internal
+      services across development, staging and production?
+    expected_concepts:
+      - zones visible only to associated VPCs or VNets
+      - Route 53 private hosted zones, Azure Private DNS or Cloud DNS private zones
+      - a consistent naming scheme per environment
+      - separate zones or subdomains per environment to avoid collisions
+      - managing records through infrastructure as code or service discovery
+      - sharing zones across accounts or networks
+    rubric:
+      excellent: Explains zone association and visibility, proposes a clear per-environment naming scheme, and manages records automatically and consistently across networks.
+      good: Knows private zones resolve only inside associated networks and suggests sensible names.
+      weak: Relies on IP addresses in configuration or cannot explain where private names resolve.
+    followups:
+      - How would a service in another account resolve names in your private zone?
+      - Who should own record changes, and how do you stop stale records piling up?
+    common_errors:
+      - Hard-coding IP addresses in application configuration instead of using names.
+
+  - external_key: technical.cloud.public_site_tls
+    competency_key: security
+    topic: TLS certificates for a public site
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A team is launching a public website in the cloud and needs HTTPS. How would you set up certificates
+      and TLS termination so that renewals never cause an outage?
+    expected_concepts:
+      - managed certificates such as ACM, App Service or Google-managed certificates
+      - DNS validation for automatic renewal
+      - terminating TLS at the load balancer or CDN
+      - redirecting HTTP to HTTPS and modern TLS policies
+      - monitoring certificate expiry
+      - re-encrypting to the backend when required
+    rubric:
+      excellent: Uses provider-managed certificates with DNS validation so renewal is automatic, terminates at the edge with a modern policy, and still monitors expiry for anything not managed.
+      good: Uses managed certificates on a load balancer and redirects to HTTPS.
+      weak: Uploads manually bought certificates with a calendar reminder for renewal.
+    followups:
+      - Where would you still need certificates you manage yourself?
+      - Would you encrypt traffic between the load balancer and the instances, and why?
+    common_errors:
+      - Email-validated certificates that silently fail to renew.
+
+  - external_key: technical.cloud.transit_route_domains
+    competency_key: aws
+    topic: Route domains in a transit hub
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      With a transit gateway or a similar hub, how would you use separate route tables to keep production,
+      non-production and shared services apart while still letting each reach what it needs?
+    expected_concepts:
+      - attachment association versus route propagation
+      - separate route tables per environment or domain
+      - shared services reachable from all domains
+      - no route between production and non-production
+      - blackhole routes and inspection paths
+      - managing routes as code across accounts
+    rubric:
+      excellent: Distinguishes association from propagation, designs isolated routing domains with shared services reachable from each, and explains how inspection fits in.
+      good: Uses separate route tables per environment with shared services propagated to both.
+      weak: Uses a single default route table where every network can reach every other.
+    followups:
+      - How would you insert a firewall for traffic between two domains?
+      - How do you stop a team accidentally propagating a route into production?
+    common_errors:
+      - Leaving default route table association and propagation on, connecting everything.
+
+  - external_key: technical.cloud.cross_region_chattiness
+    competency_key: distributed_systems
+    topic: Latency from cross-region calls
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      After moving part of an application to another region to get more capacity, page loads went from
+      three hundred milliseconds to three seconds. How would you analyse and fix that?
+    expected_concepts:
+      - chatty sequential calls multiply round-trip time
+      - distributed tracing to find cross-region hops
+      - co-locating services with their data
+      - batching, parallelising or making calls asynchronous
+      - caching or replicating read data locally
+      - connection reuse and TLS handshake cost
+    rubric:
+      excellent: Uses tracing to count cross-region round trips, explains how sequential calls multiply latency, and proposes co-location first with batching, caching or replication where moving is not possible.
+      good: Identifies cross-region latency on chatty calls and proposes moving components or caching.
+      weak: Suggests bigger instances or a faster network link.
+    followups:
+      - How would you decide which component must move back?
+      - What's the impact of opening a new TLS connection for every cross-region call?
+    common_errors:
+      - Blaming bandwidth when the problem is round trips.

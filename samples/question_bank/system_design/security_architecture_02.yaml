@@ -1,0 +1,617 @@
+# System design: security architecture (2 of 4) — zero-trust access, network controls and privileged access.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [security, cloud]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.security_architecture.replacing_the_vpn
+    competency_key: security
+    topic: Moving internal apps off the VPN
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Today anyone on the corporate VPN can reach every internal web app. How would you design access so each app
+      decides who gets in based on identity rather than network location?
+    expected_concepts:
+      - identity-aware proxy in front of internal apps
+      - authentication through the central identity provider with MFA
+      - per-application access policy by group or role
+      - apps no longer reachable directly from the network
+      - access logs per request
+    rubric:
+      excellent: Places an identity-aware proxy in front of each app, enforces SSO and MFA with per-app group policies, removes direct network paths to the apps and logs every access.
+      good: Proposes identity-based access per app but leaves the apps reachable on the internal network as well.
+      weak: Suggests a second VPN or firewall rules by IP range, keeping network location as the main control.
+    followups:
+      - Which apps would you move first, and why?
+      - How do you stop someone from reaching the app directly and skipping the proxy?
+    common_errors:
+      - Leaving the old network path open so the new control can be bypassed.
+
+  - external_key: system_design.security_architecture.egress_allowlisting
+    competency_key: networking
+    topic: Controlling outbound traffic from servers
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your production servers can currently connect to anywhere on the internet. How would you design outbound
+      controls so they can reach only what they genuinely need, and why does that matter?
+    expected_concepts:
+      - default-deny egress with explicit allowed destinations
+      - egress proxy or NAT with domain-based filtering
+      - private endpoints for cloud services
+      - logging of outbound connections and DNS queries
+      - limiting data exfiltration and command-and-control
+    rubric:
+      excellent: Explains why egress control limits exfiltration and command-and-control, designs default-deny with a proxy or domain allow-list, uses private endpoints for cloud services and logs outbound traffic and DNS.
+      good: Proposes an allow-list and logging but is vague on how domains are filtered or how the list is maintained.
+      weak: Says outbound traffic is harmless or only blocks known bad IP addresses.
+    followups:
+      - How would you find out what a service actually needs before you lock it down?
+      - What about traffic to large cloud providers whose IP ranges change constantly?
+    common_errors:
+      - Filtering by IP address for services hosted behind shared CDN ranges.
+
+  - external_key: system_design.security_architecture.environment_account_separation
+    competency_key: aws
+    topic: Separating environments in the cloud
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A startup runs development, staging and production in a single cloud account, and every engineer has admin
+      rights. How would you restructure accounts and access as a first step toward a secure setup?
+    expected_concepts:
+      - separate accounts or projects per environment
+      - central identity with federated roles instead of IAM users
+      - narrower roles in production with elevated access on request
+      - organisation-wide guardrails and centralised logging
+      - separate account for security tooling and logs
+    rubric:
+      excellent: Splits environments into separate accounts, federates access from the identity provider, narrows production roles with elevation on request and sends logs to a separate security account with basic guardrails.
+      good: Separates accounts and reduces production access but leaves logging or guardrails out.
+      weak: Keeps a single account and relies on tagging or naming conventions to separate environments.
+    followups:
+      - What would engineers still be able to do in production day to day?
+      - Where would you keep the audit logs so production admins can't delete them?
+    common_errors:
+      - Creating long-lived IAM user keys for every engineer in every account.
+
+  - external_key: system_design.security_architecture.edge_protection_layers
+    competency_key: networking
+    topic: Layered protection for a public web app
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      You're launching a public web application and API. What layers of protection would you put between the
+      internet and your servers, and what does each one handle?
+    expected_concepts:
+      - CDN or edge network absorbing volumetric attacks
+      - web application firewall for common attack patterns
+      - rate limiting per client and per endpoint
+      - TLS termination and redirect to HTTPS
+      - origin locked so it accepts traffic only from the edge
+      - bot management for abusive automation
+    rubric:
+      excellent: Describes edge, WAF, rate limiting, TLS and bot controls with what each handles, and locks the origin so attackers can't go around the edge.
+      good: Names sensible layers with their purpose but forgets to protect the origin from direct access.
+      weak: Relies on a single firewall or claims the cloud provider handles everything by default.
+    followups:
+      - An attacker finds your origin's IP address. What happens?
+      - How would you avoid the WAF blocking legitimate customers?
+    common_errors:
+      - Leaving the origin publicly reachable behind the CDN.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.security_architecture.identity_aware_proxy
+    competency_key: security
+    topic: Designing an identity-aware access proxy
+    difficulty: medium
+    text: >-
+      Design the identity-aware proxy that will sit in front of all internal applications. Cover how it
+      authenticates users, decides access, passes identity to the apps and how the apps can trust what it sends.
+    expected_concepts:
+      - authentication via the identity provider with session handling at the proxy
+      - per-app policies combining user, group and device signals
+      - signed identity assertion forwarded to the backend
+      - backends verify the signature and accept traffic only from the proxy
+      - support for non-HTTP protocols or a clear plan for them
+      - per-request decision logging
+    rubric:
+      excellent: Designs authentication, policy evaluation with device signals, a signed identity assertion that backends verify, network restrictions so only the proxy can reach apps, and detailed logging.
+      good: Covers authentication and per-app policy well but forwards identity in plain headers that a backend can't verify.
+      weak: Describes a reverse proxy with basic login and no way for apps to trust the identity or to block bypass.
+    followups:
+      - How would you handle long-lived WebSocket connections when a user's access is revoked?
+      - What happens to access if the proxy fleet is partially down?
+    common_errors:
+      - Trusting an X-User header that any client inside the network could set.
+
+  - external_key: system_design.security_architecture.device_trust_signals
+    competency_key: security
+    topic: Using device posture in access decisions
+    difficulty: medium
+    text: >-
+      Security wants access to sensitive internal systems allowed only from company-managed, up-to-date laptops.
+      How would you design device trust into your access decisions?
+    expected_concepts:
+      - device identity via a certificate issued at enrolment
+      - posture signals from device management and endpoint security tools
+      - posture evaluated at access time and re-evaluated periodically
+      - tiered policies by sensitivity of the system
+      - grace periods and self-remediation guidance
+      - protecting the device certificate from export
+    rubric:
+      excellent: Establishes strong device identity with a hardware-protected certificate, combines posture from management and endpoint tools, applies tiered policies, re-evaluates during sessions and gives users a way to fix issues themselves.
+      good: Uses device management signals in access policy but relies on easily copied identifiers or checks only at login.
+      weak: Checks the user agent string or an IP range to decide whether a device is managed.
+    followups:
+      - How would you stop someone from copying the device certificate to an unmanaged machine?
+      - What should happen when a laptop misses a patch deadline by one day?
+    common_errors:
+      - Treating a self-reported device attribute as proof of management.
+
+  - external_key: system_design.security_architecture.kubernetes_human_access
+    competency_key: security
+    topic: Human access to Kubernetes clusters
+    difficulty: medium
+    text: >-
+      Engineers access forty Kubernetes clusters using kubeconfig files with long-lived admin credentials that get
+      passed around. Design a better access model for humans.
+    expected_concepts:
+      - OIDC authentication to the API server through the identity provider
+      - short-lived credentials and no shared kubeconfigs
+      - RBAC bound to identity provider groups
+      - read-only by default with elevation for changes
+      - API server audit logs tied to individual identities
+      - private API endpoints reached through an access proxy
+    rubric:
+      excellent: Replaces shared credentials with OIDC-backed short-lived access, binds RBAC to groups with read-only defaults and elevation, exposes clusters only through a controlled path and ties audit logs to people.
+      good: Moves to identity-based authentication with RBAC but keeps broad standing write access.
+      weak: Rotates the shared admin credentials more often while keeping the same model.
+    followups:
+      - How would an engineer get emergency write access at three in the morning?
+      - How would you revoke the old credentials that are already scattered around?
+    common_errors:
+      - Binding groups to cluster-admin because finer roles take effort.
+
+  - external_key: system_design.security_architecture.database_access_proxy
+    competency_key: security
+    topic: Controlled human access to production databases
+    difficulty: medium
+    text: >-
+      Engineers sometimes need to query production databases to debug customer issues, and those databases hold
+      personal data. Design how human access to production data works.
+    expected_concepts:
+      - access through a proxy or gateway rather than direct credentials
+      - short-lived credentials issued per session after approval
+      - read-only by default with separate approval for writes
+      - query-level audit tied to the individual
+      - masking or limiting sensitive columns
+      - linking access to a ticket or incident
+    rubric:
+      excellent: Routes access through a gateway with per-session credentials, approval linked to a reason, read-only defaults, column masking and query-level audit attributed to the person.
+      good: Uses temporary credentials and audit but has no masking or approval tied to a reason.
+      weak: Shares a read-write database user among the team or relies on a bastion with no query logging.
+    followups:
+      - How would you handle a query that would return a million customer records?
+      - Who reviews the audit trail, and how often?
+    common_errors:
+      - Logging connections but not the queries that were run.
+
+  - external_key: system_design.security_architecture.break_glass_access
+    competency_key: security
+    topic: Emergency break-glass access
+    difficulty: medium
+    text: >-
+      During a major outage your identity provider and access tooling may themselves be broken. Design a
+      break-glass path that lets responders get in when everything else fails, without it becoming a back door.
+    expected_concepts:
+      - a small number of emergency accounts independent of the normal identity provider
+      - credentials split or sealed with strong MFA such as hardware keys
+      - use triggering immediate alerts to several people
+      - all actions logged to a separate destination
+      - credentials rotated after every use
+      - regular drills to prove the path works
+    rubric:
+      excellent: Designs independent emergency accounts with hardware-backed authentication, split custody, loud alerting on use, separate logging, rotation after use and scheduled drills.
+      good: Defines emergency accounts with alerting but skips drills or post-use rotation.
+      weak: Keeps a root password in a shared document or relies on the same identity provider that might be down.
+    followups:
+      - How would you know if someone used the break-glass account quietly?
+      - How often would you test it, and what does a test look like?
+    common_errors:
+      - Never testing the emergency path until the day it's needed.
+
+  - external_key: system_design.security_architecture.east_west_segmentation
+    competency_key: networking
+    topic: Segmenting a flat internal network
+    difficulty: medium
+    text: >-
+      All services in your data centre can talk to each other on any port. Design a segmentation approach that
+      limits which workloads can reach which, and explain how you'd roll it out without breaking things.
+    expected_concepts:
+      - discovering actual traffic flows before writing policy
+      - segments or policies keyed to workload identity or labels rather than raw IPs
+      - default deny between segments with explicit allows
+      - monitor-only mode before enforcing
+      - policy as code with ownership per service
+      - handling shared services like DNS and monitoring
+    rubric:
+      excellent: Starts with flow discovery, writes identity- or label-based policies owned by services, runs in monitor mode first, enforces gradually and accounts for shared infrastructure.
+      good: Proposes sensible segments and a staged rollout but bases rules on IP addresses that drift.
+      weak: Proposes a big-bang firewall change or segmentation only at the perimeter.
+    followups:
+      - How do you keep policies correct as services change every week?
+      - What do you do about a legacy service that talks to everything?
+    common_errors:
+      - Enforcing deny rules before observing real traffic.
+
+  - external_key: system_design.security_architecture.admin_plane_isolation
+    competency_key: security
+    topic: Isolating the administrative plane
+    difficulty: medium
+    text: >-
+      Your cloud and infrastructure administrators do their admin work from the same laptops they use for email
+      and browsing. How would you design an isolated path for administrative actions?
+    expected_concepts:
+      - dedicated privileged access workstations or isolated browser sessions
+      - separate admin identities from everyday identities
+      - phishing-resistant MFA for admin identities
+      - admin consoles reachable only from the privileged path
+      - session recording or detailed logging for admin actions
+    rubric:
+      excellent: Separates admin identities and devices or sessions from everyday use, requires phishing-resistant MFA, restricts admin interfaces to that path and logs admin sessions in detail.
+      good: Separates admin accounts with stronger MFA but still allows admin access from everyday devices.
+      weak: Relies on admins being careful, or simply adds another password prompt.
+    followups:
+      - What would the day-to-day experience be for an admin under this design?
+      - How would you handle cloud consoles that are reachable from anywhere by default?
+    common_errors:
+      - Using the same account for email and for production administration.
+
+  - external_key: system_design.security_architecture.contractor_access
+    competency_key: security
+    topic: Access for contractors on unmanaged devices
+    difficulty: medium
+    text: >-
+      A group of external contractors needs access to three internal systems for six months, from their own
+      laptops that you don't manage. Design how they get in and what you'd do to contain the risk.
+    expected_concepts:
+      - separate external identities with expiry dates
+      - access limited to specific apps through a proxy
+      - browser isolation or virtual desktops for sensitive data
+      - restrictions on download, copy and print where needed
+      - sponsor ownership and periodic re-approval
+      - automatic removal at contract end
+    rubric:
+      excellent: Gives contractors expiring external identities with sponsors, scopes access to specific apps, uses isolation for sensitive data on unmanaged devices and removes access automatically at contract end.
+      good: Scopes access with separate accounts but has no plan for data leaving unmanaged devices or for expiry.
+      weak: Adds contractors to the VPN with normal employee accounts.
+    followups:
+      - One of the systems has no web interface. How do they reach it?
+      - How would you know if a contractor's laptop is infected?
+    common_errors:
+      - Forgetting to set an end date on external accounts.
+
+  - external_key: system_design.security_architecture.legacy_apps_zero_trust
+    competency_key: security
+    topic: Bringing legacy applications under zero trust
+    difficulty: medium
+    text: >-
+      Some important internal applications only support LDAP passwords or Kerberos, or rely on IP allow-lists.
+      How would you bring them under a zero-trust access model without rewriting them?
+    expected_concepts:
+      - fronting them with an authenticating proxy or gateway
+      - protocol-aware connectors for non-HTTP traffic
+      - removing direct network reachability
+      - MFA enforced at the access layer
+      - mapping centrally managed groups to the app's local accounts
+      - a plan to retire or replace the worst offenders
+    rubric:
+      excellent: Wraps legacy apps with access gateways or connectors that enforce identity and MFA, removes direct reachability, maps identities to local accounts and keeps a plan to replace them.
+      good: Proposes a proxy for web-based legacy apps but has no answer for non-HTTP protocols.
+      weak: Says legacy apps should stay on the VPN as an exception indefinitely.
+    followups:
+      - The app trusts whatever username the proxy sends. What could go wrong?
+      - How do you decide which legacy app to tackle first?
+    common_errors:
+      - Leaving a direct network path open for convenience after adding the gateway.
+
+  - external_key: system_design.security_architecture.customer_private_connectivity
+    competency_key: networking
+    topic: Private connectivity for enterprise customers
+    difficulty: medium
+    text: >-
+      Several enterprise customers insist that traffic to your SaaS API never crosses the public internet, and
+      others want their tenant reachable only from their own IP ranges. Design how the platform supports both.
+    expected_concepts:
+      - private endpoints such as PrivateLink per customer
+      - mapping the private connection to the correct tenant
+      - per-tenant IP allow-lists enforced at the edge
+      - authentication still required on private paths
+      - operational limits and cost per connection
+      - handling allow-list mistakes that lock customers out
+    rubric:
+      excellent: Designs private endpoints mapped to tenants, enforces per-tenant allow-lists at the edge, keeps authentication mandatory on private paths and plans for scale, cost and lockout recovery.
+      good: Offers private endpoints and IP allow-lists but treats the private path as automatically trusted.
+      weak: Proposes a dedicated VPN per customer into the shared production network.
+    followups:
+      - A customer misconfigures their allow-list and locks out their own staff. How do they recover?
+      - How do you stop a private connection from reaching another tenant's data?
+    common_errors:
+      - Skipping authentication because traffic arrives over a private link.
+
+  - external_key: system_design.security_architecture.signup_bot_defence
+    competency_key: security
+    topic: Defending sign-up and login from automation
+    difficulty: medium
+    text: >-
+      Bots are creating thousands of fake accounts a day and hammering your login endpoint with stolen
+      credentials. Design an anti-automation layer that stops most of it without wrecking the experience for real
+      users.
+    expected_concepts:
+      - signals such as velocity, IP reputation and device characteristics
+      - risk scoring with graduated responses rather than one hard block
+      - challenges only for suspicious traffic
+      - breached password checks at login and sign-up
+      - feedback loop from confirmed abuse into the model
+      - monitoring false positives
+    rubric:
+      excellent: Builds a risk-scoring layer from several signals with graduated responses, challenges only risky traffic, checks breached credentials, learns from confirmed abuse and watches the false positive rate.
+      good: Combines rate limits and challenges sensibly but applies them uniformly or without measurement.
+      weak: Puts a CAPTCHA on every request or blocks by IP address alone.
+    followups:
+      - Attackers move to residential proxies. Which of your signals still work?
+      - How would you know you're blocking real customers?
+    common_errors:
+      - Relying on IP rate limits against attackers with millions of addresses.
+
+  - external_key: system_design.security_architecture.centralised_traffic_inspection
+    competency_key: networking
+    topic: Central versus distributed traffic inspection
+    difficulty: medium
+    text: >-
+      Your organisation has around eighty cloud accounts, and security wants all traffic between them and to the
+      internet inspected by firewalls. How would you design the network, and what are the trade-offs of
+      centralising inspection?
+    expected_concepts:
+      - hub-and-spoke through a transit gateway with an inspection network
+      - symmetric routing requirements for stateful firewalls
+      - throughput, latency and cost of hairpinning traffic
+      - availability of the inspection tier as a shared dependency
+      - distributed controls such as security groups as an alternative
+      - which flows really need deep inspection
+    rubric:
+      excellent: Designs a hub-and-spoke inspection architecture, handles symmetric routing and availability, weighs latency and cost against distributed controls and chooses which flows need inspection.
+      good: Describes central inspection correctly but ignores its cost or failure impact.
+      weak: Proposes inspecting everything centrally without considering the bottleneck, or skips inspection with no reasoning.
+    followups:
+      - What happens to all inter-account traffic if the firewall tier fails?
+      - How would you handle a latency-sensitive service that can't afford the extra hop?
+    common_errors:
+      - Creating asymmetric routes that stateful firewalls silently drop.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.security_architecture.zero_trust_programme
+    competency_key: security
+    topic: Organisation-wide move to zero trust
+    difficulty: hard
+    text: >-
+      You're asked to lead the move from a perimeter-based network to zero trust for five thousand employees and
+      several hundred applications. Design the target architecture and the phased plan to get there.
+    expected_concepts:
+      - inventory of users, devices, applications and data flows
+      - strong identity and device trust as foundations
+      - access proxy and connectors for apps, segmentation for workloads
+      - phases ordered by risk and dependency with measurable milestones
+      - coexistence with the VPN and a decommission point
+      - metrics such as share of apps behind policy and VPN usage
+    rubric:
+      excellent: Builds on identity and device foundations, sequences app and workload migration by risk with clear milestones, plans coexistence and VPN retirement and defines metrics that show progress.
+      good: Describes a coherent target architecture but the plan lacks sequencing, metrics or an end state for the VPN.
+      weak: Treats zero trust as buying one product, or proposes switching everything over at once.
+    followups:
+      - What would you show the leadership team after the first quarter?
+      - Which teams would resist, and how would you bring them along?
+    common_errors:
+      - Keeping the VPN as a permanent parallel path, so nothing is ever enforced.
+
+  - external_key: system_design.security_architecture.continuous_access_evaluation
+    competency_key: security
+    topic: Re-evaluating access during a session
+    difficulty: hard
+    text: >-
+      Today access is decided at login and then lasts for hours. Design a system where an active session is cut
+      off or downgraded within minutes when risk changes, for example the user is suspended, their device falls
+      out of compliance or their credentials are reported stolen.
+    expected_concepts:
+      - risk and state change events from identity, device and threat sources
+      - shared event channel between the identity provider and applications
+      - apps or proxies that act on events by revoking or stepping up
+      - short session lifetimes as a backstop
+      - handling apps that can't receive events
+      - avoiding mass lockouts from bad signals
+    rubric:
+      excellent: Designs an event pipeline from risk sources to enforcement points, has apps and proxies act on events, keeps short lifetimes as a backstop, covers apps without event support and guards against false-positive storms.
+      good: Proposes revocation events and shorter sessions but doesn't address apps that can't consume events or signal quality.
+      weak: Shortens every session to five minutes, or relies on users signing out.
+    followups:
+      - A faulty device feed marks every laptop non-compliant. What happens?
+      - How do you handle a long-running file download or video call?
+    common_errors:
+      - Assuming every application can consume revocation events.
+
+  - external_key: system_design.security_architecture.access_proxy_availability
+    competency_key: distributed_systems
+    topic: Keeping the access layer available
+    difficulty: hard
+    text: >-
+      Once every internal app sits behind your zero-trust proxy, the proxy and its policy engine become a single
+      point of failure for the whole company. Design them for global availability and decide how they should
+      behave when dependencies fail.
+    expected_concepts:
+      - regional proxy deployments close to users
+      - cached policy and identity data for degraded operation
+      - explicit fail-open versus fail-closed choice per app tier
+      - independence from the services the proxy protects
+      - staged policy rollout to avoid self-inflicted outages
+      - emergency bypass that is controlled and audited
+    rubric:
+      excellent: Distributes the proxy regionally, caches policy for degraded operation, chooses failure behaviour per app tier, avoids circular dependencies, stages policy changes and defines an audited emergency bypass.
+      good: Makes the proxy redundant and caches data but applies one failure mode everywhere.
+      weak: Runs the proxy as a single cluster or fails open everywhere without reasoning.
+    followups:
+      - A policy change accidentally denies everyone access to the incident tooling. How do you recover?
+      - What does the proxy depend on that could take it down?
+    common_errors:
+      - Putting the tools needed to fix the proxy behind the proxy itself.
+
+  - external_key: system_design.security_architecture.no_standing_production_access
+    competency_key: security
+    topic: Eliminating standing human access to production
+    difficulty: hard
+    text: >-
+      The goal is that no human has standing access to production systems or customer data, yet teams must still
+      deploy, debug and respond to incidents. Design the access architecture that makes that work.
+    expected_concepts:
+      - all routine changes through automated pipelines
+      - pre-approved, parameterised runbook actions
+      - just-in-time elevation with approval and expiry
+      - incident mode with faster but more heavily audited access
+      - recorded sessions and automatic review of elevated access
+      - metrics on how often humans needed direct access and why
+    rubric:
+      excellent: Moves routine work into pipelines and safe runbook actions, uses just-in-time elevation for the rest, defines an incident mode with extra audit and tracks why access was needed to keep reducing it.
+      good: Combines automation with just-in-time access but has no incident fast path or feedback loop.
+      weak: Removes access entirely without alternatives, or keeps standing access with better logging.
+    followups:
+      - An on-call engineer needs access in two minutes during a severe outage. Walk me through it.
+      - How would you stop runbook actions from becoming a back door?
+    common_errors:
+      - Making elevation so slow that teams create their own workarounds.
+
+  - external_key: system_design.security_architecture.compromised_workload_blast_radius
+    competency_key: security
+    topic: Limiting damage from one compromised service
+    difficulty: hard
+    text: >-
+      Assume an attacker gets code execution inside one of your two hundred microservices. Design the platform so
+      that what they can reach and do from there is as small as possible.
+    expected_concepts:
+      - per-service identity with least-privilege permissions
+      - network policy limiting callers and callees
+      - credentials scoped and short-lived, nothing shared across services
+      - metadata service and node protections against escape
+      - authorisation on internal APIs, not just authentication
+      - detection of unusual calls from a service
+    rubric:
+      excellent: Combines per-service identity and least privilege, network restrictions, short-lived scoped credentials, host and metadata hardening, authorisation on internal calls and behavioural detection.
+      good: Covers identity and network isolation but treats internal API calls as trusted once authenticated.
+      weak: Relies on the perimeter, or assumes internal services can trust each other freely.
+    followups:
+      - Which shared component would worry you most, and why?
+      - How would you detect the attacker moving to a second service?
+    common_errors:
+      - Overlooking the cloud instance metadata endpoint as a source of credentials.
+
+  - external_key: system_design.security_architecture.cross_company_service_trust
+    competency_key: security
+    topic: Service trust between two organisations
+    difficulty: hard
+    text: >-
+      Your services and a strategic partner's services need to call each other continuously, and both security
+      teams refuse to exchange long-lived shared secrets. Design the trust relationship between the two
+      organisations.
+    expected_concepts:
+      - federation of workload identity between two trust domains
+      - mutual TLS or signed token exchange with each side's own issuer
+      - explicit mapping of partner identities to narrow permissions
+      - key and trust bundle rotation coordinated across organisations
+      - revocation and kill switch for the relationship
+      - shared audit and incident contacts
+    rubric:
+      excellent: Federates the two trust domains without shared secrets, maps partner identities to narrow permissions, plans trust bundle rotation and revocation and agrees audit and incident procedures.
+      good: Uses mutual TLS or token exchange correctly but has no rotation, revocation or permission mapping.
+      weak: Falls back to a shared API key or IP allow-listing as the main control.
+    followups:
+      - The partner's issuing key is compromised. What happens on your side?
+      - How do you limit what the partner can do if their whole platform is breached?
+    common_errors:
+      - Trusting every identity from the partner's trust domain equally.
+
+  - external_key: system_design.security_architecture.privileged_session_recording
+    competency_key: security
+    topic: Recording privileged sessions
+    difficulty: hard
+    text: >-
+      Regulators require you to record privileged sessions on servers and databases and be able to replay them.
+      Design the recording system, including how you handle the sensitive data those recordings will capture.
+    expected_concepts:
+      - recording at a gateway the user can't bypass
+      - structured capture of commands and queries, not only video
+      - tamper-resistant storage separate from the systems being accessed
+      - encryption and strict access control for recordings
+      - retention aligned to regulation and minimising captured secrets
+      - searchable indexes and alerting on risky commands
+    rubric:
+      excellent: Records at an unbypassable gateway with structured command capture, stores recordings tamper-resistantly and encrypted with tight access, sets retention, limits secret capture and makes recordings searchable with alerts.
+      good: Captures and stores sessions reasonably but ignores sensitive data inside the recordings or tampering.
+      weak: Relies on shell history files or recordings stored on the same hosts being accessed.
+    followups:
+      - A recording contains a customer's full card number. What happens next?
+      - Who is allowed to watch recordings, and how is that access itself audited?
+    common_errors:
+      - Treating recordings as low-sensitivity logs.
+
+  - external_key: system_design.security_architecture.device_fleet_identity
+    competency_key: security
+    topic: Identity for a fleet of connected devices
+    difficulty: hard
+    text: >-
+      Your company ships a few hundred thousand connected devices that talk to your cloud. Design how each device
+      gets a unique identity at manufacturing, proves it to your backend and loses access if it's stolen or
+      tampered with.
+    expected_concepts:
+      - per-device keys generated in a secure element
+      - certificates issued during manufacturing through a controlled CA
+      - mutual TLS or signed tokens to authenticate to the backend
+      - device registry with ownership and status
+      - revocation and quarantine of specific devices
+      - certificate renewal and recovery over the device lifetime
+    rubric:
+      excellent: Generates keys in secure hardware, issues per-device certificates through a controlled manufacturing CA, authenticates devices cryptographically, maintains a registry with revocation and plans renewal over years.
+      good: Uses per-device certificates and a registry but is vague on manufacturing trust or long-term renewal.
+      weak: Bakes one shared key or password into every device's firmware.
+    followups:
+      - How do you protect the CA that signs device certificates at the factory?
+      - A batch of devices is cloned. How would you detect it?
+    common_errors:
+      - Using a shared fleet-wide secret, so one extracted device compromises all of them.
+
+  - external_key: system_design.security_architecture.ddos_resilient_login
+    competency_key: networking
+    topic: Surviving large attacks on login and APIs
+    difficulty: hard
+    text: >-
+      A large botnet repeatedly targets your login and public API with traffic that looks like real requests.
+      Design an architecture that keeps legitimate users signed in and served while you're under that kind of
+      attack.
+    expected_concepts:
+      - edge absorption with global anycast capacity
+      - adaptive rate limits per identity, client and endpoint
+      - prioritising authenticated and known-good traffic
+      - cheap rejection early with expensive work late
+      - protecting dependencies like the identity store and database
+      - runbooks and automatic mitigations with observability
+    rubric:
+      excellent: Layers edge absorption, adaptive limits and early cheap rejection, prioritises known-good traffic, shields expensive backends and pairs automatic mitigations with clear observability and runbooks.
+      good: Uses edge protection and rate limits well but doesn't prioritise legitimate users or protect backends.
+      weak: Relies on adding servers or blocking IP addresses one at a time.
+    followups:
+      - How do you tell a flash crowd of real users from an attack?
+      - Which part of the login path is most expensive, and how do you protect it?
+    common_errors:
+      - Letting attack traffic reach the password hashing step, which exhausts CPU.

@@ -1,0 +1,265 @@
+version: 1
+slug: change_failure_rate_by_service
+title: "Change Failure Rate per Service"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [devops, sre, data_analyst, dba, engineering_manager]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Change Failure Rate per Service
+
+  The platform team records every production deployment in one table and wants a weekly report of how
+  often a change to each service goes wrong.
+
+  Table `deployments`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | service | VARCHAR(60) | name of the deployed service |
+  | status | VARCHAR(20) | `success`, `failed` or `rolled_back` |
+  | deployed_at | INTEGER | Unix epoch seconds (not needed for this report) |
+
+  A deployment **counts as failed** when its status is `failed` **or** `rolled_back`.
+
+  For every service with **at least 3 deployments**, return:
+
+  - `service`
+  - `total_deploys`: the number of deployments of the service
+  - `failed_deploys`: the number of failed deployments of the service
+  - `failure_rate_pct`: `100 * failed_deploys / total_deploys`, rounded to **2 decimal places** (a
+    decimal number, for example `33.33`; do not truncate with integer division)
+
+  Services with fewer than 3 deployments are left out. Order the rows by `failure_rate_pct`
+  descending, then by `service` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  deployments
+  +----+----------+-------------+-------------+
+  | id | service  | status      | deployed_at |
+  +----+----------+-------------+-------------+
+  | 1  | checkout | success     | 1700000000  |
+  | 2  | checkout | failed      | 1700000600  |
+  | 3  | search   | success     | 1700001200  |
+  | 4  | checkout | success     | 1700001800  |
+  | 5  | payments | failed      | 1700002400  |
+  | 6  | checkout | rolled_back | 1700003000  |
+  | 7  | search   | success     | 1700003600  |
+  | 8  | auth     | failed      | 1700004200  |
+  | 9  | payments | success     | 1700004800  |
+  | 10 | checkout | success     | 1700005400  |
+  | 11 | search   | success     | 1700006000  |
+  | 12 | payments | success     | 1700006600  |
+  | 13 | auth     | failed      | 1700007200  |
+  +----+----------+-------------+-------------+
+
+  Output
+  +----------+---------------+----------------+------------------+
+  | service  | total_deploys | failed_deploys | failure_rate_pct |
+  +----------+---------------+----------------+------------------+
+  | checkout | 5             | 2              | 40.0             |
+  | payments | 3             | 1              | 33.33            |
+  | search   | 3             | 0              | 0.0              |
+  +----------+---------------+----------------+------------------+
+  auth has only 2 deployments and is not reported. The rolled-back checkout deployment counts as failed.
+  ```
+
+  ### Example 2
+  ```
+  deployments
+  +----+---------+-------------+-------------+
+  | id | service | status      | deployed_at |
+  +----+---------+-------------+-------------+
+  | 1  | billing | success     | 1700000000  |
+  | 2  | api-gw  | success     | 1700000100  |
+  | 3  | worker  | failed      | 1700000200  |
+  | 4  | billing | rolled_back | 1700000300  |
+  | 5  | api-gw  | failed      | 1700000400  |
+  | 6  | worker  | rolled_back | 1700000500  |
+  | 7  | billing | success     | 1700000600  |
+  | 8  | api-gw  | success     | 1700000700  |
+  | 9  | worker  | failed      | 1700000800  |
+  | 10 | billing | success     | 1700000900  |
+  | 11 | api-gw  | success     | 1700001000  |
+  +----+---------+-------------+-------------+
+
+  Output
+  +---------+---------------+----------------+------------------+
+  | service | total_deploys | failed_deploys | failure_rate_pct |
+  +---------+---------------+----------------+------------------+
+  | worker  | 3             | 3              | 100.0            |
+  | api-gw  | 4             | 1              | 25.0             |
+  | billing | 4             | 1              | 25.0             |
+  +---------+---------------+----------------+------------------+
+  api-gw and billing tie on 25.0 and are ordered by name.
+  ```
+
+  ### Constraints
+  - `0 <= rows in deployments <= 10^5`
+  - `status` is always one of `success`, `failed`, `rolled_back`.
+languages: [sql]
+starter_code:
+  sql: |
+    -- For each service with at least 3 deployments, report totals, failures and the failure rate.
+    SELECT service, COUNT(*) AS total_deploys, 0 AS failed_deploys, 0.0 AS failure_rate_pct
+    FROM deployments
+    GROUP BY service
+    ORDER BY service;
+reference_solutions:
+  sql: |
+    SELECT
+      service,
+      COUNT(*) AS total_deploys,
+      SUM(CASE WHEN status IN ('failed', 'rolled_back') THEN 1 ELSE 0 END) AS failed_deploys,
+      CAST(
+        ROUND(100.0 * SUM(CASE WHEN status IN ('failed', 'rolled_back') THEN 1 ELSE 0 END) / COUNT(*), 2)
+        AS DOUBLE PRECISION
+      ) AS failure_rate_pct
+    FROM deployments
+    GROUP BY service
+    HAVING COUNT(*) >= 3
+    ORDER BY failure_rate_pct DESC, service ASC;
+sql_setup: |
+  CREATE TABLE deployments (
+    id INTEGER PRIMARY KEY,
+    service VARCHAR(60) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    deployed_at INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - rolled_back counts as failed; auth below 3 deploys is excluded"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (1, 'checkout', 'success', 1700000000), (2, 'checkout', 'failed', 1700000600),
+        (3, 'search', 'success', 1700001200), (4, 'checkout', 'success', 1700001800),
+        (5, 'payments', 'failed', 1700002400), (6, 'checkout', 'rolled_back', 1700003000),
+        (7, 'search', 'success', 1700003600), (8, 'auth', 'failed', 1700004200),
+        (9, 'payments', 'success', 1700004800), (10, 'checkout', 'success', 1700005400),
+        (11, 'search', 'success', 1700006000), (12, 'payments', 'success', 1700006600),
+        (13, 'auth', 'failed', 1700007200);
+    expected_rows: [["checkout", 5, 2, 40.0], ["payments", 3, 1, 33.33], ["search", 3, 0, 0.0]]
+  - id: t2
+    description: "Example 2 - tie on the rate broken by service name"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (1, 'billing', 'success', 1700000000), (2, 'api-gw', 'success', 1700000100),
+        (3, 'worker', 'failed', 1700000200), (4, 'billing', 'rolled_back', 1700000300),
+        (5, 'api-gw', 'failed', 1700000400), (6, 'worker', 'rolled_back', 1700000500),
+        (7, 'billing', 'success', 1700000600), (8, 'api-gw', 'success', 1700000700),
+        (9, 'worker', 'failed', 1700000800), (10, 'billing', 'success', 1700000900),
+        (11, 'api-gw', 'success', 1700001000);
+    expected_rows: [["worker", 3, 3, 100.0], ["api-gw", 4, 1, 25.0], ["billing", 4, 1, 25.0]]
+  - id: t3
+    hidden: true
+    description: "Empty table returns no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Every service has fewer than 3 deployments - no rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (1, 'a', 'failed', 10), (2, 'a', 'failed', 20), (3, 'b', 'success', 30), (4, 'c', 'rolled_back', 40);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Integer-division pitfall - 1 of 7 must be 14.29 and 3 of 7 must be 42.86, not 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (1, 'edge', 'failed', 1), (2, 'edge', 'success', 2), (3, 'edge', 'success', 3), (4, 'edge', 'success', 4),
+        (5, 'edge', 'success', 5), (6, 'edge', 'success', 6), (7, 'edge', 'success', 7),
+        (8, 'queue', 'failed', 8), (9, 'queue', 'rolled_back', 9), (10, 'queue', 'failed', 10), (11, 'queue', 'success', 11),
+        (12, 'queue', 'success', 12), (13, 'queue', 'success', 13), (14, 'queue', 'success', 14);
+    expected_rows: [["queue", 7, 3, 42.86], ["edge", 7, 1, 14.29]]
+  - id: t6
+    hidden: true
+    description: "Exactly 3 deployments is included, 2 is not; only rolled_back failures"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (1, 'cron', 'rolled_back', 100), (2, 'cron', 'success', 200), (3, 'cron', 'rolled_back', 300),
+        (4, 'mailer', 'rolled_back', 400), (5, 'mailer', 'rolled_back', 500);
+    expected_rows: [["cron", 3, 2, 66.67]]
+  - id: t7
+    hidden: true
+    description: "Several services tie at 0.0 and several at 100.0 - name order inside each tie"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (1, 'zeta', 'success', 1), (2, 'zeta', 'success', 2), (3, 'zeta', 'success', 3),
+        (4, 'alpha', 'success', 4), (5, 'alpha', 'success', 5), (6, 'alpha', 'success', 6),
+        (7, 'omega', 'failed', 7), (8, 'omega', 'rolled_back', 8), (9, 'omega', 'failed', 9),
+        (10, 'beta', 'failed', 10), (11, 'beta', 'failed', 11), (12, 'beta', 'failed', 12), (13, 'beta', 'failed', 13);
+    expected_rows: [["beta", 4, 4, 100.0], ["omega", 3, 3, 100.0], ["alpha", 3, 0, 0.0], ["zeta", 3, 0, 0.0]]
+  - id: t8
+    hidden: true
+    description: "Rows inserted out of time order; deployed_at must not affect the result; 2 of 6 equals 1 of 3"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (1, 'ingest', 'success', 900), (2, 'ingest', 'failed', 100), (3, 'ingest', 'success', 500),
+        (4, 'ingest', 'success', 300), (5, 'ingest', 'rolled_back', 700), (6, 'ingest', 'success', 200),
+        (7, 'report', 'failed', 50), (8, 'report', 'success', 40), (9, 'report', 'success', 30),
+        (10, 'export', 'success', 20), (11, 'export', 'failed', 10), (12, 'export', 'success', 60),
+        (13, 'export', 'success', 70), (14, 'export', 'success', 80), (15, 'export', 'success', 90),
+        (16, 'export', 'success', 95), (17, 'export', 'success', 99);
+    expected_rows: [["ingest", 6, 2, 33.33], ["report", 3, 1, 33.33], ["export", 8, 1, 12.5]]
+  - id: t9
+    hidden: true
+    description: "Larger log - three-way tie at 25.0, a 5 percent service and one below the threshold"
+    ordered: true
+    setup_sql: |
+      INSERT INTO deployments (id, service, status, deployed_at) VALUES
+        (1, 'web', 'success', 1), (2, 'web', 'failed', 2), (3, 'web', 'success', 3), (4, 'web', 'success', 4),
+        (5, 'web', 'rolled_back', 5), (6, 'web', 'success', 6), (7, 'web', 'success', 7), (8, 'web', 'success', 8),
+        (9, 'gateway', 'failed', 9), (10, 'gateway', 'success', 10), (11, 'gateway', 'success', 11), (12, 'gateway', 'success', 12),
+        (13, 'db-proxy', 'failed', 13), (14, 'db-proxy', 'failed', 14), (15, 'db-proxy', 'success', 15),
+        (16, 'db-proxy', 'success', 16), (17, 'db-proxy', 'success', 17), (18, 'db-proxy', 'success', 18),
+        (19, 'db-proxy', 'success', 19), (20, 'db-proxy', 'success', 20),
+        (21, 'notifier', 'success', 21), (22, 'notifier', 'success', 22), (23, 'notifier', 'success', 23),
+        (24, 'notifier', 'success', 24), (25, 'notifier', 'success', 25), (26, 'notifier', 'success', 26),
+        (27, 'notifier', 'success', 27), (28, 'notifier', 'success', 28), (29, 'notifier', 'success', 29),
+        (30, 'notifier', 'success', 30), (31, 'notifier', 'success', 31), (32, 'notifier', 'success', 32),
+        (33, 'notifier', 'success', 33), (34, 'notifier', 'success', 34), (35, 'notifier', 'success', 35),
+        (36, 'notifier', 'success', 36), (37, 'notifier', 'success', 37), (38, 'notifier', 'success', 38),
+        (39, 'notifier', 'success', 39), (40, 'notifier', 'failed', 40),
+        (41, 'scheduler', 'failed', 41), (42, 'scheduler', 'success', 42);
+    expected_rows: [["db-proxy", 8, 2, 25.0], ["gateway", 4, 1, 25.0], ["web", 8, 2, 25.0], ["notifier", 20, 1, 5.0]]
+expected_concepts:
+  - "GROUP BY with conditional aggregation (SUM over CASE WHEN)"
+  - "HAVING to filter groups after aggregation"
+  - "avoiding integer division with a decimal literal"
+  - "ROUND to two decimals portably"
+  - "deterministic ORDER BY with a tie-breaker"
+optimal_complexity: {time: "O(n log n) for grouping and sorting (O(n) with hash aggregation)", space: "O(s) for s services"}
+rubric:
+  excellent: "Writes one GROUP BY query with a conditional SUM for failures, filters with HAVING COUNT(*) >= 3, forces decimal division before ROUND, orders by rate descending then name, and explains why WHERE cannot replace HAVING here."
+  good: "Reaches a correct query but needs a nudge on integer division, the rolled_back status or the tie-breaking order."
+  weak: "Uses WHERE status = 'failed' (dropping both totals and rolled_back), divides integers, forgets the minimum deploy count, or leaves the order unspecified."
+  criteria:
+    correctness: "All tests pass, including rolled_back failures, ties and the 3-deploy threshold."
+    efficiency: "Single pass aggregation; no self-joins or one subquery per service."
+    code_quality: "The failure condition is written once in a readable CASE expression, with clear output aliases."
+    edge_cases: "Empty table, services below the threshold, 0 and 100 percent, repeating decimals."
+    communication: "Explains conditional aggregation and why a decimal literal avoids integer division."
+hints:
+  - "You need two counts per service from the same rows: all deployments and only the failed ones. Think about counting conditionally inside one GROUP BY."
+  - "A CASE expression inside SUM can count only the rows that are failed or rolled back, and the minimum of three deployments is a condition on the group, not on individual rows."
+  - "Group by service, compute the failed count with SUM over a CASE that yields 1 for failed or rolled_back, keep groups with HAVING COUNT(*) of at least 3, multiply by 100.0 before dividing so the division is decimal, round to 2 places, and order by the rate descending then the service name."
+followups:
+  - "How would you restrict the report to the last 7 days using deployed_at, and which index would help?"
+  - "How would you also report the mean time between a failed deploy and the next successful one?"
+  - "Why can a WHERE clause on status not be used to compute the failure count here?"
+common_errors:
+  - "Filtering WHERE status = 'failed', which loses the total count and ignores rolled_back."
+  - "Dividing two integers, which yields 0 for any rate below 100 percent on PostgreSQL and SQLite."
+  - "Putting the minimum deployment count in WHERE instead of HAVING."
+  - "Ordering only by the rate, which leaves ties in an arbitrary order."

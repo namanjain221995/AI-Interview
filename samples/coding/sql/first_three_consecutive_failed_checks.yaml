@@ -1,0 +1,291 @@
+version: 1
+slug: first_three_consecutive_failed_checks
+title: "Third Consecutive Failed Check"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [sre, devops, qa]
+time_limit_minutes: 22
+prompt_markdown: |
+  ## Third Consecutive Failed Check
+
+  Synthetic monitoring runs scripted probes (log in, search, check out) against production on a
+  schedule. A single failed run is often noise, so the on-call policy pages only when a probe fails
+  **three runs in a row**. The SRE team is replaying last week's results to see when each probe would
+  have paged.
+
+  Table `health_checks`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | probe | VARCHAR(40) | probe name; `(probe, run_no)` is the primary key |
+  | run_no | INTEGER | run sequence number of that probe; increases over time but **may skip values** (runs lost to scheduler restarts) |
+  | ok | INTEGER | `1` when the run passed, `0` when it failed |
+
+  The runs of a probe are ordered by `run_no`. Missing numbers do not matter: two runs are
+  consecutive when no other run of the same probe lies between them. Runs of different probes are
+  independent.
+
+  A probe **alerts** at the run that is its third failure in a row, that is a failed run whose two
+  previous runs of the same probe also failed. If a probe has several such streaks, or a streak
+  longer than three, only the **earliest** alerting run counts.
+
+  Return `probe` and `alert_run_no` (the `run_no` of that earliest alerting run) for every probe that
+  ever had three consecutive failures, ordered by `probe` ascending. Probes that never alert are left
+  out.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  health_checks
+  +----------+--------+----+
+  | probe    | run_no | ok |
+  +----------+--------+----+
+  | login    | 1      | 1  |
+  | login    | 2      | 0  |
+  | login    | 3      | 0  |
+  | login    | 4      | 0  |
+  | login    | 5      | 0  |
+  | cdn      | 1      | 0  |
+  | cdn      | 2      | 0  |
+  | cdn      | 3      | 1  |
+  | cdn      | 4      | 0  |
+  | cdn      | 5      | 0  |
+  | payments | 10     | 0  |
+  | payments | 12     | 0  |
+  | payments | 15     | 0  |
+  +----------+--------+----+
+
+  Output
+  +----------+--------------+
+  | probe    | alert_run_no |
+  +----------+--------------+
+  | login    | 4            |
+  | payments | 15           |
+  +----------+--------------+
+  login alerts at run 4 (runs 2, 3, 4 failed). cdn never fails three times in a row. payments fails
+  at runs 10, 12 and 15, which are consecutive runs because 11, 13 and 14 do not exist.
+  ```
+
+  ### Example 2
+  ```
+  health_checks
+  +----------+--------+----+
+  | probe    | run_no | ok |
+  +----------+--------+----+
+  | search   | 1      | 0  |
+  | search   | 2      | 0  |
+  | search   | 3      | 1  |
+  | search   | 4      | 0  |
+  | search   | 5      | 0  |
+  | search   | 6      | 0  |
+  | checkout | 1      | 1  |
+  | checkout | 2      | 0  |
+  | checkout | 3      | 0  |
+  +----------+--------+----+
+
+  Output
+  +--------+--------------+
+  | probe  | alert_run_no |
+  +--------+--------------+
+  | search | 6            |
+  +--------+--------------+
+  search fails at runs 1 and 2, passes at 3, then fails at 4, 5 and 6, so it alerts at run 6.
+  ```
+
+  ### Constraints
+  - At most `10^6` rows; the table may be empty.
+  - `1 <= run_no <= 10^9`, unique per probe; `ok` is `0` or `1`.
+  - Rows are stored in no particular order.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return probe and alert_run_no (the earliest run that is the third failure in a row),
+    -- ordered by probe.
+    SELECT probe, MIN(run_no) AS alert_run_no
+    FROM health_checks
+    WHERE ok = 0
+    GROUP BY probe
+    ORDER BY probe;
+reference_solutions:
+  sql: |
+    WITH ordered AS (
+      SELECT probe,
+             run_no,
+             ok,
+             LAG(ok, 1) OVER (PARTITION BY probe ORDER BY run_no) AS prev1_ok,
+             LAG(ok, 2) OVER (PARTITION BY probe ORDER BY run_no) AS prev2_ok
+      FROM health_checks
+    )
+    SELECT probe, MIN(run_no) AS alert_run_no
+    FROM ordered
+    WHERE ok = 0 AND prev1_ok = 0 AND prev2_ok = 0
+    GROUP BY probe
+    ORDER BY probe;
+sql_setup: |
+  CREATE TABLE health_checks (
+    probe VARCHAR(40) NOT NULL,
+    run_no INTEGER NOT NULL,
+    ok INTEGER NOT NULL,
+    PRIMARY KEY (probe, run_no)
+  );
+tests:
+  - id: t1
+    description: "Example 1 - a streak of four alerts at its third run, a broken streak never alerts, gaps in run_no are ignored"
+    ordered: true
+    setup_sql: |
+      INSERT INTO health_checks (probe, run_no, ok) VALUES
+        ('login', 1, 1), ('login', 2, 0), ('login', 3, 0), ('login', 4, 0), ('login', 5, 0),
+        ('cdn', 1, 0), ('cdn', 2, 0), ('cdn', 3, 1), ('cdn', 4, 0), ('cdn', 5, 0),
+        ('payments', 10, 0), ('payments', 12, 0), ('payments', 15, 0);
+    expected_rows: [["login", 4], ["payments", 15]]
+  - id: t2
+    description: "Example 2 - first streak breaks after two failures; alert at the later triple; two failures alone do not alert"
+    ordered: true
+    setup_sql: |
+      INSERT INTO health_checks (probe, run_no, ok) VALUES
+        ('search', 1, 0), ('search', 2, 0), ('search', 3, 1), ('search', 4, 0), ('search', 5, 0),
+        ('search', 6, 0), ('checkout', 1, 1), ('checkout', 2, 0), ('checkout', 3, 0);
+    expected_rows: [["search", 6]]
+  - id: t3
+    hidden: true
+    description: "Empty table - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Every run passes, and one probe has only a single failed run - no alerts"
+    ordered: true
+    setup_sql: |
+      INSERT INTO health_checks (probe, run_no, ok) VALUES
+        ('login', 1, 1), ('login', 2, 1), ('login', 3, 1), ('login', 4, 1), ('search', 7, 0);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Streak of exactly three at the very start alerts at the third run; a later longer streak does not replace it"
+    ordered: true
+    setup_sql: |
+      INSERT INTO health_checks (probe, run_no, ok) VALUES
+        ('export', 1, 0), ('export', 2, 0), ('export', 3, 0), ('export', 4, 1), ('export', 5, 0),
+        ('export', 6, 0), ('export', 7, 0), ('export', 8, 0), ('export', 9, 0);
+    expected_rows: [["export", 3]]
+  - id: t6
+    hidden: true
+    description: "Large gaps and run numbers that do not start at 1 - a self-join on run_no + 1 finds nothing"
+    ordered: true
+    setup_sql: |
+      INSERT INTO health_checks (probe, run_no, ok) VALUES
+        ('dns', 1000, 1), ('dns', 1007, 0), ('dns', 1500, 0), ('dns', 999999999, 0), ('mail', 40, 0),
+        ('mail', 41, 0), ('mail', 90, 1), ('mail', 91, 0);
+    expected_rows: [["dns", 999999999]]
+  - id: t7
+    hidden: true
+    description: "Three probes inserted in shuffled order with different run_no steps (5 and 3); one probe never reaches three"
+    ordered: true
+    setup_sql: |
+      INSERT INTO health_checks (probe, run_no, ok) VALUES
+        ('auth', 109, 0), ('search', 25, 0), ('auth', 106, 0), ('auth', 112, 0), ('cdn', 2, 0),
+        ('auth', 115, 1), ('auth', 103, 1), ('search', 30, 0), ('search', 15, 1), ('search', 5, 0),
+        ('auth', 100, 0), ('search', 10, 0), ('cdn', 1, 0), ('search', 20, 0);
+    expected_rows: [["auth", 112], ["search", 30]]
+  - id: t8
+    hidden: true
+    description: "Failures of different probes interleave by run_no but must not be combined into one streak"
+    ordered: true
+    setup_sql: |
+      INSERT INTO health_checks (probe, run_no, ok) VALUES
+        ('api', 1, 0), ('api', 3, 0), ('api', 5, 1), ('web', 2, 0), ('web', 4, 1),
+        ('web', 6, 1), ('queue', 1, 1), ('queue', 2, 0), ('queue', 3, 0), ('queue', 4, 1),
+        ('queue', 5, 0), ('queue', 6, 0);
+    expected_rows: []
+  - id: t9
+    hidden: true
+    description: "Stress - about 430 shuffled runs over three probes; ledger has many two-failure streaks before its first triple, ingest never alerts"
+    ordered: true
+    setup_sql: |
+      INSERT INTO health_checks (probe, run_no, ok) VALUES
+        ('billing', 40, 1), ('ledger', 63, 1), ('billing', 63, 1), ('ledger', 32, 0), ('billing', 62, 0), ('ingest', 67, 0), ('ingest', 117, 0), ('ingest', 77, 1),
+        ('ledger', 184, 0), ('ledger', 2, 0), ('ingest', 44, 1), ('ingest', 118, 0), ('ingest', 102, 0), ('billing', 88, 1), ('ingest', 93, 0), ('ingest', 104, 1),
+        ('ledger', 86, 0), ('ledger', 99, 1), ('ingest', 82, 0), ('ledger', 137, 0), ('billing', 64, 1), ('ledger', 103, 0), ('billing', 11, 1), ('ledger', 130, 0),
+        ('ledger', 141, 1), ('ingest', 31, 0), ('ledger', 76, 0), ('ingest', 56, 1), ('ingest', 29, 1), ('ledger', 138, 1), ('billing', 65, 0), ('billing', 19, 1),
+        ('billing', 82, 0), ('billing', 8, 1), ('ledger', 13, 0), ('ledger', 167, 0), ('billing', 13, 0), ('ledger', 129, 1), ('ledger', 77, 0), ('billing', 74, 0),
+        ('billing', 73, 0), ('billing', 33, 0), ('ingest', 74, 1), ('ingest', 120, 0), ('ledger', 83, 0), ('billing', 122, 0), ('ledger', 190, 1), ('ingest', 92, 1),
+        ('ledger', 57, 1), ('ingest', 25, 0), ('ledger', 146, 0), ('ingest', 91, 0), ('ledger', 71, 0), ('ingest', 28, 0), ('ingest', 15, 0), ('ledger', 175, 0),
+        ('billing', 75, 1), ('ingest', 61, 0), ('ingest', 84, 0), ('billing', 4, 1), ('ingest', 58, 0), ('ingest', 1, 0), ('ledger', 17, 0), ('ledger', 105, 1),
+        ('ledger', 145, 0), ('ledger', 26, 0), ('billing', 45, 0), ('ledger', 48, 1), ('ledger', 14, 0), ('ingest', 35, 1), ('ledger', 165, 1), ('ledger', 7, 0),
+        ('billing', 28, 1), ('billing', 92, 1), ('ingest', 72, 0), ('billing', 31, 1), ('ingest', 79, 0), ('billing', 59, 1), ('ledger', 135, 1), ('ledger', 185, 0),
+        ('ingest', 62, 1), ('ingest', 41, 1), ('ledger', 40, 0), ('billing', 71, 1), ('ledger', 74, 0), ('ledger', 89, 0), ('billing', 110, 0), ('ledger', 142, 0),
+        ('ledger', 155, 0), ('ingest', 75, 0), ('ledger', 10, 0), ('ledger', 42, 1), ('billing', 96, 1), ('ledger', 153, 1), ('ledger', 112, 0), ('ledger', 121, 0),
+        ('ledger', 87, 1), ('ingest', 64, 0), ('ledger', 67, 0), ('billing', 91, 1), ('billing', 108, 1), ('ingest', 52, 0), ('ledger', 126, 1), ('billing', 111, 1),
+        ('billing', 25, 0), ('ledger', 58, 0), ('ledger', 15, 1), ('ledger', 157, 0), ('ingest', 47, 1), ('ingest', 60, 0), ('ingest', 18, 0), ('ingest', 21, 0),
+        ('ledger', 174, 1), ('billing', 5, 0), ('ingest', 119, 1), ('billing', 30, 0), ('billing', 80, 1), ('ledger', 159, 1), ('ingest', 12, 0), ('billing', 41, 0),
+        ('ingest', 81, 0), ('ledger', 161, 0), ('billing', 98, 0), ('billing', 56, 1), ('ledger', 50, 0), ('ledger', 28, 0), ('ledger', 178, 0), ('billing', 9, 0),
+        ('ledger', 111, 1), ('ledger', 51, 1), ('ingest', 65, 1), ('ledger', 104, 0), ('ledger', 84, 1), ('ledger', 62, 0), ('ingest', 20, 1), ('ledger', 114, 1),
+        ('billing', 113, 0), ('billing', 68, 1), ('ledger', 172, 0), ('ingest', 114, 0), ('ledger', 37, 0), ('ledger', 78, 1), ('ingest', 3, 0), ('billing', 70, 0),
+        ('ledger', 166, 0), ('ingest', 100, 0), ('billing', 35, 1), ('ledger', 29, 0), ('ledger', 59, 0), ('billing', 26, 0), ('billing', 51, 1), ('ledger', 23, 0),
+        ('billing', 90, 0), ('ledger', 182, 0), ('ingest', 71, 1), ('ingest', 109, 0), ('ledger', 187, 0), ('billing', 93, 0), ('ledger', 119, 0), ('ledger', 113, 0),
+        ('billing', 58, 0), ('billing', 49, 0), ('ledger', 100, 0), ('ingest', 32, 1), ('ledger', 183, 1), ('ingest', 95, 1), ('ledger', 30, 1), ('ledger', 164, 0),
+        ('billing', 107, 1), ('ledger', 21, 1), ('ingest', 7, 0), ('billing', 1, 0), ('ledger', 179, 0), ('ingest', 27, 0), ('ledger', 186, 0), ('ingest', 86, 1),
+        ('ledger', 170, 0), ('ingest', 89, 1), ('ledger', 4, 0), ('ingest', 38, 1), ('ingest', 87, 0), ('ingest', 99, 0), ('ingest', 101, 1), ('billing', 103, 1),
+        ('billing', 34, 0), ('ledger', 176, 0), ('ingest', 113, 1), ('billing', 17, 0), ('ledger', 88, 0), ('billing', 14, 0), ('ledger', 181, 1), ('billing', 39, 1),
+        ('ingest', 2, 1), ('ingest', 43, 0), ('ingest', 98, 1), ('billing', 53, 0), ('ledger', 140, 0), ('billing', 78, 0), ('ingest', 14, 1), ('billing', 18, 0),
+        ('billing', 47, 1), ('ingest', 85, 0), ('ingest', 19, 0), ('ingest', 30, 0), ('ingest', 49, 0), ('billing', 83, 1), ('ingest', 76, 0), ('ledger', 163, 0),
+        ('ledger', 154, 0), ('billing', 21, 0), ('ingest', 24, 0), ('ledger', 80, 0), ('ledger', 180, 1), ('ledger', 92, 0), ('ledger', 122, 0), ('ingest', 50, 1),
+        ('billing', 46, 0), ('ingest', 106, 0), ('billing', 77, 0), ('ledger', 150, 1), ('ledger', 134, 0), ('ledger', 177, 1), ('ledger', 188, 0), ('ingest', 107, 1),
+        ('ledger', 85, 0), ('ledger', 116, 0), ('ingest', 66, 0), ('ledger', 93, 1), ('ledger', 24, 1), ('ledger', 34, 0), ('ledger', 147, 1), ('ledger', 136, 0),
+        ('billing', 116, 1), ('billing', 105, 0), ('ledger', 46, 0), ('ledger', 12, 1), ('billing', 55, 1), ('ledger', 64, 0), ('ledger', 115, 0), ('ledger', 106, 0),
+        ('billing', 24, 1), ('ledger', 18, 1), ('billing', 118, 0), ('ledger', 192, 0), ('ledger', 53, 0), ('ingest', 54, 0), ('billing', 67, 1), ('ledger', 55, 0),
+        ('ledger', 72, 1), ('billing', 85, 0), ('ingest', 69, 0), ('ledger', 158, 0), ('ingest', 26, 1), ('billing', 79, 1), ('ledger', 144, 1), ('ingest', 53, 1),
+        ('ingest', 88, 0), ('ledger', 65, 0), ('billing', 54, 0), ('ledger', 90, 1), ('billing', 72, 1), ('ingest', 59, 1), ('ingest', 80, 1), ('ledger', 132, 1),
+        ('ingest', 8, 1), ('ledger', 123, 1), ('billing', 60, 1), ('billing', 57, 0), ('ledger', 20, 0), ('billing', 61, 0), ('ledger', 54, 1), ('ledger', 25, 0),
+        ('billing', 6, 0), ('ledger', 41, 0), ('billing', 16, 1), ('ingest', 6, 0), ('billing', 76, 1), ('ledger', 82, 0), ('billing', 100, 1), ('ledger', 128, 0),
+        ('ledger', 117, 1), ('billing', 29, 0), ('ledger', 79, 0), ('ledger', 94, 0), ('ingest', 105, 0), ('ledger', 70, 0), ('ingest', 55, 0), ('ledger', 66, 1),
+        ('ingest', 40, 0), ('ledger', 191, 0), ('ledger', 189, 1), ('billing', 69, 0), ('ledger', 125, 0), ('ledger', 107, 0), ('billing', 104, 1), ('ledger', 39, 1),
+        ('billing', 36, 1), ('billing', 48, 1), ('ledger', 152, 0), ('ledger', 169, 0), ('ledger', 5, 0), ('ledger', 133, 0), ('ingest', 34, 0), ('billing', 101, 0),
+        ('ledger', 75, 1), ('billing', 115, 1), ('billing', 95, 1), ('ingest', 103, 0), ('ingest', 116, 1), ('ingest', 9, 0), ('billing', 109, 0), ('billing', 42, 0),
+        ('ledger', 11, 0), ('billing', 106, 0), ('ingest', 111, 0), ('billing', 32, 1), ('billing', 44, 1), ('ledger', 109, 0), ('ingest', 23, 1), ('billing', 97, 0),
+        ('ledger', 60, 1), ('ingest', 4, 0), ('billing', 37, 0), ('ledger', 68, 0), ('billing', 84, 1), ('billing', 119, 1), ('ingest', 37, 0), ('ledger', 97, 0),
+        ('billing', 123, 0), ('ledger', 91, 0), ('ingest', 57, 0), ('billing', 121, 0), ('billing', 86, 0), ('ledger', 6, 1), ('ledger', 52, 0), ('ledger', 127, 0),
+        ('ledger', 69, 1), ('ledger', 61, 0), ('ingest', 17, 1), ('billing', 89, 0), ('ledger', 171, 1), ('ledger', 160, 0), ('ledger', 45, 1), ('ledger', 173, 0),
+        ('ledger', 139, 0), ('ledger', 102, 1), ('billing', 112, 1), ('ingest', 97, 0), ('ledger', 38, 0), ('ingest', 22, 0), ('ingest', 11, 1), ('ledger', 193, 0),
+        ('ingest', 48, 0), ('ledger', 27, 1), ('ledger', 108, 1), ('ledger', 110, 0), ('ledger', 1, 0), ('billing', 38, 0), ('ledger', 9, 1), ('ledger', 35, 0),
+        ('ingest', 5, 1), ('ledger', 149, 0), ('billing', 52, 1), ('ingest', 13, 0), ('ledger', 56, 0), ('ingest', 96, 0), ('ledger', 36, 1), ('billing', 81, 0),
+        ('ledger', 148, 0), ('billing', 114, 0), ('ledger', 118, 0), ('ledger', 162, 1), ('ledger', 131, 0), ('billing', 50, 0), ('ledger', 43, 0), ('ingest', 90, 0),
+        ('ingest', 16, 0), ('ledger', 143, 0), ('billing', 23, 1), ('ingest', 42, 0), ('ledger', 44, 0), ('billing', 27, 1), ('ledger', 3, 1), ('ingest', 63, 0),
+        ('ledger', 151, 0), ('billing', 15, 1), ('ledger', 120, 1), ('ingest', 73, 0), ('ledger', 101, 0), ('ingest', 110, 1), ('ingest', 33, 0), ('ledger', 168, 1),
+        ('ingest', 45, 0), ('ledger', 16, 0), ('ingest', 115, 0), ('ledger', 124, 0), ('billing', 117, 0), ('ledger', 19, 0), ('ledger', 31, 0), ('ledger', 33, 1),
+        ('ingest', 78, 0), ('ledger', 8, 0), ('billing', 7, 1), ('ledger', 81, 1), ('billing', 20, 1), ('billing', 3, 1), ('billing', 66, 0), ('billing', 22, 0),
+        ('billing', 120, 1), ('ingest', 10, 0), ('ingest', 112, 0), ('ledger', 22, 0), ('billing', 12, 1), ('billing', 43, 1), ('billing', 102, 0), ('ingest', 83, 1),
+        ('ledger', 47, 0), ('ledger', 73, 0), ('ledger', 156, 1), ('ingest', 36, 0), ('ledger', 49, 0), ('ledger', 96, 1), ('billing', 94, 0), ('billing', 2, 0),
+        ('billing', 10, 0), ('ingest', 51, 0), ('ingest', 70, 0), ('billing', 99, 1), ('ledger', 95, 0), ('ledger', 98, 0), ('ingest', 108, 0), ('ingest', 68, 1),
+        ('billing', 124, 0), ('ingest', 46, 0), ('billing', 87, 1), ('ingest', 94, 0), ('ingest', 39, 0);
+    expected_rows: [["billing", 123], ["ledger", 186]]
+expected_concepts:
+  - "window functions with PARTITION BY and ORDER BY"
+  - "LAG with an offset to look at previous rows"
+  - "ordering by position rather than assuming gap-free sequence numbers"
+  - "aggregating the earliest qualifying row per group"
+optimal_complexity: {time: "O(n log n) to order runs within each probe (O(n) with an index on (probe, run_no))", space: "O(n) for the window evaluation"}
+rubric:
+  excellent: "Uses LAG(ok, 1) and LAG(ok, 2) (or ROW_NUMBER plus a self-join on row numbers) partitioned by probe and ordered by run_no, takes MIN(run_no) of qualifying runs, and explains why joining on run_no - 1 breaks with gaps."
+  good: "Correct query after a hint about gaps in run_no or about returning only the earliest alert."
+  weak: "Joins on run_no + 1 and run_no + 2, counts total failures per probe, returns every run of a long streak, or mixes runs of different probes."
+  criteria:
+    correctness: "All tests pass, including gaps in run_no, shuffled insertion order, streaks longer than three and probes that never alert."
+    efficiency: "A single windowed pass over the table; notes that the (probe, run_no) primary key supports the ordering."
+    code_quality: "Named CTE, descriptive column aliases and a clear filter on the three ok values."
+    edge_cases: "Empty table, a streak at the very first runs, two-failure streaks, interleaved probes."
+    communication: "Explains the difference between consecutive numbers and consecutive rows."
+hints:
+  - "For each failed run you need to know the outcome of the two runs that came just before it for the same probe; think about how to look backwards in an ordered list of rows."
+  - "Do not assume run numbers are contiguous; the previous run is the previous row when a probe's runs are sorted by run_no, which a window function can give you directly."
+  - "In a CTE compute LAG(ok, 1) and LAG(ok, 2) over a window partitioned by probe and ordered by run_no, keep rows where ok and both lagged values are 0, then take MIN(run_no) per probe and order by probe."
+followups:
+  - "How would you make the streak length (three) a parameter without writing N LAG calls?"
+  - "How would you report every distinct streak that paged, not just the first one?"
+  - "How would you also require that the three failures happened within ten minutes of each other if there were a timestamp column?"
+common_errors:
+  - "Self-joining on run_no + 1 and run_no + 2, which misses streaks that span skipped run numbers."
+  - "Forgetting PARTITION BY probe, so the last runs of one probe become the previous rows of the next probe."
+  - "Returning every failed run in a long streak instead of only the earliest third failure."
+  - "Counting total failures per probe, which alerts on scattered failures that were never consecutive."

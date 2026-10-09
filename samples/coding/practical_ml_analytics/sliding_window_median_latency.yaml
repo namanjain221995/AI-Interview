@@ -1,0 +1,248 @@
+version: 1
+slug: sliding_window_median_latency
+title: Time-Window Median Latency
+difficulty: hard
+competency_keys: [algorithms, data_structures]
+role_tags: [sre, backend, data, devops]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Time-Window Median Latency
+
+  An API gateway emits one latency sample per request. Requests do not arrive at a steady rate: there are
+  bursts with many requests in the same second and quiet gaps with none. The alerting rule therefore
+  watches the **median latency of the last `window_seconds` seconds**, not of the last fixed number of
+  requests.
+
+  You get two lists of equal length `n`: `timestamps[i]` (whole seconds, **non-decreasing**) and
+  `latencies[i]` (milliseconds) of request `i`, in arrival order, plus `window_seconds`.
+
+  For every request `i` (in order), its window holds the requests `j` with `j <= i` and
+  `timestamps[j] > timestamps[i] - window_seconds`. The window always contains request `i` itself, and a
+  request that arrives later in the same second as `i` is **not** in `i`'s window.
+
+  Return a list of `n` medians, where entry `i` is the median latency of request `i`'s window: the middle
+  value after sorting when the window holds an odd number of samples, and the mean of the two middle
+  values when it holds an even number. Answers within `10^-6` (relative for large values) are accepted.
+
+  ### Example 1
+  ```
+  Input:  timestamps = [0, 1, 2, 5, 6, 6, 9], latencies = [120, 80, 100, 300, 90, 95, 110], window_seconds = 3
+  Output: [120.0, 100.0, 100.0, 300.0, 195.0, 95.0, 110.0]
+  Explanation: at t = 5 the window covers seconds 3-5 and holds only 300; the second request at t = 6 sees [300, 90, 95]; at t = 9 only 110 is left
+  ```
+
+  ### Example 2
+  ```
+  Input:  timestamps = [10, 10, 10, 11], latencies = [5, 1, 3, 7], window_seconds = 1
+  Output: [5.0, 3.0, 3.0, 7.0]
+  Explanation: the three requests at t = 10 see windows [5], [5, 1] and [5, 1, 3]; at t = 11 the earlier second has left the window
+  ```
+
+  ### Constraints
+  - `1 <= n <= 10^5`, `timestamps.length == latencies.length`
+  - `0 <= timestamps[i] <= 10^9` and `timestamps[i] <= timestamps[i + 1]`
+  - `0 <= latencies[i] <= 10^9`; the sum of two middle values can exceed the 32-bit integer range
+  - `1 <= window_seconds <= 10^9`
+
+  **Follow-up:** re-sorting every window is `O(n * w log w)` for windows of size `w`; aim for
+  `O(n log n)` overall even when one window holds almost every request.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: time_window_medians
+  params:
+    - {name: timestamps, type: "int[]"}
+    - {name: latencies, type: "int[]"}
+    - {name: window_seconds, type: int}
+  return_type: "float[]"
+  comparison: float_tolerance
+  tolerance: 1e-06
+reference_solutions:
+  python: |
+    import heapq
+
+
+    def time_window_medians(timestamps: list[int], latencies: list[int], window_seconds: int) -> list[float]:
+        low: list[tuple[int, int]] = []  # smaller half as a max-heap of (-value, index)
+        high: list[tuple[int, int]] = []  # larger half as a min-heap of (value, index)
+        in_low = [False] * len(latencies)
+        sizes = [0, 0]  # live samples in low and high
+        start = 0  # first index still inside the window; heap entries before it are stale
+        result: list[float] = []
+
+        def prune(heap: list[tuple[int, int]]) -> None:
+            while heap and heap[0][1] < start:
+                heapq.heappop(heap)
+
+        for i, value in enumerate(latencies):
+            while timestamps[start] <= timestamps[i] - window_seconds:
+                sizes[0 if in_low[start] else 1] -= 1
+                start += 1
+            prune(low)
+            prune(high)
+            if low and value <= -low[0][0]:
+                heapq.heappush(low, (-value, i))
+                in_low[i] = True
+                sizes[0] += 1
+            else:
+                heapq.heappush(high, (value, i))
+                sizes[1] += 1
+            while sizes[0] > sizes[1] + 1:
+                prune(low)
+                neg, idx = heapq.heappop(low)
+                heapq.heappush(high, (-neg, idx))
+                in_low[idx] = False
+                sizes[0] -= 1
+                sizes[1] += 1
+            while sizes[0] < sizes[1]:
+                prune(high)
+                val, idx = heapq.heappop(high)
+                heapq.heappush(low, (-val, idx))
+                in_low[idx] = True
+                sizes[0] += 1
+                sizes[1] -= 1
+            prune(low)
+            prune(high)
+            if sizes[0] > sizes[1]:
+                result.append(float(-low[0][0]))
+            else:
+                result.append((-low[0][0] + high[0][0]) / 2)
+        return result
+  javascript: |
+    class Heap {
+      constructor(before) {
+        this.items = [];
+        this.before = before; // before(a, b) is true when a belongs above b
+      }
+      get size() {
+        return this.items.length;
+      }
+      peek() {
+        return this.items[0];
+      }
+      push(item) {
+        const a = this.items;
+        a.push(item);
+        let i = a.length - 1;
+        while (i > 0) {
+          const parent = (i - 1) >> 1;
+          if (!this.before(a[i], a[parent])) break;
+          [a[i], a[parent]] = [a[parent], a[i]];
+          i = parent;
+        }
+      }
+      pop() {
+        const a = this.items;
+        const top = a[0];
+        const last = a.pop();
+        if (a.length > 0) {
+          a[0] = last;
+          let i = 0;
+          for (;;) {
+            const l = 2 * i + 1;
+            const r = l + 1;
+            let best = i;
+            if (l < a.length && this.before(a[l], a[best])) best = l;
+            if (r < a.length && this.before(a[r], a[best])) best = r;
+            if (best === i) break;
+            [a[i], a[best]] = [a[best], a[i]];
+            i = best;
+          }
+        }
+        return top;
+      }
+    }
+
+    function timeWindowMedians(timestamps, latencies, windowSeconds) {
+      // Entries are [value, index]; entries whose index is before `start` have left the window.
+      const low = new Heap((a, b) => a[0] > b[0]); // smaller half, largest on top
+      const high = new Heap((a, b) => a[0] < b[0]); // larger half, smallest on top
+      const inLow = new Array(latencies.length).fill(false);
+      let lowSize = 0;
+      let highSize = 0;
+      let start = 0;
+      const prune = (heap) => {
+        while (heap.size > 0 && heap.peek()[1] < start) heap.pop();
+      };
+      const result = [];
+      for (let i = 0; i < latencies.length; i++) {
+        while (timestamps[start] <= timestamps[i] - windowSeconds) {
+          if (inLow[start]) lowSize--;
+          else highSize--;
+          start++;
+        }
+        prune(low);
+        prune(high);
+        const value = latencies[i];
+        if (low.size > 0 && value <= low.peek()[0]) {
+          low.push([value, i]);
+          inLow[i] = true;
+          lowSize++;
+        } else {
+          high.push([value, i]);
+          highSize++;
+        }
+        while (lowSize > highSize + 1) {
+          prune(low);
+          const moved = low.pop();
+          high.push(moved);
+          inLow[moved[1]] = false;
+          lowSize--;
+          highSize++;
+        }
+        while (lowSize < highSize) {
+          prune(high);
+          const moved = high.pop();
+          low.push(moved);
+          inLow[moved[1]] = true;
+          lowSize++;
+          highSize--;
+        }
+        prune(low);
+        prune(high);
+        result.push(lowSize > highSize ? low.peek()[0] : (low.peek()[0] + high.peek()[0]) / 2);
+      }
+      return result;
+    }
+tests:
+  - {id: t1, args: [[0, 1, 2, 5, 6, 6, 9], [120, 80, 100, 300, 90, 95, 110], 3], expected: [120.0, 100.0, 100.0, 300.0, 195.0, 95.0, 110.0], description: "Example 1"}
+  - {id: t2, args: [[10, 10, 10, 11], [5, 1, 3, 7], 1], expected: [5.0, 3.0, 3.0, 7.0], description: "Example 2 - equal timestamps and a window of one second"}
+  - {id: t3, hidden: true, args: [[42], [250], 60], expected: [250.0], description: "Single sample"}
+  - {id: t4, hidden: true, args: [[0, 5, 9, 20, 21], [9, 1, 8, 2, 7], 1000], expected: [9.0, 5.0, 8.0, 5.0, 7.0], description: "Window longer than the trace - running median of the prefix"}
+  - {id: t5, hidden: true, args: [[0, 1, 2, 3], [40, 10, 30, 20], 1], expected: [40.0, 10.0, 30.0, 20.0], description: "One-second window with distinct timestamps - each median is the sample itself"}
+  - {id: t6, hidden: true, args: [[0, 0, 0, 0, 0, 0], [7, 7, 7, 7, 7, 7], 5], expected: [7.0, 7.0, 7.0, 7.0, 7.0, 7.0], description: "All equal values at one timestamp"}
+  - {id: t7, hidden: true, args: [[0, 1, 100, 101, 102, 300], [5, 9, 1, 3, 2, 8], 10], expected: [5.0, 7.0, 1.0, 2.0, 2.0, 8.0], description: "Long gaps empty the window except for the current sample"}
+  - {id: t8, hidden: true, args: [[0, 1, 2, 3, 4, 5], [1000000000, 999999999, 1000000000, 999999998, 1000000000, 1000000000], 4], expected: [1000000000.0, 999999999.5, 1000000000.0, 999999999.5, 999999999.5, 1000000000.0], description: "Values near 10^9 - the sum of the two middle values exceeds 32 bits"}
+  - {id: t9, hidden: true, args: [[1, 2, 3, 4, 5, 6, 7, 8], [80, 70, 60, 50, 40, 30, 20, 10], 3], expected: [80.0, 75.0, 70.0, 60.0, 50.0, 40.0, 30.0, 20.0], description: "Strictly decreasing latencies"}
+  - {id: t10, hidden: true, args: [[0, 3, 5, 6, 6, 9, 11, 12, 12, 15, 17, 18, 18, 21, 23, 24, 24, 27, 29, 30, 30, 33, 35, 36, 36, 39, 41, 42, 42, 45, 47, 48, 48, 51, 53, 54, 54, 57, 59, 60, 60, 63, 65, 66, 66, 69, 71, 72, 72, 75, 77, 78, 78, 81, 83, 84, 84, 87, 89, 90, 90, 93, 95, 96, 96, 99, 101, 102, 102, 105, 107, 108, 108, 111, 113, 114, 114, 117, 119, 120, 120, 123, 125, 126, 126, 129, 131, 132, 132, 135, 137, 138, 138, 141, 143, 144, 144, 147, 149, 150, 150, 153, 155, 156, 156, 159, 161, 162, 162, 165, 167, 168, 168, 171, 173, 174, 174, 177, 179, 180, 180, 183, 185, 186, 186, 189, 191, 192, 192, 195, 197, 198, 198, 201, 203, 204, 204, 207, 209, 210, 210, 213, 215, 216, 216, 219, 221, 222, 222, 225, 227, 228, 228, 231, 233, 234, 234, 237, 239, 240, 240, 243, 245, 246, 246, 249, 251, 252, 252, 255, 257, 258, 258, 261, 263, 264, 264, 267, 269, 270, 270, 273, 275, 276, 276, 279, 281, 282, 282, 285, 287, 288, 288, 291, 293, 294, 294, 297, 299, 300, 300, 303, 305, 306, 306, 309, 311, 312, 312, 315, 317, 318, 318, 321, 323, 324, 324, 327, 329, 330, 330, 333, 335, 336, 336, 339, 341, 342, 342, 345, 347, 348, 348, 351, 353, 354, 354, 357, 359, 360, 360, 363, 365, 366, 366, 369, 371, 372, 372, 375, 377, 378, 378, 381, 383, 384, 384, 387, 389, 390, 390, 393, 395, 396, 396, 399, 401, 402, 402, 405, 407, 408, 408, 411, 413, 414, 414, 417, 419, 420, 420, 423, 425, 426, 426, 429, 431, 432, 432, 435, 437, 438, 438, 441, 443, 444, 444, 447, 449, 450, 450, 453, 455, 456, 456, 459, 461, 462, 462, 465, 467, 468, 468, 471, 473, 474, 474, 477, 479, 480, 480, 483, 485, 486, 486, 489, 491, 492, 492, 495, 497, 498, 498, 501, 503, 504, 504, 507, 509, 510, 510, 513, 515, 516, 516, 519, 521, 522, 522, 525, 527, 528, 528, 531, 533, 534, 534, 537, 539, 540, 540, 543, 545, 546, 546, 549, 551, 552, 552, 555, 557, 558, 558, 561, 563, 564, 564, 567, 569, 570, 570, 573, 575, 576, 576, 579, 581, 582, 582, 585, 587, 588, 588, 591, 593, 594, 594, 597, 599, 600, 600, 603, 605, 606, 606, 609, 611, 612, 612, 615, 617, 618, 618, 621, 623, 624, 624, 627, 629, 630, 630, 633, 635, 636, 636, 639, 641, 642, 642, 645, 647, 648, 648, 651, 653, 654, 654, 657, 659, 660, 660, 663, 665, 666, 666, 669, 671, 672, 672, 675, 677, 678, 678, 681, 683, 684, 684, 687, 689, 690, 690, 693, 695, 696, 696, 699, 701, 702, 702, 705, 707, 708, 708, 711, 713, 714, 714, 717, 719, 720, 720, 723, 725, 726, 726, 729, 731, 732, 732, 735, 737, 738, 738, 741, 743, 744, 744, 747, 749, 750], [0, 940001, 883002, 826003, 769004, 712005, 655006, 598007, 541008, 484009, 427010, 370011, 313012, 256000, 199001, 142002, 85003, 28004, 968005, 911006, 854007, 797008, 740009, 683010, 626011, 569012, 512000, 455001, 398002, 341003, 284004, 227005, 170006, 113007, 56008, 996009, 939010, 882011, 825012, 768000, 711001, 654002, 597003, 540004, 483005, 426006, 369007, 312008, 255009, 198010, 141011, 84012, 27000, 967001, 910002, 853003, 796004, 739005, 682006, 625007, 568008, 511009, 454010, 397011, 340012, 283000, 226001, 169002, 112003, 55004, 995005, 938006, 881007, 824008, 767009, 710010, 653011, 596012, 539000, 482001, 425002, 368003, 311004, 254005, 197006, 140007, 83008, 26009, 966010, 909011, 852012, 795000, 738001, 681002, 624003, 567004, 510005, 453006, 396007, 339008, 282009, 225010, 168011, 111012, 54000, 994001, 937002, 880003, 823004, 766005, 709006, 652007, 595008, 538009, 481010, 424011, 367012, 310000, 253001, 196002, 139003, 82004, 25005, 965006, 908007, 851008, 794009, 737010, 680011, 623012, 566000, 509001, 452002, 395003, 338004, 281005, 224006, 167007, 110008, 53009, 993010, 936011, 879012, 822000, 765001, 708002, 651003, 594004, 537005, 480006, 423007, 366008, 309009, 252010, 195011, 138012, 81000, 24001, 964002, 907003, 850004, 793005, 736006, 679007, 622008, 565009, 508010, 451011, 394012, 337000, 280001, 223002, 166003, 109004, 52005, 992006, 935007, 878008, 821009, 764010, 707011, 650012, 593000, 536001, 479002, 422003, 365004, 308005, 251006, 194007, 137008, 80009, 23010, 963011, 906012, 849000, 792001, 735002, 678003, 621004, 564005, 507006, 450007, 393008, 336009, 279010, 222011, 165012, 108000, 51001, 991002, 934003, 877004, 820005, 763006, 706007, 649008, 592009, 535010, 478011, 421012, 364000, 307001, 250002, 193003, 136004, 79005, 22006, 962007, 905008, 848009, 791010, 734011, 677012, 620000, 563001, 506002, 449003, 392004, 335005, 278006, 221007, 164008, 107009, 50010, 990011, 933012, 876000, 819001, 762002, 705003, 648004, 591005, 534006, 477007, 420008, 363009, 306010, 249011, 192012, 135000, 78001, 21002, 961003, 904004, 847005, 790006, 733007, 676008, 619009, 562010, 505011, 448012, 391000, 334001, 277002, 220003, 163004, 106005, 49006, 989007, 932008, 875009, 818010, 761011, 704012, 647000, 590001, 533002, 476003, 419004, 362005, 305006, 248007, 191008, 134009, 77010, 20011, 960012, 903000, 846001, 789002, 732003, 675004, 618005, 561006, 504007, 447008, 390009, 333010, 276011, 219012, 162000, 105001, 48002, 988003, 931004, 874005, 817006, 760007, 703008, 646009, 589010, 532011, 475012, 418000, 361001, 304002, 247003, 190004, 133005, 76006, 19007, 959008, 902009, 845010, 788011, 731012, 674000, 617001, 560002, 503003, 446004, 389005, 332006, 275007, 218008, 161009, 104010, 47011, 987012, 930000, 873001, 816002, 759003, 702004, 645005, 588006, 531007, 474008, 417009, 360010, 303011, 246012, 189000, 132001, 75002, 18003, 958004, 901005, 844006, 787007, 730008, 673009, 616010, 559011, 502012, 445000, 388001, 331002, 274003, 217004, 160005, 103006, 46007, 986008, 929009, 872010, 815011, 758012, 701000, 644001, 587002, 530003, 473004, 416005, 359006, 302007, 245008, 188009, 131010, 74011, 17012, 957000, 900001, 843002, 786003, 729004, 672005, 615006, 558007, 501008, 444009, 387010, 330011, 273012, 216000, 159001, 102002, 45003, 985004, 928005, 871006, 814007, 757008, 700009, 643010, 586011, 529012, 472000, 415001, 358002, 301003, 244004, 187005, 130006, 73007, 16008, 956009, 899010, 842011, 785012, 728000, 671001, 614002, 557003, 500004, 443005, 386006, 329007, 272008, 215009, 158010, 101011, 44012, 984000, 927001, 870002, 813003, 756004, 699005, 642006, 585007, 528008, 471009, 414010, 357011, 300012, 243000, 186001, 129002, 72003, 15004, 955005, 898006, 841007, 784008, 727009, 670010, 613011, 556012, 499000, 442001, 385002, 328003, 271004, 214005, 157006, 100007, 43008, 983009, 926010, 869011, 812012, 755000, 698001, 641002, 584003, 527004, 470005], 30], expected: [0.0, 470000.5, 883002.0, 854502.5, 826003.0, 797503.5, 769004.0, 740504.5, 712005.0, 683505.5, 655006.0, 626506.5, 598007.0, 569507.5, 541008.0, 512508.5, 484009.0, 455509.5, 484009.0, 541008.0, 569507.5, 569507.5, 569507.5, 541008.0, 569507.5, 555010.0, 526504.0, 484009.0, 469505.0, 441005.5, 426501.5, 455001.0, 426501.5, 426501.5, 426501.5, 512000.0, 540506.0, 597511.5, 597511.5, 569012.0, 597511.5, 597511.5, 583007.5, 540004.0, 526002.0, 497502.5, 469003.0, 483005.0, 454505.5, 454505.5, 454505.5, 483005.0, 454505.5, 511504.5, 568503.5, 540004.0, 568503.5, 568503.5, 568503.5, 540004.0, 554006.0, 525506.5, 497007.0, 454010.0, 440008.0, 425510.5, 425510.5, 454010.0, 425510.5, 425510.5, 482509.5, 568008.0, 596507.5, 596507.5, 596507.5, 568008.0, 596507.5, 582010.0, 553504.0, 511009.0, 496505.0, 468005.5, 453501.5, 482001.0, 453501.5, 453501.5, 453501.5, 482001.0, 510500.5, 567506.0, 567506.0, 539000.0, 567506.0, 567506.0, 567506.0, 539000.0, 524502.5, 496003.0, 467503.5, 453006.0, 424506.5, 424506.5, 424506.5, 453006.0, 424506.5, 481505.5, 538504.5, 567004.0, 595503.5, 595503.5, 595503.5, 567004.0, 581006.0, 552506.5, 524007.0, 481010.0, 467008.0, 452510.5, 452510.5, 481010.0, 452510.5, 452510.5, 452510.5, 538009.0, 566508.5, 566508.5, 566508.5, 538009.0, 566508.5, 566508.5, 552004.5, 509001.0, 495005.5, 466506.0, 438006.5, 452002.0, 423502.5, 423502.5, 423502.5, 452002.0, 480501.5, 537500.5, 594506.0, 566000.0, 594506.0, 594506.0, 594506.0, 566000.0, 551502.5, 523003.0, 494503.5, 480006.0, 451506.5, 451506.5, 451506.5, 480006.0, 451506.5, 451506.5, 508505.5, 537005.0, 565504.5, 565504.5, 565504.5, 537005.0, 565504.5, 551007.0, 522507.5, 480006.0, 465508.5, 437009.0, 422511.5, 451011.0, 422511.5, 422511.5, 422511.5, 508010.0, 536509.5, 593508.5, 593508.5, 565009.0, 593508.5, 593508.5, 579004.5, 536001.0, 522005.5, 493506.0, 465006.5, 479002.0, 450502.5, 450502.5, 450502.5, 479002.0, 450502.5, 507501.5, 564500.5, 536001.0, 564500.5, 564500.5, 564500.5, 536001.0, 550003.0, 521503.5, 493004.0, 450007.0, 436005.0, 421507.5, 421507.5, 450007.0, 421507.5, 421507.5, 478506.5, 564005.0, 592504.5, 592504.5, 592504.5, 564005.0, 592504.5, 578007.0, 549507.5, 507006.0, 492508.5, 464009.0, 449511.5, 478011.0, 449511.5, 449511.5, 449511.5, 478011.0, 506510.5, 563509.5, 563509.5, 535010.0, 563509.5, 563509.5, 563509.5, 535010.0, 520506.0, 492006.5, 463507.0, 449003.0, 420503.5, 420503.5, 420503.5, 449003.0, 420503.5, 477502.5, 534501.5, 563001.0, 591500.5, 591500.5, 591500.5, 563001.0, 577003.0, 548503.5, 520004.0, 477007.0, 463005.0, 448507.5, 448507.5, 477007.0, 448507.5, 448507.5, 448507.5, 534006.0, 562505.5, 562505.5, 562505.5, 534006.0, 562505.5, 562505.5, 548008.0, 505011.0, 491009.0, 462509.5, 434010.0, 448012.0, 419506.0, 419506.0, 419506.0, 448012.0, 476511.5, 533510.5, 590509.5, 562010.0, 590509.5, 590509.5, 590509.5, 562010.0, 547506.0, 519006.5, 490507.0, 476003.0, 447503.5, 447503.5, 447503.5, 476003.0, 447503.5, 447503.5, 504502.5, 533002.0, 561501.5, 561501.5, 561501.5, 533002.0, 561501.5, 547004.0, 518504.5, 476003.0, 461505.5, 433006.0, 418508.5, 447008.0, 418508.5, 418508.5, 418508.5, 504007.0, 532506.5, 589505.5, 589505.5, 561006.0, 589505.5, 589505.5, 575008.0, 532011.0, 518009.0, 489509.5, 461010.0, 475012.0, 446506.0, 446506.0, 446506.0, 475012.0, 446506.0, 503511.5, 560510.5, 532011.0, 560510.5, 560510.5, 560510.5, 532011.0, 546006.5, 517507.0, 489007.5, 446004.0, 432002.0, 417504.5, 417504.5, 446004.0, 417504.5, 417504.5, 474503.5, 560002.0, 588501.5, 588501.5, 588501.5, 560002.0, 588501.5, 574004.0, 545504.5, 503003.0, 488505.5, 460006.0, 445508.5, 474008.0, 445508.5, 445508.5, 445508.5, 474008.0, 502507.5, 559506.5, 559506.5, 531007.0, 559506.5, 559506.5, 559506.5, 531007.0, 516509.5, 488010.0, 459504.0, 445000.0, 416500.5, 416500.5, 416500.5, 445000.0, 416500.5, 473506.0, 530511.5, 559011.0, 587510.5, 587510.5, 587510.5, 559011.0, 573006.5, 544507.0, 516007.5, 473004.0, 459002.0, 444504.5, 444504.5, 473004.0, 444504.5, 444504.5, 444504.5, 530003.0, 558502.5, 558502.5, 558502.5, 530003.0, 558502.5, 558502.5, 544005.0, 501008.0, 487006.0, 458506.5, 430007.0, 444009.0, 415509.5, 415509.5, 415509.5, 444009.0, 472508.5, 529507.5, 586506.5, 558007.0, 586506.5, 586506.5, 586506.5, 558007.0, 543509.5, 515010.0, 486504.0, 472000.0, 443500.5, 443500.5, 443500.5, 472000.0, 443500.5, 443500.5, 500506.0, 529012.0, 557511.5, 557511.5, 557511.5, 529012.0, 557511.5, 543007.5, 514508.0, 472000.0, 457502.5, 429003.0, 414505.5, 443005.0, 414505.5, 414505.5, 414505.5, 500004.0, 528503.5, 585502.5, 585502.5, 557003.0, 585502.5, 585502.5, 571005.0, 528008.0, 514006.0, 485506.5, 457007.0, 471009.0, 442509.5, 442509.5, 442509.5, 471009.0, 442509.5, 499508.5, 556507.5, 528008.0, 556507.5, 556507.5, 556507.5, 528008.0, 542010.0, 513504.0, 485004.5, 442001.0, 428005.5, 413501.5, 413501.5, 442001.0, 413501.5, 413501.5, 470500.5, 556012.0, 584511.5, 584511.5, 584511.5, 556012.0, 584511.5, 570007.5, 541508.0, 499000.0], description: "500 samples with bursts of equal timestamps"}
+expected_concepts:
+  - "two heaps (max-heap for the lower half, min-heap for the upper half)"
+  - "lazy deletion of expired samples by index"
+  - "variable-size windows driven by a time-based left pointer"
+  - "rebalancing heap sizes using live counts rather than heap lengths"
+  - "64-bit or floating-point arithmetic for the even-size mean"
+optimal_complexity: {time: "O(n log n)", space: "O(n)"}
+rubric:
+  excellent: "Moves a left pointer by time, keeps two heaps with lazy deletion keyed by index, tracks live counts per heap to rebalance, prunes stale tops before reading them, handles equal timestamps and explains the O(n log n) bound and why stale entries are popped at most once."
+  good: "Correct two-heap or sorted-container solution that needs a hint about removing expired samples or about balancing with live counts; or a correct O(n * w) insertion-sort window with a clear plan for the faster version."
+  weak: "Uses a fixed count of samples instead of a time window, re-sorts every window without discussing the cost, includes later requests from the same second, or overflows when adding two large middle values."
+  criteria:
+    correctness: "All tests pass, including bursts at one timestamp, long gaps and values near 10^9."
+    efficiency: "O(n log n) with heaps or an order-statistics structure; no full re-sort per request."
+    code_quality: "Clear invariants for the two halves and a single place where expired samples are discarded."
+    edge_cases: "Single sample, windows that shrink to one sample after a gap, windows longer than the trace and equal values."
+    communication: "States the heap invariants and how lazy deletion keeps removals cheap."
+hints:
+  - "Solve the window boundary and the median separately: the window start only moves forward as time advances, and the median of a changing multiset is a classic two-halves problem."
+  - "Keep the smaller half in a max-heap and the larger half in a min-heap; heaps cannot delete arbitrary items cheaply, so leave expired samples inside and discard them when they reach the top."
+  - "Store (value, index) in the heaps, remember which heap each index went to, and keep live counts per heap; when the start pointer passes an index decrement that heap's live count, rebalance so the lower half holds the same or one more live sample, and prune stale tops before reading the median."
+followups:
+  - "How would you report the p99 latency over the same windows instead of the median?"
+  - "What would you change if samples could arrive slightly out of order?"
+  - "How much memory do lazily deleted entries cost in the worst case, and how would you bound it?"
+  - "How would an approximate structure such as a t-digest or a histogram trade accuracy for memory here?"
+common_errors:
+  - "Treating the window as the last k samples instead of the last window_seconds seconds."
+  - "Including requests that arrive later in the same second in an earlier request's window."
+  - "Balancing with heap lengths that still contain expired samples."
+  - "Reading a heap top without pruning expired entries first."
+  - "Adding two 32-bit middle values before dividing and overflowing."

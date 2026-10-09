@@ -1,0 +1,181 @@
+version: 1
+slug: first_fit_pod_placement
+title: First-Fit Pod Scheduler
+difficulty: medium
+competency_keys: [problem_solving, code_quality, algorithms]
+role_tags: [platform, devops, cloud, sre]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## First-Fit Pod Scheduler
+
+  You are writing a tiny scheduler for a test cluster. Pods are placed **in the given order**. Pod `i`
+  requests `pod_cpu[i]` CPU and `pod_memory[i]` memory; node `j` offers `node_cpu[j]` CPU and
+  `node_memory[j]` memory in total.
+
+  Each pod goes to the **first node (lowest index)** whose remaining CPU **and** remaining memory are
+  both at least the pod's request; that node's remaining resources then shrink by the request. If no node
+  can take the pod, its result is `-1` and it consumes nothing.
+
+  Quantities are strings in a Kubernetes-like notation:
+
+  - **CPU** is either an integer number of millicores followed by `m` (`"250m"` is a quarter core), or a
+    number of cores with at most 3 decimal places (`"2"`, `"0.5"`, `"1.125"`). One core is `1000m`.
+  - **Memory** is an integer number of bytes, optionally followed by a unit: `Ki`, `Mi`, `Gi` (1024,
+    1024^2, 1024^3) or `k`, `M`, `G` (1000, 1000^2, 1000^3). So `"1Gi"` is 1073741824 bytes while `"1G"`
+    is 1000000000 bytes.
+
+  Comparisons must be **exact**: `"0.1"` is exactly `100m`.
+
+  Return a list with the node index chosen for each pod, in pod order (`-1` for a pod that was not placed).
+
+  ### Example 1
+  ```
+  Input:  pod_cpu = ["500m", "1", "250m", "3", "0.75"],
+          pod_memory = ["1Gi", "512Mi", "256Mi", "1Gi", "2G"],
+          node_cpu = ["1", "4"],
+          node_memory = ["1Gi", "8Gi"]
+  Output: [0, 1, 1, -1, 1]
+  Explanation: pod 0 fills node 0's memory. Pod 1 needs a full core and node 0 has only 500m
+  left, so it goes to node 1, as does pod 2 (node 0 has no memory left). Pod 3 asks for 3 cores
+  but node 1 has 2750m left, so it is not placed. Pod 4 (750m, 2G) fits on node 1.
+  ```
+
+  ### Example 2
+  ```
+  Input:  pod_cpu = ["0.1", "100m", "0.25"],
+          pod_memory = ["1G", "1000M", "1000000000"],
+          node_cpu = ["0.2"],
+          node_memory = ["2Gi"]
+  Output: [0, 0, -1]
+  Explanation: "1G", "1000M" and "1000000000" are the same amount. After two pods node 0 has
+  0m CPU left, so the 250m pod cannot be placed.
+  ```
+
+  ### Constraints
+  - `0 <= pod_cpu.length == pod_memory.length <= 1000`
+  - `1 <= node_cpu.length == node_memory.length <= 100`
+  - Every CPU string is `<digits>m`, `<digits>` or `<digits>.<1 to 3 digits>`, at most 1000 cores.
+  - Every memory string is `<digits>` optionally followed by one of `Ki`, `Mi`, `Gi`, `k`, `M`, `G`, and
+    is at most `2^40` bytes (more than a 32-bit integer can hold).
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: first_fit_pod_placement
+  params:
+    - {name: pod_cpu, type: "string[]"}
+    - {name: pod_memory, type: "string[]"}
+    - {name: node_cpu, type: "string[]"}
+    - {name: node_memory, type: "string[]"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def _millicores(text: str) -> int:
+        if text.endswith("m"):
+            return int(text[:-1])
+        whole, _, fraction = text.partition(".")
+        return int(whole) * 1000 + int((fraction + "000")[:3])
+
+
+    _UNITS = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "k": 1000, "M": 1000**2, "G": 1000**3}
+
+
+    def _bytes(text: str) -> int:
+        for suffix in ("Ki", "Mi", "Gi", "k", "M", "G"):
+            if text.endswith(suffix):
+                return int(text[: -len(suffix)]) * _UNITS[suffix]
+        return int(text)
+
+
+    def first_fit_pod_placement(pod_cpu: list[str], pod_memory: list[str], node_cpu: list[str], node_memory: list[str]) -> list[int]:
+        free_cpu = [_millicores(c) for c in node_cpu]
+        free_mem = [_bytes(m) for m in node_memory]
+        placement: list[int] = []
+        for cpu_text, mem_text in zip(pod_cpu, pod_memory):
+            cpu, mem = _millicores(cpu_text), _bytes(mem_text)
+            chosen = -1
+            for j in range(len(free_cpu)):
+                if free_cpu[j] >= cpu and free_mem[j] >= mem:
+                    free_cpu[j] -= cpu
+                    free_mem[j] -= mem
+                    chosen = j
+                    break
+            placement.append(chosen)
+        return placement
+  javascript: |
+    function parseMillicores(text) {
+      if (text.endsWith("m")) return parseInt(text.slice(0, -1), 10);
+      const [whole, fraction = ""] = text.split(".");
+      return parseInt(whole, 10) * 1000 + parseInt((fraction + "000").slice(0, 3), 10);
+    }
+
+    const MEMORY_UNITS = [["Ki", 1024], ["Mi", 1024 ** 2], ["Gi", 1024 ** 3], ["k", 1000], ["M", 1000 ** 2], ["G", 1000 ** 3]];
+
+    function parseBytes(text) {
+      for (const [suffix, factor] of MEMORY_UNITS) {
+        if (text.endsWith(suffix)) return parseInt(text.slice(0, -suffix.length), 10) * factor;
+      }
+      return parseInt(text, 10);
+    }
+
+    function firstFitPodPlacement(podCpu, podMemory, nodeCpu, nodeMemory) {
+      const freeCpu = nodeCpu.map(parseMillicores);
+      const freeMem = nodeMemory.map(parseBytes);
+      const placement = [];
+      for (let i = 0; i < podCpu.length; i++) {
+        const cpu = parseMillicores(podCpu[i]);
+        const mem = parseBytes(podMemory[i]);
+        let chosen = -1;
+        for (let j = 0; j < freeCpu.length; j++) {
+          if (freeCpu[j] >= cpu && freeMem[j] >= mem) {
+            freeCpu[j] -= cpu;
+            freeMem[j] -= mem;
+            chosen = j;
+            break;
+          }
+        }
+        placement.push(chosen);
+      }
+      return placement;
+    }
+tests:
+  - {id: t1, args: [["500m", "1", "250m", "3", "0.75"], ["1Gi", "512Mi", "256Mi", "1Gi", "2G"], ["1", "4"], ["1Gi", "8Gi"]], expected: [0, 1, 1, -1, 1], description: "Example 1"}
+  - {id: t2, args: [["0.1", "100m", "0.25"], ["1G", "1000M", "1000000000"], ["0.2"], ["2Gi"]], expected: [0, 0, -1], description: "Example 2 - equivalent units and decimal versus binary memory"}
+  - {id: t3, hidden: true, args: [[], [], ["4"], ["8Gi"]], expected: [], description: "No pods returns an empty list"}
+  - {id: t4, hidden: true, args: [["0.1", "0.1", "0.1", "1m"], ["1Ki", "1Ki", "1Ki", "1"], ["0.3"], ["3Ki"]], expected: [0, 0, 0, -1], description: "Exact fit - floating point core arithmetic wrongly rejects the third 0.1 core pod"}
+  - {id: t5, hidden: true, args: [["1.001", "1.5"], ["1", "1"], ["1000m", "1500m"], ["1k", "1k"]], expected: [1, -1], description: "1.001 cores must not truncate to 1000m so pod 0 skips node 0; then 1.5 cores fits nowhere"}
+  - {id: t6, hidden: true, args: [["1", "1", "1", "1"], ["40Gi", "30Gi", "24Gi", "1"], ["8", "8"], ["64Gi", "32Gi"]], expected: [0, 1, 0, 1], description: "Memory totals beyond 32 bits; later small pod backfills node 0"}
+  - {id: t7, hidden: true, args: [["0", "0", "1"], ["1Mi", "1M", "1Mi"], ["1"], ["2Mi"]], expected: [0, 0, -1], description: "Zero CPU requests still need memory; binary versus decimal mega"}
+  - {id: t8, hidden: true, args: [["5", "1"], ["1Gi", "9Gi"], ["4", "2"], ["8Gi", "8Gi"]], expected: [-1, -1], description: "Nothing fits - every pod is -1 and nodes keep their capacity"}
+  - {id: t9, hidden: true, args: [["2", "2", "2", "2"], ["1k", "1000", "1Ki", "1024"], ["8", "4"], ["2000", "2048"]], expected: [0, 0, 1, 1], description: "k is 1000 and Ki is 1024 - node 0 memory is used up exactly so the Ki pods move to node 1"}
+  - {id: t10, hidden: true, args: [["1", "250m", "100m", "1", "2", "2", "750m", "1.5", "500m", "0.5", "1", "0.125", "100m", "0.5", "0.125", "100m", "250m", "250m", "0.125", "2", "100m", "750m", "2", "1.5", "100m", "0.5", "100m", "1.5", "500m", "0.5", "1.5", "1.5", "1", "1.5", "250m", "0.125", "500m", "0.125", "0.125", "500m", "500m", "500m", "750m", "1.5", "750m", "0.5", "250m", "250m", "250m", "2", "100m", "1", "1", "1.5", "250m", "1.5", "1", "750m", "1", "0.125", "750m", "0.5", "1", "500m", "250m", "250m", "0.125", "0.5", "1.5", "750m", "500m", "250m", "2", "500m", "0.125", "100m", "100m", "2", "2", "100m", "500m", "0.5", "100m", "0.5", "100m", "750m", "0.125", "250m", "1.5", "100m", "2", "0.125", "0.5", "100m", "250m", "1", "0.125", "750m", "0.5", "0.125", "1", "0.5", "250m", "250m", "750m", "750m", "500m", "750m", "750m", "0.5", "1", "250m", "2", "500m", "100m", "0.125", "1.5", "2", "500m", "2", "250m", "0.5", "750m", "1", "2", "2", "1", "750m", "750m", "100m", "1", "250m", "100m", "500m", "1.5", "750m", "2", "0.5", "500m", "250m", "1.5", "750m", "750m", "250m", "0.5", "750m", "0.125", "0.125", "1", "100m", "1.5", "2", "100m", "500m", "2", "0.5", "100m", "500m", "0.125", "2", "250m", "2", "1", "0.125", "750m", "750m", "500m", "750m", "750m", "1", "1", "250m", "0.5", "100m", "0.125", "2", "100m", "0.125", "2", "1", "1.5", "2", "1.5", "1", "1", "1.5", "500m", "2", "100m", "2", "0.125", "750m", "1", "750m", "1", "250m", "2", "0.5", "1", "500m", "750m", "1.5", "250m", "0.125", "250m", "1", "0.125", "100m", "100m", "1", "250m", "0.5", "0.125", "100m", "2", "250m", "1", "0.5", "1.5", "500m", "250m", "500m", "750m", "2", "1.5", "1", "250m", "500m", "100m", "250m", "500m", "100m", "500m", "500m", "1", "0.125", "1", "100m", "100m", "250m", "1.5", "100m", "500m", "1.5", "250m", "500m", "0.5", "0.5", "2", "1.5", "0.5", "750m", "2", "1.5", "750m", "0.5", "750m", "1", "0.125", "500m", "1.5", "2", "1", "100m", "0.125", "2", "1.5", "0.5", "750m", "500m", "0.5", "1.5", "2", "2", "100m", "100m", "1.5", "2", "0.125", "500m", "2", "1.5", "0.5", "1.5", "100m", "1", "0.125", "500m", "2", "1.5", "0.125", "100m", "750m", "2", "500m", "0.125", "0.5", "2", "250m", "0.125"], ["128Mi", "1G", "1G", "2Gi", "128Mi", "128Mi", "1G", "1G", "500M", "2Gi", "512Mi", "512Mi", "256Mi", "64Mi", "256Mi", "256Mi", "1G", "64Mi", "512Mi", "2Gi", "256Mi", "128Mi", "1Gi", "1Gi", "500M", "2Gi", "2Gi", "2Gi", "1G", "64Mi", "2Gi", "500M", "128Mi", "1Gi", "512Mi", "256Mi", "512Mi", "256Mi", "2Gi", "2Gi", "256Mi", "256Mi", "256Mi", "128Mi", "64Mi", "128Mi", "2Gi", "2Gi", "1G", "128Mi", "1Gi", "256Mi", "512Mi", "512Mi", "1Gi", "64Mi", "128Mi", "512Mi", "2Gi", "128Mi", "1G", "128Mi", "1G", "128Mi", "128Mi", "512Mi", "512Mi", "128Mi", "500M", "1G", "128Mi", "64Mi", "256Mi", "64Mi", "500M", "2Gi", "128Mi", "512Mi", "1Gi", "2Gi", "256Mi", "512Mi", "512Mi", "512Mi", "256Mi", "1G", "1Gi", "512Mi", "1Gi", "256Mi", "2Gi", "256Mi", "512Mi", "256Mi", "1G", "500M", "256Mi", "1Gi", "1G", "500M", "256Mi", "1Gi", "512Mi", "500M", "1G", "64Mi", "1Gi", "512Mi", "1Gi", "500M", "128Mi", "256Mi", "512Mi", "512Mi", "256Mi", "500M", "128Mi", "128Mi", "64Mi", "128Mi", "512Mi", "2Gi", "500M", "1Gi", "64Mi", "500M", "2Gi", "256Mi", "1G", "64Mi", "256Mi", "1G", "1G", "1G", "128Mi", "512Mi", "256Mi", "128Mi", "128Mi", "500M", "512Mi", "256Mi", "500M", "1G", "512Mi", "1G", "2Gi", "512Mi", "2Gi", "1G", "512Mi", "2Gi", "1G", "500M", "512Mi", "128Mi", "500M", "2Gi", "256Mi", "64Mi", "64Mi", "500M", "128Mi", "1G", "256Mi", "2Gi", "512Mi", "256Mi", "128Mi", "1Gi", "500M", "1G", "1Gi", "256Mi", "2Gi", "2Gi", "1Gi", "1Gi", "512Mi", "512Mi", "64Mi", "500M", "1G", "500M", "500M", "1Gi", "1G", "128Mi", "1G", "500M", "256Mi", "256Mi", "128Mi", "512Mi", "256Mi", "512Mi", "256Mi", "1G", "2Gi", "512Mi", "500M", "512Mi", "256Mi", "500M", "500M", "2Gi", "64Mi", "1Gi", "1G", "2Gi", "128Mi", "512Mi", "128Mi", "64Mi", "1G", "128Mi", "512Mi", "64Mi", "128Mi", "500M", "64Mi", "1Gi", "512Mi", "1Gi", "128Mi", "2Gi", "1Gi", "256Mi", "2Gi", "64Mi", "128Mi", "2Gi", "2Gi", "64Mi", "64Mi", "512Mi", "1G", "1G", "1Gi", "256Mi", "1Gi", "1G", "128Mi", "1G", "256Mi", "2Gi", "512Mi", "2Gi", "1Gi", "1Gi", "1Gi", "128Mi", "2Gi", "1Gi", "1G", "256Mi", "512Mi", "1G", "1Gi", "1Gi", "128Mi", "1Gi", "256Mi", "128Mi", "128Mi", "512Mi", "500M", "128Mi", "128Mi", "1G", "500M", "64Mi", "256Mi", "1Gi", "2Gi", "128Mi", "512Mi", "128Mi", "256Mi", "128Mi", "1Gi", "256Mi", "256Mi", "1Gi", "512Mi", "256Mi", "64Mi", "2Gi", "64Mi", "64Mi", "128Mi", "128Mi", "512Mi", "128Mi", "500M", "64Mi", "128Mi", "1G", "1Gi", "500M"], ["16000m", "16000m", "2", "8", "16000m", "16000m", "16000m", "4", "3.5", "8", "2", "4", "8", "8", "16000m", "8", "8", "4", "3.5", "4"], ["4Gi", "4Gi", "4Gi", "16Gi", "8G", "32Gi", "8G", "8G", "8Gi", "32Gi", "4Gi", "32Gi", "8Gi", "8Gi", "8Gi", "8G", "4Gi", "32Gi", "4Gi", "8G"]], expected: [0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 2, 2, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 3, 2, 4, 4, 4, 4, 3, 3, 4, 4, 5, 5, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 6, 6, 6, 7, 6, 7, 7, 7, 7, 7, 8, 7, 7, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 6, 9, 9, 9, 9, 9, 9, 10, 11, 9, 11, 11, 12, 11, 12, 11, 11, 12, 12, 12, 13, 13, 13, 13, 11, 13, 11, 11, 13, 13, 14, 14, 13, 14, 12, 14, 14, 14, 14, 14, 14, 11, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15, 15, 14, 15, 16, 16, 16, 16, 16, 17, 17, 16, 17, 17, 17, 17, 18, 18, 19, 18, 19, 18, 19, 16, -1, -1, -1, -1, -1, 19, -1, 19, -1, 18, -1, -1, -1, -1, 19, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 15, -1, -1, -1, -1, -1, -1, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1], description: "Stress - 300 pods on 20 nodes with mixed units"}
+expected_concepts:
+  - parsing quantities into exact integer base units (millicores and bytes)
+  - avoiding floating point for decimal cores
+  - 64-bit integers for memory sizes
+  - first-fit greedy placement with remaining capacity per node
+  - checking both dimensions before committing
+optimal_complexity: {time: O(P * N) for P pods and N nodes, space: O(N + P)}
+rubric:
+  excellent: Converts every quantity once into exact integer millicores and bytes with small helper functions, uses 64-bit values for memory, runs the first-fit loop checking both resources before committing, and explains why floating point is unsafe here.
+  good: Correct placement with parsing that needs one fix after the tests, such as decimal-core truncation or the k versus Ki distinction.
+  weak: Parses cores with floating point and compares floats, mixes up binary and decimal units, overflows on Gi values, or subtracts resources for pods that were not placed.
+  criteria:
+    correctness: All tests pass, including exact fits, unit equivalences and unplaced pods.
+    efficiency: One pass over the nodes per pod; quantities are parsed once rather than inside the inner loop.
+    code_quality: Separate parse helpers for CPU and memory and a clear placement loop without duplicated logic.
+    edge_cases: Zero requests, decimal cores with three digits, memory above 32 bits and pods that fit nowhere.
+    communication: Explains the unit system and why exact integers are needed for comparisons.
+hints:
+  - Turn every quantity into a whole number in the smallest unit before comparing anything.
+  - CPU becomes millicores by handling the m suffix or the whole and fractional parts separately as integers, and memory becomes bytes by separating the trailing unit from the digits and multiplying by that unit's factor.
+  - Parse all node capacities into remaining-CPU and remaining-memory arrays of 64-bit integers, then for each pod scan the nodes from index 0, take the first one where both remaining values are large enough, subtract the request there and record its index, or record minus one and change nothing.
+followups:
+  - How would best-fit or least-allocated placement change the results, and when would you prefer them?
+  - How would you support more units such as Ti or exponent notation?
+  - With 10^5 nodes, how could you find the first fitting node faster than a linear scan?
+  - How would you add taints or node labels that restrict which pods may land on a node?
+common_errors:
+  - Converting decimal cores with floating point, so 0.1 three times does not fit into 0.3.
+  - Truncating 1.001 times 1000 from a float and getting 1000 instead of 1001.
+  - Treating k and Ki (or G and Gi) as the same multiplier.
+  - Storing memory in 32-bit integers, which overflows for several Gi.

@@ -1,0 +1,231 @@
+version: 1
+slug: order_total_mismatches
+title: "Order Total Mismatches"
+difficulty: medium
+competency_keys: [sql, databases, debugging]
+role_tags: [data, qa, business_analyst]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Order Total Mismatches
+
+  The checkout service stores a cached total on each order header, and the order lines separately.
+  After a bug in the line-voiding code, finance asks for a reconciliation report: every order whose
+  stored header total disagrees with the total recomputed from its lines.
+
+  Table `orders`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | header_total_cents | BIGINT | the cached total stored on the order |
+
+  Table `order_lines`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | order_id | INTEGER | references `orders.id` |
+  | qty | INTEGER | `>= 1` |
+  | unit_cents | INTEGER | price per unit; **negative for discount lines** |
+  | voided | INTEGER | `1` if the line was cancelled, otherwise `0` |
+
+  The **computed total** of an order is the sum of `qty * unit_cents` over its lines that are **not
+  voided**. An order with no lines, or with only voided lines, has a computed total of `0`.
+
+  Return `order_id`, `header_total_cents` and `computed_total` for every order whose header total
+  differs from its computed total, ordered by `order_id` ascending. Return no rows when everything
+  reconciles. Each order appears at most once.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  orders                         order_lines
+  +----+--------------------+    +----+----------+-----+------------+--------+
+  | id | header_total_cents |    | id | order_id | qty | unit_cents | voided |
+  +----+--------------------+    +----+----------+-----+------------+--------+
+  | 1  | 2500               |    | 1  | 1        | 2   | 1000       | 0      |
+  | 2  | 1000               |    | 2  | 1        | 1   | 500        | 0      |
+  | 3  | 0                  |    | 3  | 2        | 3   | 300        | 0      |
+  | 4  | 1500               |    | 4  | 4        | 1   | 750        | 0      |
+  +----+--------------------+    | 5  | 4        | 1   | 750        | 1      |
+                                 +----+----------+-----+------------+--------+
+
+  Output
+  +----------+--------------------+----------------+
+  | order_id | header_total_cents | computed_total |
+  +----------+--------------------+----------------+
+  | 2        | 1000               | 900            |
+  | 4        | 1500               | 750            |
+  +----------+--------------------+----------------+
+  Order 3 has no lines and a header of 0, so it reconciles. Line 5 is voided and does not count.
+  ```
+
+  ### Example 2
+  ```
+  orders                         order_lines
+  +----+--------------------+    +----+----------+-----+------------+--------+
+  | id | header_total_cents |    | id | order_id | qty | unit_cents | voided |
+  +----+--------------------+    +----+----------+-----+------------+--------+
+  | 10 | 1200               |    | 1  | 10       | 1   | 1500       | 0      |
+  | 11 | 800                |    | 2  | 10       | 1   | -300       | 0      |
+  | 12 | 1800               |    | 3  | 11       | 2   | 400        | 1      |
+  +----+--------------------+    +----+----------+-----+------------+--------+
+
+  Output
+  +----------+--------------------+----------------+
+  | order_id | header_total_cents | computed_total |
+  +----------+--------------------+----------------+
+  | 11       | 800                | 0              |
+  | 12       | 1800               | 0              |
+  +----------+--------------------+----------------+
+  Order 10 reconciles thanks to the discount line. Order 11 has only a voided line and order 12 has
+  no lines, so both compute to 0.
+  ```
+
+  ### Constraints
+  - At most `10^6` orders and `10^7` lines; either table may be empty.
+  - `1 <= qty <= 10000`, `-100000 <= unit_cents <= 100000`; an order total can exceed the 32-bit
+    integer range.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return order_id, header_total_cents and computed_total for orders whose header total
+    -- differs from the sum of their non-voided lines, ordered by order_id.
+    SELECT o.id AS order_id, o.header_total_cents, 0 AS computed_total
+    FROM orders o
+    ORDER BY o.id;
+reference_solutions:
+  sql: |
+    SELECT o.id AS order_id,
+           o.header_total_cents,
+           COALESCE(SUM(l.qty * l.unit_cents), 0) AS computed_total
+    FROM orders o
+    LEFT JOIN order_lines l
+      ON l.order_id = o.id
+     AND l.voided = 0
+    GROUP BY o.id, o.header_total_cents
+    HAVING o.header_total_cents <> COALESCE(SUM(l.qty * l.unit_cents), 0)
+    ORDER BY o.id;
+sql_setup: |
+  CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    header_total_cents BIGINT NOT NULL
+  );
+  CREATE TABLE order_lines (
+    id INTEGER PRIMARY KEY,
+    order_id INTEGER NOT NULL REFERENCES orders (id),
+    qty INTEGER NOT NULL,
+    unit_cents INTEGER NOT NULL,
+    voided INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - wrong header and a voided line still counted in the header"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, header_total_cents) VALUES (1, 2500), (2, 1000), (3, 0), (4, 1500);
+      INSERT INTO order_lines (id, order_id, qty, unit_cents, voided) VALUES
+        (1, 1, 2, 1000, 0), (2, 1, 1, 500, 0), (3, 2, 3, 300, 0), (4, 4, 1, 750, 0), (5, 4, 1, 750, 1);
+    expected_rows: [[2, 1000, 900], [4, 1500, 750]]
+  - id: t2
+    description: "Example 2 - discount line, only-voided order and order without lines"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, header_total_cents) VALUES (10, 1200), (11, 800), (12, 1800);
+      INSERT INTO order_lines (id, order_id, qty, unit_cents, voided) VALUES
+        (1, 10, 1, 1500, 0), (2, 10, 1, -300, 0), (3, 11, 2, 400, 1);
+    expected_rows: [[11, 800, 0], [12, 1800, 0]]
+  - id: t3
+    hidden: true
+    description: "Empty tables - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Everything reconciles, including a zero-header order without lines - no rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, header_total_cents) VALUES (1, 300), (2, 0), (3, 4500);
+      INSERT INTO order_lines (id, order_id, qty, unit_cents, voided) VALUES
+        (1, 1, 3, 100, 0), (2, 3, 5, 900, 0), (3, 3, 2, 999, 1);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Voided filter must live in the join - orders with only voided lines must still be reported"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, header_total_cents) VALUES (1, 500), (2, 0), (3, 200);
+      INSERT INTO order_lines (id, order_id, qty, unit_cents, voided) VALUES
+        (1, 1, 1, 500, 1), (2, 2, 4, 100, 1), (3, 3, 1, 200, 1), (4, 3, 1, 50, 1);
+    expected_rows: [[1, 500, 0], [3, 200, 0]]
+  - id: t6
+    hidden: true
+    description: "Duplicate identical lines both count (no DISTINCT) and a discount brings a total to exactly 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, header_total_cents) VALUES (1, 400), (2, 0), (3, 200);
+      INSERT INTO order_lines (id, order_id, qty, unit_cents, voided) VALUES
+        (1, 1, 2, 100, 0), (2, 1, 2, 100, 0), (3, 2, 1, 1000, 0), (4, 2, 2, -500, 0), (5, 3, 2, 100, 0), (6, 3, 2, 100, 0);
+    expected_rows: [[3, 200, 400]]
+  - id: t7
+    hidden: true
+    description: "Totals beyond 32-bit range - one matches, one is off by a cent"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, header_total_cents) VALUES (1, 2999970000), (2, 3999960001);
+      INSERT INTO order_lines (id, order_id, qty, unit_cents, voided) VALUES
+        (1, 1, 10000, 99999, 0), (2, 1, 10000, 99999, 0), (3, 1, 10000, 99999, 0),
+        (4, 2, 10000, 99999, 0), (5, 2, 10000, 99999, 0), (6, 2, 10000, 99999, 0), (7, 2, 10000, 99999, 0);
+    expected_rows: [[2, 3999960001, 3999960000]]
+  - id: t8
+    hidden: true
+    description: "Header lower than lines, negative computed total, and lines inserted out of order across orders"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, header_total_cents) VALUES (7, 100), (3, 900), (5, -50), (9, 0);
+      INSERT INTO order_lines (id, order_id, qty, unit_cents, voided) VALUES
+        (1, 9, 1, -250, 0), (2, 7, 1, 60, 0), (3, 3, 3, 300, 0), (4, 7, 1, 60, 0), (5, 5, 1, -50, 0), (6, 9, 1, 250, 1);
+    expected_rows: [[7, 100, 120], [9, 0, -250]]
+  - id: t9
+    hidden: true
+    description: "Many orders, a few mismatches scattered through - each reported once"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, header_total_cents) VALUES
+        (1, 100), (2, 200), (3, 300), (4, 400), (5, 500), (6, 600), (7, 700), (8, 800), (9, 900), (10, 1000);
+      INSERT INTO order_lines (id, order_id, qty, unit_cents, voided) VALUES
+        (1, 1, 1, 100, 0), (2, 2, 2, 100, 0), (3, 3, 1, 100, 0), (4, 3, 1, 100, 0), (5, 4, 4, 100, 0),
+        (6, 5, 5, 100, 0), (7, 5, 1, 100, 1), (8, 6, 3, 200, 0), (9, 7, 7, 100, 0), (10, 7, 1, -1, 0),
+        (11, 8, 8, 100, 0), (12, 9, 9, 100, 0), (13, 9, 9, 100, 0), (14, 10, 10, 100, 1);
+    expected_rows: [[3, 300, 200], [7, 700, 699], [9, 900, 1800], [10, 1000, 0]]
+expected_concepts:
+  - "LEFT JOIN so orders without lines are kept"
+  - "putting a filter on the optional table in the ON clause instead of WHERE"
+  - "COALESCE of an aggregate over no rows"
+  - "HAVING to filter on an aggregate"
+  - "64-bit arithmetic for large totals"
+optimal_complexity: {time: "O(n + m) with hash aggregation (an index on order_lines.order_id helps)", space: "O(n) for the grouped orders"}
+rubric:
+  excellent: "Left-joins lines with the voided filter in the ON clause, aggregates per order with COALESCE to 0, filters with HAVING, orders by order_id, and explains why a WHERE filter on voided or an inner join loses orders."
+  good: "Correct query after a hint about orders without lines, the voided filter or NULL from SUM over no rows."
+  weak: "Uses an inner join so orders without valid lines vanish, filters voided lines in WHERE, compares NULL with the header, or reports every line instead of every order."
+  criteria:
+    correctness: "All tests pass, including orders with no lines, only voided lines, discounts and 64-bit totals."
+    efficiency: "One grouped pass over the lines; no correlated subquery per order required."
+    code_quality: "Clear aliases, exact output column names and a readable HAVING clause."
+    edge_cases: "Empty tables, zero totals, duplicate lines, negative totals and large sums."
+    communication: "Explains how the bug would be found and how ON versus WHERE changes outer-join results."
+hints:
+  - "Every order must be considered, even one that has no usable lines, so think about which join keeps orders without matches."
+  - "Aggregate the non-voided lines per order; the voided condition belongs in the join condition, because filtering it in WHERE removes orders whose lines are all voided. SUM over no rows is NULL, not 0."
+  - "LEFT JOIN order_lines on the order id and voided = 0, group by the order, compute COALESCE(SUM(qty * unit_cents), 0), keep groups where the header total differs from it using HAVING, and order by the order id."
+followups:
+  - "How would you also list which lines are responsible for each mismatch?"
+  - "How would you prevent this drift in the first place: a trigger, a generated column or computing totals on read?"
+  - "How would you run this reconciliation incrementally for orders changed since the last run?"
+common_errors:
+  - "Filtering voided = 0 in WHERE after a LEFT JOIN, which turns it into an inner join and drops orders whose lines are all voided."
+  - "Using an inner join, so orders without lines are never compared."
+  - "Comparing the header with SUM directly, which is NULL for orders without lines and never unequal."
+  - "Using SUM(DISTINCT ...), which collapses identical lines."

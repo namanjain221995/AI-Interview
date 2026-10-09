@@ -1,0 +1,642 @@
+# Curated questions: Data engineering (part 4 of 4).
+# Orchestration, data quality and contracts, testing, observability, access and retention, cost.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [data]
+questions:
+  # ------------------------------------------------------------- orchestration and quality basics
+  - external_key: technical.data_engineering.dag_task_granularity
+    competency_key: data_engineering
+    topic: Structuring an orchestrated pipeline
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you build a pipeline in an orchestrator like Airflow or Dagster, how do you decide how to split the
+      work into tasks? Describe a DAG you designed and why it looked the way it did.
+    expected_concepts:
+      - tasks small enough to retry independently
+      - not so small that scheduling overhead dominates
+      - heavy compute runs in external engines, not the scheduler
+      - clear inputs and outputs per task
+      - dependencies that reflect real data dependencies
+    rubric:
+      excellent: Explains task boundaries in terms of retry units, clear outputs and real data dependencies, keeps heavy work off the scheduler, and walks through an actual DAG with the reasoning behind it.
+      good: Gives a sensible structure for a real DAG and knows tasks should be retryable.
+      weak: Puts the whole pipeline in one task or cannot explain why tasks were split.
+    followups:
+      - What did you pass between tasks, and what did you avoid passing?
+      - How would you change the DAG if one step took ninety percent of the time?
+    common_errors:
+      - Passing large datasets between tasks through the orchestrator's metadata store.
+
+  - external_key: technical.data_engineering.retries_timeouts_alerts
+    competency_key: data_engineering
+    topic: Retries, timeouts and alerts on scheduled tasks
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you set up retries, timeouts and failure alerts for scheduled data tasks, and what goes wrong
+      when people leave those at the defaults?
+    expected_concepts:
+      - retries with backoff for transient failures only
+      - execution timeouts so hung tasks don't block the schedule
+      - alerts routed to an owner with context and a runbook link
+      - SLA or deadline alerts for jobs that run late rather than fail
+      - avoiding alert floods from retries
+    rubric:
+      excellent: Distinguishes transient from permanent failures for retries, adds timeouts and lateness alerts, routes actionable alerts to owners with context, and gives concrete examples of default settings causing trouble.
+      good: Configures retries with backoff and alerts on failure.
+      weak: Leaves defaults and relies on someone noticing missing data.
+    followups:
+      - A task hangs for six hours without failing. How would you have caught it sooner?
+      - Which errors should never be retried?
+    common_errors:
+      - Retrying non-idempotent tasks that then write partial data twice.
+
+  - external_key: technical.data_engineering.first_quality_checks
+    competency_key: data_engineering
+    topic: Basic data quality checks on a new table
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      You've just built a new table that other teams will rely on. Which data quality checks would you add
+      first, and how do you decide which ones are worth having?
+    expected_concepts:
+      - uniqueness of the primary or business key
+      - not-null on required columns
+      - accepted values and ranges
+      - row count or volume compared to expectations
+      - freshness of the latest data
+      - referential integrity to related tables
+    rubric:
+      excellent: Proposes a focused set covering keys, nulls, values, volume, freshness and relationships, ties each to a real failure it would catch, and avoids noisy checks that nobody acts on.
+      good: Lists several sensible checks such as uniqueness, nulls and row counts.
+      weak: Relies on the job succeeding as proof of good data.
+    followups:
+      - Which check has caught the most real problems for you?
+      - What happens when a check fails?
+    common_errors:
+      - Adding dozens of checks without owners, so failures get ignored.
+
+  - external_key: technical.data_engineering.overnight_failure_triage
+    competency_key: data_engineering
+    topic: An overnight failure before morning reports
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You're on call. A key overnight pipeline failed at three in the morning, and executives look at the
+      reports it feeds at eight. Walk me through what you do.
+    expected_concepts:
+      - read the error and logs to classify the failure
+      - decide between fix and rerun or rerunning from the failed task
+      - tell report consumers early if data will be late
+      - confirm the output after the rerun
+      - follow up with a root cause and prevention
+    rubric:
+      excellent: Diagnoses before acting, reruns from the failed step safely, communicates expected delays before eight o'clock, verifies the output and follows up with a root-cause fix.
+      good: Investigates the logs, reruns the job and checks the result.
+      weak: Reruns blindly or waits until someone complains.
+    followups:
+      - It won't be fixed by eight. What do you tell people and how?
+      - How would you make a failure like this less likely?
+    common_errors:
+      - Rerunning the whole pipeline from scratch when only the last step failed.
+
+  - external_key: technical.data_engineering.freshness_slas
+    competency_key: data_engineering
+    topic: Defining and monitoring data freshness
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you define and monitor freshness for the datasets you own, so you know about stale data before
+      the people using it do?
+    expected_concepts:
+      - agreed freshness targets per dataset with consumers
+      - measure from the latest event or load timestamp in the data
+      - alert on lateness, not only on job failure
+      - show freshness to consumers in dashboards or catalogs
+      - separate source delays from pipeline delays
+    rubric:
+      excellent: Agrees targets with consumers, measures freshness from the data itself, alerts on lateness independently of job status and makes freshness visible to users, separating upstream from pipeline delays.
+      good: Monitors the latest timestamp and alerts when it is too old.
+      weak: Assumes data is fresh if the job succeeded.
+    followups:
+      - The job succeeded but loaded nothing. Would your monitoring notice?
+      - How would you set a target for a dataset nobody has given you one for?
+    common_errors:
+      - Measuring freshness from the job's finish time rather than the newest record.
+
+  - external_key: technical.data_engineering.testing_sql_transformations
+    competency_key: testing
+    topic: Testing SQL transformations before merge
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you test SQL transformations, say dbt models, before a change is merged, so you're confident it
+      doesn't break anything downstream?
+    expected_concepts:
+      - unit tests with small fixed input and expected output
+      - schema and data tests on keys and values
+      - building changed models and their dependants in CI
+      - comparing results between the old and new version
+      - code review with sample output
+    rubric:
+      excellent: Combines unit tests on fixtures, data tests, CI builds of changed models and their children, and a diff of outputs against production, with examples of bugs this caught.
+      good: Runs data tests and builds the models in a development environment before merging.
+      weak: Tests only by running the query and eyeballing the result.
+    followups:
+      - How do you keep CI runs fast when the warehouse holds terabytes?
+      - What would an output diff tell you that tests wouldn't?
+    common_errors:
+      - Testing only against tiny sample data that never contains edge cases.
+
+  - external_key: technical.data_engineering.handling_pii_in_pipelines
+    competency_key: data_engineering
+    topic: Handling personal data in pipelines
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Your pipelines carry personal data such as emails and phone numbers. How do you handle those fields so
+      that analysts can still do their work without everyone seeing them?
+    expected_concepts:
+      - collect and keep only what is needed
+      - tagging or classifying sensitive columns
+      - masking, hashing or tokenising
+      - restricted access with column-level controls
+      - keeping personal data out of logs and test environments
+    rubric:
+      excellent: Minimises collection, classifies sensitive columns, applies masking or tokenisation with access controls, and keeps personal data out of logs and lower environments, with examples from their own work.
+      good: Masks or hashes sensitive fields and restricts access to the raw values.
+      weak: Relies on people being careful with the data.
+    followups:
+      - Analysts need to count unique users. How do they do it without seeing emails?
+      - Why can a plain hash of a phone number still be a risk?
+    common_errors:
+      - Copying production personal data into development environments for testing.
+
+  # ------------------------------------------------------------- medium
+  - external_key: technical.data_engineering.data_contract_contents
+    competency_key: data_engineering
+    topic: What a data contract should contain
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      If you were setting up a data contract between a product team that produces events and your data
+      team, what would it contain and how would it be enforced?
+    expected_concepts:
+      - schema with types and required fields
+      - semantics such as units, meanings and allowed values
+      - freshness, volume and quality expectations
+      - ownership and a change process with notice periods
+      - automated checks at the producer and on ingestion
+    rubric:
+      excellent: Covers schema, semantics, service levels, ownership and change process, and makes it enforceable through automated checks on both sides rather than a document alone.
+      good: Includes schema, ownership and some quality expectations, with validation on ingestion.
+      weak: Describes it as a document with field names and nothing that enforces it.
+    followups:
+      - Who should own the contract, the producer or the consumer?
+      - What should happen to data that violates the contract?
+    common_errors:
+      - Covering field types but not meaning, so a unit change still breaks reports.
+
+  - external_key: technical.data_engineering.silent_semantic_change
+    competency_key: data_engineering
+    topic: An upstream change in meaning
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      An upstream team quietly changed an amount field from cents to whole currency units. The schema
+      didn't change, and finance noticed a week later that revenue dropped a hundredfold. How would you deal
+      with the incident and stop it happening again?
+    expected_concepts:
+      - fix forward and correct the affected week of data
+      - inform consumers about the period that was wrong
+      - distribution and range checks that catch value shifts
+      - anomaly detection on key metrics
+      - contracts and change notification covering semantics
+    rubric:
+      excellent: Corrects the affected data and tells consumers, then adds distribution or anomaly checks that would catch such shifts within hours and pushes for semantic contracts with the producer.
+      good: Fixes the data and adds a range or anomaly check.
+      weak: Only fixes the data and blames the upstream team.
+    followups:
+      - How would you tell which rows were in cents and which in whole units?
+      - How quickly could your checks have caught this?
+    common_errors:
+      - Relying on schema validation, which cannot detect a change in meaning.
+
+  - external_key: technical.data_engineering.cross_team_pipeline_dependencies
+    competency_key: data_engineering
+    topic: Dependencies between pipelines owned by different teams
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your pipeline needs to start only after another team's tables are ready, and their run time varies
+      from one to four hours. How do you handle that dependency?
+    expected_concepts:
+      - time-based scheduling with a buffer is fragile
+      - sensors on readiness markers or partition presence
+      - data-aware or event-driven triggers between pipelines
+      - completeness signals rather than mere existence
+      - timeouts and escalation when upstream is very late
+    rubric:
+      excellent: Replaces guessed start times with readiness signals or data-aware triggers, checks completeness rather than existence, and handles very late upstreams with timeouts and escalation.
+      good: Uses a sensor or trigger on the upstream data instead of a fixed time.
+      weak: Schedules a few hours later and hopes.
+    followups:
+      - How do you avoid a sensor holding a worker slot for four hours?
+      - The table exists but is half loaded. How would you know?
+    common_errors:
+      - Checking that a partition exists while the upstream job is still writing to it.
+
+  - external_key: technical.data_engineering.scheduler_catchup_storm
+    competency_key: data_engineering
+    topic: A flood of catch-up runs after an outage
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      The scheduler was down for two days. When it comes back, fifty pipelines all start catching up on missed
+      runs at once and the warehouse grinds to a halt. What would you do now, and how would you prevent it
+      next time?
+    expected_concepts:
+      - pause or limit catch-up while prioritising critical pipelines
+      - concurrency limits, pools and queues
+      - collapse missed runs where only the latest matters
+      - protecting shared warehouse capacity with workload isolation
+      - catch-up policies set deliberately per pipeline
+    rubric:
+      excellent: Stabilises first by pausing and prioritising, uses pools and concurrency limits, collapses runs where appropriate, and sets explicit catch-up and isolation policies per pipeline afterwards.
+      good: Limits concurrency and runs the most important pipelines first.
+      weak: Lets it all run and waits.
+    followups:
+      - Which pipelines can skip missed runs and which can't?
+      - How would you make sure dashboards don't show partial data meanwhile?
+    common_errors:
+      - Leaving catch-up enabled by default on every DAG without thinking about it.
+
+  - external_key: technical.data_engineering.blocking_versus_warning_checks
+    competency_key: data_engineering
+    topic: Deciding which quality checks block the pipeline
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your volume anomaly check keeps failing the pipeline on public holidays, and people have started
+      ignoring it. How do you decide which checks should stop data from publishing and which should only warn,
+      and how would you fix this one?
+    expected_concepts:
+      - severity based on downstream impact of bad data versus late data
+      - blocking checks for correctness-critical rules
+      - warnings with review for statistical anomalies
+      - seasonality and calendars in anomaly thresholds
+      - tracking false positive rates and tuning
+    rubric:
+      excellent: Ties severity to the cost of publishing bad versus late data, keeps hard rules blocking and statistical checks warning, makes the anomaly check seasonality-aware and tracks its false positives.
+      good: Separates critical blocking checks from warnings and adjusts the threshold.
+      weak: Disables the check.
+    followups:
+      - Who should be able to override a blocking check and publish anyway?
+      - How would you measure whether a check is worth keeping?
+    common_errors:
+      - Making every check blocking, so the pipeline stops for harmless anomalies.
+
+  - external_key: technical.data_engineering.warehouse_bill_doubled
+    competency_key: data_engineering
+    topic: A warehouse bill that suddenly doubled
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      This month's cloud warehouse bill is about double last month's, and nobody knows why. How would you find
+      out what happened and bring it back down?
+    expected_concepts:
+      - query history and billing data by user, warehouse and query
+      - identify a few expensive queries or jobs
+      - common causes such as full scans, runaway schedules or idle clusters
+      - quick fixes like auto-suspend and right-sizing
+      - budgets, alerts and cost attribution to teams
+    rubric:
+      excellent: Uses billing and query history to attribute cost, finds the specific queries or jobs responsible, fixes them, and puts budgets, alerts and team-level attribution in place.
+      good: Looks at query history for the most expensive queries and optimises them.
+      weak: Asks everyone to run fewer queries.
+    followups:
+      - The cost comes from a dashboard refreshing every minute. What would you do?
+      - How would you make teams see their own spend?
+    common_errors:
+      - Cutting warehouse size across the board and slowing everyone down.
+
+  - external_key: technical.data_engineering.safe_development_environments
+    competency_key: data_engineering
+    topic: Developing pipelines without touching production
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do engineers on your team develop and test changes to pipelines against realistic data without
+      risking production tables or exposing sensitive data?
+    expected_concepts:
+      - separate development schemas or workspaces per engineer
+      - zero-copy clones or snapshots of production data
+      - sampled or masked datasets
+      - CI environments built from code
+      - promotion through environments with the same code
+    rubric:
+      excellent: Describes isolated per-person environments built from code, realistic data through clones, samples or masked copies, and a promotion path that runs the same code everywhere, with attention to cost and privacy.
+      good: Uses separate development schemas with a copy or sample of the data.
+      weak: Develops directly against production tables.
+    followups:
+      - How do you keep development environments from piling up and costing money?
+      - What breaks when development data is too small?
+    common_errors:
+      - Hard-coding production table names so code can't be pointed at another environment.
+
+  - external_key: technical.data_engineering.lineage_impact_analysis
+    competency_key: data_engineering
+    topic: Using lineage to assess a change
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You want to change how a column in a widely used table is calculated. How do you work out who and what
+      will be affected before you make the change?
+    expected_concepts:
+      - column-level lineage from transformation code and query logs
+      - downstream models, dashboards and exports
+      - query history to find actual users
+      - notifying owners with a timeline
+      - adding a new column and deprecating the old one
+    rubric:
+      excellent: Combines column-level lineage with query logs to find real consumers, reaches out to owners, and prefers adding a new column with a deprecation period over changing meaning in place.
+      good: Uses lineage tooling or searches code to find dependants and informs them.
+      weak: Makes the change and waits to see what breaks.
+    followups:
+      - Some consumers export the table to spreadsheets. How would you find them?
+      - How long would you keep the old column around?
+    common_errors:
+      - Trusting lineage from code only, missing ad hoc queries and external tools.
+
+  - external_key: technical.data_engineering.pipeline_observability_signals
+    competency_key: data_engineering
+    topic: Observability for data pipelines
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Beyond whether a job succeeded or failed, what signals do you collect from your pipelines, and how
+      have they helped you catch problems early?
+    expected_concepts:
+      - rows read, written and rejected per run
+      - run duration and resource use trends
+      - freshness and lag of outputs
+      - data distribution metrics on key columns
+      - linking runs to code versions and input partitions
+    rubric:
+      excellent: Collects volume, rejection, duration, freshness and distribution signals tied to code version and inputs, and gives concrete examples of catching issues before users noticed.
+      good: Tracks row counts and durations and alerts on anomalies.
+      weak: Relies on job status and log files only.
+    followups:
+      - How would you notice a job that is slowly getting slower each week?
+      - Where do these metrics live, and who looks at them?
+    common_errors:
+      - Logging counts that nobody charts or alerts on.
+
+  - external_key: technical.data_engineering.warehouse_access_design
+    competency_key: data_engineering
+    topic: Designing access control in the warehouse
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you design roles and permissions in a shared warehouse used by engineers, analysts, finance
+      and a few external partners?
+    expected_concepts:
+      - role-based access with roles mapped to functions, not people
+      - least privilege with separate read and write roles
+      - row-level and column-level security for sensitive data
+      - service accounts for pipelines
+      - access reviews and audit logs
+    rubric:
+      excellent: Builds a role hierarchy by function, separates pipeline and human access, uses row and column policies for sensitive and partner data, and keeps access reviewed and audited.
+      good: Uses roles with least privilege and restricts sensitive tables.
+      weak: Grants broad access and relies on trust.
+    followups:
+      - A partner should only see their own customers' rows. How would you enforce that?
+      - How do you handle someone who needs temporary access to sensitive data?
+    common_errors:
+      - Granting permissions to individual users, which becomes impossible to audit.
+
+  - external_key: technical.data_engineering.preemptible_batch_compute
+    competency_key: data_engineering
+    topic: Running batch jobs on spot or preemptible capacity
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Spot or preemptible instances can cut batch compute costs a lot. How have you used them, or how would
+      you, without making jobs unreliable?
+    expected_concepts:
+      - stateless executors on spot, driver or coordinator on on-demand
+      - task-level retries and recomputation after node loss
+      - diversifying instance types and zones
+      - graceful decommissioning and shuffle data loss
+      - fallback to on-demand for deadline-critical runs
+    rubric:
+      excellent: Keeps coordinators on stable capacity, relies on task retries for executors, diversifies instance pools, understands shuffle data loss on preemption and keeps an on-demand fallback for critical deadlines.
+      good: Uses spot for workers with on-demand for the driver and accepts some retries.
+      weak: Runs everything on spot without considering interruptions.
+    followups:
+      - What happens to a long shuffle stage when several nodes are reclaimed at once?
+      - How would you decide which jobs are allowed to use spot?
+    common_errors:
+      - Placing the driver on a spot node so one interruption kills the whole job.
+
+  # ------------------------------------------------------------- hard
+  - external_key: technical.data_engineering.wrong_numbers_published
+    competency_key: data_engineering
+    topic: Wrong numbers reached an executive report
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You discover that a figure in a board report, already sent out, came from your pipeline and is wrong
+      because of a join bug. How do you handle it from the moment you find out?
+    expected_concepts:
+      - confirm and size the error quickly
+      - inform the report owner promptly with facts and impact
+      - find every other output affected by the same bug
+      - fix, backfill and provide corrected figures
+      - blameless review and safeguards such as reconciliation checks
+    rubric:
+      excellent: Verifies and quantifies the error, informs owners promptly and plainly, traces all affected outputs, delivers corrected figures with an explanation, and follows up with specific safeguards from a blameless review.
+      good: Tells the owner, fixes the bug and reruns the affected data.
+      weak: Fixes the data quietly without telling anyone who used the figure.
+    followups:
+      - What would you put in the message to the report owner?
+      - Which check would have caught this join bug before publishing?
+    common_errors:
+      - Waiting until the fix is ready before telling anyone.
+
+  - external_key: technical.data_engineering.platform_cost_reduction
+    competency_key: data_engineering
+    topic: Cutting data platform spend without hurting SLAs
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Leadership asks you to reduce the data platform's total spend by thirty percent this year without
+      making key datasets late or less reliable. How would you approach it?
+    expected_concepts:
+      - break down spend by workload, team and dataset
+      - find unused tables, dashboards and pipelines to retire
+      - reduce reprocessing through incremental models
+      - storage lifecycle tiers and retention
+      - compute right-sizing, scheduling and commitments
+      - track savings and SLA impact together
+    rubric:
+      excellent: Builds a cost breakdown first, targets the biggest items, retires unused assets, moves to incremental processing, tunes storage and compute commitments, and reports savings alongside SLA metrics.
+      good: Identifies several large cost areas and proposes reasonable reductions.
+      weak: Proposes cutting cluster sizes across the board.
+    followups:
+      - How would you find tables nobody uses any more?
+      - A team refuses to give up a costly hourly pipeline. How do you handle it?
+    common_errors:
+      - Optimising small items while the largest cost driver is never examined.
+
+  - external_key: technical.data_engineering.quality_programme_rollout
+    competency_key: data_engineering
+    topic: Building data quality across hundreds of tables
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You join a team with around four hundred warehouse tables and almost no quality checks, and data
+      incidents happen every week. How would you build a quality programme that actually reduces incidents?
+    expected_concepts:
+      - learn from recent incidents to find the common failure types
+      - tier tables by business criticality
+      - start with critical tables and high-value checks
+      - ownership and on-call for failures
+      - measure incident counts and time to detect
+      - make checks part of the definition of done for new models
+    rubric:
+      excellent: Uses incident history and criticality tiers to prioritise, adds focused checks with clear owners, measures detection time and incident rates, and changes team practice so new work ships with checks.
+      good: Prioritises critical tables and adds checks with alerts.
+      weak: Tries to add checks to all four hundred tables at once.
+    followups:
+      - How would you decide which tables count as critical?
+      - What would you report after three months to show progress?
+    common_errors:
+      - Measuring success by the number of checks rather than incidents prevented.
+
+  - external_key: technical.data_engineering.orchestrator_at_scale
+    competency_key: data_engineering
+    topic: An orchestrator struggling with thousands of DAGs
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your Airflow deployment now has around three thousand DAGs, tasks sit queued for minutes before starting,
+      and the scheduler is constantly busy. What would you look at, and how would you change the setup?
+    expected_concepts:
+      - DAG file parsing cost from top-level code and imports
+      - dynamically generated DAGs and parse intervals
+      - executor choice and worker capacity
+      - pools, priorities and concurrency limits
+      - metadata database performance and clean-up
+      - splitting into multiple deployments by domain
+    rubric:
+      excellent: Investigates parse time, scheduler loop and metadata database load, fixes heavy top-level code and dynamic generation, sizes executors and pools, and considers splitting deployments, with measurements guiding each change.
+      good: Identifies parsing overhead and executor capacity as likely causes.
+      weak: Adds more workers without checking the scheduler or parsing.
+    followups:
+      - How would you measure how long each DAG file takes to parse?
+      - When would you split one Airflow into several?
+    common_errors:
+      - Making API or database calls at the top level of DAG files.
+
+  - external_key: technical.data_engineering.contract_enforcement_rollout
+    competency_key: data_engineering
+    topic: Rolling out contract checks to producer teams
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Breaking changes from thirty producing services keep landing in your pipelines. You want schema and
+      contract checks in their CI, but those teams see it as extra work. How would you get this adopted?
+    expected_concepts:
+      - evidence of incidents and their cost to producers' own users
+      - tooling that is cheap to adopt, such as a shared CI step
+      - start with the most critical producers as pilots
+      - warn-only mode before blocking
+      - clear change process and fast review from the data team
+    rubric:
+      excellent: Builds the case with incident evidence, makes adoption cheap with shared tooling, pilots with critical producers in warn-only mode, and commits the data team to fast reviews so the process doesn't slow producers down.
+      good: Provides tooling and starts with a few teams before expanding.
+      weak: Asks leadership to mandate it without making it easy.
+    followups:
+      - A producer insists a breaking change must ship today. What happens?
+      - How would you know the rollout is working?
+    common_errors:
+      - Turning on blocking checks everywhere at once and getting them disabled within a week.
+
+  - external_key: technical.data_engineering.retention_policy_implementation
+    competency_key: data_engineering
+    topic: Implementing a data retention policy
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Legal sets a rule that raw event data must be kept for no more than two years. Your platform has raw
+      zones, derived tables, aggregates, backups and copies in development environments. How would you
+      implement and prove compliance?
+    expected_concepts:
+      - inventory of every location holding the data, through lineage and catalog
+      - automated expiry such as lifecycle rules and partition drops
+      - deciding whether aggregates count as raw data
+      - backups and snapshot retention aligned with the policy
+      - monitoring and audit evidence of deletion
+    rubric:
+      excellent: Inventories every copy, automates expiry at each layer including snapshots and backups, agrees with legal how derived and aggregated data is treated, and produces ongoing evidence of compliance.
+      good: Sets lifecycle rules on raw storage and drops old partitions in tables.
+      weak: Deletes old files in the main bucket once.
+    followups:
+      - A model needs three years of history for training. How do you handle the conflict?
+      - How do you stop new copies of raw data appearing outside the policy?
+    common_errors:
+      - Forgetting that table snapshots and backups keep deleted data recoverable.
+
+  - external_key: technical.data_engineering.pipeline_criticality_tiers
+    competency_key: data_engineering
+    topic: Tiering pipelines by criticality
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      With hundreds of pipelines and a small team, not everything can get the same care. How would you define
+      tiers of criticality and what concretely would differ between them?
+    expected_concepts:
+      - tiers based on business impact of late or wrong data
+      - freshness and recovery targets per tier
+      - on-call coverage and alert routing per tier
+      - quality check and review requirements per tier
+      - periodic review of tier assignments with consumers
+    rubric:
+      excellent: Derives tiers from business impact, ties each to explicit freshness and recovery targets, on-call, testing and review requirements, and keeps assignments reviewed with consumers.
+      good: Defines a few tiers with different alerting and checks.
+      weak: Treats all pipelines the same or tiers them by technical complexity.
+    followups:
+      - Who decides which tier a pipeline belongs to?
+      - A low-tier pipeline feeds a high-tier one. What happens?
+    common_errors:
+      - Labelling most pipelines as critical, which makes the tiers meaningless.

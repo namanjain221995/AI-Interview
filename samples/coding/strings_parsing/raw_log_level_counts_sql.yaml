@@ -1,0 +1,174 @@
+version: 1
+slug: raw_log_level_counts_sql
+title: Raw Log Level Counts (SQL)
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, sre, dba]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Raw Log Level Counts (SQL)
+
+  An ingestion service stores application log lines exactly as they arrived, without parsing them.
+
+  Table `log_lines`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | line | TEXT | the raw log line, never NULL |
+
+  The **level** of a line is its **first word**: the text before the first space, or the whole line when
+  it contains no space. Different services write the level in different letter cases (`ERROR`, `error`,
+  `Error`).
+
+  Return one row for each of the four levels `DEBUG`, `INFO`, `WARN` and `ERROR`, **in that order**, with
+  columns:
+
+  - `level`: the level name in upper case,
+  - `line_count`: the number of lines whose first word equals that level, ignoring letter case.
+
+  All four rows are always returned, with `0` for a level that has no lines. Lines whose first word is
+  anything else (for example `WARNING`, `ERROR:` or a timestamp) are not counted, and neither are lines
+  that start with a space (their first word is empty). A level name that appears later in a line does
+  not count.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example
+  ```
+  log_lines
+  +----+---------------------------------+
+  | id | line                            |
+  +----+---------------------------------+
+  | 1  | ERROR payments timeout after 5s |
+  | 2  | info cache warmed               |
+  | 3  | Error retry budget exhausted    |
+  | 4  | WARNING disk at 85%             |
+  | 5  | INFO                            |
+  | 6  | debug: token refreshed          |
+  +----+---------------------------------+
+
+  Output
+  +-------+------------+
+  | level | line_count |
+  +-------+------------+
+  | DEBUG | 0          |
+  | INFO  | 2          |
+  | WARN  | 0          |
+  | ERROR | 2          |
+  +-------+------------+
+  Line 4 starts with WARNING (not WARN) and line 6 starts with "debug:" (not DEBUG), so neither is counted.
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return level and line_count for DEBUG, INFO, WARN and ERROR, in that order.
+    SELECT 'DEBUG' AS level, 0 AS line_count;
+reference_solutions:
+  sql: |
+    SELECT lv.level,
+           (
+             SELECT COUNT(*)
+             FROM log_lines g
+             WHERE UPPER(g.line) = lv.level
+                OR UPPER(g.line) LIKE lv.level || ' %'
+           ) AS line_count
+    FROM (
+      SELECT 'DEBUG' AS level, 1 AS severity
+      UNION ALL SELECT 'INFO', 2
+      UNION ALL SELECT 'WARN', 3
+      UNION ALL SELECT 'ERROR', 4
+    ) lv
+    ORDER BY lv.severity;
+sql_setup: |
+  CREATE TABLE log_lines (
+    id INTEGER PRIMARY KEY,
+    line TEXT NOT NULL
+  );
+tests:
+  - id: t1
+    description: Example - mixed case, WARNING is not WARN, a colon-suffixed level is not a level, a bare level word counts
+    ordered: true
+    setup_sql: |
+      INSERT INTO log_lines (id, line) VALUES
+        (1, 'ERROR payments timeout after 5s'), (2, 'info cache warmed'), (3, 'Error retry budget exhausted'),
+        (4, 'WARNING disk at 85%'), (5, 'INFO'), (6, 'debug: token refreshed');
+    expected_rows: [["DEBUG", 0], ["INFO", 2], ["WARN", 0], ["ERROR", 2]]
+  - id: t2
+    description: Every level present once
+    ordered: true
+    setup_sql: |
+      INSERT INTO log_lines (id, line) VALUES
+        (1, 'warn queue depth high'), (2, 'DEBUG span opened'), (3, 'error db down'), (4, 'Info deploy started');
+    expected_rows: [["DEBUG", 1], ["INFO", 1], ["WARN", 1], ["ERROR", 1]]
+  - id: t3
+    hidden: true
+    description: Empty table still returns all four levels with zero counts in severity order
+    ordered: true
+    expected_rows: [["DEBUG", 0], ["INFO", 0], ["WARN", 0], ["ERROR", 0]]
+  - id: t4
+    hidden: true
+    description: Level words later in the line and lines starting with a space are ignored
+    ordered: true
+    setup_sql: |
+      INSERT INTO log_lines (id, line) VALUES
+        (1, 'payments ERROR upstream'), (2, ' ERROR leading space'), (3, '2024-05-01 INFO boot'),
+        (4, 'ERROR'), (5, 'eRrOr  two spaces after level');
+    expected_rows: [["DEBUG", 0], ["INFO", 0], ["WARN", 0], ["ERROR", 2]]
+  - id: t5
+    hidden: true
+    description: Prefix traps - INFORMATION, WARNED, ERRORS and DEBUGGER are different first words
+    ordered: true
+    setup_sql: |
+      INSERT INTO log_lines (id, line) VALUES
+        (1, 'INFORMATION only'), (2, 'warned once'), (3, 'ERRORS piled up'), (4, 'debugger attached'),
+        (5, 'Warn real one');
+    expected_rows: [["DEBUG", 0], ["INFO", 0], ["WARN", 1], ["ERROR", 0]]
+  - id: t6
+    hidden: true
+    description: Many lines of a single level plus unrelated lines and an empty line
+    ordered: true
+    setup_sql: |
+      INSERT INTO log_lines (id, line) VALUES
+        (1, 'debug a'), (2, 'debug b'), (3, 'DEBUG c'), (4, 'Debug d'), (5, 'debug'), (6, ''),
+        (7, 'trace x'), (8, 'FATAL y'), (9, 'debug%wild card');
+    expected_rows: [["DEBUG", 5], ["INFO", 0], ["WARN", 0], ["ERROR", 0]]
+  - id: t7
+    hidden: true
+    description: Wildcard characters in the data do not create false matches; underscores and percent signs follow the level word
+    ordered: true
+    setup_sql: |
+      INSERT INTO log_lines (id, line) VALUES
+        (1, 'INFO_x not a level'), (2, 'INFO 100% done'), (3, 'info _private flag'), (4, 'WARN_ON_FAIL set'),
+        (5, 'warn 50%');
+    expected_rows: [["DEBUG", 0], ["INFO", 2], ["WARN", 1], ["ERROR", 0]]
+expected_concepts:
+  - building a fixed list of rows with UNION ALL (a derived lookup table)
+  - correlated COUNT or LEFT JOIN with GROUP BY to keep zero counts
+  - case-insensitive comparison with UPPER
+  - first-word matching with equality or LIKE 'LEVEL %'
+  - explicit ORDER BY on a severity column
+optimal_complexity: {time: O(n) per level (one scan of log_lines for each of the four levels), space: O(1)}
+rubric:
+  excellent: Builds the four levels as a derived table with a severity column, counts matches with a correlated COUNT or a LEFT JOIN plus GROUP BY so zero rows survive, matches the first word exactly (equal to the level or followed by a space) with UPPER, orders by severity, and explains why plain LIKE 'ERROR%' over-counts.
+  good: Correct counts and zero rows after a hint about prefix matches such as WARNING or about keeping levels with no lines.
+  weak: Uses GROUP BY over the raw lines (losing zero rows), matches with LIKE 'LEVEL%' or LIKE '%LEVEL%', or relies on alphabetical order instead of severity order.
+  criteria:
+    correctness: All tests pass, including prefix traps, bare level lines and the empty table.
+    efficiency: Set-based query; mentions that parsing the level at ingestion time (a stored, indexed column) would avoid repeated scans.
+    code_quality: Clear aliases, a named severity column and a readable match predicate.
+    edge_cases: Empty table, lines that are only the level word, leading spaces and wildcard characters in the data.
+    communication: Explains how the query differs between case-sensitive and case-insensitive LIKE in PostgreSQL and SQLite.
+hints:
+  - The four output rows must exist even when no log line matches, so they cannot come only from the log_lines table. Where else can rows come from?
+  - Create the four levels yourself as a small derived table with a column that gives their severity order, then count matching lines for each level. Think carefully about what counts as a match for the first word.
+  - Build the levels with SELECT and UNION ALL, each with a severity number, and for each level count lines where the upper-cased line equals the level or is like the level followed by a space and anything else; order by the severity number.
+followups:
+  - How would you change the schema so the level is parsed once at ingestion and can be indexed?
+  - How would you count levels per hour using portable SQL?
+  - Why might LIKE behave differently for letter case on PostgreSQL and SQLite?
+common_errors:
+  - Grouping by the first word of log_lines, which drops levels that have no lines.
+  - Using LIKE 'WARN%', which also counts WARNING and WARNED lines.
+  - Forgetting lines that consist of the level word alone with no trailing text.
+  - Ordering by level name, which gives DEBUG, ERROR, INFO, WARN instead of severity order.

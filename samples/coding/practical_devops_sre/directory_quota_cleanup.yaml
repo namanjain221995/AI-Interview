@@ -1,0 +1,184 @@
+version: 1
+slug: directory_quota_cleanup
+title: Quota-Driven Log Cleanup
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [devops, sre, platform]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Quota-Driven Log Cleanup
+
+  A log-rotation agent enforces disk quotas on a host. You receive the files on disk as three parallel
+  arrays (`paths[i]`, `sizes[i]` in bytes, `mtimes[i]` = last modification time) and a list of quota
+  rules: directory `quota_dirs[k]` may hold at most `quota_bytes[k]` bytes in its **whole subtree**.
+  Quota directories can be nested (for example `/var/log` and `/var/log/api`).
+
+  A file is **under** a directory `d` when `d` is `/`, or when the file's path starts with `d` followed
+  by `/`. Matching is on whole path components: `/var/log-archive/x.log` is **not** under `/var/log`.
+
+  A quota directory is **over quota** while the total size of the remaining files under it is greater
+  than its limit. The agent repeats this step until no quota directory is over quota:
+
+  - Among the files that are under **at least one** over-quota directory, delete the **oldest**
+    (smallest `mtime`; on equal `mtime`, the lexicographically smallest path), and subtract its size
+    from every directory it is under.
+
+  Files under no over-quota directory are never deleted. Return the deleted paths **in deletion
+  order**, or an empty array if every quota already holds.
+
+  ### Example 1
+  ```
+  Input:  paths = ["/var/log/api/access.log", "/var/log/api/error.log", "/var/log/worker/run.log",
+                   "/var/log/worker/old.log", "/var/log-archive/a.log"]
+          sizes = [400, 100, 300, 200, 999]
+          mtimes = [10, 30, 20, 5, 1]
+          quota_dirs = ["/var/log", "/var/log/api"], quota_bytes = [800, 450]
+  Output: ["/var/log/worker/old.log", "/var/log/api/access.log"]
+  Explanation: /var/log holds 1000 bytes and /var/log/api holds 500, so both are over quota.
+  /var/log-archive/a.log is the oldest file but is under no quota directory. Deleting old.log brings
+  /var/log to 800 (within quota), but /var/log/api is still over, so its oldest file, access.log,
+  goes next.
+  ```
+
+  ### Example 2
+  ```
+  Input:  paths = ["/b.txt", "/a/z.txt", "/c"], sizes = [30, 30, 10], mtimes = [7, 7, 9]
+          quota_dirs = ["/"], quota_bytes = [50]
+  Output: ["/a/z.txt"]
+  Explanation: "/" covers every file. Two files share the oldest mtime; "/a/z.txt" sorts first.
+  ```
+
+  ### Constraints
+  - `1 <= paths.length == sizes.length == mtimes.length <= 10^4`
+  - Paths are absolute, unique, use `/` as the separator, have no trailing `/`, no empty, `.` or `..`
+    components, contain printable ASCII only and are at most 200 characters long.
+  - `1 <= quota_dirs.length == quota_bytes.length <= 10^3`; quota directories are unique, are `/` or
+    have the same shape as paths, and are never equal to a file path. A quota directory may contain no files.
+  - `1 <= sizes[i] <= 10^11`, `0 <= mtimes[i] <= 10^9`, `0 <= quota_bytes[k] <= 10^15`
+  - Lexicographic order compares character codes (plain ASCII order).
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: directory_quota_cleanup
+  params:
+    - {name: paths, type: "string[]"}
+    - {name: sizes, type: "long[]"}
+    - {name: mtimes, type: "int[]"}
+    - {name: quota_dirs, type: "string[]"}
+    - {name: quota_bytes, type: "long[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def directory_quota_cleanup(paths: list[str], sizes: list[int], mtimes: list[int],
+                                quota_dirs: list[str], quota_bytes: list[int]) -> list[str]:
+        index = {d: k for k, d in enumerate(quota_dirs)}
+        used = [0] * len(quota_dirs)
+        covering: list[list[int]] = []  # quota directories each file is under
+        for path, size in zip(paths, sizes):
+            ks = [index["/"]] if "/" in index else []
+            pos = path.find("/", 1)
+            while pos != -1:
+                k = index.get(path[:pos])
+                if k is not None:
+                    ks.append(k)
+                pos = path.find("/", pos + 1)
+            covering.append(ks)
+            for k in ks:
+                used[k] += size
+        over = sum(1 for k in range(len(used)) if used[k] > quota_bytes[k])
+        # Totals only shrink, so a directory that is within quota stays within quota. A file skipped
+        # once can therefore never become eligible later: one pass in age order is enough.
+        order = sorted(range(len(paths)), key=lambda i: (mtimes[i], paths[i]))
+        deleted: list[str] = []
+        for i in order:
+            if over == 0:
+                break
+            if any(used[k] > quota_bytes[k] for k in covering[i]):
+                deleted.append(paths[i])
+                for k in covering[i]:
+                    was_over = used[k] > quota_bytes[k]
+                    used[k] -= sizes[i]
+                    if was_over and used[k] <= quota_bytes[k]:
+                        over -= 1
+        return deleted
+  javascript: |
+    function directoryQuotaCleanup(paths, sizes, mtimes, quotaDirs, quotaBytes) {
+      const index = new Map();
+      quotaDirs.forEach((d, k) => index.set(d, k));
+      const used = new Array(quotaDirs.length).fill(0);
+      const covering = [];
+      for (let i = 0; i < paths.length; i++) {
+        const path = paths[i];
+        const ks = index.has("/") ? [index.get("/")] : [];
+        let pos = path.indexOf("/", 1);
+        while (pos !== -1) {
+          const k = index.get(path.slice(0, pos));
+          if (k !== undefined) ks.push(k);
+          pos = path.indexOf("/", pos + 1);
+        }
+        covering.push(ks);
+        for (const k of ks) used[k] += sizes[i];
+      }
+      let over = 0;
+      for (let k = 0; k < used.length; k++) if (used[k] > quotaBytes[k]) over++;
+      const order = paths.map((_, i) => i);
+      order.sort((a, b) => {
+        if (mtimes[a] !== mtimes[b]) return mtimes[a] - mtimes[b];
+        return paths[a] < paths[b] ? -1 : paths[a] > paths[b] ? 1 : 0;
+      });
+      const deleted = [];
+      for (const i of order) {
+        if (over === 0) break;
+        if (!covering[i].some((k) => used[k] > quotaBytes[k])) continue;
+        deleted.push(paths[i]);
+        for (const k of covering[i]) {
+          const wasOver = used[k] > quotaBytes[k];
+          used[k] -= sizes[i];
+          if (wasOver && used[k] <= quotaBytes[k]) over--;
+        }
+      }
+      return deleted;
+    }
+tests:
+  - {id: t1, args: [["/var/log/api/access.log", "/var/log/api/error.log", "/var/log/worker/run.log", "/var/log/worker/old.log", "/var/log-archive/a.log"], [400, 100, 300, 200, 999], [10, 30, 20, 5, 1], ["/var/log", "/var/log/api"], [800, 450]], expected: ["/var/log/worker/old.log", "/var/log/api/access.log"], description: "Example 1 - nested quotas and a prefix look-alike directory"}
+  - {id: t2, args: [["/b.txt", "/a/z.txt", "/c"], [30, 30, 10], [7, 7, 9], ["/"], [50]], expected: ["/a/z.txt"], description: "Example 2 - root quota and an mtime tie broken by path"}
+  - {id: t3, hidden: true, args: [["/data/x.log", "/data/y.log"], [10, 20], [1, 2], ["/data"], [30]], expected: [], description: "Exactly at the limit - nothing deleted"}
+  - {id: t4, hidden: true, args: [["/tmp/a", "/tmp/b", "/tmp/c", "/keep/d"], [5, 1, 9, 100], [3, 1, 2, 0], ["/tmp"], [0]], expected: ["/tmp/b", "/tmp/c", "/tmp/a"], description: "Zero-byte quota - every file under it goes, oldest first; unrelated older file stays"}
+  - {id: t5, hidden: true, args: [["/logs/app/1.log", "/logs/app/2.log", "/logs/db/1.log", "/logs/db/2.log"], [50, 50, 50, 50], [1, 2, 3, 4], ["/logs", "/logs/db"], [1000, 60]], expected: ["/logs/db/1.log"], description: "Only the inner quota is over - older files outside it are kept"}
+  - {id: t6, hidden: true, args: [["/logs/app/1.log", "/logs/db/1.log", "/logs/db/2.log", "/logs/app/2.log"], [70, 40, 40, 10], [1, 2, 3, 4], ["/logs", "/logs/db"], [100, 50]], expected: ["/logs/app/1.log", "/logs/db/1.log"], description: "Fixing the outer quota by deleting outside the inner one; inner still needs a deletion"}
+  - {id: t7, hidden: true, args: [["/opt/data/a", "/opt/database/b", "/opt/data/sub/c", "/empty-sibling/x"], [10, 10, 10, 10], [5, 1, 5, 0], ["/opt/data", "/opt/datab", "/nothing/here"], [5, 0, 0]], expected: ["/opt/data/a", "/opt/data/sub/c"], description: "Component-boundary matching, quota dirs without files, equal mtimes broken by path"}
+  - {id: t8, hidden: true, args: [["/a/B", "/a/a", "/a/_", "/a/Z1"], [1, 1, 1, 1], [9, 9, 9, 9], ["/a"], [1]], expected: ["/a/B", "/a/Z1", "/a/_"], description: "All mtimes equal - ASCII path order (uppercase before underscore before lowercase)"}
+  - {id: t9, hidden: true, args: [["/big/1", "/big/2", "/big/3", "/big/4"], [100000000000, 100000000000, 100000000000, 100000000000], [4, 3, 2, 1], ["/big", "/"], [250000000000, 1000000000000000]], expected: ["/big/4", "/big/3"], description: "100 GB files - sums beyond 32 bits; newest-first input order"}
+  - {id: t10, hidden: true, args: [["/srv/web/data/blob-619.bin", "/srv/search/data/blob-858.bin", "/srv/search/logs/app/app-099.log", "/srv/search/logs/gc/gc-204.log", "/srv/auth/logs/app/app-268.log", "/srv/api/logs/app/app-389.log", "/srv/api/logs/gc/gc-243.log", "/srv/billing/logs/gc/gc-373.log", "/srv/worker/data/blob-223.bin", "/srv/billing/logs/audit/audit-155.log", "/srv/worker/logs/audit/audit-300.log", "/srv/auth/logs/app/app-144.log", "/srv/worker/logs/audit/audit-293.log", "/srv/search/data/blob-494.bin", "/srv/worker/logs/app/app-211.log", "/srv/billing/data/blob-630.bin", "/srv/auth/logs/audit/audit-170.log", "/srv/web/data/blob-111.bin", "/srv/api/logs/app/app-209.log", "/srv/auth/logs/app/app-174.log", "/srv/billing/logs/gc/gc-267.log", "/srv/search/logs/app/app-318.log", "/srv/billing/logs/audit/audit-369.log", "/srv/worker/logs/audit/audit-156.log", "/srv/search/logs/gc/gc-011.log", "/srv/web/logs/app/app-325.log", "/srv/auth/logs/gc/gc-312.log", "/srv/search/data/blob-379.bin", "/srv/billing/logs/gc/gc-304.log", "/srv/web/logs/gc/gc-389.log", "/srv/worker/logs/gc/gc-054.log", "/srv/auth/logs/audit/audit-068.log", "/srv/worker/logs/app/app-168.log", "/srv/auth/logs/app/app-053.log", "/srv/web/data/blob-760.bin", "/srv/billing/logs/gc/gc-116.log", "/srv/web/logs/gc/gc-295.log", "/srv/auth/logs/app/app-318.log", "/srv/worker/logs/audit/audit-139.log", "/srv/billing/data/blob-424.bin", "/srv/api/logs/gc/gc-319.log", "/srv/auth/logs/app/app-017.log", "/srv/search/logs/gc/gc-117.log", "/srv/api/data/blob-823.bin", "/srv/billing/data/blob-764.bin", "/srv/search/logs/gc/gc-123.log", "/srv/billing/data/blob-129.bin", "/srv/billing/logs/app/app-181.log", "/srv/api/logs/app/app-123.log", "/srv/billing/logs/audit/audit-293.log", "/srv/worker/logs/app/app-138.log", "/srv/api/logs/gc/gc-166.log", "/srv/web/data/blob-495.bin", "/srv/api/logs/audit/audit-258.log", "/srv/api/logs/gc/gc-198.log", "/srv/worker/logs/gc/gc-098.log", "/srv/web/logs/audit/audit-002.log", "/srv/search/logs/app/app-022.log", "/srv/search/logs/gc/gc-326.log", "/srv/worker/logs/audit/audit-255.log", "/srv/auth/data/blob-224.bin", "/srv/auth/logs/audit/audit-037.log", "/srv/web/logs/app/app-167.log", "/srv/api/data/blob-833.bin", "/srv/auth/logs/app/app-376.log", "/srv/search/logs/audit/audit-003.log", "/srv/billing/data/blob-102.bin", "/srv/api/data/blob-118.bin", "/srv/worker/logs/audit/audit-154.log", "/srv/search/logs/audit/audit-271.log", "/srv/auth/data/blob-333.bin", "/srv/api/logs/app/app-093.log", "/srv/auth/logs/gc/gc-130.log", "/srv/search/logs/gc/gc-043.log", "/srv/auth/logs/app/app-213.log", "/srv/search/logs/audit/audit-248.log", "/srv/web/logs/app/app-255.log", "/srv/search/data/blob-771.bin", "/srv/search/logs/audit/audit-162.log", "/srv/worker/logs/audit/audit-362.log", "/srv/search/logs/gc/gc-112.log", "/srv/billing/logs/app/app-089.log", "/srv/billing/logs/app/app-215.log", "/srv/search/logs/app/app-240.log", "/srv/billing/logs/audit/audit-038.log", "/srv/auth/logs/app/app-240.log", "/srv/auth/logs/audit/audit-036.log", "/srv/web/logs/gc/gc-071.log", "/srv/web/logs/app/app-161.log", "/srv/api/logs/app/app-048.log", "/srv/worker/logs/gc/gc-298.log", "/srv/api/logs/gc/gc-170.log", "/srv/web/logs/audit/audit-300.log", "/srv/web/data/blob-282.bin", "/srv/billing/logs/app/app-225.log", "/srv/search/logs/audit/audit-192.log", "/srv/billing/logs/gc/gc-340.log", "/srv/worker/logs/audit/audit-290.log", "/srv/billing/data/blob-302.bin", "/srv/web/logs/audit/audit-331.log", "/srv/worker/data/blob-574.bin", "/srv/auth/logs/audit/audit-333.log", "/srv/auth/logs/app/app-235.log", "/srv/api/logs/app/app-367.log", "/srv/search/logs/audit/audit-201.log", "/srv/billing/data/blob-517.bin", "/srv/auth/logs/audit/audit-182.log", "/srv/search/logs/app/app-181.log", "/srv/worker/logs/audit/audit-052.log", "/srv/auth/logs/app/app-095.log", "/srv/auth/logs/audit/audit-201.log", "/srv/search/logs/app/app-204.log", "/srv/web/logs/audit/audit-092.log", "/srv/worker/logs/app/app-228.log", "/srv/search/logs/audit/audit-159.log", "/srv/auth/logs/gc/gc-342.log", "/srv/auth/data/blob-775.bin", "/srv/web/logs/audit/audit-321.log", "/srv/search/logs/app/app-019.log", "/srv/search/logs/gc/gc-337.log", "/srv/api/data/blob-634.bin", "/srv/api/data/blob-348.bin", "/srv/worker/data/blob-879.bin", "/srv/api/logs/audit/audit-041.log", "/srv/api/logs/app/app-224.log", "/srv/worker/logs/app/app-022.log", "/srv/web/logs/gc/gc-255.log", "/srv/billing/logs/app/app-333.log", "/srv/billing/logs/audit/audit-206.log", "/srv/auth/logs/gc/gc-188.log", "/srv/worker/logs/audit/audit-206.log", "/srv/worker/logs/gc/gc-074.log", "/srv/web/logs/app/app-012.log", "/srv/web/data/blob-624.bin", "/srv/billing/logs/app/app-031.log", "/srv/worker/logs/gc/gc-017.log", "/srv/billing/logs/app/app-204.log", "/srv/worker/logs/audit/audit-060.log", "/srv/api/logs/audit/audit-149.log", "/srv/billing/logs/app/app-288.log", "/srv/worker/data/blob-446.bin", "/srv/search/data/blob-093.bin", "/srv/search/data/blob-671.bin", "/srv/web/logs/gc/gc-175.log", "/srv/api/logs/gc/gc-157.log", "/srv/worker/data/blob-400.bin", "/srv/search/logs/audit/audit-399.log", "/srv/auth/logs/gc/gc-284.log", "/srv/billing/logs/gc/gc-118.log", "/srv/worker/logs/app/app-260.log", "/srv/auth/data/blob-176.bin", "/srv/api/logs/audit/audit-347.log", "/srv/search/logs/audit/audit-029.log", "/srv/billing/logs/audit/audit-332.log", "/srv/api/logs/app/app-205.log", "/srv/search/logs/gc/gc-057.log", "/srv/auth/logs/app/app-079.log", "/srv/api/logs/app/app-118.log", "/srv/search/logs/audit/audit-215.log", "/srv/api/logs/app/app-058.log", "/srv/worker/logs/app/app-056.log", "/srv/search/logs/app/app-329.log", "/srv/search/logs/audit/audit-229.log", "/srv/billing/data/blob-008.bin", "/srv/auth/logs/audit/audit-040.log", "/srv/api/logs/audit/audit-352.log", "/srv/api/logs/audit/audit-266.log", "/srv/worker/logs/app/app-221.log", "/srv/worker/logs/app/app-384.log", "/srv/search/logs/gc/gc-365.log", "/srv/web/logs/audit/audit-210.log", "/srv/search/logs/app/app-150.log", "/srv/api/logs/app/app-370.log", "/srv/api/data/blob-764.bin", "/srv/billing/logs/gc/gc-020.log", "/srv/worker/logs/app/app-053.log", "/srv/api/logs/app/app-079.log", "/srv/auth/logs/gc/gc-083.log", "/srv/search/logs/audit/audit-114.log", "/srv/api/logs/gc/gc-192.log", "/srv/web/data/blob-645.bin", "/srv/search/logs/app/app-085.log", "/srv/billing/logs/gc/gc-186.log", "/srv/web/logs/app/app-007.log", "/srv/search/logs/audit/audit-049.log", "/srv/auth/logs/gc/gc-215.log", "/srv/api/logs/gc/gc-020.log", "/srv/search/logs/app/app-070.log", "/srv/worker/logs/audit/audit-069.log", "/srv/api/data/blob-836.bin", "/srv/search/logs/audit/audit-387.log", "/srv/billing/logs/gc/gc-266.log", "/srv/api/logs/audit/audit-072.log", "/srv/billing/logs/gc/gc-228.log", "/srv/worker/logs/audit/audit-080.log", "/srv/api/logs/gc/gc-249.log", "/srv/search/logs/gc/gc-016.log", "/srv/api/logs/gc/gc-065.log", "/srv/billing/logs/audit/audit-039.log", "/srv/auth/logs/gc/gc-100.log", "/srv/auth/logs/gc/gc-204.log", "/srv/api/logs/gc/gc-163.log", "/srv/api/logs/app/app-214.log", "/srv/web/data/blob-539.bin", "/srv/auth/logs/app/app-324.log", "/srv/auth/logs/app/app-221.log", "/srv/worker/logs/gc/gc-280.log", "/srv/billing/data/blob-723.bin", "/srv/billing/logs/audit/audit-204.log", "/srv/worker/logs/app/app-333.log", "/srv/search/logs/app/app-274.log", "/srv/billing/logs/app/app-014.log", "/srv/web/logs/gc/gc-065.log", "/srv/web/logs/app/app-190.log", "/srv/api/logs/gc/gc-280.log", "/srv/auth/data/blob-354.bin", "/srv/billing/logs/audit/audit-209.log", "/srv/billing/logs/app/app-274.log", "/srv/search/logs/gc/gc-384.log", "/srv/web/logs/gc/gc-137.log", "/srv/search/logs/app/app-210.log", "/srv/search/logs/app/app-081.log", "/srv/auth/logs/gc/gc-269.log", "/srv/billing/logs/audit/audit-298.log", "/srv/search/logs/app/app-166.log", "/srv/auth/logs/gc/gc-303.log", "/srv/auth/logs/gc/gc-354.log", "/srv/worker/logs/app/app-064.log", "/srv/worker/logs/audit/audit-331.log", "/srv/billing/logs/app/app-245.log", "/srv/search/logs/audit/audit-227.log", "/srv/billing/logs/gc/gc-282.log", "/srv/web/logs/gc/gc-197.log", "/srv/search/logs/app/app-029.log", "/srv/auth/logs/gc/gc-365.log", "/srv/worker/logs/audit/audit-190.log", "/srv/auth/logs/app/app-300.log", "/srv/api/logs/gc/gc-033.log", "/srv/web/logs/gc/gc-223.log", "/srv/search/logs/audit/audit-161.log", "/srv/web/logs/gc/gc-174.log", "/srv/billing/data/blob-315.bin", "/srv/web/logs/app/app-089.log", "/srv/api/data/blob-853.bin", "/srv/worker/logs/app/app-200.log", "/srv/auth/logs/audit/audit-153.log", "/srv/auth/data/blob-899.bin", "/srv/api/logs/gc/gc-246.log", "/srv/worker/logs/audit/audit-215.log", "/srv/web/logs/audit/audit-201.log", "/srv/search/logs/app/app-261.log", "/srv/web/logs/app/app-241.log", "/srv/worker/logs/gc/gc-234.log", "/srv/web/logs/audit/audit-153.log", "/srv/search/logs/audit/audit-187.log", "/srv/search/logs/audit/audit-378.log", "/srv/auth/logs/gc/gc-160.log", "/srv/web/data/blob-514.bin", "/srv/worker/data/blob-511.bin", "/srv/auth/logs/audit/audit-030.log", "/srv/web/logs/app/app-146.log", "/srv/auth/data/blob-226.bin", "/srv/web/logs/audit/audit-087.log", "/srv/auth/logs/audit/audit-202.log", "/srv/web/logs/audit/audit-155.log", "/srv/search/data/blob-181.bin", "/srv/billing/logs/audit/audit-254.log", "/srv/worker/logs/gc/gc-317.log", "/srv/auth/logs/gc/gc-174.log", "/srv/worker/logs/app/app-179.log", "/srv/auth/logs/audit/audit-078.log", "/srv/billing/logs/app/app-299.log", "/srv/api/logs/audit/audit-390.log", "/srv/search/logs/audit/audit-148.log", "/srv/auth/logs/gc/gc-006.log", "/srv/worker/logs/gc/gc-246.log", "/srv/worker/logs/audit/audit-097.log", "/srv/api/logs/gc/gc-284.log", "/srv/search/logs/gc/gc-239.log", "/srv/search/logs/gc/gc-055.log", "/srv/auth/logs/app/app-085.log", "/srv/api/data/blob-397.bin", "/srv/worker/data/blob-283.bin", "/srv/worker/logs/app/app-109.log", "/srv/billing/logs/app/app-135.log", "/srv/search/logs/audit/audit-103.log", "/srv/worker/logs/audit/audit-176.log", "/srv/web/logs/app/app-116.log", "/srv/worker/data/blob-503.bin", "/srv/web/logs/gc/gc-226.log", "/srv/auth/logs/audit/audit-219.log", "/srv/worker/logs/audit/audit-140.log", "/srv/api/logs/app/app-088.log", "/srv/web/logs/audit/audit-374.log", "/srv/api/logs/audit/audit-286.log", "/srv/api/logs/app/app-112.log", "/srv/billing/data/blob-558.bin", "/srv/search/logs/audit/audit-083.log", "/srv/api/data/blob-715.bin", "/srv/search/logs/gc/gc-363.log"], [3884000, 3844000, 3853000, 1234000, 125000, 351000, 3176000, 3643000, 2114000, 3162000, 1904000, 1337000, 1730000, 3961000, 165000, 369000, 2287000, 4914000, 2158000, 1134000, 4880000, 4154000, 2467000, 94000, 4827000, 3820000, 4011000, 2058000, 1454000, 4880000, 221000, 1824000, 3566000, 2735000, 1787000, 278000, 2283000, 1063000, 3416000, 1278000, 3559000, 4252000, 4823000, 4197000, 990000, 4301000, 2069000, 1002000, 1053000, 410000, 4258000, 15000, 271000, 1287000, 4806000, 3512000, 3115000, 4952000, 3536000, 2581000, 4390000, 1839000, 4580000, 4344000, 4358000, 1934000, 3079000, 3948000, 298000, 875000, 4621000, 3721000, 3250000, 1928000, 4750000, 3286000, 4238000, 1632000, 4408000, 4877000, 2197000, 1957000, 3929000, 4564000, 3279000, 1924000, 2083000, 302000, 746000, 2391000, 2758000, 3981000, 4014000, 625000, 2056000, 3019000, 2176000, 929000, 4640000, 1226000, 1159000, 4546000, 1445000, 4537000, 2178000, 2223000, 3305000, 919000, 4624000, 4646000, 1053000, 4463000, 2050000, 3139000, 4335000, 4927000, 1916000, 1585000, 3640000, 1111000, 1913000, 2647000, 4925000, 2815000, 1810000, 1641000, 557000, 192000, 3731000, 3668000, 23000, 4374000, 3308000, 1379000, 3303000, 419000, 1794000, 1016000, 3813000, 2761000, 733000, 157000, 4176000, 2880000, 3231000, 4484000, 1431000, 1507000, 3938000, 4962000, 189000, 2623000, 395000, 3032000, 861000, 1724000, 1173000, 1711000, 4951000, 831000, 1825000, 2835000, 2391000, 3803000, 1573000, 3465000, 2872000, 2056000, 1792000, 3431000, 3334000, 149000, 4125000, 1699000, 1612000, 3368000, 2330000, 3795000, 2363000, 2437000, 4349000, 16000, 288000, 2772000, 2145000, 2782000, 1357000, 3379000, 1383000, 3769000, 4937000, 2407000, 4482000, 2094000, 1145000, 3760000, 4897000, 2193000, 4218000, 2833000, 2220000, 4549000, 650000, 944000, 44000, 3956000, 1431000, 1458000, 1166000, 1203000, 878000, 1076000, 4946000, 3919000, 3974000, 4349000, 4409000, 3146000, 1471000, 1069000, 1458000, 3305000, 2254000, 1199000, 4618000, 4924000, 2350000, 1813000, 3562000, 1441000, 423000, 2386000, 613000, 964000, 98000, 3052000, 2650000, 1143000, 242000, 2982000, 990000, 2350000, 695000, 1505000, 3542000, 795000, 2631000, 772000, 1852000, 426000, 4702000, 4416000, 4329000, 4818000, 2908000, 3663000, 4043000, 3254000, 2023000, 3006000, 2158000, 2489000, 1714000, 3478000, 459000, 2200000, 4102000, 1465000, 1182000, 2441000, 3659000, 1664000, 4857000, 3361000, 4577000, 1487000, 3159000, 3981000, 3345000, 4969000, 1370000, 4562000, 2575000, 3906000, 1525000, 2024000, 808000, 2736000, 2208000, 4131000, 3523000, 3180000, 13000, 3052000, 2934000, 605000, 2760000, 711000, 679000, 3627000], [1320, 1132, 1276, 1118, 1343, 1154, 1365, 1068, 1344, 1293, 1172, 1357, 1324, 1045, 1150, 1193, 1258, 1274, 1079, 1193, 1348, 1138, 1223, 1212, 1323, 1180, 1011, 1321, 1186, 1135, 1291, 1334, 1332, 1345, 1291, 1271, 1174, 1215, 1148, 1102, 1286, 1147, 1146, 1101, 1087, 1274, 1276, 1273, 1003, 1387, 1216, 1028, 1364, 1161, 1155, 1063, 1040, 1332, 1027, 1215, 1138, 1218, 1134, 1192, 1052, 1396, 1091, 1356, 1392, 1283, 1092, 1315, 1179, 1211, 1345, 1076, 1226, 1075, 1399, 1299, 1245, 1164, 1359, 1014, 1400, 1331, 1123, 1130, 1373, 1018, 1003, 1039, 1200, 1340, 1049, 1387, 1054, 1341, 1380, 1091, 1169, 1153, 1361, 1278, 1138, 1126, 1229, 1077, 1398, 1213, 1303, 1270, 1189, 1161, 1351, 1097, 1251, 1400, 1057, 1239, 1259, 1168, 1396, 1105, 1248, 1361, 1275, 1237, 1019, 1271, 1107, 1099, 1257, 1226, 1229, 1122, 1123, 1304, 1153, 1322, 1303, 1087, 1169, 1337, 1044, 1171, 1378, 1185, 1176, 1363, 1239, 1121, 1230, 1000, 1173, 1123, 1299, 1112, 1163, 1102, 1348, 1206, 1304, 1153, 1248, 1331, 1031, 1111, 1376, 1188, 1240, 1094, 1265, 1141, 1382, 1227, 1192, 1242, 1146, 1382, 1076, 1104, 1250, 1026, 1126, 1022, 1389, 1260, 1023, 1239, 1263, 1093, 1052, 1231, 1267, 1299, 1281, 1052, 1249, 1092, 1109, 1144, 1253, 1380, 1144, 1236, 1120, 1353, 1200, 1024, 1221, 1058, 1039, 1125, 1053, 1383, 1156, 1102, 1153, 1027, 1058, 1291, 1047, 1302, 1191, 1394, 1152, 1374, 1136, 1317, 1035, 1030, 1187, 1220, 1153, 1333, 1112, 1041, 1014, 1369, 1260, 1282, 1220, 1242, 1300, 1327, 1033, 1337, 1165, 1328, 1043, 1202, 1116, 1068, 1161, 1030, 1110, 1108, 1196, 1199, 1027, 1226, 1110, 1306, 1040, 1266, 1248, 1058, 1298, 1244, 1191, 1319, 1155, 1383, 1376, 1127, 1365, 1088, 1283, 1246, 1061, 1263, 1117, 1190, 1135, 1132, 1360, 1058, 1260, 1289, 1131, 1078, 1108, 1131, 1103, 1248, 1342, 1319, 1322, 1134], ["/srv", "/srv/api/logs", "/srv/worker/logs/gc", "/srv/billing", "/srv/web/logs/audit", "/srv/searchx"], [600000000, 15000000, 8000000, 40000000, 3000000, 0]], expected: ["/srv/billing/logs/audit/audit-332.log", "/srv/api/logs/app/app-123.log", "/srv/worker/logs/gc/gc-298.log", "/srv/auth/logs/gc/gc-312.log", "/srv/search/logs/app/app-240.log", "/srv/web/logs/gc/gc-223.log", "/srv/api/logs/app/app-048.log", "/srv/billing/logs/audit/audit-206.log", "/srv/auth/logs/gc/gc-215.log", "/srv/worker/logs/audit/audit-069.log", "/srv/worker/logs/app/app-333.log", "/srv/web/logs/app/app-007.log", "/srv/search/logs/gc/gc-326.log", "/srv/web/logs/app/app-146.log", "/srv/web/logs/gc/gc-137.log", "/srv/api/logs/gc/gc-166.log", "/srv/billing/logs/gc/gc-282.log", "/srv/search/logs/audit/audit-378.log", "/srv/api/logs/audit/audit-266.log", "/srv/auth/data/blob-899.bin", "/srv/search/logs/audit/audit-227.log", "/srv/api/logs/gc/gc-170.log", "/srv/web/logs/gc/gc-065.log", "/srv/web/logs/audit/audit-002.log", "/srv/web/logs/audit/audit-155.log", "/srv/api/logs/gc/gc-033.log", "/srv/search/logs/app/app-261.log", "/srv/api/logs/gc/gc-157.log", "/srv/search/data/blob-494.bin", "/srv/auth/logs/gc/gc-269.log", "/srv/billing/logs/app/app-225.log", "/srv/api/logs/audit/audit-072.log", "/srv/api/logs/gc/gc-065.log", "/srv/auth/logs/app/app-376.log", "/srv/api/logs/gc/gc-280.log", "/srv/billing/logs/gc/gc-340.log", "/srv/search/logs/app/app-019.log", "/srv/billing/logs/app/app-014.log", "/srv/search/logs/app/app-210.log", "/srv/web/logs/app/app-116.log", "/srv/worker/logs/gc/gc-317.log", "/srv/auth/logs/app/app-085.log", "/srv/worker/logs/gc/gc-098.log", "/srv/billing/logs/gc/gc-373.log", "/srv/web/logs/audit/audit-153.log", "/srv/search/data/blob-771.bin", "/srv/search/logs/audit/audit-248.log", "/srv/web/data/blob-645.bin", "/srv/search/logs/app/app-181.log", "/srv/worker/logs/audit/audit-140.log", "/srv/api/logs/app/app-209.log", "/srv/billing/data/blob-764.bin", "/srv/search/data/blob-093.bin", "/srv/api/logs/gc/gc-284.log", "/srv/billing/data/blob-102.bin", "/srv/web/logs/audit/audit-331.log", "/srv/auth/data/blob-333.bin", "/srv/auth/logs/gc/gc-100.log", "/srv/billing/logs/gc/gc-266.log", "/srv/search/logs/app/app-150.log", "/srv/auth/logs/gc/gc-342.log", "/srv/worker/logs/gc/gc-074.log", "/srv/api/data/blob-823.bin", "/srv/api/logs/app/app-058.log", "/srv/billing/data/blob-424.bin", "/srv/billing/logs/app/app-274.log", "/srv/api/logs/audit/audit-286.log", "/srv/api/logs/audit/audit-041.log", "/srv/api/logs/app/app-088.log", "/srv/web/logs/audit/audit-087.log", "/srv/api/logs/app/app-118.log", "/srv/api/logs/audit/audit-347.log", "/srv/billing/logs/app/app-204.log", "/srv/billing/data/blob-517.bin", "/srv/web/logs/audit/audit-374.log", "/srv/billing/logs/app/app-135.log", "/srv/api/logs/gc/gc-163.log", "/srv/api/logs/audit/audit-149.log", "/srv/billing/data/blob-008.bin", "/srv/api/logs/app/app-389.log", "/srv/api/logs/audit/audit-390.log", "/srv/api/logs/gc/gc-198.log", "/srv/billing/logs/audit/audit-209.log", "/srv/api/logs/audit/audit-258.log", "/srv/billing/logs/app/app-089.log", "/srv/api/logs/app/app-205.log", "/srv/billing/logs/gc/gc-118.log", "/srv/billing/logs/gc/gc-304.log", "/srv/web/logs/audit/audit-092.log", "/srv/api/logs/app/app-079.log", "/srv/billing/data/blob-630.bin", "/srv/billing/logs/audit/audit-204.log", "/srv/web/logs/audit/audit-300.log", "/srv/billing/logs/audit/audit-369.log", "/srv/billing/logs/app/app-031.log", "/srv/billing/logs/gc/gc-228.log", "/srv/billing/logs/app/app-333.log", "/srv/web/logs/audit/audit-210.log", "/srv/api/logs/app/app-112.log", "/srv/api/logs/app/app-224.log", "/srv/billing/logs/audit/audit-254.log", "/srv/billing/logs/audit/audit-039.log", "/srv/api/logs/app/app-214.log", "/srv/api/logs/app/app-370.log", "/srv/api/logs/app/app-367.log", "/srv/api/logs/gc/gc-319.log", "/srv/api/logs/gc/gc-249.log"], description: "300 files across services with six overlapping quotas"}
+expected_concepts:
+  - mapping each file to its quota ancestors on component boundaries
+  - aggregating subtree totals with a hash map of directory prefixes
+  - monotonicity - totals only decrease, so over-quota status never returns
+  - single pass over files sorted by (mtime, path) instead of repeated rescans
+  - deterministic tie-breaking
+optimal_complexity: {time: "O(n log n + n * depth)", space: "O(n * depth + q)"}
+rubric:
+  excellent: Matches quota directories on component boundaries, precomputes each file's covering quota directories, notices that over-quota status can only turn off so one sorted pass suffices, keeps a count of over-quota directories to stop early, and explains the complexity.
+  good: Correct simulation that rescans for the oldest eligible file after each deletion (or uses a heap per directory), with correct boundary matching and tie-breaking.
+  weak: Matches directories with a plain string prefix (so /var/log matches /var/log-archive), deletes files under quotas that are already satisfied, stops after the first quota is fixed, or ignores nested quotas when updating totals.
+  criteria:
+    correctness: All tests pass, including nested quotas, the root quota, zero-byte quotas, prefix look-alike directories and mtime ties.
+    efficiency: O(n log n + n * depth) with a single sorted pass; repeated full rescans are only acceptable for small inputs.
+    code_quality: Path handling isolated in a helper, clear names for used bytes and limits, no string re-parsing inside the loop.
+    edge_cases: Nothing to delete, quota directories without files, files under no quota and very large sizes.
+    communication: Explains why a file skipped once can never become eligible later.
+hints:
+  - Start by working out, for every file, which quota directories it is under. Be careful that /var/log must not match /var/log-archive.
+  - Directory totals only ever go down, so once a quota directory is within its limit it stays there. What does that mean for a file that is skipped because none of its quota directories is over?
+  - Sort the files once by (mtime, path) and walk that order. Delete a file when any of its quota directories is currently over, subtracting its size from all of them, and stop as soon as a counter of over-quota directories reaches zero.
+followups:
+  - How would the algorithm change if the agent could also compress files to a tenth of their size instead of deleting them?
+  - How would you handle quota directories given with a trailing slash or symbolic links?
+  - If files keep arriving while the agent runs, which data structures would you keep between runs?
+  - How would you choose files to delete to minimise the number of deletions instead of deleting the oldest first?
+common_errors:
+  - Using startswith(dir) without the trailing slash, so sibling directories with a shared prefix are counted.
+  - Deleting files under every quota directory once any quota is over.
+  - Forgetting to update every nested quota directory when a file is removed.
+  - Breaking mtime ties by input order instead of by path.
+  - Rescanning all files for every deletion, which is quadratic on large hosts.

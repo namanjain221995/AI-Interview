@@ -1,0 +1,140 @@
+version: 1
+slug: histogram_quantile_estimate
+title: Histogram Quantile Estimate
+difficulty: medium
+competency_keys: [algorithms, problem_solving]
+role_tags: [sre, platform, devops, data_analyst]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Histogram Quantile Estimate
+
+  A metrics agent does not keep every request latency; it only keeps a **cumulative histogram**. You are
+  asked to estimate a latency percentile (for example p90) from it for an SLO dashboard.
+
+  - `upper_bounds` holds the finite bucket bounds in seconds, strictly increasing and all positive.
+  - `cumulative_counts` has **one more** entry than `upper_bounds`. For `i < upper_bounds.length`,
+    `cumulative_counts[i]` is the number of requests with latency `<= upper_bounds[i]`. The last entry
+    belongs to an extra **+Inf** bucket and equals the total number of requests. The counts never
+    decrease.
+  - `q` is the requested quantile with `0 < q <= 1` (`0.9` means p90).
+
+  Estimate the quantile as follows:
+
+  1. Let `total` be the last count. If `total` is `0`, return `-1.0`.
+  2. Let `rank = q * total` (a real number).
+  3. Find the **first** index `i` with `cumulative_counts[i] >= rank`.
+  4. If `i` is the +Inf bucket (`i == upper_bounds.length`), return the largest finite bound,
+     `upper_bounds[upper_bounds.length - 1]`.
+  5. Otherwise the bucket spans from `lower` to `upper = upper_bounds[i]`, where `lower` is the previous
+     bound (`0` for the first bucket), and holds `cumulative_counts[i] - before` requests, where `before`
+     is the previous cumulative count (`0` for the first bucket). Assume the requests are spread evenly
+     inside the bucket and return
+     `lower + (upper - lower) * (rank - before) / (cumulative_counts[i] - before)`.
+
+  Answers within `10^-6` relative error are accepted.
+
+  ### Example 1
+  ```
+  Input:  upper_bounds = [0.1, 0.2, 0.5, 1.0], cumulative_counts = [30, 60, 90, 98, 100], q = 0.75
+  Output: 0.35
+  Explanation: total = 100 and rank = 75. The first cumulative count >= 75 is 90 (bucket 0.2 to
+  0.5, which holds 30 requests, 60 of them before it): 0.2 + 0.3 * 15 / 30 = 0.35.
+  ```
+
+  ### Example 2
+  ```
+  Input:  upper_bounds = [100.0, 250.0, 500.0], cumulative_counts = [10, 40, 45, 50], q = 0.99
+  Output: 500.0
+  Explanation: rank = 49.5, and only the +Inf bucket reaches it, so the estimate is the largest
+  finite bound.
+  ```
+
+  ### Constraints
+  - `1 <= upper_bounds.length <= 100` and `cumulative_counts.length == upper_bounds.length + 1`
+  - `0 < upper_bounds[0] < upper_bounds[1] < ... <= 10^6`
+  - `0 <= cumulative_counts[0] <= cumulative_counts[1] <= ... <= 10^15` (counts can exceed 32 bits)
+  - `0 < q <= 1`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: histogram_quantile_estimate
+  params:
+    - {name: upper_bounds, type: "float[]"}
+    - {name: cumulative_counts, type: "long[]"}
+    - {name: q, type: "float"}
+  return_type: "float"
+  comparison: float_tolerance
+reference_solutions:
+  python: |
+    def histogram_quantile_estimate(upper_bounds: list[float], cumulative_counts: list[int], q: float) -> float:
+        total = cumulative_counts[-1]
+        if total == 0:
+            return -1.0
+        rank = q * total
+        for i, count in enumerate(cumulative_counts):
+            if count >= rank:
+                if i == len(upper_bounds):
+                    return float(upper_bounds[-1])
+                lower = upper_bounds[i - 1] if i > 0 else 0.0
+                before = cumulative_counts[i - 1] if i > 0 else 0
+                # count > before here: rank > 0 and the previous count was below rank
+                return lower + (upper_bounds[i] - lower) * (rank - before) / (count - before)
+        return float(upper_bounds[-1])
+  javascript: |
+    function histogramQuantileEstimate(upperBounds, cumulativeCounts, q) {
+      const total = cumulativeCounts[cumulativeCounts.length - 1];
+      if (total === 0) return -1.0;
+      const rank = q * total;
+      for (let i = 0; i < cumulativeCounts.length; i++) {
+        const count = cumulativeCounts[i];
+        if (count >= rank) {
+          if (i === upperBounds.length) return upperBounds[upperBounds.length - 1];
+          const lower = i > 0 ? upperBounds[i - 1] : 0;
+          const before = i > 0 ? cumulativeCounts[i - 1] : 0;
+          return lower + (upperBounds[i] - lower) * (rank - before) / (count - before);
+        }
+      }
+      return upperBounds[upperBounds.length - 1];
+    }
+tests:
+  - {id: t1, args: [[0.1, 0.2, 0.5, 1.0], [30, 60, 90, 98, 100], 0.75], expected: 0.35, description: "Example 1"}
+  - {id: t2, args: [[100.0, 250.0, 500.0], [10, 40, 45, 50], 0.99], expected: 500.0, description: "Example 2 - rank only reached in the +Inf bucket"}
+  - {id: t3, hidden: true, args: [[0.5, 1.0], [0, 0, 0], 0.5], expected: -1.0, description: "No observations at all returns -1.0"}
+  - {id: t4, hidden: true, args: [[1, 2, 4], [5, 10, 10, 10], 1.0], expected: 2.0, description: "q = 1 with empty trailing buckets picks the first bucket reaching the total, not the last bound"}
+  - {id: t5, hidden: true, args: [[0.25, 0.5, 1.0], [40, 80, 100, 100], 0.1], expected: 0.0625, description: "Rank inside the first bucket interpolates from a lower bound of 0"}
+  - {id: t6, hidden: true, args: [[0.01, 0.02, 0.05, 0.1], [0, 0, 8, 8, 8], 0.5], expected: 0.035, description: "Leading empty buckets are skipped; all data in one middle bucket"}
+  - {id: t7, hidden: true, args: [[0.1, 0.3, 0.9], [20, 60, 90, 100], 0.6], expected: 0.3, description: "Rank exactly equal to a cumulative count returns that bucket's upper bound"}
+  - {id: t8, hidden: true, args: [[0.005, 0.05, 0.5, 5.0], [1200000000000, 3000000000000, 4500000000000, 4990000000000, 5000000000000], 0.95], expected: 2.795918367346939, description: "Counts in the trillions (64-bit) - p95 interpolated inside the 0.5 to 5.0 bucket"}
+  - {id: t9, hidden: true, args: [[2.5], [7, 9], 0.001], expected: 0.0032142857142857147, description: "Single finite bucket and a tiny quantile"}
+  - {id: t10, hidden: true, args: [[0.001, 0.00125, 0.001563, 0.001953, 0.002441, 0.003052, 0.003815, 0.004768, 0.00596, 0.007451, 0.009313, 0.011642, 0.014552, 0.01819, 0.022737, 0.028422, 0.035527, 0.044409, 0.055511, 0.069389, 0.086736, 0.10842, 0.135525, 0.169407, 0.211758, 0.264698, 0.330872, 0.41359, 0.516988, 0.646235, 0.807794, 1.009742, 1.262177, 1.577722, 1.972152, 2.46519, 3.081488, 3.85186, 4.814825, 6.018531, 7.523164, 9.403955, 11.754944, 14.693679, 18.367099, 22.958874, 28.698593, 35.873241, 44.841551, 56.051939, 70.064923, 87.581154, 109.476443, 136.845553, 171.056941, 213.821177, 267.276471, 334.095589, 417.619486, 522.024357], [0, 40, 117, 130, 180, 267, 290, 347, 444, 477, 547, 553, 596, 676, 689, 742, 832, 858, 921, 1021, 1057, 1127, 1136, 1182, 1265, 1284, 1340, 1433, 1459, 1525, 1628, 1667, 1743, 1755, 1804, 1887, 1909, 1968, 2064, 2096, 2165, 2170, 2209, 2288, 2303, 2355, 2444, 2469, 2531, 2627, 2662, 2734, 2742, 2787, 2869, 2887, 2939, 3031, 3059, 3124, 3226], 0.95], expected: 426.7749900723074, description: "Stress - 60 exponential buckets, p95"}
+expected_concepts:
+  - cumulative counts versus per-bucket counts
+  - locating the bucket that contains the rank (linear scan or binary search)
+  - linear interpolation inside a bucket
+  - handling the +Inf bucket and the empty histogram
+  - 64-bit counts with floating point rank
+optimal_complexity: {time: O(m) for m buckets (O(log m) with binary search), space: O(1)}
+rubric:
+  excellent: Computes the rank once, finds the first cumulative count reaching it, handles the empty histogram and the +Inf bucket explicitly, interpolates with the previous bound and previous count (0 for the first bucket), and explains why the denominator cannot be zero.
+  good: Correct interpolation with one fix needed for an edge such as the first bucket's lower bound, the +Inf bucket or q equal to 1.
+  weak: Treats cumulative counts as per-bucket counts, interpolates with the wrong bounds, divides by zero on empty buckets, or returns infinity for the +Inf bucket.
+  criteria:
+    correctness: All tests pass, including empty buckets, rank on a boundary and q equal to 1.
+    efficiency: One pass over the buckets; binary search mentioned as an option.
+    code_quality: Clearly named lower, upper and before values instead of index arithmetic spread across one expression.
+    edge_cases: Zero total, leading and trailing empty buckets, the +Inf bucket and very large counts.
+    communication: Explains the even-spread assumption and how it can mislead for wide buckets.
+hints:
+  - Turn the quantile into a target position among all requests, then find which bucket that position falls into.
+  - Because the counts are cumulative, the right bucket is the first one whose count reaches the target; inside it, assume the requests are evenly spread between its lower and upper bound.
+  - Compute the rank as q times the last count (returning minus one when that count is zero), scan for the first index whose cumulative count is at least the rank, return the largest finite bound if that index is the +Inf bucket, and otherwise move from the previous bound toward the bucket's bound by the fraction of the bucket's own requests needed to reach the rank.
+followups:
+  - Why can this estimate be far from the true percentile, and how would you choose bucket bounds for an SLO?
+  - How would you combine histograms from several instances before estimating the quantile?
+  - How does this approach compare with keeping a sketch such as t-digest?
+  - How would you use binary search here, and does it matter for 100 buckets?
+common_errors:
+  - Treating the cumulative counts as the number of requests in each bucket.
+  - Using the bucket's own bound as the lower end, or forgetting that the first bucket starts at 0.
+  - Dividing by zero when interpolating in a bucket that holds no requests.
+  - Returning infinity or the next bound instead of the largest finite bound for the +Inf bucket.
+  - Comparing with strictly greater instead of greater or equal, which skips the bucket when the rank equals its count.

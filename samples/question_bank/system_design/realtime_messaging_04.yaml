@@ -1,0 +1,609 @@
+# Curated questions: system design for real-time and messaging systems (part 4 of 4).
+# Job queues, voice and video calling (signalling, media servers) and operating real-time systems.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend, platform]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------------------ easy
+  - external_key: system_design.realtime_messaging.browser_video_call_basics
+    competency_key: networking
+    topic: Components of a browser video call
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Two people want to start a video call from their browsers using WebRTC. Walk me through what your backend has
+      to provide for the call to connect, and what part the browsers handle on their own.
+    expected_concepts:
+      - signalling service to exchange offers, answers and network candidates
+      - STUN for discovering public addresses
+      - TURN relays when a direct connection isn't possible
+      - media flowing peer to peer, encrypted, without the signalling server
+      - authenticating who may join the call
+    rubric:
+      excellent: Separates signalling from media clearly, explains the roles of STUN and TURN and when relaying is needed, and covers authorisation of who can call whom.
+      good: Knows a signalling server and STUN or TURN are needed, but the purpose of each is fuzzy.
+      weak: Thinks all media goes through the web server or doesn't know what signalling is for.
+    followups:
+      - Roughly what share of calls would you expect to need TURN, and why does that matter for cost?
+      - Which transport would you use for the signalling messages?
+    common_errors:
+      - Assuming WebRTC defines the signalling protocol for you.
+
+  - external_key: system_design.realtime_messaging.long_export_progress
+    competency_key: system_design
+    topic: Progress and completion for long-running exports
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Users click export and a report takes anywhere from ten seconds to twenty minutes to generate. How would you
+      design it so they see progress, can leave the page, and get the file when it's ready?
+    expected_concepts:
+      - accepting the request and returning a job id immediately
+      - background worker writing progress to a job record
+      - client polling or a live update channel for status
+      - storing the result in object storage with an expiring download link
+      - notifying the user by email or in-app when done
+    rubric:
+      excellent: Turns the export into a tracked job with an id, reports progress through polling or push, stores results durably with expiring links and notifies the user even if they left.
+      good: Uses a background job and status polling but forgets notifications or result expiry.
+      weak: Keeps the HTTP request open for twenty minutes.
+    followups:
+      - How would you prevent a user from starting the same export ten times?
+      - How should progress be calculated when you don't know the total size up front?
+    common_errors:
+      - Running the export inside the web request and hitting load balancer timeouts.
+
+  - external_key: system_design.realtime_messaging.duplicate_job_enqueue
+    competency_key: system_design
+    topic: Preventing duplicate jobs for the same work
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A double click, plus a retrying client, means the same "recalculate account totals" job is often queued three or
+      four times for one account. How would you design the job system so duplicate work is avoided?
+    expected_concepts:
+      - a uniqueness key per logical job such as job type plus account
+      - rejecting or merging enqueues while an identical job is pending
+      - deciding what happens if a request arrives while the job is running
+      - making the job itself idempotent as a safety net
+      - expiry of uniqueness locks for crashed jobs
+    rubric:
+      excellent: Defines a uniqueness key and clear rules for pending versus running duplicates, makes the job idempotent anyway and handles stale locks after crashes.
+      good: Uses a uniqueness check before enqueueing.
+      weak: Relies on disabling the button in the UI.
+    followups:
+      - The account changes again while the job is running. Should a new job be queued?
+      - What happens to the uniqueness lock if the worker dies?
+    common_errors:
+      - Dropping a newer request while an older job runs, so the latest change is never processed.
+
+  # ------------------------------------------------------------------------ medium: job queues
+  - external_key: system_design.realtime_messaging.postgres_backed_job_queue
+    competency_key: databases
+    topic: A job queue built on the existing database
+    difficulty: medium
+    text: >-
+      A team runs everything on PostgreSQL and doesn't want to operate a separate broker. How would you design a
+      reliable job queue on top of their database, and at what point would you tell them to move to something else?
+    expected_concepts:
+      - jobs table with status, run-at time, attempts and lease expiry
+      - claiming jobs with SELECT FOR UPDATE SKIP LOCKED
+      - enqueueing in the same transaction as the business change
+      - reclaiming jobs whose lease expired after a worker crash
+      - index design, cleanup of finished jobs and table bloat
+      - throughput limits that justify a dedicated broker
+    rubric:
+      excellent: Designs the table and claim query correctly with skip-locked, leases and retries, highlights the transactional enqueue benefit, handles cleanup and bloat, and gives concrete signals for outgrowing it.
+      good: Describes a jobs table with row locking and status updates but misses crash recovery or cleanup.
+      weak: Polls with a plain SELECT and UPDATE that lets two workers take the same job.
+    followups:
+      - How would you avoid workers polling the table constantly?
+      - What indexes does the claim query need?
+    common_errors:
+      - Holding the row lock for the entire job duration inside one long transaction.
+
+  - external_key: system_design.realtime_messaging.job_checkpointing
+    competency_key: distributed_systems
+    topic: Checkpointing hour-long jobs
+    difficulty: medium
+    text: >-
+      Some jobs re-process a customer's entire history and take over an hour. When a worker is restarted during a
+      deploy, the job starts again from zero. How would you design long-running jobs so they survive restarts
+      efficiently?
+    expected_concepts:
+      - breaking the job into chunks with recorded progress
+      - checkpoints stored durably after each chunk
+      - idempotent chunk processing so a repeated chunk is harmless
+      - lease renewal or heartbeats while the job runs
+      - cooperative shutdown that finishes or saves the current chunk
+    rubric:
+      excellent: Splits work into idempotent chunks with durable checkpoints, keeps the lease alive with heartbeats and stops cleanly on shutdown, resuming from the last checkpoint.
+      good: Adds checkpoints and resumption but doesn't address repeating the last chunk safely.
+      weak: Extends the job timeout or tells the team to deploy less often.
+    followups:
+      - How do you choose the chunk size?
+      - Could you split this into many small jobs instead, and what would you lose?
+    common_errors:
+      - Saving the checkpoint before the chunk's writes are durable.
+
+  - external_key: system_design.realtime_messaging.job_cancellation
+    competency_key: system_design
+    topic: Cancelling queued and running jobs
+    difficulty: medium
+    text: >-
+      Users want a cancel button for bulk operations, such as sending a campaign or importing a large file, that may
+      already be queued or partway through running. How would you design cancellation in the job system?
+    expected_concepts:
+      - cancellation flag stored on the job record
+      - removing or skipping queued jobs that were cancelled
+      - running jobs checking the flag between units of work
+      - defining what partial work remains and reporting it
+      - cancelling child jobs of a parent operation
+    rubric:
+      excellent: Uses a durable cancellation state checked both before start and between units of work, propagates to child jobs and tells users exactly what was completed before cancellation.
+      good: Adds a cancel flag checked by running jobs, but forgets children or partial results.
+      weak: Kills the worker process, leaving work half-written.
+    followups:
+      - What should users see for a campaign that was cancelled after sending to half its recipients?
+      - How quickly should a cancel take effect, and what decides that?
+    common_errors:
+      - Only removing jobs from the queue, while the ones already running carry on.
+
+  - external_key: system_design.realtime_messaging.partner_rate_limited_jobs
+    competency_key: distributed_systems
+    topic: Respecting a partner's rate limit across workers
+    difficulty: medium
+    text: >-
+      Your jobs call a partner API that allows a hundred requests per second for your whole account, and you have
+      forty workers that autoscale. How would you design the system to stay under that limit while keeping
+      throughput high?
+    expected_concepts:
+      - a shared rate limiter such as a central token bucket
+      - per-worker allocation versus central coordination trade-offs
+      - honouring the partner's retry-after and rate limit headers
+      - queueing work rather than failing when tokens run out
+      - prioritising some job types when capacity is scarce
+    rubric:
+      excellent: Coordinates a global limit across autoscaling workers, reacts to the partner's signals, smooths bursts by queueing, and prioritises urgent jobs within the budget.
+      good: Uses a shared limiter but doesn't react to partner feedback or prioritise.
+      weak: Sets a fixed per-worker limit that breaks as soon as the worker count changes.
+    followups:
+      - The partner quietly halves your limit. How does the system notice and adapt?
+      - How do you keep one customer's jobs from using the whole budget?
+    common_errors:
+      - Dividing the limit by the current worker count, which is wrong as soon as autoscaling changes it.
+
+  - external_key: system_design.realtime_messaging.job_system_observability
+    competency_key: observability
+    topic: Observability for a job system
+    difficulty: medium
+    text: >-
+      Your company runs a few hundred job types on a shared queueing system, and problems are usually noticed by
+      customers first. What would you measure and alert on, and how would you help each team see their own jobs?
+    expected_concepts:
+      - queue depth and age of the oldest job per queue
+      - success, failure and retry rates per job type
+      - processing time percentiles and time spent waiting
+      - dead-letter growth and stuck or long-running jobs
+      - per-team dashboards and alerts routed to job owners
+      - tracing a job back to the request that created it
+    rubric:
+      excellent: Prioritises user-facing signals like oldest-job age and failure rate per job type, covers dead letters and stuck jobs, routes alerts to owners and links jobs to originating requests.
+      good: Monitors queue length and failures and has some dashboards.
+      weak: Watches only CPU and memory of the worker machines.
+    followups:
+      - Why is queue length on its own a poor alert?
+      - How would you find out which job type is filling the queue?
+    common_errors:
+      - Alerting on queue length rather than how long work has been waiting.
+
+  # ------------------------------------------------------------------------ medium: voice and video
+  - external_key: system_design.realtime_messaging.call_ringing_devices
+    competency_key: system_design
+    topic: Ringing a user on several devices
+    difficulty: medium
+    text: >-
+      When someone calls a user who has the app on a phone, a tablet and a laptop, all three should ring, the call
+      connects on whichever answers first, and the others stop ringing. How would you design the call setup flow?
+    expected_concepts:
+      - call session state machine on the server
+      - fanning the invite out to every registered device
+      - atomic acceptance so only the first answer wins
+      - cancel messages to the other devices, including through push
+      - timeouts, decline, busy and missed-call handling
+    rubric:
+      excellent: Uses a server-side call state machine with atomic accept, fans out invites through live connections and push, cancels the rest reliably, and handles timeouts and missed calls.
+      good: Rings all devices and stops the others when one answers, but races or timeouts are vague.
+      weak: Lets every device connect media and drops the extras afterwards.
+    followups:
+      - Two devices answer within the same fifty milliseconds. What happens?
+      - A cancel message doesn't reach an offline tablet. What does it show later?
+    common_errors:
+      - Not handling the race when two devices accept at nearly the same time.
+
+  - external_key: system_design.realtime_messaging.group_call_topology
+    competency_key: networking
+    topic: Mesh, SFU or MCU for group calls
+    difficulty: medium
+    text: >-
+      Your one-to-one video calls work well, and now you need group calls with up to twenty-five participants. How
+      would you choose between a peer-to-peer mesh, a selective forwarding unit and a mixing server?
+    expected_concepts:
+      - mesh upload bandwidth growing with participants
+      - SFU forwarding streams without decoding and keeping end-to-end options
+      - MCU mixing on the server with high CPU cost but low client load
+      - per-participant bandwidth and layout needs
+      - server costs and latency of each option
+    rubric:
+      excellent: Compares the three on client bandwidth, server cost, latency and flexibility with rough numbers, and justifies an SFU for this size with a view on when mixing still makes sense.
+      good: Picks an SFU with a correct reason and knows mesh doesn't scale.
+      weak: Proposes a mesh for twenty-five people or can't explain the difference between forwarding and mixing.
+    followups:
+      - When might you still mix audio on the server?
+      - How many video streams should each participant actually receive?
+    common_errors:
+      - Ignoring that upload bandwidth, not download, is what breaks a mesh first.
+
+  - external_key: system_design.realtime_messaging.turn_relay_capacity
+    competency_key: networking
+    topic: Placing and sizing TURN relays
+    difficulty: medium
+    text: >-
+      Many of your calling users are on corporate and mobile networks where direct connections fail, so their media
+      goes through your TURN relays, and call quality in some regions is poor. How would you design the deployment
+      and capacity of the relay fleet?
+    expected_concepts:
+      - relays placed close to users in several regions
+      - choosing a relay by latency or geography at call setup
+      - TURN over TCP and TLS on port 443 for restrictive networks
+      - capacity planning by bandwidth rather than CPU
+      - short-lived relay credentials
+      - monitoring relay usage and per-region quality
+    rubric:
+      excellent: Distributes relays geographically with latency-based selection, supports restrictive-network transports, sizes by bandwidth, issues short-lived credentials and monitors quality per region.
+      good: Adds regional relays and mentions bandwidth costs.
+      weak: Runs one central relay cluster and adds machines when it slows down.
+    followups:
+      - How would you protect the relays from being abused as free bandwidth?
+      - What fraction of your bandwidth bill would you expect relays to account for?
+    common_errors:
+      - Hard-coding long-lived relay credentials into the client.
+
+  - external_key: system_design.realtime_messaging.call_network_handover
+    competency_key: networking
+    topic: Keeping calls alive across network changes
+    difficulty: medium
+    text: >-
+      Users on mobile complain that calls drop when they walk out of the office and their phone switches from Wi-Fi to
+      cellular. How would you design call signalling and media handling so calls survive network changes?
+    expected_concepts:
+      - detecting the network change and the connection failing
+      - ICE restart to gather new candidates without ending the call
+      - signalling connection that reconnects and resumes the same call session
+      - server-side grace period before declaring a participant gone
+      - showing a reconnecting state rather than ending the call
+    rubric:
+      excellent: Combines ICE restart with resumable signalling and a server-side grace period, and designs the user experience during the gap.
+      good: Knows the call must re-negotiate connectivity and that the server shouldn't end the call immediately.
+      weak: Accepts drops or has the user call back.
+    followups:
+      - How long should the server wait before removing the participant from a group call?
+      - What would you log to measure how often handovers succeed?
+    common_errors:
+      - Treating a signalling disconnect as the end of the call.
+
+  - external_key: system_design.realtime_messaging.incoming_call_wakeup
+    competency_key: system_design
+    topic: Waking a mobile app for an incoming call
+    difficulty: medium
+    text: >-
+      Incoming calls only ring if the recipient has the app open, because the phone suspends the app's connection in
+      the background. How would you design call delivery to sleeping mobile devices?
+    expected_concepts:
+      - high-priority platform push for calls such as VoIP push or a call-style notification
+      - integration with the phone's native call interface
+      - push payload carrying a call id, then fetching details securely
+      - handling a push that arrives after the caller hung up
+      - platform rules that require a visible call when such a push is received
+    rubric:
+      excellent: Uses the platform's dedicated call-wakeup mechanisms, integrates with the native call UI, keeps the payload minimal, handles stale calls gracefully and respects platform rules.
+      good: Sends a high-priority push to wake the app and ring, without handling stale or cancelled calls.
+      weak: Keeps a background connection open permanently or uses ordinary notifications that may arrive late.
+    followups:
+      - The push arrives thirty seconds late. What should the user see?
+      - How would you test call delivery on many phone models?
+    common_errors:
+      - Ignoring that some platforms penalise apps that receive call pushes without showing a call.
+
+  - external_key: system_design.realtime_messaging.call_quality_telemetry
+    competency_key: observability
+    topic: Measuring call quality
+    difficulty: medium
+    text: >-
+      Users report choppy audio and frozen video, but you have no data to tell where the problem is. How would you
+      design call quality telemetry and use it to find the cause?
+    expected_concepts:
+      - client statistics such as packet loss, jitter, round-trip time and frame rate
+      - server-side media statistics from relays and SFUs
+      - per-call records joined with region, network type and app version
+      - quality scores or thresholds that classify bad calls
+      - dashboards that separate client network, server and codec problems
+    rubric:
+      excellent: Collects both client and server media stats, joins them with call context, defines quality scores, and shows how to slice data to separate network, server and client causes.
+      good: Collects client-side stats and builds some dashboards.
+      weak: Relies on user ratings at the end of the call only.
+    followups:
+      - How would you sample this data without overwhelming storage?
+      - Packet loss is high only for one mobile carrier. What would you do?
+    common_errors:
+      - Averaging quality across all calls, hiding the bad tail that users notice.
+
+  - external_key: system_design.realtime_messaging.server_call_recording
+    competency_key: system_design
+    topic: Recording group calls on the server
+    difficulty: medium
+    text: >-
+      Customers want to record their group video meetings and get a single video file afterwards. How would you
+      design recording for calls that run through your media servers?
+    expected_concepts:
+      - a recording participant or tap on the SFU receiving all streams
+      - writing raw tracks per participant, then composing offline
+      - synchronising tracks with timestamps
+      - consent indication shown to all participants
+      - durable storage, processing queue and access control on the result
+    rubric:
+      excellent: Captures per-participant tracks via the media server, composes asynchronously with proper sync, makes recording visible to everyone and secures the stored output.
+      good: Records on the server and produces a file but composes in real time or skips sync issues.
+      weak: Records only on the host's device or forgets to tell participants.
+    followups:
+      - The media server holding the recording crashes mid-meeting. What do you lose?
+      - How would you produce a transcript as well?
+    common_errors:
+      - Composing the final video in real time on the media server and overloading it.
+
+  - external_key: system_design.realtime_messaging.call_signalling_service
+    competency_key: system_design
+    topic: Designing the signalling service
+    difficulty: medium
+    text: >-
+      Design the signalling service for a meeting product, which handles joining rooms, exchanging session
+      descriptions and network candidates, muting, and participants leaving, for about fifty thousand simultaneous
+      meetings.
+    expected_concepts:
+      - persistent connections per participant with a room abstraction
+      - room state owned by one node or stored in a shared store
+      - routing participants of a room to the right media server
+      - ordered, reliable delivery of signalling messages within a room
+      - recovering room state when a signalling node fails
+    rubric:
+      excellent: Defines room ownership and placement, routes rooms to media servers, guarantees ordered delivery within a room, and designs recovery when a node holding rooms fails.
+      good: Describes a WebSocket-based room service with media server assignment but is vague on failure.
+      weak: Puts signalling over stateless HTTP without any notion of room state or ordering.
+    followups:
+      - A participant's signalling connection lands on a different node after reconnecting. How do they rejoin the room?
+      - How would you spread rooms across media servers?
+    common_errors:
+      - Keeping room state only in one node's memory with no recovery path.
+
+  # ------------------------------------------------------------------------ hard
+  - external_key: system_design.realtime_messaging.interactive_webinar
+    competency_key: system_design
+    topic: Webinars with large audiences
+    difficulty: hard
+    text: >-
+      A webinar product needs five presenters talking live to an audience of fifty thousand, where any viewer can be
+      brought on stage to ask a question within a few seconds. How would you design the media delivery?
+    expected_concepts:
+      - interactive tier for presenters on SFUs
+      - large-audience distribution through cascaded SFUs or low-latency streaming
+      - latency trade-off between WebRTC distribution and HTTP streaming
+      - promoting a viewer into the interactive tier quickly
+      - keeping chat and questions in sync with the media delay
+    rubric:
+      excellent: Splits the interactive and audience tiers, chooses distribution technology with clear latency and cost reasoning, designs fast promotion to stage, and keeps side channels in sync with media delay.
+      good: Uses an SFU for presenters and some broadcast technology for viewers, but promotion or sync is vague.
+      weak: Puts all fifty thousand viewers into one SFU room.
+    followups:
+      - How much delay would you accept for viewers, and why?
+      - What happens to a viewer who is promoted while their stream is ten seconds behind?
+    common_errors:
+      - Ignoring that standard HTTP streaming delays make live questions awkward.
+
+  - external_key: system_design.realtime_messaging.cascaded_sfu_regions
+    competency_key: distributed_systems
+    topic: Cascading media servers across regions
+    difficulty: hard
+    text: >-
+      Meetings often have participants spread across three continents, and everyone currently connects to a media
+      server in the region of whoever started the meeting. How would you redesign media routing so latency is good for
+      everyone?
+    expected_concepts:
+      - each participant connecting to a nearby SFU
+      - SFUs in different regions forwarding streams to each other
+      - forwarding only streams that remote participants actually need
+      - coordinating the cascade through the signalling layer
+      - handling the failure of one SFU in the cascade
+      - bandwidth costs of inter-region links
+    rubric:
+      excellent: Designs a cascade with local edge SFUs, selective forwarding between regions, signalling-driven coordination, failure handling and awareness of inter-region bandwidth costs.
+      good: Connects participants to regional servers that relay streams between each other, without detail on selection or failure.
+      weak: Moves the whole meeting to a central region or proposes one global server.
+    followups:
+      - How would you decide which streams cross regions?
+      - One regional SFU fails mid-meeting. What do its participants experience?
+    common_errors:
+      - Sending every stream across every regional link regardless of who is watching it.
+
+  - external_key: system_design.realtime_messaging.voice_agent_pipeline
+    competency_key: system_design
+    topic: Streaming pipeline for a voice assistant
+    difficulty: hard
+    text: >-
+      Design the real-time pipeline for a voice assistant that holds spoken conversations, where audio streams from the
+      user's browser, speech is transcribed, a language model replies, and synthesised speech plays back. Users should
+      be able to interrupt, and the reply should start within about a second.
+    expected_concepts:
+      - streaming audio over WebRTC or WebSockets in small frames
+      - voice activity detection and end-of-turn decisions
+      - streaming transcription, model output and speech synthesis to overlap stages
+      - barge-in handling that stops playback and cancels in-flight generation
+      - latency budget per stage and measuring time to first audio
+      - session state and reconnect without losing the conversation
+    rubric:
+      excellent: Builds a streaming, overlapped pipeline with explicit latency budgets, clear end-of-turn and barge-in logic that cancels downstream work, and robust session handling, with a plan to measure each stage.
+      good: Has the right stages streamed end to end, but turn-taking or interruption is thin.
+      weak: Waits for the full utterance, the full reply and the full audio file in sequence.
+    followups:
+      - How would you decide the user has finished speaking rather than pausing?
+      - Where does most of your latency budget go, and how would you cut it?
+    common_errors:
+      - Not cancelling generation and synthesis on interruption, so the assistant keeps talking over the user.
+
+  - external_key: system_design.realtime_messaging.realtime_load_testing
+    competency_key: system_design
+    topic: Load testing a real-time system
+    difficulty: hard
+    text: >-
+      Before a launch you need confidence that your real-time messaging platform can handle two million concurrent
+      connections with realistic traffic. How would you design the load test?
+    expected_concepts:
+      - realistic connection mix of idle, active and reconnecting clients
+      - distributed load generators with their own port and memory limits
+      - ramp patterns, sudden spikes and mass reconnect scenarios
+      - measuring end-to-end delivery latency from the generators
+      - testing against production-like infrastructure and dependencies
+      - finding the breaking point and the first component to fail
+    rubric:
+      excellent: Models realistic client behaviour including reconnect storms, scales generators properly, measures end-to-end delivery rather than just connections, and pushes to failure to learn the limits.
+      good: Plans a large connection test with ramps and some latency measurement.
+      weak: Opens many idle connections from one machine and calls it done.
+    followups:
+      - Your load generators hit their own limits first. How would you notice?
+      - How would you test a gateway failure during peak load?
+    common_errors:
+      - Testing only steady state, not the reconnect behaviour that causes real outages.
+
+  - external_key: system_design.realtime_messaging.gateway_region_evacuation
+    competency_key: distributed_systems
+    topic: Moving connections out of a failing region
+    difficulty: hard
+    text: >-
+      One of your three regions is degrading and holds three million live connections for chat and notifications. How
+      would you design the system so you can move those users to the other regions quickly without overloading them
+      or losing messages?
+    expected_concepts:
+      - global routing via DNS or anycast steering new connections away
+      - paced draining of existing connections with jittered reconnects
+      - capacity headroom planned in the remaining regions
+      - session resume from a cursor in another region
+      - data replication so messages are available where users land
+      - rehearsing evacuations regularly
+    rubric:
+      excellent: Combines traffic steering with paced draining and session resume, plans headroom and data availability in the receiving regions, and insists on regular rehearsals.
+      good: Steers traffic and drains connections but ignores capacity or data availability.
+      weak: Switches DNS and lets three million clients reconnect at once.
+    followups:
+      - DNS caches keep sending users to the bad region. What else can you do?
+      - How do you decide when to move users back?
+    common_errors:
+      - Not reserving enough capacity in the other regions to absorb the moved load.
+
+  - external_key: system_design.realtime_messaging.realtime_protocol_evolution
+    competency_key: api_design
+    topic: Evolving a real-time client protocol
+    difficulty: hard
+    text: >-
+      Your mobile apps speak a custom real-time protocol over WebSockets, and versions from two years ago are still in
+      use. How would you design the protocol and the servers so you can keep adding features without breaking old
+      clients?
+    expected_concepts:
+      - protocol version or capability negotiation at connect
+      - additive changes and ignoring unknown fields and message types
+      - schema-defined messages, for example with protobuf
+      - server-side adapters for old versions
+      - minimum supported version with a forced upgrade path
+      - telemetry of version distribution
+    rubric:
+      excellent: Negotiates capabilities at connect, keeps changes additive with tolerant parsing, isolates legacy handling in adapters, and manages deprecation with telemetry and a forced-upgrade path.
+      good: Uses versioning and backward-compatible changes, but lacks a plan for deprecation.
+      weak: Bumps the protocol and breaks old clients, or keeps every behaviour forever without a plan.
+    followups:
+      - A new message type would confuse old clients. How do you avoid sending it to them?
+      - How would you decide when to stop supporting an old version?
+    common_errors:
+      - Clients that crash on unknown message types, making every addition a breaking change.
+
+  - external_key: system_design.realtime_messaging.subscription_authorisation
+    competency_key: security
+    topic: Authorising real-time subscriptions
+    difficulty: hard
+    text: >-
+      Clients subscribe to real-time channels named after resources, like an order, a project or a document, and a
+      penetration test found a user could subscribe to another customer's order channel. How would you redesign
+      subscription authorisation so it is correct and still fast at a million subscriptions a minute?
+    expected_concepts:
+      - authorisation check on every subscribe, not only at connect
+      - opaque or signed channel names rather than guessable ids
+      - caching permission decisions with short expiry
+      - revocation that removes existing subscriptions
+      - checking authorisation for publish as well as subscribe
+      - audit and tests for cross-tenant access
+    rubric:
+      excellent: Enforces server-side checks on every subscribe and publish with a fast cached path, handles revocation of live subscriptions, avoids guessable channels as a defence in depth, and adds cross-tenant tests.
+      good: Adds a permission check on subscribe but ignores revocation or publishing.
+      weak: Relies only on hard-to-guess channel names or trusts what the client says it may access.
+    followups:
+      - Permission is revoked while a user is subscribed. How fast must they stop receiving events?
+      - How would you test that this class of bug can't come back?
+    common_errors:
+      - Treating unguessable channel names as the only access control.
+
+  - external_key: system_design.realtime_messaging.e2ee_group_calls
+    competency_key: security
+    topic: End-to-end encryption for group calls
+    difficulty: hard
+    text: >-
+      Customers in regulated industries want group video calls where even your media servers can't see or hear the
+      content. How would you add end-to-end encryption to calls that run through selective forwarding servers?
+    expected_concepts:
+      - frame-level encryption inside the clients on top of transport encryption
+      - SFU still forwarding using unencrypted headers and metadata
+      - group key distribution and rotation when people join or leave
+      - identity verification of participants
+      - features that break, such as server recording and transcription
+    rubric:
+      excellent: Explains insertable or frame-level encryption over an SFU, designs key distribution and rotation on membership changes, covers identity verification and is clear about lost server-side features.
+      good: Knows media must be encrypted in the client so the SFU can't decode it, but key management is vague.
+      weak: Thinks transport encryption to the SFU already makes it end to end.
+    followups:
+      - Someone leaves the call. Why should keys rotate, and how fast?
+      - How would recording work for a customer who also needs it?
+    common_errors:
+      - Not rotating keys when participants leave.
+
+  - external_key: system_design.realtime_messaging.simulcast_bandwidth_adaptation
+    competency_key: networking
+    topic: Adapting video quality per participant
+    difficulty: hard
+    text: >-
+      In a group call, some participants are on fast fibre and others on weak mobile connections, and today everyone
+      gets the same video quality, so the weakest link ruins it. How would you design adaptive quality through your
+      media servers?
+    expected_concepts:
+      - simulcast or scalable video coding layers from each sender
+      - SFU choosing a layer per receiver based on bandwidth estimates
+      - congestion control and bandwidth estimation feedback
+      - prioritising the active speaker and visible tiles
+      - sender-side adaptation when nobody needs the high layer
+    rubric:
+      excellent: Uses simulcast or layered coding with per-receiver layer selection driven by bandwidth estimates, prioritises what each viewer sees, and saves sender bandwidth when high layers are unused.
+      good: Proposes multiple quality levels selected by the server per receiver.
+      weak: Lowers quality for everyone to the weakest participant or transcodes every stream on the server.
+    followups:
+      - Which signals tell the SFU a receiver's bandwidth has dropped?
+      - How would you prioritise audio over video when bandwidth is tight?
+    common_errors:
+      - Transcoding on the server, which adds latency and huge CPU cost.

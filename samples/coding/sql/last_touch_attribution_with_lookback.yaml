@@ -1,0 +1,356 @@
+version: 1
+slug: last_touch_attribution_with_lookback
+title: "Last-Touch Attribution with Lookback"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, product_manager, data_scientist]
+time_limit_minutes: 22
+prompt_markdown: |
+  ## Last-Touch Attribution with Lookback
+
+  The growth team is deciding where to spend next quarter's marketing budget and wants a simple
+  last-touch report: which campaign gets the credit for each sign-up. The tracking pipeline stores
+  every ad interaction and every sign-up, with dates already converted to a day number (days since
+  the product launched) so no date functions are needed.
+
+  Table `touches` (one row per ad click or email open):
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key; a higher id was recorded later |
+  | visitor_id | VARCHAR(40) | anonymous visitor identifier |
+  | campaign | VARCHAR(40) | lower-case campaign name, never `'direct'` |
+  | day_no | INTEGER | day of the touch, `>= 0` |
+
+  Table `conversions` (one row per sign-up):
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | visitor_id | VARCHAR(40) | the visitor who signed up |
+  | day_no | INTEGER | day of the sign-up, `>= 0` |
+
+  Credit each conversion to exactly one campaign:
+
+  - Only touches of the **same visitor** inside the **7-day lookback window** are eligible: the
+    touch's `day_no` must be between `conversion.day_no - 7` and `conversion.day_no`, both ends
+    included (a touch on the conversion day counts; a touch after it never does).
+  - Among eligible touches, the one with the **latest `day_no`** wins; if several share that day, the
+    one with the **highest `id`** wins.
+  - A conversion without any eligible touch is credited to the campaign `'direct'`.
+
+  Return one row per campaign that received at least one conversion, with the columns `campaign` and
+  `conversion_count`, ordered by `conversion_count` descending, then `campaign` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  touches
+  +----+------------+------------+--------+
+  | id | visitor_id | campaign   | day_no |
+  +----+------------+------------+--------+
+  | 1  | v1         | search     | 10     |
+  | 2  | v1         | newsletter | 14     |
+  | 3  | v2         | social     | 3      |
+  | 4  | v3         | search     | 20     |
+  | 5  | v1         | social     | 19     |
+  | 6  | v4         | newsletter | 12     |
+  +----+------------+------------+--------+
+
+  conversions
+  +----+------------+--------+
+  | id | visitor_id | day_no |
+  +----+------------+--------+
+  | 1  | v1         | 16     |
+  | 2  | v2         | 10     |
+  | 3  | v3         | 12     |
+  | 4  | v5         | 5      |
+  | 5  | v4         | 20     |
+  | 6  | v1         | 21     |
+  +----+------------+--------+
+
+  Output
+  +------------+------------------+
+  | campaign   | conversion_count |
+  +------------+------------------+
+  | direct     | 3                |
+  | social     | 2                |
+  | newsletter | 1                |
+  +------------+------------------+
+  Conversion 1 (day 16): v1's touches on days 10 and 14 are eligible; day 14 (newsletter) is latest.
+  Conversion 2 (day 10): v2's touch on day 3 is exactly 7 days earlier, so it counts.
+  Conversion 3: v3's only touch (day 20) is after the sign-up. Conversion 4: v5 has no touches.
+  Conversion 5 (day 20): v4's touch on day 12 is 8 days earlier, outside the window.
+  Conversion 6 (day 21): v1's touches on days 14 and 19 are eligible; day 19 (social) is latest.
+  ```
+
+  ### Example 2
+  ```
+  touches
+  +----+------------+----------+--------+
+  | id | visitor_id | campaign | day_no |
+  +----+------------+----------+--------+
+  | 1  | a1         | email    | 5      |
+  | 2  | a1         | partner  | 5      |
+  | 3  | a2         | partner  | 8      |
+  | 4  | a2         | email    | 8      |
+  +----+------------+----------+--------+
+
+  conversions
+  +----+------------+--------+
+  | id | visitor_id | day_no |
+  +----+------------+--------+
+  | 1  | a1         | 5      |
+  | 2  | a2         | 9      |
+  | 3  | a1         | 13     |
+  +----+------------+--------+
+
+  Output
+  +----------+------------------+
+  | campaign | conversion_count |
+  +----------+------------------+
+  | direct   | 1                |
+  | email    | 1                |
+  | partner  | 1                |
+  +----------+------------------+
+  a1 converts on day 5: touches 1 and 2 are both on day 5, so the higher id (2, partner) wins.
+  a2 converts on day 9: touches 3 and 4 share day 8, so touch 4 (email) wins.
+  a1's second conversion on day 13 has no touch in days 6..13, so it is direct.
+  ```
+
+  ### Constraints
+  - Each table has at most `10^6` rows; either table may be empty.
+  - `0 <= day_no <= 10^6`
+  - A visitor can convert several times; every conversion is credited separately.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return campaign and conversion_count (last eligible touch within 7 days, else 'direct'),
+    -- ordered by conversion_count DESC, campaign.
+    SELECT t.campaign, COUNT(*) AS conversion_count
+    FROM conversions c
+    JOIN touches t ON t.visitor_id = c.visitor_id
+    GROUP BY t.campaign
+    ORDER BY conversion_count DESC, t.campaign;
+reference_solutions:
+  sql: |
+    WITH eligible AS (
+      SELECT c.id AS conversion_id,
+             t.campaign,
+             ROW_NUMBER() OVER (
+               PARTITION BY c.id
+               ORDER BY t.day_no DESC, t.id DESC
+             ) AS rn
+      FROM conversions c
+      JOIN touches t
+        ON t.visitor_id = c.visitor_id
+       AND t.day_no BETWEEN c.day_no - 7 AND c.day_no
+    ),
+    credited AS (
+      SELECT COALESCE(e.campaign, 'direct') AS campaign
+      FROM conversions c
+      LEFT JOIN eligible e
+        ON e.conversion_id = c.id
+       AND e.rn = 1
+    )
+    SELECT campaign, COUNT(*) AS conversion_count
+    FROM credited
+    GROUP BY campaign
+    ORDER BY conversion_count DESC, campaign;
+sql_setup: |
+  CREATE TABLE touches (
+    id INTEGER PRIMARY KEY,
+    visitor_id VARCHAR(40) NOT NULL,
+    campaign VARCHAR(40) NOT NULL,
+    day_no INTEGER NOT NULL
+  );
+  CREATE TABLE conversions (
+    id INTEGER PRIMARY KEY,
+    visitor_id VARCHAR(40) NOT NULL,
+    day_no INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - latest touch wins, day-7 boundary counts, later and expired touches ignored"
+    ordered: true
+    setup_sql: |
+      INSERT INTO touches (id, visitor_id, campaign, day_no) VALUES
+        (1, 'v1', 'search', 10), (2, 'v1', 'newsletter', 14), (3, 'v2', 'social', 3), (4, 'v3', 'search', 20),
+        (5, 'v1', 'social', 19), (6, 'v4', 'newsletter', 12);
+      INSERT INTO conversions (id, visitor_id, day_no) VALUES
+        (1, 'v1', 16), (2, 'v2', 10), (3, 'v3', 12), (4, 'v5', 5),
+        (5, 'v4', 20), (6, 'v1', 21);
+    expected_rows: [["direct", 3], ["social", 2], ["newsletter", 1]]
+  - id: t2
+    description: "Example 2 - same-day touches broken by highest id; equal counts ordered by campaign"
+    ordered: true
+    setup_sql: |
+      INSERT INTO touches (id, visitor_id, campaign, day_no) VALUES
+        (1, 'a1', 'email', 5), (2, 'a1', 'partner', 5), (3, 'a2', 'partner', 8), (4, 'a2', 'email', 8);
+      INSERT INTO conversions (id, visitor_id, day_no) VALUES (1, 'a1', 5), (2, 'a2', 9), (3, 'a1', 13);
+    expected_rows: [["direct", 1], ["email", 1], ["partner", 1]]
+  - id: t3
+    hidden: true
+    description: "Empty tables - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Touches but no conversions - no rows (campaigns without credit are not listed)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO touches (id, visitor_id, campaign, day_no) VALUES (1, 'v1', 'search', 1), (2, 'v2', 'social', 2);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "No touches at all - every conversion is direct"
+    ordered: true
+    setup_sql: |
+      INSERT INTO conversions (id, visitor_id, day_no) VALUES (1, 'v1', 0), (2, 'v2', 3), (3, 'v1', 9);
+    expected_rows: [["direct", 3]]
+  - id: t6
+    hidden: true
+    description: "Window edges - 7 days back counts, 8 days back does not, next-day touch never counts"
+    ordered: true
+    setup_sql: |
+      INSERT INTO touches (id, visitor_id, campaign, day_no) VALUES
+        (1, 'x', 'alpha', 0), (2, 'y', 'beta', 0), (3, 'y', 'gamma', 9), (4, 'z', 'delta', 100),
+        (5, 'z', 'omega', 101);
+      INSERT INTO conversions (id, visitor_id, day_no) VALUES (1, 'x', 7), (2, 'y', 8), (3, 'z', 100);
+    expected_rows: [["alpha", 1], ["delta", 1], ["direct", 1]]
+  - id: t7
+    hidden: true
+    description: "Touches of other visitors on the same day are ignored; repeat conversions credited separately"
+    ordered: true
+    setup_sql: |
+      INSERT INTO touches (id, visitor_id, campaign, day_no) VALUES
+        (1, 'v1', 'search', 4), (2, 'v2', 'video', 5), (3, 'v2', 'display', 6), (4, 'v3', 'video', 6);
+      INSERT INTO conversions (id, visitor_id, day_no) VALUES
+        (1, 'v1', 6), (2, 'v1', 7), (3, 'v1', 11), (4, 'v2', 6),
+        (5, 'v4', 6);
+    expected_rows: [["search", 3], ["direct", 1], ["display", 1]]
+  - id: t8
+    hidden: true
+    description: "Latest day beats a higher id on an older day; same-day tie inserted out of id order"
+    ordered: true
+    setup_sql: |
+      INSERT INTO touches (id, visitor_id, campaign, day_no) VALUES
+        (10, 'v', 'older', 3), (7, 'v', 'newb', 5), (2, 'v', 'newa', 5), (11, 'w', 'mail', 1),
+        (12, 'w', 'push', 1), (9, 'w', 'radio', 2);
+      INSERT INTO conversions (id, visitor_id, day_no) VALUES (1, 'v', 6), (2, 'w', 2), (3, 'w', 1);
+    expected_rows: [["newb", 1], ["push", 1], ["radio", 1]]
+  - id: t9
+    hidden: true
+    description: "Count ties across several campaigns including direct - ordered by name within a count"
+    ordered: true
+    setup_sql: |
+      INSERT INTO touches (id, visitor_id, campaign, day_no) VALUES
+        (1, 'a', 'video', 1), (2, 'b', 'search', 1), (3, 'c', 'email', 1), (4, 'd', 'video', 1),
+        (5, 'e', 'search', 1);
+      INSERT INTO conversions (id, visitor_id, day_no) VALUES
+        (1, 'a', 2), (2, 'b', 2), (3, 'c', 2), (4, 'd', 3),
+        (5, 'e', 4), (6, 'f', 4), (7, 'g', 4), (8, 'c', 20);
+    expected_rows: [["direct", 3], ["search", 2], ["video", 2], ["email", 1]]
+  - id: t10
+    hidden: true
+    description: "Stress - 160 touches and 100 conversions over 50 visitors (pseudo-random)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO touches (id, visitor_id, campaign, day_no) VALUES
+        (1, 'v29', 'partner', 28), (2, 'v13', 'email', 2), (3, 'v32', 'search', 12), (4, 'v21', 'search', 80),
+        (5, 'v11', 'social', 20), (6, 'v0', 'video', 65), (7, 'v26', 'video', 79), (8, 'v5', 'search', 63),
+        (9, 'v18', 'social', 3), (10, 'v36', 'search', 83), (11, 'v15', 'video', 63), (12, 'v32', 'display', 3),
+        (13, 'v23', 'video', 25), (14, 'v18', 'social', 73), (15, 'v11', 'social', 68), (16, 'v16', 'display', 56),
+        (17, 'v35', 'display', 83), (18, 'v25', 'email', 0), (19, 'v10', 'social', 65), (20, 'v10', 'partner', 55),
+        (21, 'v5', 'partner', 67), (22, 'v3', 'partner', 35), (23, 'v7', 'partner', 19), (24, 'v26', 'display', 66),
+        (25, 'v31', 'search', 28), (26, 'v13', 'search', 9), (27, 'v31', 'search', 64), (28, 'v19', 'video', 67),
+        (29, 'v30', 'social', 49), (30, 'v11', 'video', 63), (31, 'v30', 'partner', 29), (32, 'v10', 'display', 43),
+        (33, 'v30', 'partner', 0), (34, 'v25', 'video', 24), (35, 'v32', 'display', 63), (36, 'v11', 'display', 41),
+        (37, 'v26', 'display', 75), (38, 'v34', 'email', 34), (39, 'v8', 'social', 60), (40, 'v18', 'search', 89),
+        (41, 'v32', 'search', 49), (42, 'v11', 'search', 49), (43, 'v3', 'social', 86), (44, 'v34', 'email', 81),
+        (45, 'v10', 'video', 87), (46, 'v16', 'email', 16), (47, 'v37', 'social', 33), (48, 'v17', 'display', 60),
+        (49, 'v28', 'video', 72), (50, 'v29', 'partner', 65), (51, 'v10', 'social', 12), (52, 'v9', 'partner', 27),
+        (53, 'v12', 'search', 11), (54, 'v37', 'video', 83), (55, 'v37', 'social', 84), (56, 'v38', 'search', 84),
+        (57, 'v12', 'partner', 85), (58, 'v37', 'social', 37), (59, 'v11', 'email', 71), (60, 'v30', 'social', 68),
+        (61, 'v17', 'search', 29), (62, 'v25', 'email', 51), (63, 'v32', 'social', 62), (64, 'v35', 'search', 57),
+        (65, 'v7', 'email', 83), (66, 'v28', 'email', 85), (67, 'v24', 'email', 15), (68, 'v2', 'display', 71),
+        (69, 'v9', 'search', 79), (70, 'v28', 'video', 65), (71, 'v38', 'display', 80), (72, 'v39', 'video', 77),
+        (73, 'v5', 'email', 22), (74, 'v11', 'social', 84), (75, 'v31', 'partner', 63), (76, 'v37', 'search', 54),
+        (77, 'v13', 'search', 19), (78, 'v22', 'social', 67), (79, 'v15', 'partner', 80), (80, 'v25', 'search', 56),
+        (81, 'v30', 'video', 42), (82, 'v32', 'display', 65), (83, 'v18', 'video', 37), (84, 'v31', 'partner', 49),
+        (85, 'v11', 'partner', 11), (86, 'v7', 'display', 78), (87, 'v27', 'display', 17), (88, 'v19', 'partner', 27),
+        (89, 'v1', 'display', 31), (90, 'v13', 'search', 54), (91, 'v7', 'social', 42), (92, 'v16', 'partner', 58),
+        (93, 'v12', 'search', 81), (94, 'v22', 'video', 76), (95, 'v18', 'partner', 79), (96, 'v12', 'search', 34),
+        (97, 'v8', 'social', 31), (98, 'v32', 'search', 22), (99, 'v8', 'social', 30), (100, 'v32', 'search', 56),
+        (101, 'v17', 'social', 85), (102, 'v13', 'email', 33), (103, 'v20', 'display', 17), (104, 'v27', 'social', 32),
+        (105, 'v10', 'video', 34), (106, 'v10', 'email', 86), (107, 'v12', 'search', 86), (108, 'v24', 'email', 48),
+        (109, 'v32', 'partner', 59), (110, 'v27', 'display', 3), (111, 'v1', 'email', 71), (112, 'v34', 'display', 81),
+        (113, 'v31', 'search', 10), (114, 'v20', 'partner', 26), (115, 'v18', 'search', 22), (116, 'v30', 'partner', 46),
+        (117, 'v18', 'video', 79), (118, 'v16', 'partner', 30), (119, 'v1', 'display', 38), (120, 'v15', 'video', 71),
+        (121, 'v14', 'display', 71), (122, 'v4', 'partner', 23), (123, 'v4', 'partner', 23), (124, 'v27', 'social', 6),
+        (125, 'v23', 'partner', 77), (126, 'v4', 'video', 63), (127, 'v20', 'display', 69), (128, 'v36', 'email', 78),
+        (129, 'v17', 'video', 75), (130, 'v36', 'video', 46), (131, 'v32', 'social', 45), (132, 'v15', 'email', 74),
+        (133, 'v24', 'display', 65), (134, 'v39', 'partner', 88), (135, 'v19', 'email', 50), (136, 'v24', 'partner', 6),
+        (137, 'v15', 'display', 42), (138, 'v34', 'partner', 85), (139, 'v8', 'search', 88), (140, 'v18', 'search', 14),
+        (141, 'v27', 'social', 73), (142, 'v25', 'partner', 80), (143, 'v36', 'search', 8), (144, 'v26', 'search', 35),
+        (145, 'v32', 'social', 82), (146, 'v31', 'search', 55), (147, 'v18', 'display', 45), (148, 'v20', 'video', 68),
+        (149, 'v25', 'search', 59), (150, 'v2', 'email', 47), (151, 'v8', 'video', 13), (152, 'v20', 'social', 27),
+        (153, 'v4', 'social', 27), (154, 'v4', 'email', 35), (155, 'v0', 'video', 32), (156, 'v6', 'social', 3),
+        (157, 'v11', 'email', 58), (158, 'v2', 'email', 75), (159, 'v31', 'search', 70), (160, 'v13', 'search', 42);
+      INSERT INTO conversions (id, visitor_id, day_no) VALUES
+        (1, 'v0', 0), (2, 'v47', 79), (3, 'v24', 31), (4, 'v42', 97),
+        (5, 'v24', 2), (6, 'v6', 40), (7, 'v17', 68), (8, 'v47', 33),
+        (9, 'v49', 14), (10, 'v45', 91), (11, 'v9', 32), (12, 'v33', 44),
+        (13, 'v10', 98), (14, 'v4', 26), (15, 'v36', 52), (16, 'v18', 58),
+        (17, 'v29', 17), (18, 'v10', 15), (19, 'v0', 22), (20, 'v32', 62),
+        (21, 'v6', 11), (22, 'v28', 24), (23, 'v7', 19), (24, 'v36', 42),
+        (25, 'v13', 79), (26, 'v12', 79), (27, 'v15', 75), (28, 'v24', 73),
+        (29, 'v32', 19), (30, 'v45', 82), (31, 'v46', 47), (32, 'v29', 31),
+        (33, 'v19', 22), (34, 'v6', 7), (35, 'v23', 5), (36, 'v37', 88),
+        (37, 'v35', 83), (38, 'v47', 39), (39, 'v26', 62), (40, 'v30', 40),
+        (41, 'v45', 36), (42, 'v19', 95), (43, 'v0', 42), (44, 'v38', 11),
+        (45, 'v21', 52), (46, 'v47', 45), (47, 'v33', 29), (48, 'v35', 29),
+        (49, 'v31', 51), (50, 'v9', 91), (51, 'v23', 4), (52, 'v32', 86),
+        (53, 'v37', 8), (54, 'v12', 79), (55, 'v42', 13), (56, 'v43', 78),
+        (57, 'v22', 13), (58, 'v43', 79), (59, 'v34', 81), (60, 'v35', 5),
+        (61, 'v23', 73), (62, 'v26', 77), (63, 'v17', 44), (64, 'v34', 51),
+        (65, 'v42', 15), (66, 'v46', 19), (67, 'v21', 90), (68, 'v20', 48),
+        (69, 'v15', 57), (70, 'v46', 95), (71, 'v22', 28), (72, 'v45', 4),
+        (73, 'v44', 66), (74, 'v40', 79), (75, 'v28', 88), (76, 'v24', 7),
+        (77, 'v48', 42), (78, 'v33', 69), (79, 'v2', 83), (80, 'v5', 9),
+        (81, 'v44', 64), (82, 'v8', 43), (83, 'v10', 93), (84, 'v37', 94),
+        (85, 'v32', 46), (86, 'v17', 87), (87, 'v5', 27), (88, 'v30', 94),
+        (89, 'v48', 43), (90, 'v18', 59), (91, 'v23', 31), (92, 'v8', 89),
+        (93, 'v10', 39), (94, 'v43', 89), (95, 'v18', 86), (96, 'v13', 27),
+        (97, 'v17', 13), (98, 'v49', 31), (99, 'v34', 12), (100, 'v0', 40);
+    expected_rows: [["direct", 74], ["social", 7], ["partner", 6], ["video", 5], ["display", 3], ["email", 3], ["search", 2]]
+expected_concepts:
+  - "range join on visitor and a day window (BETWEEN with an offset)"
+  - "picking one row per group with ROW_NUMBER and a tie-breaking ORDER BY"
+  - "LEFT JOIN plus COALESCE to keep unmatched conversions as direct"
+  - "aggregating after attribution, with a deterministic ORDER BY"
+optimal_complexity: {time: "O(n log n) with an index on touches (visitor_id, day_no); one ranked row per conversion", space: "O(m) for the credited conversions"}
+rubric:
+  excellent: "Joins conversions to eligible touches with both window ends inclusive, picks one touch per conversion with ROW_NUMBER ordered by day then id, keeps unmatched conversions as direct through a LEFT JOIN, and explains why aggregating before choosing the winner double-counts."
+  good: "Correct after a hint about the tie-breaker, the inclusive window edges or keeping conversions that have no eligible touch."
+  weak: "Credits every eligible touch (counting a conversion several times), drops direct conversions with an inner join, uses MAX(day_no) without resolving same-day ties, or ignores the lookback window."
+  criteria:
+    correctness: "All tests pass, including the 7-day edge, same-day ties, repeat conversions and conversions without touches."
+    efficiency: "Set-based query with a single ranking pass; mentions an index on touches (visitor_id, day_no)."
+    code_quality: "Readable CTEs that separate eligibility, winner selection and counting, with the exact output column names."
+    edge_cases: "Empty tables, touches after the conversion, other visitors' touches and count ties."
+    communication: "Explains why each conversion must be resolved to exactly one touch before counting."
+hints:
+  - "Work per conversion first: decide which single touch (or none) gets the credit, and only then count credits per campaign."
+  - "The eligible touches of a conversion are those of the same visitor whose day lies in the seven days up to and including the conversion day; rank them so the latest day comes first and, within a day, the highest id comes first."
+  - "Join conversions to touches on visitor and the inclusive day range, number the matches per conversion with a window function ordered by day descending then id descending, keep number one through a left join from conversions so unmatched ones survive, replace a missing campaign with the word direct, then group by campaign and sort by the count descending and the name."
+followups:
+  - "How would you switch to a position-based model that splits credit between the first and last touch?"
+  - "Which index would make the range join fast on hundreds of millions of touches?"
+  - "How would the query change if the lookback window differed per campaign?"
+common_errors:
+  - "Counting every eligible touch, so one conversion is credited to several campaigns."
+  - "Using an inner join, which silently drops direct conversions."
+  - "Off-by-one on the window: excluding the touch exactly 7 days earlier or including touches after the conversion."
+  - "Taking MAX(day_no) and joining back, which returns several rows when two touches share the latest day."

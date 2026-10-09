@@ -1,0 +1,248 @@
+version: 1
+slug: sql_user_session_stats
+title: "Session Statistics from Page Views (SQL)"
+difficulty: hard
+competency_keys: [sql, databases]
+role_tags: [data, data_analyst, backend, data_scientist]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Session Statistics from Page Views
+
+  The product analytics team wants per-user engagement numbers for a web app. Raw page views are stored
+  with an integer Unix timestamp in seconds.
+
+  Table `page_views`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | user_id | INTEGER | user who viewed the page |
+  | viewed_at | INTEGER | Unix seconds; a user can have several views in the same second |
+
+  Order each user's views by `viewed_at`, then by `id`. A view **starts a new session** when it is the
+  user's first view, or when it comes **more than 1800 seconds** after that user's previous view. A gap of
+  exactly 1800 seconds keeps the session going, so a session can last much longer than 1800 seconds in total.
+  The **length** of a session is its last view's `viewed_at` minus its first view's `viewed_at` (0 for a
+  session with one view).
+
+  Return one row per user who has at least one view, with the columns:
+
+  - `user_id`;
+  - `sessions`: the number of sessions of that user;
+  - `total_views`: the number of views of that user;
+  - `longest_session_seconds`: the length of that user's longest session.
+
+  Order the rows by `user_id` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite (window functions are allowed).
+
+  ### Example 1
+  ```
+  page_views
+  +----+---------+-----------+
+  | id | user_id | viewed_at |
+  +----+---------+-----------+
+  | 1  | 7       | 1000      |
+  | 2  | 7       | 1600      |
+  | 3  | 7       | 3400      |
+  | 4  | 7       | 9000      |
+  | 5  | 3       | 500       |
+  | 6  | 7       | 9100      |
+  | 7  | 3       | 2400      |
+  +----+---------+-----------+
+
+  Output
+  +---------+----------+-------------+-------------------------+
+  | user_id | sessions | total_views | longest_session_seconds |
+  +---------+----------+-------------+-------------------------+
+  | 3       | 2        | 2           | 0                       |
+  | 7       | 2        | 5           | 2400                    |
+  +---------+----------+-------------+-------------------------+
+  User 7: 1600 -> 3400 is exactly 1800 seconds, so the first session is 1000..3400 (2400 seconds);
+  9000 starts a second session. User 3: the gap of 1900 seconds splits two one-view sessions.
+  ```
+
+  ### Example 2
+  ```
+  page_views
+  +----+---------+-----------+
+  | id | user_id | viewed_at |
+  +----+---------+-----------+
+  | 10 | 42      | 7200      |
+  | 11 | 42      | 100       |
+  | 12 | 42      | 1900      |
+  | 13 | 42      | 1900      |
+  +----+---------+-----------+
+
+  Output
+  +---------+----------+-------------+-------------------------+
+  | user_id | sessions | total_views | longest_session_seconds |
+  +---------+----------+-------------+-------------------------+
+  | 42      | 2        | 4           | 1800                    |
+  +---------+----------+-------------+-------------------------+
+  Rows are stored out of time order. Sessions are 100..1900 (three views) and 7200.
+  ```
+
+  ### Constraints
+  - The table may be empty (then no rows are returned).
+  - `0 <= viewed_at <= 4 * 10^9`.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Per user: number of sessions, total views and the longest session in seconds.
+    SELECT user_id, 1 AS sessions, COUNT(*) AS total_views, MAX(viewed_at) - MIN(viewed_at) AS longest_session_seconds
+    FROM page_views
+    GROUP BY user_id
+    ORDER BY user_id;
+reference_solutions:
+  sql: |
+    WITH ordered AS (
+      SELECT user_id, id, viewed_at,
+             LAG(viewed_at) OVER (PARTITION BY user_id ORDER BY viewed_at, id) AS prev_at
+      FROM page_views
+    ),
+    flagged AS (
+      SELECT user_id, id, viewed_at,
+             CASE WHEN prev_at IS NULL OR viewed_at - prev_at > 1800 THEN 1 ELSE 0 END AS starts_session
+      FROM ordered
+    ),
+    numbered AS (
+      SELECT user_id, viewed_at,
+             SUM(starts_session) OVER (
+               PARTITION BY user_id ORDER BY viewed_at, id
+               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+             ) AS session_no
+      FROM flagged
+    ),
+    sessions AS (
+      SELECT user_id, session_no, COUNT(*) AS views, MAX(viewed_at) - MIN(viewed_at) AS length_seconds
+      FROM numbered
+      GROUP BY user_id, session_no
+    )
+    SELECT user_id,
+           COUNT(*) AS sessions,
+           SUM(views) AS total_views,
+           MAX(length_seconds) AS longest_session_seconds
+    FROM sessions
+    GROUP BY user_id
+    ORDER BY user_id;
+sql_setup: |
+  CREATE TABLE page_views (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    viewed_at INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - a gap of exactly 1800 seconds stays in the session; one-view sessions have length 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO page_views (id, user_id, viewed_at) VALUES
+        (1, 7, 1000), (2, 7, 1600), (3, 7, 3400), (4, 7, 9000),
+        (5, 3, 500), (6, 7, 9100), (7, 3, 2400);
+    expected_rows: [[3, 2, 2, 0], [7, 2, 5, 2400]]
+  - id: t2
+    description: "Example 2 - rows inserted out of time order; two views at the same second"
+    ordered: true
+    setup_sql: |
+      INSERT INTO page_views (id, user_id, viewed_at) VALUES
+        (10, 42, 7200), (11, 42, 100), (12, 42, 1900), (13, 42, 1900);
+    expected_rows: [[42, 2, 4, 1800]]
+  - id: t3
+    hidden: true
+    description: "Empty table - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single view - one session of length 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO page_views (id, user_id, viewed_at) VALUES (1, 5, 123456);
+    expected_rows: [[5, 1, 1, 0]]
+  - id: t5
+    hidden: true
+    description: "Every gap is 1801 seconds - each view is its own session"
+    ordered: true
+    setup_sql: |
+      INSERT INTO page_views (id, user_id, viewed_at) VALUES
+        (1, 1, 0), (2, 1, 1801), (3, 1, 3602), (4, 1, 5403);
+    expected_rows: [[1, 4, 4, 0]]
+  - id: t6
+    hidden: true
+    description: "Chain of exactly-1800 gaps - one long session of 7200 seconds (session length can exceed 1800)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO page_views (id, user_id, viewed_at) VALUES
+        (1, 1, 0), (2, 1, 1800), (3, 1, 3600), (4, 1, 5400), (5, 1, 7200);
+    expected_rows: [[1, 1, 5, 7200]]
+  - id: t7
+    hidden: true
+    description: "Interleaved users - gaps must be measured per user, not across the whole table"
+    ordered: true
+    setup_sql: |
+      INSERT INTO page_views (id, user_id, viewed_at) VALUES
+        (1, 2, 100), (2, 9, 150), (3, 2, 1000), (4, 9, 2000), (5, 2, 2500);
+    expected_rows: [[2, 1, 3, 2400], [9, 2, 2, 0]]
+  - id: t8
+    hidden: true
+    description: "Longest session is not the first or last; duplicates at one second"
+    ordered: true
+    setup_sql: |
+      INSERT INTO page_views (id, user_id, viewed_at) VALUES
+        (1, 4, 10000), (2, 4, 10000), (3, 4, 10000), (4, 4, 20000), (5, 4, 20500), (6, 4, 30000);
+    expected_rows: [[4, 3, 6, 500]]
+  - id: t9
+    hidden: true
+    description: "60 shuffled views from 6 users with gaps around the 1800-second threshold"
+    ordered: true
+    setup_sql: |
+      INSERT INTO page_views (id, user_id, viewed_at) VALUES
+        (52, 3, 1700021055), (33, 1, 1700096069), (18, 3, 1700008193), (42, 6, 1700028536),
+        (20, 1, 1700087168), (26, 1, 1700092468), (59, 6, 1700070456), (38, 3, 1700013654),
+        (56, 2, 1700017858), (35, 6, 1700021836), (45, 6, 1700028656), (23, 1, 1700088868),
+        (9, 2, 1700010126), (16, 5, 1700002987), (8, 2, 1700008426), (51, 6, 1700030456),
+        (47, 5, 1700004787), (60, 5, 1700012207), (1, 6, 1700002515), (57, 5, 1700007207),
+        (40, 1, 1700176669), (17, 1, 1700047168), (3, 2, 1700006696), (19, 6, 1700020036),
+        (43, 2, 1700016028), (12, 3, 1700008163), (50, 4, 1700043347), (10, 3, 1700003163),
+        (7, 2, 1700006726), (25, 1, 1700090668), (6, 6, 1700012515), (44, 3, 1700014254),
+        (46, 2, 1700016058), (48, 3, 1700016055), (11, 6, 1700012635), (22, 4, 1700003197),
+        (4, 6, 1700007515), (28, 3, 1700010023), (55, 5, 1700006607), (54, 5, 1700004907),
+        (37, 6, 1700023536), (2, 1, 1700002168), (39, 1, 1700176069), (24, 2, 1700011927),
+        (13, 1, 1700042168), (21, 3, 1700008223), (31, 1, 1700094268), (58, 3, 1700021085),
+        (14, 6, 1700013235), (49, 1, 1700177269), (30, 2, 1700014328), (5, 3, 1700003043),
+        (29, 3, 1700011824), (41, 4, 1700043227), (34, 1, 1700136069), (27, 2, 1700012527),
+        (36, 4, 1700003227), (15, 6, 1700018235), (32, 3, 1700011854), (53, 4, 1700043467);
+    expected_rows: [[1, 7, 13, 7100], [2, 3, 10, 3530], [3, 5, 13, 2430], [4, 2, 5, 240], [5, 2, 6, 4220], [6, 7, 13, 3500]]
+expected_concepts:
+  - "LAG over a per-user partition ordered by time with a deterministic tie-breaker"
+  - "gap-and-island sessionisation with a running SUM of new-session flags"
+  - "two-level aggregation: per session, then per user"
+  - "inclusive versus exclusive thresholds (more than 1800 seconds)"
+  - "window functions cannot be nested inside aggregates in the same SELECT"
+optimal_complexity: {time: "O(n log n) for the per-user sort", space: O(n)}
+rubric:
+  excellent: "Flags session starts with LAG partitioned by user and ordered by (viewed_at, id), numbers sessions with a running SUM of the flags, aggregates per session and then per user, handles the exact 1800-second boundary and explains the gaps-and-islands pattern and why the aggregation needs separate CTE levels."
+  good: "Correct query after a hint about the threshold, the per-user partition or the second aggregation level."
+  weak: "Computes gaps across all users, counts sessions as views with a large gap but miscounts the first view, uses the overall first and last view as the session length, or tries to nest window functions inside aggregates."
+  criteria:
+    correctness: "All tests pass, including exact-threshold gaps, interleaved users, same-second views and the empty table."
+    efficiency: "One ordered pass per user with window functions; mentions an index on (user_id, viewed_at)."
+    code_quality: "Readable CTE pipeline (previous view, session flag, session number, per-session, per-user) with clear names."
+    edge_cases: "Single view, all gaps above the threshold, chained gaps at exactly the threshold and duplicates at one second."
+    communication: "Explains how a running sum turns start flags into session ids."
+hints:
+  - "First decide, view by view, whether it begins a new session; that only needs the same user's previous view."
+  - "A window function can give each view the previous view time of the same user. Turn that into a one-or-zero flag for new sessions, and a running total of the flags then gives every view a session number within its user."
+  - "Use LAG over a partition by user ordered by time and id to get the previous time, mark a start when it is missing or the gap is greater than 1800, take a cumulative SUM of the marks with the same partition and order to number the sessions, group by user and session number to get each session's view count and its maximum minus minimum time, and finally group by user to count sessions, add up views and take the largest length, ordered by user."
+followups:
+  - "How would you also report the median session length per user?"
+  - "How would you make the 30-minute threshold configurable per product surface?"
+  - "How would you compute sessions incrementally as new page views stream in?"
+  - "Which index supports this query, and how would you partition the table for very large volumes?"
+common_errors:
+  - "Using greater-or-equal 1800 so an exact 30-minute gap wrongly starts a new session."
+  - "Forgetting PARTITION BY user_id, so one user's view is compared with another user's."
+  - "Ordering only by viewed_at, which makes the running sum non-deterministic for same-second views in some engines."
+  - "Measuring the longest session as the user's last view minus first view overall."
+  - "Nesting a window function inside SUM or MAX in the same query level."

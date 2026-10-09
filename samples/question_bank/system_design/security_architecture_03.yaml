@@ -1,0 +1,615 @@
+# System design: security architecture (3 of 4) — secrets, keys and protecting sensitive data.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [security, cloud]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.security_architecture.developer_laptop_secrets
+    competency_key: security
+    topic: Secrets on developer laptops
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Developers need credentials for development and staging services on their laptops, and some have quietly
+      copied production keys there too. How would you design the way developers get the secrets they need
+      locally?
+    expected_concepts:
+      - fetching secrets on demand from a secrets manager with the developer's own identity
+      - separate secrets and access for each environment
+      - production secrets never issued to laptops
+      - short-lived credentials instead of static keys where possible
+      - no secrets in dotfiles or committed config
+      - access removed automatically when someone leaves
+    rubric:
+      excellent: Has developers fetch environment-specific, preferably short-lived secrets with their own identity, keeps production out of reach of laptops and ties access to the identity lifecycle.
+      good: Moves secrets into a manager with per-environment access but still hands out long-lived static keys.
+      weak: Shares a common env file through chat or a wiki, or treats laptops like production.
+    followups:
+      - How would a developer debug something that only reproduces with production data?
+      - What do you do about the production keys already sitting on laptops?
+    common_errors:
+      - Using the same credentials in staging and production.
+
+  - external_key: system_design.security_architecture.encrypted_backups
+    competency_key: security
+    topic: Encrypted backups and key custody
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your database backups are copied to object storage every night. How would you design their encryption and
+      key handling so a leaked backup is useless to an attacker, but you can still restore when you need to?
+    expected_concepts:
+      - encryption with keys held in a KMS, not stored alongside backups
+      - separate account or project for backup storage
+      - restricted roles for decrypting and restoring
+      - immutable or versioned storage against deletion
+      - regular restore tests including key access
+    rubric:
+      excellent: Encrypts with KMS-held keys kept apart from the backups, isolates backup storage and restore permissions, protects backups from deletion and regularly tests restores end to end.
+      good: Encrypts backups with a managed key and limits access but never tests the restore path.
+      weak: Stores the encryption key next to the backup or relies on storage defaults without thinking about who can decrypt.
+    followups:
+      - The key used for last year's backups has been rotated. Can you still restore them?
+      - Who should be able to restore production data, and how is that recorded?
+    common_errors:
+      - Discovering during a real incident that nobody can access the backup key.
+
+  - external_key: system_design.security_architecture.secure_share_links
+    competency_key: security
+    topic: Secure sharing links for documents
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Users of your document app want to share files with people outside their organisation through a link.
+      Design the link-sharing feature so it's convenient without exposing files to the wrong people.
+    expected_concepts:
+      - unguessable, high-entropy link tokens
+      - expiry and the ability to revoke a link
+      - options such as password, sign-in or specific recipient emails
+      - access logging per link
+      - organisation policies that can restrict external sharing
+    rubric:
+      excellent: Uses unguessable tokens with expiry and revocation, offers stronger options for sensitive files, logs link access and lets organisation admins set sharing policy.
+      good: Generates secure random links with revocation but no expiry, policy or logging.
+      weak: Uses sequential or predictable identifiers in links, or links that can never be revoked.
+    followups:
+      - A link was forwarded to the wrong person. What can the owner do?
+      - How would you stop search engines or link previews from exposing the file?
+    common_errors:
+      - Putting the document's database ID directly in the share URL.
+
+  - external_key: system_design.security_architecture.internal_admin_console
+    competency_key: security
+    topic: Access controls for an internal admin tool
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Support and operations staff use an internal admin console that can view and edit any customer's account.
+      How would you design access to that console so it does its job without becoming a major risk?
+    expected_concepts:
+      - SSO with MFA and no public exposure
+      - roles limiting what each team can see and change
+      - showing only the data needed for a task
+      - audit log of every view and change
+      - approval or second person for dangerous actions
+    rubric:
+      excellent: Puts the console behind SSO and MFA off the public internet, limits functions by role, minimises displayed data, logs every view and change and adds approval for dangerous actions.
+      good: Uses SSO and roles but logs only changes, not who viewed which customer.
+      weak: Gives every staff member full access through a shared login.
+    followups:
+      - How would you notice a staff member browsing accounts they have no reason to open?
+      - Which actions would you require a second person to approve?
+    common_errors:
+      - Logging edits but not record views.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.security_architecture.dynamic_database_credentials
+    competency_key: security
+    topic: Short-lived database credentials
+    difficulty: medium
+    text: >-
+      Every service uses one static database password that hasn't changed in years. Design a system that gives each
+      service, and each human, short-lived database credentials of its own.
+    expected_concepts:
+      - credentials generated on demand by a secrets broker
+      - leases with expiry and renewal
+      - per-service roles with least privilege on the database
+      - connection pools that refresh credentials before expiry
+      - revocation of a lease when misuse is suspected
+      - cleaning up expired database users
+    rubric:
+      excellent: Generates per-service and per-person credentials with leases and least-privilege roles, explains how pools renew credentials, supports revocation and cleans up expired users.
+      good: Describes dynamic credentials with leases but ignores how long-lived connection pools handle expiry.
+      weak: Proposes rotating the shared password more often while every service still uses it.
+    followups:
+      - What happens to open connections when a credential expires?
+      - What happens if the broker is unavailable when a service starts?
+    common_errors:
+      - Creating database users that are never cleaned up after expiry.
+
+  - external_key: system_design.security_architecture.card_tokenisation_vault
+    competency_key: security
+    topic: Tokenising card data to reduce scope
+    difficulty: medium
+    text: >-
+      Your checkout, subscriptions and refunds services all store card numbers today, so every one of them is in
+      scope for PCI audits. Design a tokenisation service that shrinks that scope.
+    expected_concepts:
+      - capturing card data directly into the vault or a provider via hosted fields
+      - tokens returned to other services instead of card numbers
+      - vault isolated in its own network segment and account
+      - detokenisation only for narrow, authorised callers
+      - key management and HSM-backed encryption inside the vault
+      - format-preserving tokens and their trade-offs
+    rubric:
+      excellent: Keeps raw card data out of most services by capturing it straight into an isolated vault, returns tokens, allows detokenisation only to tightly controlled callers and explains how this changes audit scope.
+      good: Designs a vault and tokens correctly but still routes raw card data through general services on the way in.
+      weak: Encrypts card numbers in each service's database and calls that tokenisation.
+    followups:
+      - Would you build the vault or use your payment provider's, and why?
+      - Which services, if any, ever need the real card number back?
+    common_errors:
+      - Letting card data pass through application logs on its way to the vault.
+
+  - external_key: system_design.security_architecture.integration_credentials_vault
+    competency_key: security
+    topic: Storing customers' third-party integration credentials
+    difficulty: medium
+    text: >-
+      Your SaaS product connects to customers' CRM, storage and messaging accounts, so you hold thousands of OAuth
+      refresh tokens and API keys that belong to your customers. Design how those credentials are stored and used.
+    expected_concepts:
+      - encrypted storage with keys separated per tenant
+      - only integration workers able to decrypt, never the web tier
+      - token refresh handled centrally with locking
+      - least-privilege scopes requested from the third party
+      - revocation on disconnect and on customer offboarding
+      - audit of credential use
+    rubric:
+      excellent: Encrypts credentials with tenant-separated keys, restricts decryption to integration workers, handles refresh safely, requests minimal scopes and revokes credentials on disconnect with audit.
+      good: Encrypts and restricts access sensibly but ignores refresh concurrency or revocation at the provider.
+      weak: Stores tokens in plain text in the main application database readable by every service.
+    followups:
+      - An attacker gets read access to your main database. What can they do with these tokens?
+      - Two workers try to refresh the same token at once. What happens?
+    common_errors:
+      - Requesting the broadest scopes because it's simpler.
+
+  - external_key: system_design.security_architecture.mobile_app_without_secrets
+    competency_key: security
+    topic: Keeping secrets out of mobile apps
+    difficulty: medium
+    text: >-
+      Your mobile app calls a mapping service and a translation API, and the team has embedded those vendors' keys
+      in the app binary. How would you redesign this so nothing valuable ships inside the app?
+    expected_concepts:
+      - treating anything in the app binary as public
+      - routing calls through your backend that holds the keys
+      - per-user authentication and rate limits on the proxy
+      - app attestation to raise the bar for scripted abuse
+      - vendor-side restrictions where keys must stay client-side
+    rubric:
+      excellent: States that app-bundled secrets are public, moves vendor keys behind an authenticated backend with per-user limits, adds attestation and uses vendor restrictions for the few keys that must remain in the app.
+      good: Moves keys to the backend but leaves the proxy open to anyone who reverse-engineers the API.
+      weak: Proposes obfuscating or encrypting the key inside the app.
+    followups:
+      - Someone scripts your proxy endpoint directly. How do you limit the cost?
+      - Which vendor keys are acceptable to ship in an app, and why?
+    common_errors:
+      - Believing obfuscation keeps a key secret.
+
+  - external_key: system_design.security_architecture.leaked_credential_response
+    competency_key: security
+    topic: Automatically responding to leaked credentials
+    difficulty: medium
+    text: >-
+      Credentials keep leaking into public repositories, pastebins and log files, and it takes days to rotate them.
+      Design a system that detects leaks and responds automatically within minutes.
+    expected_concepts:
+      - detection sources such as secret scanning, provider notifications and log scanning
+      - identifying the secret's owner and system from an inventory
+      - automatic revocation or rotation for supported credential types
+      - checking for use of the leaked credential after exposure
+      - notifying owners with clear next steps
+      - tracking time to revoke as a metric
+    rubric:
+      excellent: Combines several detection sources, maps secrets to owners, revokes or rotates automatically where safe, checks for misuse during the exposure window and measures time to remediation.
+      good: Detects leaks and alerts owners but relies on manual rotation.
+      weak: Proposes deleting the commit or relies on developers to notice.
+    followups:
+      - Automatic revocation would break a critical payment integration. How do you handle that?
+      - How do you tell whether the leaked key was used by an attacker?
+    common_errors:
+      - Rewriting git history and treating the secret as safe again.
+
+  - external_key: system_design.security_architecture.root_credentials_custody
+    competency_key: security
+    topic: Custody of the most powerful credentials
+    difficulty: medium
+    text: >-
+      Some credentials can't be federated, like cloud root accounts, domain registrar logins and the master key for
+      your secrets system. Design how your organisation stores and uses them.
+    expected_concepts:
+      - split knowledge so no single person holds the full credential
+      - hardware MFA tokens stored securely
+      - sealed storage in more than one location
+      - alerting on any use
+      - documented procedure for use and post-use rotation
+      - inventory of every such credential with owners
+    rubric:
+      excellent: Inventories these credentials, splits custody, protects them with hardware MFA, stores them in separate secure locations, alerts on any use and rotates afterwards following a documented procedure.
+      good: Locks the credentials away with MFA and alerting but a single person can still use them alone.
+      weak: Keeps them in one person's password manager or a shared spreadsheet.
+    followups:
+      - The person who holds one share leaves the company. What happens?
+      - How would you test that you can actually recover these accounts?
+    common_errors:
+      - Tying the root account's recovery email to an individual's mailbox.
+
+  - external_key: system_design.security_architecture.blind_index_lookup
+    competency_key: security
+    topic: Searching encrypted fields
+    difficulty: medium
+    text: >-
+      You encrypt email addresses and national ID numbers at the application layer, but you still need to look
+      customers up by exact email or ID. How would you design that lookup, and what does it leak?
+    expected_concepts:
+      - keyed hash or blind index stored alongside the ciphertext
+      - separate key for the index and for encryption
+      - normalisation before hashing
+      - leakage of equality and frequency patterns
+      - why deterministic encryption is a similar trade-off
+      - rotation of the index key requiring re-indexing
+    rubric:
+      excellent: Designs a keyed blind index with its own key and normalisation, explains the equality and frequency leakage and compares it with deterministic encryption, including key rotation impact.
+      good: Proposes a hashed index that works but uses an unkeyed hash or misses what it leaks.
+      weak: Decrypts every row to search, or stores a plain copy of the field for lookups.
+    followups:
+      - Why is an unkeyed hash of an ID number weak?
+      - How would you support searching by email prefix?
+    common_errors:
+      - Hashing low-entropy values without a secret key, which allows brute force.
+
+  - external_key: system_design.security_architecture.tls_termination_key_custody
+    competency_key: networking
+    topic: Where TLS terminates and who holds keys
+    difficulty: medium
+    text: >-
+      Traffic to your platform passes through a CDN, a cloud load balancer and a service mesh before it reaches a
+      service. Design where TLS terminates along that path and who holds each private key.
+    expected_concepts:
+      - termination points and re-encryption to the next hop
+      - certificates and keys at the CDN versus keyless or customer-held options
+      - managed certificates on the load balancer
+      - mesh mutual TLS between services
+      - preserving client identity information across hops
+      - automated renewal and key protection at each layer
+    rubric:
+      excellent: Maps each termination point, re-encrypts every hop, decides consciously which parties hold keys, preserves client information and automates certificate management at every layer.
+      good: Re-encrypts traffic sensibly but doesn't consider key custody at the CDN or client identity propagation.
+      weak: Terminates TLS at the edge and sends plain HTTP inside the network.
+    followups:
+      - A regulator says the CDN provider must never see decrypted card data. What changes?
+      - How would a backend know the original client's certificate when using mutual TLS at the edge?
+    common_errors:
+      - Assuming traffic inside the cloud network doesn't need encryption.
+
+  - external_key: system_design.security_architecture.multi_party_approval
+    competency_key: security
+    topic: Multi-person approval for sensitive operations
+    difficulty: medium
+    text: >-
+      Some operations, like deleting a production database, exporting all customer data or disabling audit
+      logging, should never be done by one person alone. Design a reusable approval service that enforces this.
+    expected_concepts:
+      - approval requests with a clear, immutable description of the action
+      - approvers distinct from the requester with suitable roles
+      - execution by the system only after approval, not by the requester
+      - expiry of approvals and binding to exact parameters
+      - audit of requests, approvals and execution
+      - emergency path with retroactive review
+    rubric:
+      excellent: Binds approvals to exact parameters, requires distinct qualified approvers, lets the system execute approved actions, expires approvals and audits the whole lifecycle with a reviewed emergency path.
+      good: Requires a second approver but lets the requester execute afterwards with possibly changed parameters.
+      weak: Relies on a chat message or ticket comment as approval with no enforcement.
+    followups:
+      - How do you stop an approver from rubber-stamping everything?
+      - What stops someone from changing the request after it's approved?
+    common_errors:
+      - Approving a description while executing a different command.
+
+  - external_key: system_design.security_architecture.ci_cloud_federation
+    competency_key: aws
+    topic: Pipelines that deploy without long-lived cloud keys
+    difficulty: medium
+    text: >-
+      Your CI pipelines deploy to the cloud using access keys stored as pipeline variables, and some keys have
+      admin rights. Design how pipelines get cloud access without any long-lived keys.
+    expected_concepts:
+      - OIDC tokens issued by the CI system for each job
+      - cloud roles trusting the CI issuer with conditions on repository, branch and environment
+      - separate roles per pipeline and environment
+      - production deploy roles limited to protected branches
+      - short session durations and audit via cloud logs
+    rubric:
+      excellent: Uses per-job OIDC tokens to assume tightly conditioned roles per repository, branch and environment, restricts production to protected branches and keeps sessions short and auditable.
+      good: Adopts OIDC federation but writes trust conditions too broadly, such as any repository in the organisation.
+      weak: Rotates the static keys more often or moves them to a different secret store.
+    followups:
+      - What could go wrong if the trust condition only checks the organisation name?
+      - How would you stop a pull request build from assuming the production role?
+    common_errors:
+      - Trusting every repository in the organisation to assume the deploy role.
+
+  - external_key: system_design.security_architecture.data_loss_prevention
+    competency_key: security
+    topic: Preventing sensitive data from leaving
+    difficulty: medium
+    text: >-
+      Customer personal data is ending up in places it shouldn't, like personal cloud drives, email attachments and
+      AI chat tools. Design controls that reduce data leaving the company without stopping people from working.
+    expected_concepts:
+      - knowing where sensitive data lives and how it's labelled
+      - controls at endpoints, email, web proxy and SaaS
+      - sanctioned alternatives such as an approved AI tool
+      - warn and coach before block for most cases
+      - monitoring and alert triage for high-risk transfers
+      - measuring false positives and user impact
+    rubric:
+      excellent: Starts from data discovery and labelling, places controls at the main exit channels, provides approved alternatives, uses graduated responses and tunes based on measured false positives.
+      good: Deploys channel controls sensibly but has no data labelling or alternatives for users.
+      weak: Blocks every upload site and USB port and calls it done.
+    followups:
+      - How do you handle an engineer who legitimately needs to share a dataset with a vendor?
+      - How would you stop the alerts from overwhelming the security team?
+    common_errors:
+      - Blocking everything, which pushes people to unmonitored workarounds.
+
+  - external_key: system_design.security_architecture.sensitive_data_discovery
+    competency_key: security
+    topic: Continuously finding where sensitive data lives
+    difficulty: medium
+    text: >-
+      Nobody can say with certainty which databases, buckets and warehouse tables contain personal or payment
+      data. Design a system that discovers and keeps that inventory current as teams create new stores every week.
+    expected_concepts:
+      - automatic discovery of data stores through cloud inventory
+      - sampling and classifiers for data types
+      - labels stored as metadata linked to owners
+      - change detection when new stores or columns appear
+      - feeding results into access controls and retention policy
+      - handling classifier false positives
+    rubric:
+      excellent: Discovers stores from cloud inventory, samples and classifies contents, stores labels with owners, detects new stores and columns and uses the inventory to drive controls, with a way to correct mistakes.
+      good: Scans stores and classifies data but treats it as a one-off audit rather than continuous.
+      weak: Asks teams to fill in a spreadsheet of what data they hold.
+    followups:
+      - How would you scan a huge table without copying sensitive data into the scanner?
+      - What would you do when a new bucket with card numbers appears?
+    common_errors:
+      - Storing scanner samples of sensitive data insecurely.
+
+  - external_key: system_design.security_architecture.identity_signing_keys
+    competency_key: security
+    topic: Managing an identity provider's signing keys
+    difficulty: medium
+    text: >-
+      Your in-house identity provider signs every token the company uses. Design how its signing keys are
+      generated, protected, rotated on schedule and rotated in an emergency.
+    expected_concepts:
+      - keys generated and kept in an HSM or KMS
+      - signing through the KMS API rather than exporting keys
+      - published key set with key identifiers
+      - pre-publishing new keys before using them
+      - overlap period based on token lifetimes and verifier cache times
+      - emergency rotation runbook and its impact on sessions
+    rubric:
+      excellent: Keeps keys non-exportable in an HSM or KMS, publishes new keys before using them with overlap based on token and cache lifetimes, and has a tested emergency rotation plan with known impact.
+      good: Rotates keys through a published key set but sizes overlap arbitrarily or has no emergency plan.
+      weak: Stores the private key in a config file and swaps it with no overlap.
+    followups:
+      - A verifier caches the key set for twenty-four hours. How does that affect emergency rotation?
+      - How would you know whether any service still pins the previous key?
+    common_errors:
+      - Switching to a new key before verifiers have fetched it.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.security_architecture.crypto_agility
+    competency_key: security
+    topic: Preparing for a change of cryptographic algorithms
+    difficulty: hard
+    text: >-
+      Your organisation needs to prepare for post-quantum cryptography, but algorithms are hard-coded across
+      services, devices and stored data. Design an approach that makes changing algorithms routine instead of a
+      multi-year emergency.
+    expected_concepts:
+      - inventory of where and how cryptography is used
+      - central libraries or services instead of direct primitive calls
+      - algorithm identifiers and versions stored with ciphertexts and signatures
+      - hybrid schemes during transition
+      - prioritising long-lived secrets and data at risk of harvest now, decrypt later
+      - testing interoperability with partners and devices
+    rubric:
+      excellent: Builds an inventory, routes cryptography through versioned central libraries, stores algorithm identifiers with data, plans hybrid transitions and prioritises data whose confidentiality must last longest.
+      good: Recognises the need for inventory and abstraction but has no plan for stored data or prioritisation.
+      weak: Proposes swapping the algorithm everywhere at once when the standard is final.
+    followups:
+      - Which systems would you migrate first, and why?
+      - How do you handle devices in the field that can't be updated?
+    common_errors:
+      - Overlooking data encrypted today that must stay confidential for decades.
+
+  - external_key: system_design.security_architecture.ransomware_resilient_backups
+    competency_key: security
+    topic: Backups that survive a ransomware attack
+    difficulty: hard
+    text: >-
+      Assume an attacker has domain admin and cloud admin rights in your environment. Design a backup and recovery
+      architecture that still lets you restore your critical systems after they've tried to destroy everything.
+    expected_concepts:
+      - immutable backups with retention locks that admins can't shorten
+      - a separate account, credentials and identity domain for backups
+      - offline or logically air-gapped copies
+      - knowing the restore order and dependencies such as identity and DNS
+      - regular full recovery exercises with measured time
+      - malware checks before restoring
+    rubric:
+      excellent: Uses immutable, separately administered and isolated backups, plans restore order including identity infrastructure, rehearses full recovery with timing and checks restored data for attacker persistence.
+      good: Uses immutable backups in a separate account but has never rehearsed a full recovery or restore order.
+      weak: Keeps backups in the same account with the same admins, or relies on snapshots that admins can delete.
+    followups:
+      - Your identity provider was also destroyed. What do you restore first, and how do people log in?
+      - How do you avoid restoring the attacker's persistence along with your data?
+    common_errors:
+      - Letting the production admin role also manage backup retention.
+
+  - external_key: system_design.security_architecture.purpose_based_data_access
+    competency_key: security
+    topic: Governed access to sensitive datasets
+    difficulty: hard
+    text: >-
+      Hundreds of analysts and data scientists want access to sensitive customer datasets in your warehouse.
+      Design an access platform where people request data for a stated purpose and get only what that purpose
+      justifies.
+    expected_concepts:
+      - dataset classification driving approval requirements
+      - requests tied to purpose with time-bound grants
+      - column masking, row filters and aggregation levels
+      - pseudonymised or synthetic data as the default
+      - automatic expiry and review of grants
+      - query audit and anomaly detection
+    rubric:
+      excellent: Uses classification to drive approvals, issues purpose-bound expiring grants, defaults to masked or pseudonymised data, enforces masking and row filters in the warehouse and audits queries with anomaly detection.
+      good: Builds an approval workflow and role-based grants but grants are permanent or not linked to purpose.
+      weak: Grants broad warehouse roles on request with no expiry, masking or audit.
+    followups:
+      - A model training job needs raw data for a week. How does your design support that?
+      - How would you stop someone joining two masked datasets to re-identify people?
+    common_errors:
+      - Granting access that never expires because nobody owns the review.
+
+  - external_key: system_design.security_architecture.secretless_architecture
+    competency_key: security
+    topic: Moving toward no static secrets
+    difficulty: hard
+    text: >-
+      Your goal is that no application holds a long-lived static secret. Design the architecture that gets you
+      there across databases, cloud APIs, internal services and third-party vendors, and be clear about what you
+      can't eliminate.
+    expected_concepts:
+      - workload identity as the root of all access
+      - cloud IAM federation for cloud APIs
+      - database authentication with IAM tokens or short-lived certificates
+      - mutual TLS or tokens for internal calls
+      - brokered, short-lived or tightly scoped access for vendors
+      - residual static secrets isolated, rotated and monitored
+    rubric:
+      excellent: Uses workload identity to reach each class of dependency without static secrets, explains the mechanism for each and is precise about remaining static secrets and how they're contained.
+      good: Eliminates static secrets for cloud and internal calls but is vague on databases or vendors.
+      weak: Claims a secrets manager alone means there are no secrets, without changing how services authenticate.
+    followups:
+      - A vendor only supports one static API key. How do you contain it?
+      - What becomes the most valuable target once static secrets are gone?
+    common_errors:
+      - Confusing storing secrets centrally with not having secrets.
+
+  - external_key: system_design.security_architecture.quorum_transaction_signing
+    competency_key: security
+    topic: Signing high-value transactions with quorum
+    difficulty: hard
+    text: >-
+      Your company moves large sums through payment instructions that must be cryptographically signed. Design a
+      signing system where no single person or compromised server can authorise a payment alone.
+    expected_concepts:
+      - keys held in HSMs or split with threshold signatures
+      - quorum of independent approvers with their own hardware-backed credentials
+      - policy engine checking amount, destination and velocity before signing
+      - approvers seeing exactly what will be signed
+      - separation between request, approval and signing systems
+      - tamper-evident logging and alerting
+    rubric:
+      excellent: Holds keys in HSMs or threshold schemes, requires a quorum of independent approvers who verify exactly what is signed, applies policy checks first and separates request, approval and signing with tamper-evident logs.
+      good: Requires multiple approvals and protects keys but approvers could be shown different data from what gets signed.
+      weak: Keeps one signing key on an application server and relies on a manager approving in a web UI.
+    followups:
+      - An attacker controls the approval web app and shows approvers a fake destination. What protects you?
+      - How do you handle an urgent payment when approvers are unavailable?
+    common_errors:
+      - Trusting the user interface to show approvers the real transaction.
+
+  - external_key: system_design.security_architecture.client_side_encryption_saas
+    competency_key: security
+    topic: Encryption the provider itself can't read
+    difficulty: hard
+    text: >-
+      Some customers of your document collaboration product want their content encrypted so that even your own
+      staff and infrastructure can't read it. Design that, including sharing, search and what happens when a user
+      loses their keys.
+    expected_concepts:
+      - keys generated and held on clients or in customer-controlled key services
+      - per-document keys wrapped for each member who has access
+      - sharing and revocation through key wrapping and rotation
+      - limits on server-side features like search and previews
+      - organisation-level recovery keys and their trust implications
+      - device enrolment and key distribution across devices
+    rubric:
+      excellent: Designs client-held keys with per-document wrapping for sharing, explains revocation and device enrolment, is clear about lost server-side features and designs recovery that keeps the guarantee meaningful.
+      good: Describes client-side encryption and sharing reasonably but has no credible recovery or revocation story.
+      weak: Encrypts on the server with a key the provider holds and calls it end-to-end.
+    followups:
+      - A user is removed from a shared folder. What must happen cryptographically?
+      - How would you offer search without seeing the plaintext?
+    common_errors:
+      - Overlooking that whoever serves the client code could ship a version that leaks keys.
+
+  - external_key: system_design.security_architecture.llm_tool_containment
+    competency_key: llm_engineering
+    topic: Containing prompt injection in tool-using assistants
+    difficulty: hard
+    text: >-
+      An internal assistant built on a large language model can read emails and documents and call tools that
+      send messages and update records. Design the architecture so that malicious content it reads can't turn it
+      against your users or your data.
+    expected_concepts:
+      - treating all retrieved content as untrusted input
+      - tools with least privilege scoped to the current user and task
+      - human confirmation for actions with external effects
+      - limiting data exfiltration paths such as links, images and outbound messages
+      - separating planning over trusted instructions from untrusted data
+      - logging and monitoring of tool calls
+    rubric:
+      excellent: Treats retrieved content as hostile, scopes tools to the user and task, confirms side-effecting actions, closes exfiltration channels and adds monitoring, accepting that model-level defences alone are insufficient.
+      good: Restricts tool permissions and adds confirmations but leaves exfiltration through rendered output unaddressed.
+      weak: Relies on a system prompt telling the model to ignore malicious instructions.
+    followups:
+      - How could an attacker steal data through a rendered image link?
+      - Which tool calls would you allow without confirmation, and why?
+    common_errors:
+      - Assuming better prompting will reliably block injected instructions.
+
+  - external_key: system_design.security_architecture.data_clean_room
+    competency_key: security
+    topic: Joint analysis with a partner's data
+    difficulty: hard
+    text: >-
+      A retail partner wants to measure how your ads perform against their purchase data, but neither company may
+      see the other's customer-level records. Design a data clean room for this.
+    expected_concepts:
+      - isolated environment that neither party administers alone
+      - matching on hashed or tokenised identifiers with agreed keys
+      - only approved query templates and aggregate outputs
+      - minimum group sizes and noise to prevent re-identification
+      - audit of every query by both parties
+      - data deletion when the collaboration ends
+    rubric:
+      excellent: Designs an isolated, jointly governed environment with privacy-preserving matching, approved queries, aggregation thresholds or noise, audit for both parties and deletion at the end.
+      good: Restricts outputs to aggregates in a shared environment but ignores re-identification through small groups or repeated queries.
+      weak: Proposes exchanging hashed customer lists directly.
+    followups:
+      - How could someone re-identify individuals with a series of aggregate queries?
+      - Who holds the keys used for matching identifiers?
+    common_errors:
+      - Assuming hashed emails are anonymous.

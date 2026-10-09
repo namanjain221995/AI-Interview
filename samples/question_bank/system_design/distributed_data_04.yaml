@@ -1,0 +1,589 @@
+# Curated questions: system design, distributed data (4 of 4): event sourcing, CQRS, change data capture,
+# derived data and storage choices. `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend, dba, data]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------- easy
+  - external_key: system_design.distributed_data.event_sourcing_fit
+    competency_key: system_design
+    topic: Where event sourcing fits
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      In your own words, how does storing a history of events differ from storing just the current state of a
+      record, and can you describe a system where you'd choose event sourcing and one where you wouldn't?
+    expected_concepts:
+      - append-only events as the source of truth and state derived by replay
+      - natural audit trail and the ability to rebuild new views later
+      - good fit for ledgers, orders or workflows with meaningful state changes
+      - poor fit for simple CRUD data with little history value
+      - added complexity (schema evolution, projections, eventual consistency)
+    rubric:
+      excellent: Explains the model clearly, gives a well-matched example and a counter-example from real or realistic systems, and names the concrete costs that make it a poor fit elsewhere.
+      good: Explains the difference and gives at least one sensible example.
+      weak: Confuses event sourcing with simply publishing messages, or recommends it everywhere.
+    followups:
+      - What would be hardest about running it day to day?
+      - How would you answer the question of what this record looked like last March in each model?
+    common_errors:
+      - Equating event sourcing with using a message broker.
+
+  - external_key: system_design.distributed_data.cqrs_when_overkill
+    competency_key: system_design
+    topic: When separating reads and writes pays off
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Someone suggests separate write and read models, CQRS, for a new internal admin tool. How would you
+      decide whether that's worth it, and what would make you say it's overkill?
+    expected_concepts:
+      - read and write shapes or loads that differ greatly
+      - multiple read views optimised for different queries
+      - cost of eventual consistency between models
+      - extra infrastructure, code and failure modes
+      - starting simple with views or read replicas and evolving later
+    rubric:
+      excellent: Identifies the conditions that justify CQRS (divergent read and write needs, scale, many views), weighs the eventual consistency and operational cost, and judges the admin tool on those criteria.
+      good: Explains what CQRS separates and gives a reasonable verdict for the admin tool.
+      weak: Recommends it by default or cannot explain the trade-off.
+    followups:
+      - What simpler techniques get some of the benefit without full CQRS?
+      - What would change your mind as the tool grows?
+    common_errors:
+      - Assuming CQRS requires event sourcing.
+
+  - external_key: system_design.distributed_data.dual_write_problem
+    competency_key: distributed_systems
+    topic: Saving data and publishing an event together
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      When an order is placed, the service saves it to the database and then publishes an order-placed event
+      to a message broker. What can go wrong with that, and how would you make it reliable?
+    expected_concepts:
+      - crash between the two steps leaves one without the other
+      - publishing before commit can announce orders that never existed
+      - transactional outbox written in the same transaction
+      - change data capture as an alternative
+      - consumers handling duplicates idempotently
+    rubric:
+      excellent: Walks through both failure orderings, proposes an outbox or CDC so the event is derived from the committed write, and notes at-least-once delivery requires idempotent consumers.
+      good: Spots the crash-in-between problem and suggests an outbox.
+      weak: Suggests retries or a try-catch around the publish as a full fix.
+    followups:
+      - What happens if the broker is down for an hour?
+      - Why might consumers still see the same event twice?
+    common_errors:
+      - Believing a distributed transaction or retry loop removes the problem entirely.
+
+  # ------------------------------------------------------------- medium
+  - external_key: system_design.distributed_data.outbox_relay_design
+    competency_key: distributed_systems
+    topic: Running a transactional outbox
+    difficulty: medium
+    text: >-
+      You've adopted a transactional outbox table. Design the relay that moves rows from it to the broker:
+      how does it preserve ordering, scale up, and avoid the outbox table growing forever?
+    expected_concepts:
+      - polling with locking or reading the database log via CDC
+      - per-aggregate ordering by partitioning on aggregate id
+      - marking or deleting rows after publish, and cleanup jobs
+      - duplicate publishes after relay crashes
+      - monitoring relay lag and stuck rows
+    rubric:
+      excellent: Compares polling and log-tailing relays, keeps per-key ordering while scaling with partitioning, plans cleanup and accepts duplicate publishes with idempotent consumers, and monitors lag.
+      good: Describes a polling relay with cleanup and some ordering consideration.
+      weak: Runs several relays in parallel without thinking about ordering or duplicates.
+    followups:
+      - How would you scale the relay without breaking ordering for one order?
+      - A poison row fails to publish repeatedly. What happens?
+    common_errors:
+      - Parallel relays that publish one aggregate's events out of order.
+
+  - external_key: system_design.distributed_data.cdc_pipeline_details
+    competency_key: data_engineering
+    topic: Building on change data capture
+    difficulty: medium
+    text: >-
+      You're using log-based change data capture to stream changes from a production database into a
+      message log for other teams. What details would you need to get right for it to be dependable?
+    expected_concepts:
+      - initial snapshot consistent with the stream start position
+      - per-key ordering via partitioning on the primary key
+      - handling schema changes and a schema registry
+      - retained database log or slots growing when the consumer stalls
+      - exposing internal tables versus publishing curated events
+    rubric:
+      excellent: Covers snapshot-to-stream consistency, per-key ordering, schema evolution, database-side log retention risk when the connector stalls, and the coupling risk of exposing raw tables.
+      good: Mentions snapshots, ordering and schema changes.
+      weak: Treats CDC as plug-and-play with no operational or coupling concerns.
+    followups:
+      - The connector was down for a day. What happened on the database side?
+      - Why might consumers prefer domain events to raw table changes?
+    common_errors:
+      - Exposing raw table schemas so every column change breaks downstream teams.
+
+  - external_key: system_design.distributed_data.event_store_concurrency
+    competency_key: databases
+    topic: Concurrent appends to one event stream
+    difficulty: medium
+    text: >-
+      Two requests try to modify the same bank account aggregate at the same time in an event-sourced system.
+      How would the event store detect and handle that conflict?
+    expected_concepts:
+      - append with expected stream version (optimistic concurrency)
+      - unique constraint on stream id plus version
+      - rejecting the loser and retrying by reloading and re-validating
+      - command idempotency to make retries safe
+      - contention on hot aggregates and splitting them
+    rubric:
+      excellent: Designs expected-version appends backed by a uniqueness guarantee, describes reload-and-retry with idempotent commands, and discusses hot aggregates that conflict constantly.
+      good: Explains optimistic concurrency with a version check and retry.
+      weak: Appends both events and resolves inconsistencies later, or uses a global lock.
+    followups:
+      - How would you store this in a plain relational database?
+      - What would you do with an aggregate that conflicts on most writes?
+    common_errors:
+      - Validating business rules on stale state and appending without a version check.
+
+  - external_key: system_design.distributed_data.aggregate_snapshots
+    competency_key: system_design
+    topic: Snapshots for long event streams
+    difficulty: medium
+    text: >-
+      Some aggregates in your event-sourced system now have hundreds of thousands of events, and loading them
+      is slow. How would you introduce snapshots, and what pitfalls would you watch for?
+    expected_concepts:
+      - periodic snapshots with the stream version they cover
+      - load snapshot then replay later events
+      - snapshot format tied to code version, invalidated on model change
+      - snapshots as a cache, never the source of truth
+      - questioning whether the aggregate boundary is too large
+    rubric:
+      excellent: Designs versioned snapshots plus tail replay, treats them as disposable caches rebuilt on model changes, and asks whether such long streams signal an aggregate design problem.
+      good: Describes snapshotting every N events and replaying the rest.
+      weak: Replaces the event history with snapshots or does not handle model changes.
+    followups:
+      - The aggregate's code changes shape. What happens to existing snapshots?
+      - How would you choose how often to snapshot?
+    common_errors:
+      - Deleting older events after snapshotting, losing the audit history.
+
+  - external_key: system_design.distributed_data.stored_event_versioning
+    competency_key: system_design
+    topic: Evolving events that are stored forever
+    difficulty: medium
+    text: >-
+      In an event-sourced system, events written five years ago must still be replayable today. How would you
+      evolve event formats as the business changes?
+    expected_concepts:
+      - additive changes with defaults where possible
+      - upcasters converting old event versions on read
+      - new event types instead of changing meaning of old ones
+      - version field on every event and tests replaying historical samples
+      - rare copy-and-transform migrations of the store
+    rubric:
+      excellent: Prefers additive changes, upcasts old versions at read time, introduces new event types when meaning changes, and keeps tests that replay real historical events.
+      good: Versions events and describes upcasting or tolerant readers.
+      weak: Edits stored events in place or changes field meaning silently.
+    followups:
+      - A field's meaning changed from net to gross amount. How do you represent that?
+      - When would you rewrite the event store instead of upcasting?
+    common_errors:
+      - Changing the meaning of an existing field without a new event version.
+
+  - external_key: system_design.distributed_data.new_projection_backfill
+    competency_key: data_engineering
+    topic: Building a new read model from history
+    difficulty: medium
+    text: >-
+      Product wants a new read model that needs data from all two billion historical events. How would you
+      build and launch it without affecting the live system?
+    expected_concepts:
+      - replay from the beginning into a new projection store
+      - throughput planning, parallelism by partition and throttling
+      - catching up to live and switching to tailing
+      - launching once lag is under a threshold
+      - checkpointing so a restart doesn't begin from zero
+    rubric:
+      excellent: Plans a parallel, throttled replay with checkpoints into a separate store, estimates duration from throughput, transitions to live tailing and launches only once caught up.
+      good: Describes replaying all events into a new projection then following new events.
+      weak: Builds it with ad-hoc queries on the live store or ignores replay time.
+    followups:
+      - How long would the replay take at your expected throughput?
+      - Can you parallelise if the projection depends on cross-stream ordering?
+    common_errors:
+      - Not estimating how long a full replay will actually take.
+
+  - external_key: system_design.distributed_data.cqrs_lag_user_experience
+    competency_key: system_design
+    topic: User experience with lagging read models
+    difficulty: medium
+    text: >-
+      In a CQRS system, a user submits a form and is redirected to a list page, but their new item isn't there
+      yet because the read model lags. How would you handle that in the design?
+    expected_concepts:
+      - returning the new item or its version from the command
+      - optimistic UI that shows the user's own change
+      - waiting for the projection to reach a version with a timeout
+      - push updates when the read model catches up
+      - measuring projection lag so it stays small
+    rubric:
+      excellent: Offers several techniques (version tokens with bounded waits, optimistic display, push notifications), chooses based on the user flow, and keeps lag measured and small.
+      good: Proposes optimistic UI or waiting for the projection.
+      weak: Adds a fixed delay or tells users to refresh.
+    followups:
+      - What if the command later fails after you showed it optimistically?
+      - How would the API expose the version to wait for?
+    common_errors:
+      - Hiding lag with arbitrary sleeps.
+
+  - external_key: system_design.distributed_data.projection_checkpointing
+    competency_key: distributed_systems
+    topic: Projection crash safety
+    difficulty: medium
+    text: >-
+      A projection reads events in batches and updates a read database. It crashes after writing half a batch.
+      How would you design it so that restarts never leave the read model wrong?
+    expected_concepts:
+      - storing the checkpoint in the same transaction as the read model updates
+      - idempotent handlers keyed by event position or id
+      - per-stream ordering guarantees the handler relies on
+      - handling poison events without blocking forever
+      - rebuild from scratch as the last-resort repair
+    rubric:
+      excellent: Commits checkpoints atomically with updates or makes every handler idempotent by event position, respects ordering, has a poison-event strategy and a rebuild path.
+      good: Uses checkpoints and idempotent writes.
+      weak: Stores the checkpoint separately with no idempotency, so events are skipped or doubled.
+    followups:
+      - What if the read store doesn't support transactions?
+      - How would you handle one event that always throws an error?
+    common_errors:
+      - Advancing the checkpoint before the writes are durable.
+
+  - external_key: system_design.distributed_data.feed_fanout_strategy
+    competency_key: system_design
+    topic: Precomputing feeds versus building them on read
+    difficulty: medium
+    text: >-
+      For a social app's home feed, would you push each new post into every follower's precomputed feed, or
+      assemble the feed when the user opens the app? Talk me through the trade-offs and what you'd actually build.
+    expected_concepts:
+      - fan-out on write gives fast reads but costly writes for popular authors
+      - fan-out on read is cheap to write but expensive and slow to read
+      - hybrid with popular authors merged at read time
+      - feed storage as bounded lists of ids with hydration later
+      - inactive users and backfilling feeds on return
+    rubric:
+      excellent: Quantifies both approaches, proposes a hybrid that handles high-follower authors at read time, stores bounded id lists and handles deletes and inactive users.
+      good: Explains both approaches and proposes a hybrid.
+      weak: Picks one approach without seeing the celebrity or read-latency problem.
+    followups:
+      - A post is deleted. How does it leave all the feeds?
+      - Would you build feeds for users who haven't opened the app in a month?
+    common_errors:
+      - Pushing a celebrity's post into tens of millions of feeds synchronously.
+
+  - external_key: system_design.distributed_data.cross_service_read_model
+    competency_key: system_design
+    topic: A read model built from several services
+    difficulty: medium
+    text: >-
+      An order history page needs data owned by four services: orders, payments, shipping and catalog. Calling
+      all four per page view is slow and fragile. How would you design a read model for it?
+    expected_concepts:
+      - subscribing to each service's events to build a denormalised view
+      - handling events arriving out of order across services
+      - owning service remains source of truth, view is rebuildable
+      - partial data states and how the page shows them
+      - backfilling the view and versioning its schema
+    rubric:
+      excellent: Builds an event-fed denormalised view keyed by order, tolerates out-of-order events across services, shows partial states explicitly and plans backfill and rebuilds.
+      good: Proposes a materialised view fed by events from the services.
+      weak: Adds caching to the four calls or lets the view become the source of truth.
+    followups:
+      - A shipping event arrives before the order-created event. What does the projector do?
+      - How would you add a fifth service's data later?
+    common_errors:
+      - Assuming events from different services arrive in a global order.
+
+  - external_key: system_design.distributed_data.lsm_vs_btree_choice
+    competency_key: databases
+    topic: Storage engine choice for a workload
+    difficulty: medium
+    text: >-
+      You're choosing between a B-tree based database and an LSM-tree based one for an ingestion service that
+      writes far more than it reads. How do their designs affect that decision?
+    expected_concepts:
+      - LSM turns random writes into sequential writes via memtables and SSTables
+      - B-trees update pages in place with predictable reads
+      - compaction cost, write amplification and read amplification
+      - bloom filters to reduce LSM read cost
+      - latency spikes from compaction and space overhead
+    rubric:
+      excellent: Explains how each engine writes and reads, compares write, read and space amplification, highlights compaction tuning and its latency effects, and chooses based on the actual access pattern.
+      good: Says LSM suits write-heavy workloads and B-trees suit read-heavy ones, with some reasoning.
+      weak: Chooses by brand familiarity without understanding the engines.
+    followups:
+      - What happens to an LSM store if compaction falls behind?
+      - Which reads would be slow in the LSM design, and why?
+    common_errors:
+      - Ignoring compaction as an ongoing cost of LSM storage.
+
+  - external_key: system_design.distributed_data.compacted_log_as_state
+    competency_key: data_engineering
+    topic: A compacted log as a source of current state
+    difficulty: medium
+    text: >-
+      Some teams use a compacted Kafka topic to hold the latest value for every key, for example customer
+      settings. How would you design around that, and when would you not rely on it?
+    expected_concepts:
+      - compaction keeps the latest record per key, tombstones delete
+      - consumers rebuild local state by reading from the start
+      - startup time grows with key count and partition size
+      - no ad-hoc queries or secondary indexes
+      - tombstone retention and consumers missing deletes
+    rubric:
+      excellent: Explains compaction semantics including tombstones, designs consumers that bootstrap local state, weighs startup time and query limits, and says when a database is the better home.
+      good: Explains latest-value-per-key semantics and rebuilding state from it.
+      weak: Treats the topic like a queryable database or does not know compaction is asynchronous.
+    followups:
+      - A consumer was offline longer than the tombstone retention. What can go wrong?
+      - How would a new service bootstrap from a topic with fifty million keys?
+    common_errors:
+      - Assuming compaction runs immediately so only one value per key is ever read.
+
+  - external_key: system_design.distributed_data.hot_cold_tiering
+    competency_key: data_engineering
+    topic: Tiering older data to cheaper storage
+    difficulty: medium
+    text: >-
+      Your operational database holds seven years of transactions, but only the last ninety days are queried
+      often. How would you move older data to cheaper storage while keeping it available when needed?
+    expected_concepts:
+      - partitioning by time so old ranges move as units
+      - export to columnar files in object storage
+      - query federation or a separate access path for archived data
+      - retention and legal hold requirements
+      - verifying archives before deleting from the hot store
+    rubric:
+      excellent: Moves whole time partitions to columnar object storage, gives a clear access path for older data, verifies archives before deletion, and respects retention obligations.
+      good: Proposes archiving older partitions to cheaper storage with a way to query them.
+      weak: Deletes old data or proposes bigger disks only.
+    followups:
+      - A customer disputes a transaction from four years ago. How is it retrieved?
+      - How would schema changes over seven years affect the archive?
+    common_errors:
+      - Deleting from the hot store before confirming the archive is complete and readable.
+
+  # ------------------------------------------------------------- hard
+  - external_key: system_design.distributed_data.erasure_in_event_store
+    competency_key: system_design
+    topic: Erasing personal data from immutable events
+    difficulty: hard
+    text: >-
+      Your event store is append-only by design, but a user exercises their right to have their personal data
+      erased. How would you design the system to honour that?
+    expected_concepts:
+      - keeping personal data out of events or referencing it by id
+      - per-user encryption keys deleted on request (crypto-shredding)
+      - projections, caches, backups and downstream copies also need erasure
+      - replay behaviour when a key no longer exists
+      - audit of what was erased and when
+    rubric:
+      excellent: Designs events to minimise personal data, uses per-subject keys that are destroyed on request, handles replays after erasure, and covers projections, backups and downstream consumers.
+      good: Proposes crypto-shredding or separating personal data from events.
+      weak: Rewrites history ad hoc or ignores downstream copies.
+    followups:
+      - How do backups taken last month comply with the erasure?
+      - What should a projection do when it replays an event it can no longer decrypt?
+    common_errors:
+      - Erasing the event store but leaving personal data in projections and backups.
+
+  - external_key: system_design.distributed_data.cross_aggregate_invariant
+    competency_key: distributed_systems
+    topic: Rules that span many aggregates
+    difficulty: hard
+    text: >-
+      In an event-sourced subscription system, each team member is their own aggregate, but a team may never
+      exceed its purchased seat count. How would you enforce that rule when members are added concurrently?
+    expected_concepts:
+      - aggregate boundaries define what can be checked atomically
+      - a team or seat-allocation aggregate that owns the limit
+      - reservation then confirmation (process manager) across aggregates
+      - accepting brief violations and compensating when acceptable
+      - contention on the shared aggregate for large teams
+    rubric:
+      excellent: Recognises the rule must live in one consistency boundary, introduces a seat allocator with reserve-then-confirm, discusses compensation versus strict prevention, and addresses contention.
+      good: Moves the seat count into a team aggregate that is checked when adding members.
+      weak: Counts members from a read model before adding, which is racy.
+    followups:
+      - What happens if the member creation fails after a seat was reserved?
+      - How would this scale for a team of fifty thousand members?
+    common_errors:
+      - Checking invariants against an eventually consistent read model.
+
+  - external_key: system_design.distributed_data.crud_to_event_sourcing_migration
+    competency_key: system_design
+    topic: Moving an existing system to event sourcing
+    difficulty: hard
+    text: >-
+      A billing system built on mutable database tables has years of data, and leadership wants it moved to
+      event sourcing for auditability. How would you plan that migration, and would you push back on any of it?
+    expected_concepts:
+      - seeding streams with synthetic opening-balance or snapshot events
+      - history before the cutover cannot be reconstructed accurately
+      - strangler approach, migrating one bounded area at a time
+      - running old and new in parallel with reconciliation
+      - simpler audit alternatives such as audit logs or temporal tables
+    rubric:
+      excellent: Questions whether event sourcing is needed versus audit tables, and if pursued designs an incremental migration with accurately labelled opening events, parallel running and reconciliation, and clear cutover criteria.
+      good: Proposes migrating incrementally with initial events and parallel running.
+      weak: Proposes fabricating detailed history from current state or a big-bang rewrite.
+    followups:
+      - How would you represent the state of an account at cutover?
+      - What evidence would show the new system matches the old one?
+    common_errors:
+      - Inventing past events that never actually happened.
+
+  - external_key: system_design.distributed_data.event_store_scaling
+    competency_key: distributed_systems
+    topic: Scaling an event store and its subscriptions
+    difficulty: hard
+    text: >-
+      Your event store has grown to tens of billions of events, and projections need to subscribe to all events
+      of certain types. How would you partition the store, and what ordering can you still promise subscribers?
+    expected_concepts:
+      - partition by stream id with ordering guaranteed only within a stream
+      - global ordering requires a single sequencer, which limits throughput
+      - category or type subscriptions merging partitions with per-partition checkpoints
+      - consumers designed to tolerate cross-stream reordering
+      - archiving old events and tiered storage
+    rubric:
+      excellent: Partitions by stream, explains why global ordering costs throughput, designs subscriptions with per-partition positions, and states exactly which ordering guarantees subscribers get and how projections cope.
+      good: Partitions the store and explains per-stream ordering.
+      weak: Assumes a global total order is free at any scale.
+    followups:
+      - A projection needs to correlate events from two different streams. What do you tell its owners?
+      - How would you move old events to cheaper storage without breaking replays?
+    common_errors:
+      - Promising global ordering after partitioning.
+
+  - external_key: system_design.distributed_data.cdc_backbone_platform
+    competency_key: data_engineering
+    topic: A shared change-stream backbone
+    difficulty: hard
+    text: >-
+      Design a platform where changes from dozens of operational databases flow into a shared log that feeds
+      the warehouse, search, caches and other services. What would make it trustworthy for all those consumers?
+    expected_concepts:
+      - schema registry, compatibility rules and data contracts per topic
+      - backfill and replay capability for new or broken consumers
+      - ordering guarantees per key and duplicate handling
+      - ownership, access control and sensitive-field handling
+      - observability of end-to-end lag and data quality
+    rubric:
+      excellent: Designs contracts with enforced compatibility, replay and backfill, clear ordering and duplicate semantics, ownership and protection of sensitive fields, and end-to-end lag and quality monitoring.
+      good: Covers schema management, replay and monitoring.
+      weak: Connects CDC tools to everything without governance or replay plans.
+    followups:
+      - A producer team wants to drop a column. How does the platform handle that?
+      - How would you stop personal data leaking into every downstream system?
+    common_errors:
+      - Letting producer schema changes break consumers without compatibility checks.
+
+  - external_key: system_design.distributed_data.lambda_vs_kappa
+    competency_key: data_engineering
+    topic: Batch plus streaming versus streaming only
+    difficulty: hard
+    text: >-
+      You need real-time metrics from clickstream data and accurate historical reports, and you'll sometimes
+      need to recompute history after fixing a bug. Would you build separate batch and streaming paths or a
+      single streaming path? Explain your design.
+    expected_concepts:
+      - lambda keeps batch and speed layers and duplicates logic
+      - kappa reprocesses by replaying the log with a new job version
+      - log retention or archived raw data needed for reprocessing
+      - event time, late data and windowing
+      - cutover between old and new computed outputs
+    rubric:
+      excellent: Compares both architectures on logic duplication, correctness and reprocessing cost, designs how a bug fix is replayed and cut over, and handles event time and late data.
+      good: Explains both architectures and justifies a choice.
+      weak: Chooses one without considering how reprocessing would work.
+    followups:
+      - How long would you keep the raw events, and where?
+      - How would you switch dashboards from the old results to the recomputed ones?
+    common_errors:
+      - Not keeping raw events long enough to recompute history.
+
+  - external_key: system_design.distributed_data.polyglot_persistence_choice
+    competency_key: system_design
+    topic: Choosing stores for each part of a product
+    difficulty: hard
+    text: >-
+      For a ride-hailing platform, think about trips, live driver locations, payments, pricing history and
+      analytics. Which kind of data store would you choose for each, and how would data move between them?
+    expected_concepts:
+      - relational store with strong guarantees for payments and trips
+      - in-memory or geospatial store for live locations
+      - columnar warehouse or lake for analytics
+      - change streams or events linking stores, with one owner per fact
+      - operational cost of each additional technology
+    rubric:
+      excellent: Matches each data type to a store by access pattern and guarantees, defines a single owner per fact with change streams to the others, and limits the number of technologies to what the team can operate.
+      good: Chooses sensible stores for most data types with reasons.
+      weak: Uses one store for everything without reasoning, or many stores with no plan for how they stay consistent.
+    followups:
+      - Which of these stores would you start without, and why?
+      - Where is the source of truth for a trip's fare?
+    common_errors:
+      - Adding a new database technology for every use case without counting the operational cost.
+
+  - external_key: system_design.distributed_data.replay_side_effects
+    competency_key: distributed_systems
+    topic: Replaying events without repeating side effects
+    difficulty: hard
+    text: >-
+      You need to replay a month of events to rebuild projections after a bug, but some handlers send emails,
+      charge cards or call partners. How would you design the system so replays are safe?
+    expected_concepts:
+      - separating pure state projections from side-effecting handlers
+      - recording side effects as their own events or outbox entries
+      - idempotency keys for external calls
+      - a replay mode or separate consumer groups that skip external actions
+      - testing replays in an isolated environment
+    rubric:
+      excellent: Separates projections from side-effect processors, makes external actions idempotent and recorded, gives replays an explicit mode or consumer identity, and validates the replay in isolation first.
+      good: Proposes disabling side effects during replay and idempotency keys.
+      weak: Replays everything through the same handlers and hopes partners dedupe.
+    followups:
+      - How do you know which emails were already sent before the bug?
+      - What if the bug was in the side-effect handler itself?
+    common_errors:
+      - Mixing side effects into projection handlers so they cannot be replayed safely.
+
+  - external_key: system_design.distributed_data.blue_green_projections
+    competency_key: system_design
+    topic: Deploying a changed projection safely
+    difficulty: hard
+    text: >-
+      A change to a projection's logic means every row in its read model must be recomputed, and the read model
+      serves a busy API. How would you roll out the new version without serving wrong or half-built data?
+    expected_concepts:
+      - build the new projection side by side under a new name or version
+      - replay to catch up, then compare outputs with the old version
+      - switch reads atomically and keep the old version for rollback
+      - capacity for running two projections at once
+      - cleaning up the old version afterwards
+    rubric:
+      excellent: Runs the new projection alongside the old, catches up and verifies differences, switches reads atomically with rollback, and accounts for the extra capacity and cleanup.
+      good: Builds the new version in parallel and switches when caught up.
+      weak: Truncates the read model and rebuilds it in place while the API serves traffic.
+    followups:
+      - How would you decide whether differences between old and new outputs are expected?
+      - What if the replay takes three days?
+    common_errors:
+      - Rebuilding in place and serving partially built data.

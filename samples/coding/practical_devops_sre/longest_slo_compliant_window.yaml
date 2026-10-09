@@ -1,0 +1,148 @@
+version: 1
+slug: longest_slo_compliant_window
+title: Longest SLO-Compliant Stretch
+difficulty: hard
+competency_keys: [algorithms, problem_solving]
+role_tags: [sre, data_analyst, platform]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Longest SLO-Compliant Stretch
+
+  An API gateway exports two counters per minute: `total[i]`, the number of requests served in minute
+  `i`, and `errors[i]`, how many of them failed. The service level objective allows an error ratio of at
+  most `budget_ppm` errors per million requests.
+
+  A **window** is a contiguous run of minutes `i..j`. It is **compliant** when its aggregate error ratio
+  is within budget:
+
+  ```
+  (errors[i] + ... + errors[j]) * 1_000_000  <=  budget_ppm * (total[i] + ... + total[j])
+  ```
+
+  The ratio is computed over the whole window, so a bad minute can be part of a compliant window when
+  the surrounding minutes absorb it. Minutes without traffic (`total = errors = 0`) add nothing to
+  either side, so they never break compliance.
+
+  Return the **length** (number of minutes) of the longest compliant window, or `0` if no window is
+  compliant.
+
+  ### Example 1
+  ```
+  Input:  total = [1000, 1500, 1200, 800, 1000, 900], errors = [0, 1, 8, 0, 1, 6], budget_ppm = 2000
+  Output: 5
+  Explanation: minute 2 alone is far over budget (8 errors in 1200 requests), but minutes 0..4
+  have 10 errors in 5500 requests and the budget allows 11. No window of 6 minutes is compliant.
+  ```
+
+  ### Example 2
+  ```
+  Input:  total = [0, 400, 0, 0], errors = [0, 3, 0, 0], budget_ppm = 5000
+  Output: 2
+  Explanation: minute 1 exceeds the budget (3 errors where 2 are allowed); minutes 2..3 have
+  no traffic and form a compliant window of length 2.
+  ```
+
+  ### Example 3
+  ```
+  Input:  total = [10, 20], errors = [1, 1], budget_ppm = 0
+  Output: 0
+  ```
+
+  ### Constraints
+  - `1 <= total.length == errors.length <= 10^5`
+  - `0 <= errors[i] <= total[i] <= 5 * 10^4`
+  - `0 <= budget_ppm <= 10^6`
+  - Intermediate sums need 64-bit integers.
+
+  **Follow-up:** checking every window is `O(n^2)`. Can you find the answer in `O(n log n)` or `O(n)`?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: longest_slo_compliant_window
+  params:
+    - {name: total, type: "long[]"}
+    - {name: errors, type: "long[]"}
+    - {name: budget_ppm, type: int}
+  return_type: int
+  comparison: exact
+reference_solutions:
+  python: |
+    def longest_slo_compliant_window(total: list[int], errors: list[int], budget_ppm: int) -> int:
+        n = len(total)
+        # Each minute's "excess": positive when it burns more than its share of the budget.
+        prefix = [0] * (n + 1)
+        for i in range(n):
+            prefix[i + 1] = prefix[i] + errors[i] * 1_000_000 - budget_ppm * total[i]
+        # Window (i, j] is compliant iff prefix[j] <= prefix[i]. Only strictly rising prefix
+        # maxima are useful left ends.
+        starts: list[int] = []
+        for i in range(n + 1):
+            if not starts or prefix[i] > prefix[starts[-1]]:
+                starts.append(i)
+        best = 0
+        for j in range(n, -1, -1):
+            while starts and prefix[starts[-1]] >= prefix[j]:
+                best = max(best, j - starts.pop())
+        return best
+  javascript: |
+    function longestSloCompliantWindow(total, errors, budgetPpm) {
+      const n = total.length;
+      const prefix = new Array(n + 1).fill(0);
+      for (let i = 0; i < n; i++) {
+        prefix[i + 1] = prefix[i] + errors[i] * 1000000 - budgetPpm * total[i];
+      }
+      // Every |prefix| stays below 2^53 under the constraints, so doubles are exact.
+      const starts = [];
+      for (let i = 0; i <= n; i++) {
+        if (starts.length === 0 || prefix[i] > prefix[starts[starts.length - 1]]) starts.push(i);
+      }
+      let best = 0;
+      for (let j = n; j >= 0; j--) {
+        while (starts.length > 0 && prefix[starts[starts.length - 1]] >= prefix[j]) {
+          best = Math.max(best, j - starts.pop());
+        }
+      }
+      return best;
+    }
+tests:
+  - {id: t1, args: [[1000, 1500, 1200, 800, 1000, 900], [0, 1, 8, 0, 1, 6], 2000], expected: 5, description: "Example 1 - the window must absorb a bad minute"}
+  - {id: t2, args: [[0, 400, 0, 0], [0, 3, 0, 0], 5000], expected: 2, description: "Example 2 - zero-traffic minutes are compliant"}
+  - {id: t3, args: [[10, 20], [1, 1], 0], expected: 0, description: "Example 3 - nothing compliant returns 0"}
+  - {id: t4, hidden: true, args: [[7], [7], 1000000], expected: 1, description: "Single minute, all requests failed, budget of 100 percent"}
+  - {id: t5, hidden: true, args: [[500, 500, 500, 500], [1, 1, 1, 1], 1999], expected: 0, description: "Every minute just over budget (2000 ppm needed) - answer 0"}
+  - {id: t6, hidden: true, args: [[500, 500, 500, 500, 0, 300], [1, 1, 1, 1, 0, 0], 2000], expected: 6, description: "Exact equality at the boundary counts as compliant - whole range"}
+  - {id: t7, hidden: true, args: [[5, 5, 0, 5, 5, 5, 0, 0, 5], [0, 0, 0, 1, 0, 0, 0, 0, 3], 0], expected: 4, description: "Budget 0 - longest run of error-free minutes, zero-traffic minutes included"}
+  - {id: t8, hidden: true, args: [[100, 100, 100, 100, 100, 100, 100, 100], [30, 0, 0, 0, 0, 0, 0, 30], 50000], expected: 7, description: "Best window lies strictly in the middle; both ends are spikes"}
+  - {id: t9, hidden: true, args: [[50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000], [50, 50, 50, 50, 50, 0, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50000, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 0, 50, 50, 50, 50, 50, 50, 50, 50, 50], 1000], expected: 30, description: "Maximum per-minute traffic (64-bit sums), one huge spike in the middle"}
+  - {id: t10, hidden: true, args: [[40411, 46056, 44244, 20950, 28160, 25139, 48457, 23341, 43959, 25966, 32761, 22357, 34576, 48554, 25434, 30277, 48708, 25952, 26451, 32557, 33595, 28644, 46784, 39529, 22163, 30029, 26054, 25771, 20749, 47685, 45812, 38956, 21531, 26439, 46853, 36793, 28221, 39325, 32035, 34187, 26831, 31882, 29033, 23017, 30032, 40539, 30135, 43597, 37482, 27777, 47076, 33820, 40916, 30950, 43975, 40656, 23494, 24890, 29660, 40329, 34861, 43904, 29536, 24800, 37424, 36361, 22920, 45625, 31839, 45391, 41758, 31908, 29202, 45223, 29628, 41289, 20379, 28214, 35169, 41215, 31399, 44177, 31470, 48505, 31936, 24648, 26509, 47979, 22583, 33652, 39033, 33788, 45385, 43606, 25243, 41303, 42477, 21371, 25431, 23631, 35815, 33614, 41709, 26696, 32255, 29126, 23770, 32251, 40105, 37865, 39034, 46821, 46640, 32105, 39527, 26525, 22976, 41681, 30683, 37675, 48721, 34064, 36168, 32444, 49941, 28513, 36262, 30457, 36113, 35628, 34531, 45614, 20432, 28971, 45621, 28771, 29362, 35552, 39787, 23872, 29853, 31014, 37362, 31830, 39359, 28271, 23525, 26264, 39493, 40717, 49875, 32840, 26437, 47198, 47403, 39074, 35481, 25421, 49120, 37627, 37740, 44006, 22791, 20837, 22251, 35947, 24009, 47012, 49322, 43126, 25999, 46281, 26984, 41633, 29170, 23878, 40438, 22996, 36038, 41500, 24529, 38633, 29510, 38018, 22070, 47282, 24383, 32163, 25875, 41463, 41887, 24089, 27817, 35743, 46098, 43757, 24941, 42318, 23803, 41792, 24579, 31609, 30920, 31425, 24470, 41230, 34201, 36957, 27041, 22073, 26106, 36057, 41667, 33991, 40298, 35255, 25068, 32276, 48847, 28325, 25293, 27705, 21051, 32090, 42535, 35457, 23863, 29538, 43897, 26587, 27552, 33142, 31935, 35336, 43997, 25352, 42026, 41163, 28870, 34845, 25562, 47378, 38520, 43479, 46319, 35442, 41110, 45609, 47309, 40987, 26373, 40989, 27658, 45912, 25306, 43925, 34457, 33866, 37115, 20404, 42564, 27339, 30214, 45310, 30252, 22686, 22763, 41833, 36143, 43055, 48922, 22355, 32447, 20002, 44894, 34489, 41478, 43855, 28771, 32530, 22160, 28604, 29355, 45027, 20900, 47081, 28459, 20544, 24106, 31738, 40290, 23122, 25609, 34621, 46043, 30389, 35105, 34464, 25262, 39530, 46681, 21714, 21077, 35793, 32868, 29078, 38429, 44611, 31526, 41729, 22033, 31441, 27809, 23072, 44694, 26531, 30618, 48282, 46226, 20330, 39224, 32749, 39996, 36422, 42629, 46723, 42701, 37587, 31888, 42264, 29311, 22859, 39018, 43411, 20473, 27681, 22894, 49397, 47467, 40020, 36930, 27834, 37824, 41992, 44602, 26788, 30531, 47627, 42555, 28159, 29629, 46121, 25486, 45116, 22054, 47206, 43856, 33939, 49646, 29199, 30836, 24888, 38186, 34215, 23352, 30818, 35882, 22385, 35335, 49553, 40161, 47522, 42031, 31001, 44917, 34455, 45217, 49283, 40483, 23385, 22112, 32269, 42298, 22745, 37808, 23851, 24349, 32486, 44327, 43634, 23828, 44606, 31260, 49679, 45104, 23600, 47787, 21651, 28882, 24778, 38132, 37739, 28029, 24227, 46803, 46562, 38426, 48447, 27162, 34504, 22796, 47498, 20737, 45259, 48185, 41660, 39239, 33816, 46623, 34167, 20488, 25458, 29927, 47335, 27100, 28877, 29388, 24041, 34996, 32490, 49010, 20605, 30409, 35340, 31954, 20471, 22804, 41425, 27032, 49369, 38270, 23468, 29948, 37942, 27894, 28620, 43968, 35766, 20266, 33724, 40005, 21836, 21254, 31329, 29756, 41459, 32138, 43369, 32796, 47746, 42360, 21808, 40292, 36823, 32225, 34948, 20125, 38573, 44315, 49006, 28627, 45680, 28588, 40503, 40604, 28630, 34373, 25797, 21702, 38390, 21418, 36199, 21303, 23848, 40031, 27258, 23638, 42414, 22190, 41262, 43621, 42275, 33275, 34857, 48797, 41548, 32479, 28629, 26725, 31558, 33933, 41319, 24548, 42518, 38784, 24753, 36179, 49497, 41704, 45699, 29620, 28493, 49153, 40623, 46653, 23621, 48532, 44765, 45442, 25643, 45095, 48108, 30221, 31047, 33387, 22257, 23096, 36592, 33636, 20880, 29502, 36763, 22483, 25576, 40153, 41453, 32470, 30041, 34020, 36864, 32509, 26289, 43315, 30031, 41011, 38117, 40825, 25440, 34964, 43265, 39528, 43888, 27667, 41056, 28422, 42177, 35788, 49000, 42863, 38201, 20777, 35770, 48669, 39787, 21896, 37167, 32138, 29497, 43864, 25230, 33680, 46926, 35104, 37177, 42583, 20465, 41363, 45280, 21414, 35682, 26637, 47939, 47168, 32612, 27504, 20330, 39051, 36507, 30040, 32215, 44825, 42483, 28535, 24831, 20474, 23483, 34366, 35617, 20812, 45146, 47355, 43462, 40229, 48983, 26597, 31139, 32102, 27215, 34046, 43880, 25440, 49310, 27111, 34778, 28975, 26597, 47476, 23017, 33845, 46999, 38373, 44087, 26639, 43463, 21512, 47534, 23103, 31874, 29437, 24878, 23438, 38021, 47328, 49016, 32044, 43689, 49017, 38728, 30787, 33514, 38309, 20540, 23578, 45443, 22727, 30285, 30658, 31481, 21366, 45537, 49173, 48540, 22787, 48822, 29955, 40187, 42098, 29511, 29915, 29562, 31330, 22881, 26849, 35126, 48255, 42481, 48564, 27473, 28661, 36463, 36608, 38669, 41523, 33287, 24315, 48800, 31967, 39348, 34611, 21357, 44753, 22211, 40531, 41512, 34960, 30885, 38479, 35277, 21267, 30471, 23646, 32140, 40566, 33171, 24265, 43829, 29106, 20311, 30336, 25098, 36905, 32391, 26342, 42650, 41883, 23713, 23251, 31391, 20413, 21083, 26713, 30816, 32062, 42894, 23560, 23918, 40786, 44254, 47383, 28355, 28846, 25748, 47470, 35395, 21809, 44769, 27153, 23179, 42532, 24828, 28103, 40135, 42826, 30558, 30392, 48018, 29674, 20292, 27473, 29897, 26726, 39147, 43941, 25547, 40154, 39536, 34390, 28323, 39327, 41300, 40965, 37104, 29899, 39839, 30230, 35414, 41124, 34618, 26381, 47601, 25920, 26503, 29082, 28864, 30213, 27969, 29210, 34486, 35734, 33305, 35638, 45248, 40080, 36551, 30843, 32052, 40125, 32559, 48057, 38547, 41632, 27431, 37162, 45076, 36076, 27819, 43283, 22766, 41360, 45872, 20449, 42263, 46309, 22115, 49930, 44774, 37422, 40888, 43402, 36172, 41542, 21608, 30444, 26668, 28302, 27543, 34529, 36260, 27645, 27083, 30308, 27777, 27696, 45071, 23417, 28290, 40644, 41864, 23313, 24763, 27253, 26035, 41332, 23747, 43472, 46576, 30056, 49794, 24897, 48374, 34318, 20240, 44198, 23237, 22442, 23597, 41022, 32764, 42036, 37072, 43289, 40237, 42105, 27653, 36148, 47930, 22248, 49173, 29546, 21506, 21752, 27622, 48529, 31512, 45395, 27303, 49519, 45689, 25339, 23765, 22358, 41894, 39899, 27997, 41594, 30049, 44357, 45741, 32485, 39788, 47397, 25914, 21014, 23117, 44228, 40146, 43663, 32118, 38472, 30311, 25141, 47489, 30728, 49308, 44825, 22854, 29760, 39900, 35983, 35507, 34373, 41099, 20852, 39598, 44747, 43175, 42915, 47773, 31726, 42146, 42969, 44706, 41102, 49130, 43264, 47271, 33024, 43526, 21133, 32988, 45418, 45718, 22735, 33352, 23497, 36267, 35439, 44907, 24016, 45824, 26391, 43258, 49631, 29217, 39480, 21687, 34673, 49777, 22477, 23272, 26868, 27486, 34264, 29902, 37970, 49804, 36373, 40576, 28736, 32676, 25570, 42497, 36063, 30698, 44614, 23935, 37576, 48804, 34640, 30703, 33485, 28947, 22518, 42021, 22394, 36333, 31325, 32076, 22752, 42300, 43936, 39428, 39982, 39358, 26633, 21570, 32257, 36172, 38338, 30387, 37271, 38882, 38472, 46984, 49412, 37601, 35123, 27757, 21316, 26405, 27251, 38542, 27730, 25792, 43912, 35531, 39477, 27252, 49311, 48621, 37591, 28609, 41315, 42792, 34138, 28179, 25434, 37129, 46215, 49758], [22, 53, 33, 49, 57, 30, 34, 0, 17, 49, 51, 39, 0, 641, 18, 34, 13, 44, 57, 23, 9, 19, 0, 21, 52, 20, 45, 60, 22, 35, 24, 28, 39, 15, 22, 33, 6, 51, 2, 5, 39, 21, 34, 20, 5, 44, 10, 38, 2, 22, 41, 58, 31, 8, 8, 26, 23, 26, 59, 33, 44, 17, 57, 52, 40, 11, 32, 32, 50, 37, 19, 42, 16, 45, 21, 54, 49, 17, 32, 22, 22, 26, 11, 28, 33, 10, 59, 44, 46, 49, 59, 35, 17, 12, 39, 48, 45, 14, 8, 11, 2, 24, 37, 57, 1030, 55, 35, 35, 18, 60, 22, 26, 34, 10, 30, 38, 57, 421, 39, 40, 24, 14, 45, 54, 38, 19, 1, 19, 9, 1473, 2, 25, 35, 30, 31, 46, 38, 55, 57, 458, 45, 46, 916, 52, 0, 43, 34, 1075, 45, 54, 30, 46, 29, 19, 1086, 49, 9, 35, 21, 37, 4, 52, 42, 27, 44, 53, 41, 45, 18, 9, 26, 39, 6, 4, 36, 56, 27, 38, 60, 3, 9, 32, 35, 16, 16, 33, 55, 24, 1, 36, 55, 29, 29, 6, 34, 54, 27, 47, 58, 13, 24, 18, 45, 24, 22, 40, 23, 36, 25, 2, 2, 30, 0, 56, 20, 12, 4, 55, 35, 52, 43, 57, 48, 3, 1135, 9, 20, 15, 2, 36, 39, 45, 11, 4, 29, 11, 2, 46, 324, 26, 35, 33, 6, 57, 59, 15, 25, 16, 19, 2, 32, 34, 20, 34, 54, 1, 31, 24, 46, 19, 52, 8, 49, 25, 34, 44, 36, 3, 3, 18, 6, 20, 35, 41, 1, 44, 1, 27, 51, 20, 8, 20, 34, 1, 8, 55, 39, 27, 21, 1396, 46, 38, 9, 27, 21, 14, 10, 42, 31, 459, 43, 0, 15, 22, 12, 19, 48, 23, 52, 54, 25, 53, 2, 6, 57, 48, 30, 5, 44, 38, 52, 255, 24, 45, 50, 59, 3, 26, 1, 13, 1, 39, 60, 59, 45, 48, 19, 51, 38, 30, 7, 50, 0, 11, 57, 39, 6, 35, 23, 13, 17, 57, 26, 41, 40, 34, 14, 38, 26, 56, 1, 36, 11, 38, 44, 3, 33, 54, 59, 44, 30, 12, 5, 39, 48, 52, 45, 37, 55, 52, 20, 57, 48, 60, 0, 23, 31, 60, 48, 1, 22, 58, 18, 44, 36, 21, 27, 15, 4, 6, 11, 54, 22, 0, 23, 713, 24, 3, 51, 1263, 38, 32, 25, 27, 57, 40, 1, 26, 52, 24, 48, 9, 27, 23, 12, 23, 1497, 48, 43, 26, 41, 31, 8, 58, 1, 27, 48, 49, 33, 44, 7, 23, 30, 55, 8, 225, 15, 3, 632, 45, 19, 15, 56, 35, 6, 57, 17, 38, 19, 59, 28, 33, 59, 35, 8, 31, 13, 3, 21, 21, 30, 7, 1, 10, 44, 56, 53, 36, 22, 29, 39, 41, 1042, 33, 36, 44, 46, 2, 19, 34, 41, 7, 16, 0, 33, 29, 13, 39, 9, 40, 33, 12, 10, 59, 1, 36, 60, 15, 35, 20, 12, 54, 31, 5, 49, 6, 54, 3, 24, 46, 26, 6, 45, 55, 19, 60, 57, 29, 26, 34, 43, 23, 6, 7, 5, 34, 17, 52, 56, 8, 11, 51, 8, 60, 28, 36, 18, 16, 48, 8, 44, 28, 10, 28, 54, 44, 37, 22, 46, 48, 37, 31, 58, 21, 8, 26, 8, 48, 31, 54, 26, 43, 46, 45, 50, 31, 1188, 23, 0, 47, 10, 42, 6, 55, 58, 15, 59, 37, 6, 35, 50, 57, 0, 29, 12, 56, 30, 4, 44, 29, 38, 54, 41, 32, 44, 34, 11, 2, 12, 25, 7, 12, 57, 1, 49, 55, 48, 58, 26, 42, 45, 12, 16, 49, 34, 40, 27, 40, 34, 60, 44, 53, 46, 9, 319, 48, 51, 58, 34, 27, 52, 18, 4, 14, 38, 46, 20, 49, 43, 33, 41, 40, 32, 28, 17, 4, 56, 37, 24, 10, 27, 55, 6, 53, 2, 44, 38, 19, 56, 32, 32, 26, 46, 7, 20, 50, 60, 0, 19, 37, 3, 18, 27, 27, 44, 32, 53, 54, 30, 5, 17, 21, 24, 16, 51, 22, 26, 25, 39, 39, 18, 52, 15, 37, 57, 19, 39, 59, 31, 33, 14, 14, 2, 12, 19, 4, 57, 58, 21, 49, 25, 31, 824, 54, 46, 35, 36, 2, 29, 5, 15, 53, 37, 22, 13, 37, 43, 12, 36, 15, 41, 53, 48, 37, 46, 55, 44, 11, 34, 47, 30, 0, 538, 50, 53, 38, 12, 40, 39, 1221, 1, 10, 58, 22, 39, 668, 24, 4, 9, 46, 3, 25, 12, 16, 11, 51, 10, 45, 14, 39, 48, 30, 11, 30, 36, 20, 9, 28, 41, 500, 39, 7, 48, 28, 7, 1092, 33, 21, 10, 54, 20, 37, 286, 59, 19, 15, 36, 30, 16, 0, 9, 49, 22, 18, 30, 33, 9, 6, 49, 55, 60, 57, 0, 33, 5, 20, 8, 40, 35, 5, 33, 19, 30, 49, 27, 15, 39, 43, 33, 9, 447, 0, 35, 57, 14, 16, 39, 35, 27, 29, 3, 53, 13, 4, 11, 57, 36, 28, 30, 19, 20, 53, 46, 17, 58, 2, 22, 14, 23, 26, 38, 59, 2, 58, 33, 42, 12, 7, 60, 22, 17, 31, 56, 2, 14, 22, 9, 44, 10, 25, 17, 37, 45, 26, 1, 21, 1, 1345, 43, 7, 42, 37, 44, 25, 38, 39, 20, 21, 42, 35, 16, 6, 38, 39, 8, 2, 20, 16, 33, 35, 36, 8, 22, 52, 48, 8, 13, 44, 0, 50, 42, 57, 31, 8, 23, 54, 484, 40, 2, 26, 37, 30, 14, 30, 27, 1, 44, 1291, 21, 41, 21, 7, 4, 9, 60, 53, 38, 12, 56, 2, 51, 55, 8, 0, 12, 43, 31, 28, 55, 51, 56, 1, 6, 55, 0, 38, 44, 7, 45, 17, 59, 13, 59, 7, 40, 759, 0, 1075, 24, 21, 20, 23, 42, 48, 31, 3, 60, 16, 7, 4], 1200], expected: 276, description: "1000 minutes of realistic traffic with rare error bursts"}
+expected_concepts:
+  - transforming a ratio constraint into a sum constraint with integer weights
+  - prefix sums
+  - longest subarray with sum at most zero
+  - monotonic stack of prefix maxima (or binary search over them)
+  - 64-bit arithmetic and avoiding floating-point ratios
+optimal_complexity: {time: O(n), space: O(n)}
+rubric:
+  excellent: Rewrites the ratio test as a per-minute weight errors * 10^6 - budget * total, reduces the task to the widest pair i < j with prefix[j] <= prefix[i], solves it in O(n) or O(n log n) with prefix maxima, and argues why sliding windows do not work with negative and positive weights.
+  good: Finds the prefix-sum reformulation and a correct O(n log n) solution with a binary search over prefix maxima, or reaches the linear version with hints.
+  weak: Uses floating-point ratios per minute, averages per-minute ratios instead of aggregating counts, applies a two-pointer window that assumes monotonicity, or stops at the O(n^2) scan.
+  criteria:
+    correctness: All tests pass, including budget 0, budget 10^6, zero-traffic minutes and windows that must contain a bad minute.
+    efficiency: O(n) or O(n log n) time; explains why two pointers fail when weights can be negative.
+    code_quality: Integer arithmetic only, clear naming of the prefix array and the candidate stack.
+    edge_cases: Single minute, no compliant window, the entire range compliant, and equality at the budget boundary.
+    communication: Explains why only strictly increasing prefix values can be the best left end.
+hints:
+  - Comparing ratios is awkward. Multiply out the inequality so it becomes a statement about one sum over the window being at most zero.
+  - Give each minute the weight errors * 1,000,000 - budget_ppm * total. With prefix sums P, the window i..j-1 is compliant exactly when P[j] <= P[i]; you want the widest such pair with i < j.
+  - A left end i is only worth considering if P[i] is larger than every earlier prefix value, so collect those strictly increasing prefix maxima in a stack. Then walk j from the right end down to 0 and pop every stack entry whose value is at least P[j], recording j minus the popped index; popped entries can never give a wider window for a smaller j.
+followups:
+  - How would you report the start minute of the longest window as well, choosing the earliest on ties?
+  - How would you answer the question for a stream of minutes, updating the answer as each minute arrives?
+  - How would the solution change if the SLO were defined on latency percentiles instead of error counts?
+  - Why does a sliding window with two pointers not work here, while it does when all weights are non-negative?
+common_errors:
+  - Averaging per-minute error ratios instead of comparing aggregate errors with aggregate traffic.
+  - Using floating-point division and failing at the exact budget boundary.
+  - Overflowing 32-bit integers when multiplying errors by one million.
+  - Using a two-pointer window that shrinks on violation, which misses windows that recover later.
+  - Treating zero-traffic minutes as division by zero or as violations.

@@ -1,0 +1,150 @@
+version: 1
+slug: consistent_hash_replica_sets
+title: Hash Ring Replica Placement
+difficulty: medium
+competency_keys: [algorithms, data_structures]
+role_tags: [backend, platform, sre, dba]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Hash Ring Replica Placement
+
+  A distributed key-value store places data on a **hash ring** of positions `0` to `2^31 - 1` that wraps
+  around: after the largest position comes position `0` again. Storage node `i` owns the ring positions
+  (tokens) listed in `node_tokens[i]`. Every node owns at least one token and no two tokens are equal.
+
+  To place a key with hash `h`, the store walks the ring **clockwise** (towards larger positions, wrapping
+  from the end back to the start), beginning at the first token whose position is **greater than or equal
+  to** `h`. Each token it passes names its owning node. A node is added to the key's replica list the first
+  time one of its tokens is passed; later tokens of a node already on the list are skipped. The walk stops
+  as soon as the list holds `replicas` nodes, or after every token has been visited once if there are
+  fewer than `replicas` nodes in total.
+
+  For every hash in `keys`, return its replica list (node indices in the order they were added). The
+  result has one list per key, in the same order as `keys`.
+
+  ### Example 1
+  ```
+  Input:  node_tokens = [[10, 70], [30, 90], [20, 40]], keys = [15, 35, 95, 30], replicas = 2
+  Output: [[2, 1], [2, 0], [0, 2], [1, 2]]
+  Explanation: sorted tokens are 10(n0), 20(n2), 30(n1), 40(n2), 70(n0), 90(n1). Hash 15 starts at
+  token 20: n2, then n1. Hash 35 starts at 40: n2, then 70 gives n0. Hash 95 is past the last token, so
+  it wraps to 10: n0, then 20 gives n2. Hash 30 starts exactly at token 30: n1, then n2.
+  ```
+
+  ### Example 2
+  ```
+  Input:  node_tokens = [[5, 6], [100]], keys = [4, 50, 101], replicas = 3
+  Output: [[0, 1], [1, 0], [0, 1]]
+  Explanation: only two nodes exist, so every list stops at two nodes even though three replicas were
+  requested. Node 0 owns both 5 and 6, so the walk from 4 skips the second token of node 0.
+  ```
+
+  ### Constraints
+  - `1 <= node_tokens.length <= 1000`, `1 <= node_tokens[i].length`, total tokens `T <= 10^5`
+  - `0 <= node_tokens[i][j] < 2^31`, all tokens distinct
+  - `0 <= keys.length <= 10^4`, `0 <= keys[k] < 2^31`
+  - `1 <= replicas <= 10`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: consistent_hash_replica_sets
+  params:
+    - {name: node_tokens, type: "int[][]"}
+    - {name: keys, type: "int[]"}
+    - {name: replicas, type: int}
+  return_type: "int[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    from bisect import bisect_left
+
+
+    def consistent_hash_replica_sets(node_tokens: list[list[int]], keys: list[int], replicas: int) -> list[list[int]]:
+        ring = sorted((token, node) for node, tokens in enumerate(node_tokens) for token in tokens)
+        positions = [token for token, _ in ring]
+        wanted = min(replicas, len(node_tokens))
+        result: list[list[int]] = []
+        for h in keys:
+            start = bisect_left(positions, h)
+            chosen: list[int] = []
+            seen: set[int] = set()
+            for step in range(len(ring)):
+                node = ring[(start + step) % len(ring)][1]
+                if node not in seen:
+                    seen.add(node)
+                    chosen.append(node)
+                    if len(chosen) == wanted:
+                        break
+            result.append(chosen)
+        return result
+  javascript: |
+    function consistentHashReplicaSets(nodeTokens, keys, replicas) {
+      const ring = [];
+      nodeTokens.forEach((tokens, node) => {
+        for (const token of tokens) ring.push([token, node]);
+      });
+      ring.sort((a, b) => a[0] - b[0]);
+      const wanted = Math.min(replicas, nodeTokens.length);
+      const lowerBound = (h) => {
+        let lo = 0;
+        let hi = ring.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (ring[mid][0] < h) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo;
+      };
+      return keys.map((h) => {
+        const start = lowerBound(h);
+        const chosen = [];
+        const seen = new Set();
+        for (let step = 0; step < ring.length && chosen.length < wanted; step++) {
+          const node = ring[(start + step) % ring.length][1];
+          if (!seen.has(node)) {
+            seen.add(node);
+            chosen.push(node);
+          }
+        }
+        return chosen;
+      });
+    }
+tests:
+  - {id: t1, args: [[[10, 70], [30, 90], [20, 40]], [15, 35, 95, 30], 2], expected: [[2, 1], [2, 0], [0, 2], [1, 2]], description: "Example 1 - interleaved tokens, wrap-around and an exact token hit"}
+  - {id: t2, args: [[[5, 6], [100]], [4, 50, 101], 3], expected: [[0, 1], [1, 0], [0, 1]], description: "Example 2 - fewer nodes than replicas; repeated owner skipped"}
+  - {id: t3, hidden: true, args: [[[1], [2]], [], 2], expected: [], description: "No keys - empty result"}
+  - {id: t4, hidden: true, args: [[[500, 7, 123456]], [0, 2147483647, 500], 3], expected: [[0], [0], [0]], description: "Single node with replicas 3 - list stops at one node (walk must terminate)"}
+  - {id: t5, hidden: true, args: [[[0], [2147483647], [1000]], [0, 2147483647, 2147483646, 1, 1001], 2], expected: [[0, 2], [1, 0], [1, 0], [2, 1], [1, 0]], description: "Ring boundaries 0 and 2^31-1 - exact hits at both ends and wrap from the top"}
+  - {id: t6, hidden: true, args: [[[100, 300], [200, 400]], [50, 100, 101, 250, 399, 401], 1], expected: [[0], [0], [1], [0], [1], [0]], description: "replicas 1 - just the owner of the first token at or after the hash"}
+  - {id: t7, hidden: true, args: [[[10, 20, 30, 40, 50, 60], [65], [5]], [11, 66, 0, 60], 3], expected: [[0, 1, 2], [2, 0, 1], [2, 0, 1], [0, 1, 2]], description: "Long run of tokens owned by one node - walk skips many duplicates before the next node"}
+  - {id: t8, hidden: true, args: [[[900, 300], [100, 700], [500]], [100, 300, 500, 700, 900, 950], 3], expected: [[1, 0, 2], [0, 2, 1], [2, 1, 0], [1, 0, 2], [0, 1, 2], [1, 0, 2]], description: "replicas equals the node count - every list is a full permutation, tokens given unsorted"}
+  - {id: t9, hidden: true, args: [[[207388624, 249103477, 311111475, 404285457, 647892279, 1390851128, 1570621944, 1695753998], [161042648, 300026767, 369140570, 389609433, 922121676, 1033639716, 1796035739, 1862494042], [212984476, 253877686, 265695473, 531725347, 949539216, 958804057, 1703729684, 1823296038], [200071088, 505913792, 571981485, 619570852, 776213899, 1243862422, 1324919352, 1800188482], [255985076, 269676599, 418461138, 442620898, 806899909, 884585951, 1599435267, 2132084004], [772092314, 1066984055, 1287489453, 1349251823, 1552984408, 1836494974, 1946412080, 1999744784], [314395342, 351564607, 1048386555, 1236683272, 1289560149, 1475216845, 1927728186, 2126508550], [168393879, 507088656, 652768597, 708506836, 1469118510, 1795823848, 1811180649, 2100080514], [295334609, 333377414, 401991735, 1347535308, 1460814402, 1504004731, 1959386986, 2133201995], [260573195, 279172786, 1159380353, 1222328495, 1329753547, 1656961615, 1914012528, 2036236841], [96907015, 253207296, 502922616, 721762278, 1490376253, 1526706729, 1982966162, 2120395274], [346094055, 555512015, 937195259, 1063497603, 1234510745, 1679116188, 1708957520, 2132480060], [588093310, 714537754, 1193309983, 1195809357, 1725048950, 1783684941, 1849076400, 1929245186], [356416554, 648200381, 649821629, 756849392, 991070207, 996247158, 1540910400, 1633982921], [17581913, 51810462, 625675342, 783156687, 1002170858, 1128488133, 1210883260, 2082899071], [231897701, 538981926, 1368426741, 1585932013, 1685254563, 1709696035, 1799361519, 1961269853], [267352360, 289255805, 444688428, 818661757, 1692732589, 1713601028, 1719888006, 2068124764], [1001928, 225810525, 439717024, 472138489, 697086885, 896631050, 1460519317, 1892478001], [109525498, 302003101, 435786140, 638019485, 649677951, 893149980, 1561692719, 1615892810], [495439555, 527603371, 1083438814, 1492026737, 1564070056, 2001409495, 2036465042, 2096236324], [368871838, 438892467, 618979930, 1137122202, 1339395518, 1471609726, 2063281256, 2078054027], [99195379, 116146605, 629653099, 693373550, 881391734, 1280285446, 1553714997, 2055665570], [390887330, 717440070, 956887591, 957956674, 1121481224, 1415900354, 1527703407, 1574963607], [124468790, 838145799, 858641201, 973838693, 1028162213, 1527129486, 1720926262, 2116481898], [119988828, 831698692, 1113145426, 1200093499, 1478675319, 1501175503, 1920828233, 2028255629], [345908635, 438761609, 844846557, 946878464, 974295420, 1450571437, 1566099205, 2018978166], [8196148, 364120811, 514982153, 877776915, 1477498382, 1668748295, 2059322681, 2072980149], [372587779, 766744959, 856070305, 1428150521, 1700113406, 1863693997, 1989259375, 2053134993], [118321417, 364725391, 545625652, 649187324, 682281553, 730160159, 1723943246, 1998679710], [61172929, 91898034, 441402617, 562571390, 627813881, 669638767, 1504988818, 2037347501], [120232146, 598077320, 836682996, 906419964, 913882253, 1081622282, 1258282193, 1863197321], [261582916, 562957179, 1033108812, 1113963313, 1400113410, 1519490800, 1799645190, 1967786445], [16889873, 80336781, 561623933, 643396775, 652132315, 786442397, 1806584667, 1890322092], [265236938, 455736473, 516841821, 607991152, 740223519, 1400082661, 2033636662, 2072265937], [119682498, 181242849, 244051092, 419812753, 821653592, 1067275001, 1189349776, 1942080812], [272167093, 856430243, 1063673566, 1190502836, 1398499907, 1903737354, 1942810371, 2053150339], [522362320, 588987924, 870111103, 1114940395, 1685192164, 1789442528, 1898882739, 1922119101], [311583109, 314051309, 525488741, 913495726, 1033535609, 1300430508, 1357122900, 1839700615], [404265716, 589504030, 614090116, 663343193, 943122533, 1087089872, 1572745251, 2008910111], [693491440, 699199909, 960836459, 1456492749, 1710500230, 1734349671, 1853372068, 2092769114], [83678549, 395970334, 840716950, 1368056914, 1451611684, 1531648885, 1571754093, 1809368694], [77661511, 276126871, 484686860, 1268965729, 1423772581, 1650747322, 1891753121, 1969975945], [170029957, 361040387, 450024945, 779757289, 981631321, 1140589863, 1161557137, 1167889500], [384237251, 556436891, 641530462, 1110717268, 1404662647, 1743532650, 1813567874, 2124342557], [72291700, 247074472, 311016186, 380387729, 787456633, 1155017299, 1198563463, 1826722754], [49591106, 286141622, 359671403, 522601130, 955235051, 1119061845, 1135808358, 1948942435], [185567035, 470090438, 555016296, 693418588, 1024075531, 1150448850, 1456645772, 1794266952], [216379241, 778016012, 866588008, 884211552, 1124831725, 1245372313, 1309988209, 1339997164], [65911072, 78009937, 158696256, 764074176, 1075669243, 1161884710, 1490358043, 1914210559], [79172989, 456474907, 813709449, 1055185498, 1856188577, 1920088988, 2039081424, 2126015575]], [1688291829, 1321918114, 924195862, 985979546, 1471905175, 853085645, 600087726, 1738163421, 1492725226, 233596963, 557566591, 61225318, 303752166, 1097767344, 1850017269, 701138477, 237945866, 362859750, 1635874815, 1210894222, 1040296614, 1258676654, 194293562, 1973335385, 796080901, 676598820, 1155503871, 1914802140, 15559426, 1130620377, 1563975174, 1412727126, 1389567515, 1049889716, 147947537, 1329498206, 935726744, 1531516257, 785798161, 4590953, 1440243341, 1639073804, 360307210, 2038578866, 1197990394, 863202764, 1065922393, 21262379, 390205076, 1134595846, 385487905, 617896092, 1715887400, 178958209, 1692125395, 96611647, 1286970023, 1306720429, 999909488, 362850478, 666802865, 1672960501, 1400738088, 2122533124, 641939352, 1220529103, 621706036, 188068318, 1843591967, 598321626, 69062036, 987587879, 365466111, 133833463, 179796360, 571630912, 1549226795, 450612829, 1617563115, 1938688887, 218099796, 80920073, 1050375823, 2101503087, 1132981883, 14234932, 1962578962, 301126733, 394887583, 283684097, 2035206438, 1083162950, 319760306, 1140563900, 1008396567, 881402583, 991004121, 1977145508, 2121493855, 1643084753], 3], expected: [[16, 0, 27], [3, 9, 20], [11, 38, 25], [13, 14, 46], [6, 26, 24], [27, 35, 23], [33, 38, 20], [43, 12, 36], [24, 8, 29], [34, 44, 0], [32, 29, 31], [48, 44, 41], [44, 0, 37], [43, 24, 31], [39, 49, 1], [7, 12, 22], [34, 44, 0], [26, 28, 20], [41, 9, 26], [9, 11, 6], [6, 49, 11], [41, 21, 5], [3, 0, 2], [10, 27, 28], [4, 49, 16], [28, 21, 46], [9, 42, 48], [49, 24, 36], [32, 14, 45], [45, 20, 42], [19, 25, 0], [22, 41, 27], [0, 35, 33], [49, 11, 35], [48, 1, 7], [9, 20, 47], [11, 38, 25], [40, 13, 5], [32, 44, 4], [26, 32, 14], [25, 40, 39], [41, 9, 26], [42, 26, 28], [49, 27, 35], [44, 24, 14], [47, 36, 26], [5, 34, 48], [45, 14, 29], [22, 40, 8], [45, 20, 42], [1, 22, 40], [20, 3, 14], [16, 23, 28], [34, 46, 3], [16, 0, 27], [10, 21, 18], [5, 6, 37], [47, 3, 9], [14, 46, 23], [26, 28, 20], [29, 28, 21], [11, 36, 15], [43, 22, 41], [43, 49, 6], [32, 0, 13], [9, 11, 6], [14, 29, 21], [3, 0, 2], [12, 39, 49], [33, 38, 20], [44, 41, 48], [13, 14, 46], [20, 1, 27], [48, 1, 7], [34, 46, 3], [3, 12, 36], [5, 21, 18], [33, 49, 46], [13, 41, 9], [34, 35, 5], [17, 15, 34], [40, 29, 10], [49, 11, 35], [23, 10, 43], [45, 20, 42], [32, 14, 45], [31, 41, 10], [18, 44, 0], [40, 8, 38], [45, 16, 8], [9, 19, 29], [19, 38, 43], [8, 25, 11], [42, 46, 44], [46, 23, 31], [47, 4, 18], [13, 14, 46], [10, 27, 28], [43, 49, 6], [41, 9, 26]], description: "Stress - 50 nodes x 8 random tokens, 100 random hashes, replicas 3"}
+expected_concepts:
+  - flattening and sorting tokens with their owners
+  - binary search (lower bound) for the first token at or after the hash
+  - wrap-around walk with modular indexing
+  - skipping duplicate owners with a set
+  - stopping at min(replicas, number of nodes)
+optimal_complexity: {time: "O(T log T + K (log T + W)) where W is the walk length", space: O(T)}
+rubric:
+  excellent: Sorts (token, node) pairs once, finds each starting point with a lower-bound binary search, walks with wrap-around while skipping repeated owners, caps the list at the node count and discusses the walk length when one node owns long runs of consecutive tokens.
+  good: Correct placement with sorting and a linear scan for the start, or binary search after a hint.
+  weak: Uses the first token strictly greater than the hash, forgets to wrap around, repeats a node in the list or loops forever when fewer nodes exist than replicas.
+  criteria:
+    correctness: All tests pass, including exact token hits, wrap-around and fewer nodes than replicas.
+    efficiency: One sort plus a binary search per key instead of scanning the whole ring for every key.
+    code_quality: The ring is built once; the walk has a clear termination condition.
+    edge_cases: Hash equal to a token, hash above the largest token, a single node, no keys and replicas larger than the node count.
+    communication: Explains why virtual nodes (several tokens per node) spread load and why duplicates must be skipped.
+hints:
+  - Put all tokens from all nodes on one sorted list, each remembering its owner; a key's placement only depends on where its hash falls in that list.
+  - Use binary search to find the first token whose position is at least the hash, then move forward through the list, wrapping to the beginning after the end.
+  - Sort pairs of token and owner once. For each key, find the lower-bound index, then walk up to the number of tokens in total steps using the index modulo the list length, appending an owner only the first time you see it, and stop once you have the smaller of the requested replica count and the number of nodes.
+followups:
+  - How does adding or removing a node change the replica lists of existing keys, and how much data moves?
+  - How would you avoid placing two replicas in the same rack or availability zone?
+  - If one node owns long runs of consecutive tokens, the walk can be long. How could you precompute the answer for every token position?
+common_errors:
+  - Searching for the first token strictly greater than the hash, which misplaces keys that hit a token exactly.
+  - Forgetting the wrap-around for hashes above the largest token.
+  - Looping forever when the number of nodes is smaller than the requested replica count.
+  - Adding the same node twice because it owns several tokens on the walk.

@@ -1,0 +1,177 @@
+version: 1
+slug: count_blocked_term_occurrences
+title: Count Blocked Term Occurrences
+difficulty: hard
+competency_keys: [algorithms, data_structures]
+role_tags: [security, backend, data]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Count Blocked Term Occurrences
+
+  A content filter scans uploaded documents for blocked terms. Given the document `text` and a list of
+  non-empty `terms`, return how many times each term occurs in `text` as a contiguous substring. Occurrences
+  **may overlap** (in `"aaaa"` the term `"aa"` occurs 3 times).
+
+  Return the counts in the **same order as `terms`**. If a term appears more than once in the list, every copy
+  gets the full count. A term that never occurs (including one longer than `text`) gets `0`.
+
+  ### Example 1
+  ```
+  Input:  text = "spamandspamx", terms = ["spam", "am", "spa", "ham"]
+  Output: [2, 2, 2, 0]
+  Explanation: "spam" occurs at 0 and 7, "am" at 2 and 9, "spa" at 0 and 7, and "ham" never occurs.
+  ```
+
+  ### Example 2
+  ```
+  Input:  text = "aaaa", terms = ["aa", "a", "a", "aaaaa"]
+  Output: [3, 4, 4, 0]
+  Explanation: "aa" occurs at 0, 1 and 2 (overlapping); the duplicate "a" entries both get 4.
+  ```
+
+  ### Constraints
+  - `0 <= text.length <= 10^5`
+  - `1 <= terms.length <= 10^4`
+  - `1 <= terms[i].length` and the total length of all terms is at most `10^5`.
+  - `text` and every term consist of lowercase English letters.
+
+  **Follow-up:** scanning the text once per term costs `O(len(text) * len(terms))`, which is far too slow at the
+  limits. Can you count everything in one pass over the text?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: count_term_occurrences
+  params:
+    - {name: text, type: "string"}
+    - {name: terms, type: "string[]"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    from collections import deque
+
+
+    def count_term_occurrences(text: str, terms: list[str]) -> list[int]:
+        children: list[dict[str, int]] = [{}]
+        fail = [0]
+        term_node: list[int] = []
+        for term in terms:
+            node = 0
+            for ch in term:
+                nxt = children[node].get(ch)
+                if nxt is None:
+                    nxt = len(children)
+                    children[node][ch] = nxt
+                    children.append({})
+                    fail.append(0)
+                node = nxt
+            term_node.append(node)
+
+        # breadth-first order for failure links
+        order: list[int] = []
+        queue = deque(children[0].values())
+        while queue:
+            node = queue.popleft()
+            order.append(node)
+            for ch, child in children[node].items():
+                f = fail[node]
+                while f and ch not in children[f]:
+                    f = fail[f]
+                fail[child] = children[f].get(ch, 0)
+                queue.append(child)
+
+        hits = [0] * len(children)
+        node = 0
+        for ch in text:
+            while node and ch not in children[node]:
+                node = fail[node]
+            node = children[node].get(ch, 0)
+            hits[node] += 1
+
+        # every visit to a node is also an occurrence of each suffix on its failure chain
+        for node in reversed(order):
+            hits[fail[node]] += hits[node]
+        return [hits[node] for node in term_node]
+  javascript: |
+    function countTermOccurrences(text, terms) {
+      const children = [new Map()];
+      const fail = [0];
+      const termNode = [];
+      for (const term of terms) {
+        let node = 0;
+        for (const ch of term) {
+          let nxt = children[node].get(ch);
+          if (nxt === undefined) {
+            nxt = children.length;
+            children[node].set(ch, nxt);
+            children.push(new Map());
+            fail.push(0);
+          }
+          node = nxt;
+        }
+        termNode.push(node);
+      }
+      const order = [];
+      const queue = [...children[0].values()];
+      for (let head = 0; head < queue.length; head++) {
+        const node = queue[head];
+        order.push(node);
+        for (const [ch, child] of children[node]) {
+          let f = fail[node];
+          while (f !== 0 && !children[f].has(ch)) f = fail[f];
+          fail[child] = children[f].get(ch) ?? 0;
+          queue.push(child);
+        }
+      }
+      const hits = new Array(children.length).fill(0);
+      let node = 0;
+      for (const ch of text) {
+        while (node !== 0 && !children[node].has(ch)) node = fail[node];
+        node = children[node].get(ch) ?? 0;
+        hits[node]++;
+      }
+      for (let k = order.length - 1; k >= 0; k--) hits[fail[order[k]]] += hits[order[k]];
+      return termNode.map((n) => hits[n]);
+    }
+tests:
+  - {id: t1, args: ["spamandspamx", ["spam", "am", "spa", "ham"]], expected: [2, 2, 2, 0], description: "Example 1 - terms that share prefixes and suffixes"}
+  - {id: t2, args: ["aaaa", ["aa", "a", "a", "aaaaa"]], expected: [3, 4, 4, 0], description: "Example 2 - overlapping occurrences, duplicate terms, term longer than text"}
+  - {id: t3, hidden: true, args: ["", ["a", "bc"]], expected: [0, 0], description: "Empty text; every count is zero"}
+  - {id: t4, hidden: true, args: ["abc", ["abc"]], expected: [1], description: "Single term equal to the whole text"}
+  - {id: t5, hidden: true, args: ["xyz", ["a", "b"]], expected: [0, 0], description: "No term occurs"}
+  - {id: t6, hidden: true, args: ["ushers", ["he", "she", "his", "hers", "s"]], expected: [1, 1, 0, 1, 2], description: "Terms nested as suffixes of each other; failure links must accumulate"}
+  - {id: t7, hidden: true, args: ["abababab", ["abab", "bab", "b", "aba"]], expected: [3, 3, 4, 3], description: "Periodic text with many overlapping matches"}
+  - {id: t8, hidden: true, args: ["mississippi", ["issi", "ss", "i", "sip", "pp", "mississippi", "ssissi"]], expected: [2, 2, 4, 1, 1, 1, 1], description: "Mixed lengths including the whole text and overlapping internal matches"}
+  - {id: t9, hidden: true, args: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["a", "aa", "aaa", "aaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]], expected: [30, 29, 28, 21, 0], description: "Run of one letter; chain of terms that are each other's suffixes"}
+  - {id: t10, hidden: true, args: ["bbbaaabbabababbaaaaaaababaabababbbaaababbaaabaaaaabaaaaabababaaaaaababaabaaabababbabaabbabaaabbbabbaaabbbbaabaabbbababaaabaaaaaababbabbabbaabaabbababbbaabaaaaaaaabbbaabbaabbabaaaaabbabaabababbaaaabbaaaaaaaabbbaabababbabbaababaaaaaaaaabaababaaabaabbaababbbaababaabbabaabbabbbbbbaabbbbbbbabbabaabaaabaabbbabaabbabababaaaabaaabaabbbabbbabbaaaababbbabbabbaabababbaaababaabaabaabbbabbbbaaaabbabaabaaaaabbabbbaababbabaaababababbbaabbbbbaaabbaaaababbbaaabbbbbaaaaaaaabbbbaabbaaaabbabbaabbbbbbbaababbbbbabaaabbbabbabbabaaabaaaababbaababaabbbbbbabaabbabaabbbaabbabababbbbaabbbbabbabbabbabbabbbbaaaaaaababbabaaabaaabbbaaababbbababbaaababbaabbbaababaaaabbbababbbababababaaaaaaababbbababaaabbababaaababbaabaaaaababaaabbabaaaaaabababbabbaaabaababaaaababaaaabbbbbaabbbabaabababbabbaaaababbabbbababbbbaaaaababbbababbaabbaabbaabababababbaababaabbbbbabbbabaaabbbabbbabbabababbbbababbbbaaaabbaaaababaabaaaaaabaababababaabbbaabbaaaaabaabbbabaabaaaaaababaaaaababaaaaaabaaabbbaabaaaabbbabaaabaaaaaaaabaabaabbbbbbababbabab", ["a", "ab", "aba", "abab", "bb", "bbb", "babba", "aaaaaa", "bbbbbbbbb", "abba"]], expected: [534, 262, 148, 78, 203, 89, 37, 28, 0, 61], description: "1000-character binary text against ten terms; stress for one-pass counting"}
+expected_concepts:
+  - "trie over all terms"
+  - "Aho-Corasick failure links (longest proper suffix that is a trie prefix)"
+  - "single pass over the text following goto and failure transitions"
+  - "propagating visit counts up the failure tree instead of walking output links per character"
+  - "sharing one node for duplicate terms"
+optimal_complexity: {time: "O(len(text) + total term length)", space: "O(total term length)"}
+rubric:
+  excellent: "Builds a trie, computes failure links in breadth-first order, scans the text once while counting visits per node, then pushes counts from deeper nodes to their failure targets in reverse BFS order so each term's count includes every occurrence ending as a suffix; handles duplicates and the empty text; states linear complexity in the input sizes (times the alphabet factor if transitions are not precomputed)."
+  good: "Correct Aho-Corasick that follows output (dictionary suffix) links for every position, or a hashing approach grouped by distinct term length, with near-linear performance on the tests."
+  weak: "Searches the text separately for each term, counts only non-overlapping occurrences, or loses counts for terms that are suffixes of other terms."
+  criteria:
+    correctness: "All tests pass, including overlapping, nested-suffix and duplicate terms."
+    efficiency: "One pass over the text; no per-term scan and no walking long output chains per character."
+    code_quality: "Trie construction, link building and scanning are separate, clearly named steps."
+    edge_cases: "Empty text, terms longer than the text, duplicate terms and single-letter runs."
+    communication: "Explains what a failure link means and why counts propagate along them."
+hints:
+  - "Many terms share prefixes, so start by storing all of them in one trie and think about walking the text through it only once."
+  - "When the next text character cannot extend the current trie path, you do not have to restart: jump to the node for the longest suffix of what you have matched that is also a path in the trie. Precompute those jumps for every node in breadth-first order."
+  - "While scanning, count how many times each trie node is reached. Reaching a node also means every term that is a suffix of that node's string occurred, and those nodes lie on its chain of jumps; so after the scan, process nodes from deepest to shallowest in breadth-first order and add each node's count to its jump target. A term's answer is the count at its end node."
+followups:
+  - "How would you return the positions of the first occurrence of each term instead of counts?"
+  - "How would you handle a stream of text that arrives in chunks without keeping it all in memory?"
+  - "If the term list changes rarely but documents arrive constantly, what would you precompute and cache?"
+  - "How would you extend the filter to ignore case and treat certain look-alike characters as equal?"
+common_errors:
+  - "Running a separate search for every term, which is quadratic at the limits."
+  - "Counting only the term that ends exactly at the current node and missing shorter terms that are its suffixes."
+  - "Following output links per character on inputs like a long run of one letter, causing quadratic time."
+  - "Giving depth-one nodes a failure link other than the root, or building links in depth-first order before shallower links exist."
+  - "Deduplicating the terms list and returning fewer counts than terms."

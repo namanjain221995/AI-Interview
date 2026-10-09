@@ -1,0 +1,623 @@
+# Curated questions: problem solving / security incident reasoning (part 1 of 4).
+# Scenario questions about triaging alerts, suspicious accounts and endpoints, first containment
+# decisions and early communication.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [security, cloud, network]
+  round_types: [problem_solving, combined]
+  kind: scenario
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: problem_solving.security_incident_reasoning.edr_encoded_powershell
+    competency_key: incident_response
+    topic: First look at an endpoint detection alert
+    difficulty: easy
+    text: >-
+      Your endpoint detection tool flags an encoded PowerShell command running on a laptop in the finance
+      team. Before you decide to isolate the machine, what would you look at, and what would push you one
+      way or the other?
+    expected_concepts:
+      - decode the command and read what it actually does
+      - parent process and how the command was launched (email attachment, macro, admin tool)
+      - network connections or downloads the process made
+      - whether the same command appears on other machines or matches a known admin script
+      - user and asset context, such as finance access and privileges
+      - isolate quickly when it looks malicious, since isolation is reversible
+    rubric:
+      excellent: Decodes the command, traces the parent process and network activity, checks for the same pattern elsewhere and makes a clear isolation call with a reason, noting that isolation is cheap to undo.
+      good: Looks at the command and the process tree and would isolate if anything looks wrong, but checks fewer signals.
+      weak: Either wipes the laptop immediately or closes the alert as noise without decoding what ran.
+    followups:
+      - The decoded command downloads a file from a cloud storage link. What changes?
+      - How would you confirm whether any other laptop ran something similar?
+    common_errors:
+      - Treating encoded PowerShell as malicious or benign by default instead of decoding it.
+
+  - external_key: problem_solving.security_incident_reasoning.mfa_push_flood_report
+    competency_key: security
+    topic: Unexpected MFA prompts reported by a user
+    difficulty: easy
+    text: >-
+      An engineer messages you saying their phone kept buzzing last night with sign-in approval prompts they
+      didn't trigger, and they're not sure whether they tapped approve on one of them. How would you handle
+      that report?
+    expected_concepts:
+      - prompts mean the password is likely already known to someone else
+      - check sign-in logs for approved sessions, source addresses and devices
+      - reset the password and revoke active sessions and refresh tokens
+      - review what an approved session did, such as new MFA methods or mailbox rules
+      - thank the user and encourage fast reporting
+      - consider number matching or phishing-resistant methods to stop prompt fatigue
+    rubric:
+      excellent: Recognises that the password is probably compromised, checks whether any prompt was approved and what that session did, resets credentials and sessions, and suggests a control that stops prompt-fatigue attacks.
+      good: Resets the password and checks sign-in logs, but does not look at what an approved session might have changed.
+      weak: Tells the user to ignore the prompts or only resets MFA without investigating sign-ins.
+    followups:
+      - The logs show one approved sign-in from an unfamiliar network. What do you check in that session?
+      - How would you look for other users being targeted the same way?
+    common_errors:
+      - Resetting the password but leaving existing sessions and tokens valid.
+
+  - external_key: problem_solving.security_incident_reasoning.unrecognised_local_admin
+    competency_key: security
+    topic: Unknown privileged account found during a review
+    difficulty: easy
+    text: >-
+      During a routine review you find a local administrator account on a Windows file server that nobody on
+      the team recognises. How would you work out whether it's a problem, and what would you do in the
+      meantime?
+    expected_concepts:
+      - when the account was created and by which account or process
+      - check change tickets and ask the owning team before assuming malice
+      - logon history for the account and from where
+      - disable rather than delete to preserve evidence
+      - look for the same account name on other servers
+    rubric:
+      excellent: Finds the creation event and creator, checks logon activity and other servers, verifies with owners and disables the account while preserving evidence rather than deleting it.
+      good: Checks who created it and asks around, and disables it if nobody claims it.
+      weak: Deletes the account straight away or ignores it because it has not been used yet.
+    followups:
+      - The creation event shows a domain admin created it at 2 a.m. What next?
+      - Why would you disable it instead of deleting it?
+    common_errors:
+      - Deleting the account and with it useful evidence about how it was used.
+
+  - external_key: problem_solving.security_incident_reasoning.lost_laptop_with_code
+    competency_key: incident_response
+    topic: Lost device holding source code and credentials
+    difficulty: easy
+    text: >-
+      A developer tells you they left their work laptop in a taxi last night. It has a local copy of your main
+      repositories and they were signed in to several internal tools. How would you work out the risk and
+      decide what to do?
+    expected_concepts:
+      - confirm disk encryption status and screen lock from device management
+      - remote lock or wipe through device management
+      - revoke sessions, tokens and SSH keys tied to the device
+      - rotate any secrets stored locally, such as cloud keys or .env files
+      - record the timeline and decide whether data exposure is plausible
+    rubric:
+      excellent: Checks encryption and lock status first to size the risk, triggers remote lock or wipe, revokes device-bound credentials and sessions, rotates locally stored secrets and records the decision trail.
+      good: Wipes the device and resets the developer's password, but misses tokens or keys stored on the laptop.
+      weak: Waits to see whether the laptop is returned before doing anything.
+    followups:
+      - Device management says the disk was encrypted but the laptop was only asleep, not shut down. Does that change anything?
+      - Which credentials would you rotate even if you believe the disk is safe?
+    common_errors:
+      - Assuming full-disk encryption makes credential revocation unnecessary.
+
+  - external_key: problem_solving.security_incident_reasoning.internal_host_scanning
+    competency_key: networking
+    topic: Internal workstation scanning the network
+    difficulty: easy
+    text: >-
+      Your network monitoring shows a workstation in the marketing department trying to connect to hundreds of
+      internal addresses on ports 445 and 3389 over a few minutes. What are the likely explanations, and how
+      would you narrow them down?
+    expected_concepts:
+      - malware or worm spreading versus an authorised scanner or misconfigured tool
+      - identify the process making the connections on the host
+      - check whether any connection succeeded and to which hosts
+      - check with IT for scheduled inventory or vulnerability scans
+      - contain the workstation if the activity is unexplained
+    rubric:
+      excellent: Lists benign and malicious explanations, identifies the responsible process on the host, checks which connections succeeded to scope possible spread, and contains the host if it cannot be explained quickly.
+      good: Suspects malware and checks the host, but does not consider whether any target was reached.
+      weak: Blocks the ports network-wide or ignores it because the connections were internal.
+    followups:
+      - A few connections to file servers succeeded. How does that change your next steps?
+      - What would you check on those file servers?
+    common_errors:
+      - Not checking which of the attempted connections actually succeeded.
+
+  - external_key: problem_solving.security_incident_reasoning.db_password_in_chat
+    competency_key: security
+    topic: Production secret pasted into a team chat
+    difficulty: easy
+    text: >-
+      Someone pasted the production database password into a busy engineering chat channel while debugging,
+      and it sat there for about two hours before anyone noticed. What would you do, and how would you decide
+      how urgent it is?
+    expected_concepts:
+      - who could see the channel, including guests and integrations
+      - rotate the password, which matters more than deleting the message
+      - check database logs for connections from unexpected sources
+      - delete the message and check whether chat exports or bots captured it
+      - follow up with a safer way to share secrets
+    rubric:
+      excellent: Prioritises rotation over deleting the message, sizes exposure by checking channel membership and integrations, reviews database access logs since the paste and fixes the workflow that led to it.
+      good: Rotates the password and deletes the message.
+      weak: Only deletes the message and considers the problem solved.
+    followups:
+      - Rotating the password needs a coordinated restart of six services. How would you plan that?
+      - The channel has an external partner as a guest. What changes?
+    common_errors:
+      - Treating deletion of the message as remediation.
+
+  - external_key: problem_solving.security_incident_reasoning.known_bad_ip_alert
+    competency_key: incident_response
+    topic: Threat-feed match on outbound traffic
+    difficulty: easy
+    text: >-
+      An alert says one of your application servers connected to an IP address listed in a threat
+      intelligence feed as malicious. How would you decide whether this is a real incident or a false
+      positive?
+    expected_concepts:
+      - check feed age and confidence, since shared hosting and cloud addresses get reused
+      - what the server was talking to, such as domain, port and protocol
+      - which process made the connection and whether it is expected
+      - volume, timing and whether data left the server
+      - other hosts contacting the same address
+    rubric:
+      excellent: Questions the indicator's quality and context, ties the connection to a process and a domain, considers timing and data volume and looks for the same address elsewhere before deciding.
+      good: Checks which process made the connection and whether it looks legitimate.
+      weak: Accepts or dismisses the alert based only on the feed match.
+    followups:
+      - The address belongs to a large cloud provider and hosts thousands of sites. How does that change your thinking?
+      - What would you record so the next analyst can reuse your reasoning?
+    common_errors:
+      - Treating a single threat-feed match as proof of compromise.
+
+  - external_key: problem_solving.security_incident_reasoning.first_incident_channel_message
+    competency_key: incident_response
+    topic: Raising the alarm with a clear first message
+    difficulty: easy
+    text: >-
+      You're on call and you've found something that looks like a real intrusion, but you've only been
+      looking at it for ten minutes. What would you put in your first message to the security incident
+      channel, and what would you leave out?
+    expected_concepts:
+      - what was observed, where and when, as facts
+      - what is unknown and what you are doing next
+      - severity guess and who needs to be pulled in
+      - avoid speculation about attribution or root cause
+      - avoid pasting secrets or sensitive data into the channel
+      - consider whether the channel itself might be visible to an attacker
+    rubric:
+      excellent: Gives a short factual message with observations, time, systems, current actions and asks, separates known from unknown, avoids speculation and sensitive data and thinks about whether the channel is safe.
+      good: Shares the key facts and asks for help, but mixes in guesses or misses what is unknown.
+      weak: Waits until they are sure before telling anyone, or posts a vague alarm without facts.
+    followups:
+      - When would you page the incident lead rather than post in the channel?
+      - How often would you send updates after that first message?
+    common_errors:
+      - Delaying escalation until the investigation feels complete.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: problem_solving.security_incident_reasoning.webshell_in_uploads
+    competency_key: security
+    topic: Suspected web shell on a public server
+    difficulty: medium
+    text: >-
+      File integrity monitoring reports a new script file inside the uploads directory of a public web server,
+      and it contains code that runs whatever is passed in a request parameter. How would you investigate and
+      contain this?
+    expected_concepts:
+      - preserve the file and server state before cleaning
+      - web server access logs for requests to that file, with sources and parameters
+      - how it got there, such as an upload flaw or vulnerable plugin
+      - what commands ran and whether the attacker moved beyond the web server
+      - block access to the file and fix the upload path
+      - check other servers in the pool for the same file
+    rubric:
+      excellent: Preserves evidence, reads access logs to see what was executed and from where, finds the entry point, checks other servers and onward movement, and contains by blocking the file and fixing the root cause.
+      good: Removes the file, finds the requests to it in the logs and patches the upload flaw.
+      weak: Deletes the file and moves on without finding out how it arrived or what it was used for.
+    followups:
+      - The logs show commands reading environment variables. What do you assume the attacker now has?
+      - How would you prevent uploads from ever being executable?
+    common_errors:
+      - Deleting the shell before reviewing logs and capturing it.
+
+  - external_key: problem_solving.security_incident_reasoning.gpu_instances_unused_region
+    competency_key: security
+    topic: Cloud resources launched in an unused region
+    difficulty: medium
+    text: >-
+      The cloud bill shows dozens of large GPU instances running in a region your company has never used,
+      started two days ago. How would you investigate and respond?
+    expected_concepts:
+      - audit logs for who launched them and which credentials were used
+      - likely leaked access key or compromised role, often for crypto mining
+      - capture instance details and a disk snapshot before terminating
+      - revoke the credential and look for persistence such as new users, keys or roles
+      - check all regions and accounts, not just the one on the bill
+      - restrict unused regions and set spend anomaly alerts
+    rubric:
+      excellent: Traces the launch to a credential, preserves evidence before terminating, revokes access, hunts for persistence across every region and account and proposes preventive guardrails.
+      good: Finds the credential, terminates the instances and rotates keys.
+      weak: Terminates the instances and asks the provider for a refund without finding out how they were created.
+    followups:
+      - The key belongs to a CI pipeline. Where would you look for how it leaked?
+      - What would you look for that a cost-focused attacker might have left behind?
+    common_errors:
+      - Only checking the region named on the bill.
+
+  - external_key: problem_solving.security_incident_reasoning.hidden_mailbox_forwarding
+    competency_key: security
+    topic: Mailbox rule forwarding invoices outside the company
+    difficulty: medium
+    text: >-
+      While investigating a phishing report, you find that an accounts payable clerk's mailbox has a rule
+      that forwards any email containing the word invoice to an external address and then deletes it. How
+      would you scope what happened?
+    expected_concepts:
+      - when and from which session the rule was created
+      - sign-in history and the source of that session
+      - which messages were forwarded and to whom
+      - whether replies were sent to suppliers from the mailbox
+      - look for the same rule pattern across all mailboxes
+      - remove the rule, revoke sessions and notify finance about possible payment fraud
+    rubric:
+      excellent: Ties the rule to a specific session and sign-in, lists what was forwarded and sent, hunts for the same pattern tenant-wide and connects the finding to possible payment fraud that finance needs to check.
+      good: Removes the rule, resets credentials and checks sign-ins.
+      weak: Deletes the rule without working out what left the mailbox or what the attacker sent.
+    followups:
+      - How would you search every mailbox for similar rules quickly?
+      - Which suppliers or payments would you ask finance to double-check?
+    common_errors:
+      - Treating the rule as the whole incident and missing outbound messages sent from the mailbox.
+
+  - external_key: problem_solving.security_incident_reasoning.supplier_bank_details_fraud
+    competency_key: incident_response
+    topic: Payment redirected after a fake bank-details change
+    difficulty: medium
+    text: >-
+      Finance tells you they paid a large supplier invoice to new bank details that arrived by email last
+      week, and the real supplier says they never changed their account. What would you do, and in what order?
+    expected_concepts:
+      - contact the bank immediately to try to recall or freeze the payment
+      - determine whether the email came from a compromised supplier mailbox or a lookalike domain
+      - check whether your own mailboxes were compromised
+      - preserve the emails with full headers
+      - inform the supplier, management and possibly law enforcement
+      - out-of-band verification for future bank detail changes
+    rubric:
+      excellent: Puts the bank recall first because time matters, then works out whether the compromise was on the supplier's side or yours using headers and sign-in logs, preserves evidence and fixes the verification process.
+      good: Investigates the email source and changes the payment process, but does not prioritise recovering the funds.
+      weak: Focuses only on blocking the sender's address.
+    followups:
+      - The headers show the email came from the supplier's real domain. What does that tell you?
+      - What process change would actually stop this next time?
+    common_errors:
+      - Assuming the problem is entirely on the supplier's side without checking your own mailboxes.
+
+  - external_key: problem_solving.security_incident_reasoning.periodic_beaconing
+    competency_key: networking
+    topic: Regular outbound connections that look like beaconing
+    difficulty: medium
+    text: >-
+      Flow logs show an internal server making a small outbound HTTPS connection to the same external address
+      every sixty seconds, day and night, for the past three weeks. How would you figure out whether that's
+      command-and-control traffic or something legitimate?
+    expected_concepts:
+      - identify the process and binary on the host making the connections
+      - resolve the domain or SNI and check its registration and reputation
+      - consider legitimate agents such as monitoring, licensing or update checks
+      - look at jitter, payload sizes and any larger transfers
+      - find other hosts with the same pattern
+      - contain if the process is unknown or the binary is unsigned
+    rubric:
+      excellent: Ties the traffic to a process, compares it with known agents, analyses timing and size patterns, checks the destination and other hosts, and contains if it can't be explained.
+      good: Identifies the process and checks the destination's reputation.
+      weak: Blocks the address at the firewall without finding what on the server was making the calls.
+    followups:
+      - The binary is signed by a vendor you do use, but it lives in an unusual path. What next?
+      - Why can blocking the address first make the investigation harder?
+    common_errors:
+      - Blocking the destination before identifying the process, which tips off an attacker and loses visibility.
+
+  - external_key: problem_solving.security_incident_reasoning.isolate_payroll_server
+    competency_key: incident_response
+    topic: Containment versus a critical business deadline
+    difficulty: medium
+    text: >-
+      Your endpoint tool shows signs of compromise on the server that runs payroll, and the monthly payroll run
+      is due to start tonight. How would you decide whether to isolate it now, and how would you make that
+      decision with the business?
+    expected_concepts:
+      - confidence in the compromise and how severe it looks
+      - what the attacker could do with payroll access, such as changing bank details
+      - partial containment such as restricting network access to only what payroll needs
+      - verify payroll data integrity before running it
+      - involve the business owner and agree on the risk decision explicitly
+      - fallback options such as delaying the run or running it from a clean system
+    rubric:
+      excellent: Weighs the specific risk of running payroll on a compromised host, offers options between full isolation and doing nothing, checks payroll data integrity and makes the decision jointly with the owner, with it written down.
+      good: Recognises the conflict and proposes partial containment or delaying payroll.
+      weak: Isolates without talking to anyone, or lets payroll run unchanged because the deadline matters more.
+    followups:
+      - The finance director insists payroll must run on time. How do you respond?
+      - How would you check that nobody changed employee bank details in the system?
+    common_errors:
+      - Framing it as all-or-nothing isolation instead of looking for partial containment.
+
+  - external_key: problem_solving.security_incident_reasoning.unclaimed_bastion_ssh_key
+    competency_key: security
+    topic: Unexplained SSH key on a bastion host
+    difficulty: medium
+    text: >-
+      You find an SSH public key in the authorized keys file of the admin account on your bastion host, and
+      nobody on the team claims it. Walk me through how you'd work out how it got there and what it's been
+      used for.
+    expected_concepts:
+      - file modification time and audit or configuration management history
+      - authentication logs showing logins with that key's fingerprint
+      - source addresses of those logins and what they did next
+      - hosts reachable from the bastion and their logs for the same sessions
+      - check config management and images in case it is baked in
+      - remove the key after capturing evidence and rotate other bastion credentials
+    rubric:
+      excellent: Matches the key fingerprint to logins, follows those sessions onward from the bastion, checks whether automation or images added the key and only removes it after capturing evidence.
+      good: Checks auth logs for the key and removes it.
+      weak: Removes the key immediately and considers the matter closed.
+    followups:
+      - The key was added by your configuration management tool. What does that change?
+      - Which systems would you investigate next given the bastion's role?
+    common_errors:
+      - Not following the sessions onward to the systems the bastion can reach.
+
+  - external_key: problem_solving.security_incident_reasoning.waf_sqli_large_response
+    competency_key: security
+    topic: Telling attempted from successful exploitation
+    difficulty: medium
+    text: >-
+      Your web application firewall logged thousands of SQL injection attempts against a search endpoint
+      overnight, and one of them returned a response many times larger than normal. How would you decide
+      whether data was actually stolen?
+    expected_concepts:
+      - inspect the specific request and response size compared with normal
+      - reproduce safely in a test environment to see what the payload returns
+      - database query logs at that time
+      - whether the WAF was blocking or only logging
+      - other requests from the same source after that response
+      - fix the query and assess what data could have been returned
+    rubric:
+      excellent: Focuses on the anomalous response, checks whether the WAF blocked, reproduces the payload safely, cross-checks database logs and follows the attacker's subsequent requests to estimate what was taken.
+      good: Investigates the large response and checks database logs.
+      weak: Concludes nothing happened because the WAF was in place, or assumes everything was stolen without checking.
+    followups:
+      - The WAF turns out to be in detection-only mode. How does that change your scoping?
+      - What would you say to the product owner before you know for sure?
+    common_errors:
+      - Assuming a WAF log entry means the request was blocked.
+
+  - external_key: problem_solving.security_incident_reasoning.shell_in_java_container
+    competency_key: security
+    topic: Unexpected shell inside a production container
+    difficulty: medium
+    text: >-
+      Runtime monitoring alerts that a shell process was spawned inside a production container that should
+      only ever run a Java service. How would you investigate that, and how would you contain it without
+      losing the evidence?
+    expected_concepts:
+      - parent process, such as the Java process, which suggests remote code execution
+      - check for engineers using kubectl exec for debugging
+      - capture container state, logs and filesystem before the pod is rescheduled
+      - what the shell did, such as network calls, token reads and downloads
+      - isolate the pod with a network policy rather than deleting it
+      - check the service account token and what it can access
+    rubric:
+      excellent: Distinguishes an engineer exec from an application-spawned shell, preserves the ephemeral container state, isolates rather than deletes the pod, and checks what the service account and network position allowed.
+      good: Checks how the shell started and captures some evidence before restarting.
+      weak: Deletes the pod, so the evidence disappears and the root cause stays open.
+    followups:
+      - The parent process is the Java service itself. What kind of vulnerability would you suspect?
+      - How do you keep the orchestrator from replacing the pod before you capture it?
+    common_errors:
+      - Forgetting that containers are ephemeral and evidence vanishes when the pod is deleted.
+
+  - external_key: problem_solving.security_incident_reasoning.were_we_hacked_ceo
+    competency_key: incident_response
+    topic: Answering leadership early in an investigation
+    difficulty: medium
+    text: >-
+      Two hours into investigating a suspected breach, the CEO calls you directly and asks, "Were we hacked or
+      not?" You don't know yet. How would you answer, and what would you commit to?
+    expected_concepts:
+      - state what is confirmed, what is suspected and what is unknown
+      - avoid both false reassurance and alarm
+      - explain the next steps and when the next update will come
+      - flag decisions leadership may need to make soon
+      - route through the incident lead and keep one source of truth
+    rubric:
+      excellent: Gives a clear statement separating confirmed from suspected, commits to a specific next update time, names decisions that may be needed and keeps communication consistent with the incident lead.
+      good: Explains that it's under investigation and promises an update.
+      weak: Says everything is fine to reassure, or speculates about worst cases without evidence.
+    followups:
+      - The CEO asks whether they should tell the board tonight. How do you respond?
+      - How would you keep several executives from getting different stories?
+    common_errors:
+      - Giving reassurance that later turns out to be wrong.
+
+  - external_key: problem_solving.security_incident_reasoning.rogue_ap_corporate_ssid
+    competency_key: network_engineering
+    topic: Access point impersonating the corporate network
+    difficulty: medium
+    text: >-
+      A wireless survey finds an access point broadcasting your corporate network name from somewhere near the
+      car park, and it isn't one of yours. How would you assess the risk and respond?
+    expected_concepts:
+      - evil twin risk of capturing credentials or intercepting traffic
+      - check client configuration, such as certificate validation for enterprise Wi-Fi
+      - wireless controller logs for clients that associated with it
+      - locate it physically with signal strength and involve facilities
+      - reset credentials for users who may have connected
+      - wireless intrusion prevention and stricter client profiles
+    rubric:
+      excellent: Explains the credential-capture risk, checks whether clients validate the server certificate, identifies devices that associated with the rogue AP, locates it and hardens client profiles.
+      good: Recognises an evil twin attack and plans to locate it and warn users.
+      weak: Treats it as a neighbour's network and takes no action.
+    followups:
+      - Your laptops are set to accept any certificate for the Wi-Fi. What does that mean for exposure?
+      - How would you find out which users connected to it?
+    common_errors:
+      - Ignoring whether clients validate the authentication server's certificate.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: problem_solving.security_incident_reasoning.conflicting_log_timestamps
+    competency_key: incident_response
+    topic: Building a timeline from inconsistent sources
+    difficulty: hard
+    text: >-
+      You're building an incident timeline from firewall logs, cloud audit logs and endpoint telemetry, and the
+      same event appears with times several minutes, and in one case an hour, apart. How would you reconcile
+      the sources and how much would you trust the result?
+    expected_concepts:
+      - time zones, daylight saving and UTC normalisation
+      - clock drift on devices without synchronised time
+      - event time versus ingestion time in log pipelines
+      - anchor events visible in several sources to calculate offsets
+      - document assumptions and confidence for each timeline entry
+    rubric:
+      excellent: Names the likely causes (zones, drift, ingestion delay), uses shared anchor events to compute per-source offsets, records confidence for each entry and explains which conclusions depend on precise ordering.
+      good: Normalises to UTC and spots the one-hour time-zone or daylight saving issue.
+      weak: Picks one source as correct without checking, or ignores the discrepancy.
+    followups:
+      - A conclusion depends on whether a login happened before or after a file was written, two minutes apart. How do you handle that?
+      - What would you change in logging so this is easier next time?
+    common_errors:
+      - Confusing ingestion timestamps with event timestamps.
+
+  - external_key: problem_solving.security_incident_reasoning.attacker_in_collab_tools
+    competency_key: incident_response
+    topic: Responding when the attacker can read your communications
+    difficulty: hard
+    text: >-
+      Partway through an investigation you find evidence that the attacker has administrator access to your
+      email and chat systems. How does that change the way you run the response?
+    expected_concepts:
+      - assume incident channels, tickets and email are being read
+      - move to out-of-band communication set up from clean devices
+      - limit who knows and avoid tipping off the attacker before eviction
+      - prioritise removing access to collaboration admin roles as part of a coordinated eviction
+      - check collaboration audit logs for what they read or exported
+    rubric:
+      excellent: Moves coordination out of band with clean devices and accounts, controls who knows, plans eviction from the collaboration platform in step with other containment and reviews what the attacker has already read.
+      good: Switches to another channel such as phone calls and revokes the admin access.
+      weak: Keeps working in the same chat channels, or revokes the admin access immediately without considering what else the attacker controls.
+    followups:
+      - How would you set up an out-of-band channel quickly and safely?
+      - What might the attacker already know about your investigation, and how would that change your plan?
+    common_errors:
+      - Discussing containment plans in channels the attacker can read.
+
+  - external_key: problem_solving.security_incident_reasoning.outage_or_attack
+    competency_key: incident_response
+    topic: Outage that may be caused by an attacker
+    difficulty: hard
+    text: >-
+      A major production outage is in progress, and while the SRE team works on recovery you notice
+      administrator actions in the audit log just before it started that nobody admits to. How do you run the
+      security side alongside the outage response?
+    expected_concepts:
+      - treat it as a possible security incident while recovery continues
+      - coordinate with the incident commander so recovery doesn't destroy evidence
+      - verify the identity behind the admin actions and the session source
+      - limit or revoke the suspect credentials without blocking responders
+      - check whether recovery tools and pipelines are trustworthy
+      - keep separate but linked tracks with clear ownership
+    rubric:
+      excellent: Raises the security hypothesis with the incident commander, sets up a parallel track that preserves evidence without slowing recovery, verifies the suspect identity, protects responders' access and checks that recovery paths aren't compromised.
+      good: Investigates the admin actions in parallel and tells the incident commander.
+      weak: Waits until the outage is over before looking, or halts recovery entirely to investigate.
+    followups:
+      - The SRE team wants to restore from automation that uses the same admin role. What do you advise?
+      - How would you decide when the security track takes priority over recovery?
+    common_errors:
+      - Letting recovery overwrite the systems and logs that would show what happened.
+
+  - external_key: problem_solving.security_incident_reasoning.scope_beyond_retention
+    competency_key: security
+    topic: Scoping a compromise older than your logs
+    difficulty: hard
+    text: >-
+      You confirm an attacker has been in your environment, but your central logs only go back seven days and
+      the evidence suggests the intrusion started much earlier. How would you work out the scope anyway?
+    expected_concepts:
+      - other sources with longer history, such as cloud provider logs, backups, endpoint artefacts and billing records
+      - file system timestamps, shell histories and artefacts on hosts
+      - third-party records from email, identity and SaaS providers
+      - work backwards from known indicators to find earlier footholds
+      - state which conclusions are bounded by missing data
+      - assume the worst case where data is missing when making notification decisions
+    rubric:
+      excellent: Lists several alternative sources with longer retention, uses indicators to pivot backwards, is explicit about what cannot be known and explains how that uncertainty affects containment and notification decisions.
+      good: Names a few alternative sources and plans to extend retention.
+      weak: Concludes the scope is limited to the seven days of logs available.
+    followups:
+      - Legal asks whether customer data was accessed in that earlier period. How do you answer?
+      - What retention would you argue for afterwards, and how would you justify the cost?
+    common_errors:
+      - Treating the absence of logs as the absence of activity.
+
+  - external_key: problem_solving.security_incident_reasoning.forged_kerberos_tickets
+    competency_key: security
+    topic: Suspected forged domain authentication tickets
+    difficulty: hard
+    text: >-
+      Your detection team sees Kerberos tickets in your Active Directory with unusually long lifetimes and for
+      accounts that don't exist anymore, which suggests forged tickets. How would you confirm this and plan
+      containment?
+    expected_concepts:
+      - forged tickets imply the krbtgt secret is compromised, so the domain is too
+      - confirm using domain controller logs and ticket anomalies
+      - find how domain admin level access was obtained
+      - reset krbtgt twice with spacing to invalidate tickets while managing replication
+      - coordinate eviction with removal of other persistence first
+      - consider rebuilding the domain if trust cannot be restored
+    rubric:
+      excellent: Explains that forged tickets mean full domain compromise, confirms with domain controller evidence, plans a coordinated eviction including a double krbtgt reset with replication in mind and weighs a rebuild if trust can't be restored.
+      good: Recognises a golden ticket attack and knows krbtgt needs to be reset.
+      weak: Resets a few user passwords, which does nothing against forged tickets.
+    followups:
+      - Why does the krbtgt reset need to happen twice, and what can break?
+      - What has to be done before the reset so the attacker can't just forge new tickets?
+    common_errors:
+      - Resetting krbtgt before removing the attacker's access, letting them repeat the attack.
+
+  - external_key: problem_solving.security_incident_reasoning.coordinated_eviction_plan
+    competency_key: incident_response
+    topic: Planning a coordinated eviction
+    difficulty: hard
+    text: >-
+      You've identified about twenty compromised hosts, several stolen accounts and two persistence mechanisms,
+      and you think the attacker is still active. How would you plan the eviction so they don't simply come
+      back or react destructively?
+    expected_concepts:
+      - complete scoping enough before acting, with known gaps accepted
+      - remove all footholds at the same time rather than piecemeal
+      - credential resets, token revocation, host isolation and network blocks sequenced in one window
+      - prepare for destructive reactions, such as ransomware or deletion, with backups ready
+      - heightened monitoring after eviction to catch re-entry
+      - rehearse the plan and assign owners for each action
+    rubric:
+      excellent: Plans a single coordinated window covering accounts, hosts, persistence and network, prepares for destructive responses, assigns owners and increases monitoring afterwards to catch re-entry.
+      good: Understands that actions should happen together and lists the main steps.
+      weak: Cleans hosts one by one as they're found, alerting the attacker and leaving other footholds.
+    followups:
+      - Halfway through the window you find a twenty-first host. What do you do?
+      - How would you tell whether the attacker has come back a week later?
+    common_errors:
+      - Piecemeal containment that warns the attacker while footholds remain.

@@ -1,0 +1,250 @@
+version: 1
+slug: transitive_service_dependencies
+title: "Transitive Service Dependencies (SQL)"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [dba, data, backend, sre]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Transitive Service Dependencies
+
+  The platform team stores its service catalogue in two tables.
+
+  Table `services`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | name | TEXT | unique |
+
+  Table `dependencies`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | service_id | INTEGER | references `services.id` |
+  | depends_on_id | INTEGER | references `services.id`; **`service_id` calls `depends_on_id`** |
+
+  A row `(service_id, depends_on_id)` means the first service depends on the second. The same pair
+  may be recorded more than once. The dependency graph has **no cycles**.
+
+  Before a load test of the service named `'checkout'`, you need every service it relies on. Return
+  one row per service that `checkout` depends on **directly or indirectly**, with columns:
+
+  - `name`: the service name;
+  - `depth`: the length of the **shortest** dependency chain from `checkout` to it (`1` = direct).
+
+  `checkout` itself is not listed. Order the rows by `depth` ascending, then `name` ascending. Return no
+  rows when there is no service named `checkout` or it has no dependencies.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite (a recursive common table expression
+  is supported by both).
+
+  ### Example 1
+  ```
+  services                dependencies
+  +----+-------------+    +------------+---------------+
+  | id | name        |    | service_id | depends_on_id |
+  +----+-------------+    +------------+---------------+
+  | 1  | checkout    |    | 1          | 2             |
+  | 2  | payments    |    | 1          | 3             |
+  | 3  | inventory   |    | 2          | 4             |
+  | 4  | ledger      |    | 2          | 5             |
+  | 5  | auth        |    | 3          | 5             |
+  | 6  | search      |    | 4          | 7             |
+  | 7  | audit-store |    | 6          | 1             |
+  +----+-------------+    | 6          | 3             |
+                          +------------+---------------+
+
+  Output
+  +-------------+-------+
+  | name        | depth |
+  +-------------+-------+
+  | inventory   | 1     |
+  | payments    | 1     |
+  | auth        | 2     |
+  | ledger      | 2     |
+  | audit-store | 3     |
+  +-------------+-------+
+  auth is reached through payments and through inventory, both at depth 2. search depends on
+  checkout, not the other way round, so it is not listed.
+  ```
+
+  ### Example 2
+  ```
+  services             dependencies
+  +----+----------+    +------------+---------------+
+  | id | name     |    | service_id | depends_on_id |
+  +----+----------+    +------------+---------------+
+  | 1  | checkout |    | 1          | 2             |
+  | 2  | cart     |    | 2          | 3             |
+  | 3  | pricing  |    | 3          | 4             |
+  | 4  | currency |    | 1          | 4             |
+  +----+----------+    +------------+---------------+
+
+  Output
+  +----------+-------+
+  | name     | depth |
+  +----------+-------+
+  | cart     | 1     |
+  | currency | 1     |
+  | pricing  | 2     |
+  +----------+-------+
+  currency is reachable directly (depth 1) and through cart and pricing (depth 3); report 1.
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return name and depth of every service that checkout depends on, directly or indirectly,
+    -- ordered by depth, then name.
+    SELECT name, 1 AS depth
+    FROM services
+    ORDER BY name;
+reference_solutions:
+  sql: |
+    WITH RECURSIVE reach (id, depth) AS (
+      SELECT d.depends_on_id, 1
+      FROM dependencies d
+      JOIN services s ON s.id = d.service_id
+      WHERE s.name = 'checkout'
+      UNION
+      SELECT d.depends_on_id, r.depth + 1
+      FROM reach r
+      JOIN dependencies d ON d.service_id = r.id
+    )
+    SELECT s.name, MIN(r.depth) AS depth
+    FROM reach r
+    JOIN services s ON s.id = r.id
+    GROUP BY s.id, s.name
+    ORDER BY MIN(r.depth), s.name;
+sql_setup: |
+  CREATE TABLE services (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+  );
+  CREATE TABLE dependencies (
+    service_id INTEGER NOT NULL REFERENCES services (id),
+    depends_on_id INTEGER NOT NULL REFERENCES services (id)
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - auth reachable at depth 2 twice, audit-store at 3, search is a dependent not a dependency"
+    setup_sql: |
+      INSERT INTO services (id, name) VALUES
+        (1, 'checkout'), (2, 'payments'), (3, 'inventory'), (4, 'ledger'), (5, 'auth'), (6, 'search'), (7, 'audit-store');
+      INSERT INTO dependencies (service_id, depends_on_id) VALUES
+        (1, 2), (1, 3), (2, 4), (2, 5), (3, 5), (4, 7), (6, 1), (6, 3);
+    expected_rows: [["inventory", 1], ["payments", 1], ["auth", 2], ["ledger", 2], ["audit-store", 3]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - currency is both direct and three hops away; minimum depth 1 wins"
+    setup_sql: |
+      INSERT INTO services (id, name) VALUES
+        (1, 'checkout'), (2, 'cart'), (3, 'pricing'), (4, 'currency');
+      INSERT INTO dependencies (service_id, depends_on_id) VALUES
+        (1, 2), (2, 3), (3, 4), (1, 4);
+    expected_rows: [["cart", 1], ["currency", 1], ["pricing", 2]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty tables - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "No service named checkout exists; other dependencies must not leak into the result"
+    setup_sql: |
+      INSERT INTO services (id, name) VALUES
+        (1, 'checkout-v2'), (2, 'cart'), (3, 'pricing');
+      INSERT INTO dependencies (service_id, depends_on_id) VALUES
+        (1, 2), (2, 3);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Direction trap - several services depend on checkout but checkout depends on nothing"
+    setup_sql: |
+      INSERT INTO services (id, name) VALUES
+        (1, 'web'), (2, 'mobile-bff'), (3, 'checkout'), (4, 'orders');
+      INSERT INTO dependencies (service_id, depends_on_id) VALUES
+        (1, 3), (2, 3), (4, 3), (1, 4);
+    expected_rows: []
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Duplicate dependency rows must not duplicate output rows"
+    setup_sql: |
+      INSERT INTO services (id, name) VALUES
+        (1, 'checkout'), (2, 'cart'), (3, 'pricing');
+      INSERT INTO dependencies (service_id, depends_on_id) VALUES
+        (1, 2), (1, 2), (2, 3), (2, 3), (1, 2);
+    expected_rows: [["cart", 1], ["pricing", 2]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Ties at the same depth ordered by name, not by id"
+    setup_sql: |
+      INSERT INTO services (id, name) VALUES
+        (1, 'checkout'), (2, 'zeta'), (3, 'mail'), (4, 'alpha'), (5, 'beta'), (6, 'omega');
+      INSERT INTO dependencies (service_id, depends_on_id) VALUES
+        (1, 2), (1, 3), (1, 4), (2, 6), (3, 5), (4, 6);
+    expected_rows: [["alpha", 1], ["mail", 1], ["zeta", 1], ["beta", 2], ["omega", 2]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Chain of 12 services below checkout - depths 1 to 12 (recursion goes deep enough)"
+    setup_sql: |
+      INSERT INTO services (id, name) VALUES
+        (1, 'stage-01'), (2, 'stage-02'), (3, 'stage-03'), (4, 'stage-04'), (5, 'stage-05'), (6, 'stage-06'), (7, 'stage-07'), (8, 'stage-08'), (9, 'stage-09'), (10, 'stage-10'), (11, 'stage-11'), (12, 'stage-12'), (13, 'checkout');
+      INSERT INTO dependencies (service_id, depends_on_id) VALUES
+        (13, 12), (12, 11), (11, 10), (10, 9), (9, 8), (8, 7), (7, 6), (6, 5), (5, 4), (4, 3),
+        (3, 2), (2, 1);
+    expected_rows: [["stage-12", 1], ["stage-11", 2], ["stage-10", 3], ["stage-09", 4], ["stage-08", 5], ["stage-07", 6], ["stage-06", 7], ["stage-05", 8], ["stage-04", 9], ["stage-03", 10], ["stage-02", 11], ["stage-01", 12]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Stress - 31 services in a layered DAG with many alternative paths and skip edges"
+    setup_sql: |
+      INSERT INTO services (id, name) VALUES
+        (1, 'checkout'), (2, 'svc-1a'), (3, 'svc-1b'), (4, 'svc-1c'), (5, 'svc-1d'), (6, 'svc-1e'), (7, 'svc-1f'), (8, 'svc-2a'), (9, 'svc-2b'), (10, 'svc-2c'), (11, 'svc-2d'), (12, 'svc-2e'), (13, 'svc-2f'), (14, 'svc-3a'), (15, 'svc-3b'), (16, 'svc-3c'), (17, 'svc-3d'), (18, 'svc-3e'), (19, 'svc-3f'), (20, 'svc-4a'), (21, 'svc-4b'), (22, 'svc-4c'), (23, 'svc-4d'), (24, 'svc-4e'), (25, 'svc-4f'), (26, 'svc-5a'), (27, 'svc-5b'), (28, 'svc-5c'), (29, 'svc-5d'), (30, 'svc-5e'), (31, 'svc-5f');
+      INSERT INTO dependencies (service_id, depends_on_id) VALUES
+        (8, 16), (17, 23), (6, 16), (4, 12), (15, 23), (7, 8), (11, 18), (19, 25), (9, 14), (6, 11),
+        (9, 15), (5, 15), (5, 11), (4, 16), (15, 22), (12, 15), (9, 21), (21, 26), (14, 20), (17, 20),
+        (8, 18), (19, 23), (1, 3), (20, 26), (3, 19), (22, 29), (2, 10), (16, 24), (13, 19), (5, 8),
+        (10, 18), (3, 9), (11, 19), (18, 30), (6, 12), (16, 20), (18, 25), (20, 29), (22, 26), (23, 28),
+        (1, 4), (25, 28), (10, 19), (8, 21), (25, 30), (1, 7), (2, 11), (13, 14), (7, 13), (4, 13),
+        (3, 12), (23, 31), (24, 26), (21, 31), (11, 25), (16, 30), (1, 8), (12, 19), (18, 24), (14, 24),
+        (24, 29);
+    expected_rows: [["svc-1b", 1], ["svc-1c", 1], ["svc-1f", 1], ["svc-2a", 1], ["svc-2b", 2], ["svc-2e", 2], ["svc-2f", 2], ["svc-3c", 2], ["svc-3e", 2], ["svc-3f", 2], ["svc-4b", 2], ["svc-3a", 3], ["svc-3b", 3], ["svc-4a", 3], ["svc-4d", 3], ["svc-4e", 3], ["svc-4f", 3], ["svc-5a", 3], ["svc-5e", 3], ["svc-5f", 3], ["svc-4c", 4], ["svc-5c", 4], ["svc-5d", 4]]
+expected_concepts:
+  - "WITH RECURSIVE: anchor member plus recursive member"
+  - "carrying a depth counter through the recursion"
+  - "MIN(depth) with GROUP BY to keep the shortest chain"
+  - "UNION versus UNION ALL in recursive queries and path explosion"
+  - "deterministic ORDER BY with a tie-breaker"
+optimal_complexity: {time: "O(V + E) distinct (service, depth) states with UNION and an index on dependencies.service_id", space: "O(V * D) for the working set, D = maximum depth"}
+rubric:
+  excellent: "Writes a recursive CTE anchored on checkout's direct dependencies, increments depth in the recursive member, aggregates MIN(depth) per service, orders by depth then name, and explains UNION versus UNION ALL and why duplicates or diamond paths would otherwise multiply rows."
+  good: "Correct recursive query after a hint about taking the minimum depth or about de-duplicating services reached by several paths."
+  weak: "Only handles direct dependencies or a fixed number of self-joins, follows the edges in the wrong direction, or returns a service once per path."
+  criteria:
+    correctness: "All tests pass, including diamonds, duplicate rows, missing checkout and the direction trap."
+    efficiency: "Uses UNION or another way to bound the working set; mentions an index on dependencies(service_id)."
+    code_quality: "Readable CTE with named columns and clear aliases."
+    edge_cases: "Empty tables, no checkout service, a service reachable at several depths and ties at the same depth."
+    communication: "Explains how the recursion terminates on an acyclic graph and what would happen with a cycle."
+hints:
+  - "A fixed number of joins only reaches a fixed number of hops; you need a query that keeps expanding from the services found so far."
+  - "Use a recursive common table expression: start from checkout's direct dependencies at depth 1, then repeatedly add the dependencies of rows already found with depth plus one."
+  - "In the anchor, join dependencies to services and filter on the name checkout; in the recursive part, join the CTE to dependencies on service id and add one to depth. Finally join back to services for the name, take the minimum depth per service and order by that minimum and then the name."
+followups:
+  - "How would you protect this query if someone accidentally inserts a dependency cycle?"
+  - "How would you return the actual shortest chain (for example 'checkout > payments > auth') for each service?"
+  - "Which services are depended on by the most other services, directly or indirectly?"
+  - "Which index makes the recursive step fast on a catalogue with 50,000 services?"
+common_errors:
+  - "Following the edges in the reverse direction and listing services that depend on checkout."
+  - "Returning one row per path instead of one row per service, or not taking the minimum depth."
+  - "Using UNION ALL without aggregation, which multiplies rows on diamond-shaped graphs."
+  - "Ordering only by depth, leaving ties in an undefined order."
+  - "Including checkout itself in the output at depth 0."

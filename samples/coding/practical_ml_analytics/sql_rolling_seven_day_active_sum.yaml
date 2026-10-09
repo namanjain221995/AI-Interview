@@ -1,0 +1,232 @@
+version: 1
+slug: sql_rolling_seven_day_active_sum
+title: "Rolling Seven-Day Active Users (SQL)"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, data, backend, dba]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Rolling Seven-Day Active Users
+
+  The product analytics job writes one row per day into `daily_active`. Days are numbered consecutively
+  (`day_number` 1 is the launch day), but the job sometimes fails, so **some days have no row at all**.
+
+  | column | type | notes |
+  |--------|------|-------|
+  | day_number | INTEGER | primary key; `0` or greater |
+  | active_users | INTEGER | users active on that day, `0` or greater |
+
+  For **every row** of the table, return `day_number`, `active_users` and `rolling_7d_total`: the sum of
+  `active_users` over all rows whose `day_number` lies between `day_number - 6` and `day_number`
+  inclusive (the day itself and the six calendar days before it). Missing days simply contribute
+  nothing; do not invent rows for them. Order the result by `day_number` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  daily_active
+  +------------+--------------+
+  | day_number | active_users |
+  +------------+--------------+
+  | 1          | 100          |
+  | 2          | 120          |
+  | 3          | 90           |
+  | 5          | 110          |
+  | 8          | 130          |
+  | 9          | 80           |
+  | 15         | 60           |
+  +------------+--------------+
+
+  Output
+  +------------+--------------+------------------+
+  | day_number | active_users | rolling_7d_total |
+  +------------+--------------+------------------+
+  | 1          | 100          | 100              |
+  | 2          | 120          | 220              |
+  | 3          | 90           | 310              |
+  | 5          | 110          | 420              |
+  | 8          | 130          | 450              |
+  | 9          | 80           | 410              |
+  | 15         | 60           | 140              |
+  +------------+--------------+------------------+
+  Day 8 covers days 2-8 (120 + 90 + 110 + 130); day 15 covers days 9-15 (80 + 60). The six rows before
+  day 8 are not the same as the six days before it.
+  ```
+
+  ### Example 2
+  ```
+  daily_active
+  +------------+--------------+
+  | day_number | active_users |
+  +------------+--------------+
+  | 1          | 10           |
+  | 2          | 20           |
+  | 3          | 30           |
+  | 4          | 40           |
+  | 5          | 50           |
+  | 6          | 60           |
+  | 7          | 70           |
+  | 8          | 80           |
+  +------------+--------------+
+
+  Output
+  +------------+--------------+------------------+
+  | day_number | active_users | rolling_7d_total |
+  +------------+--------------+------------------+
+  | 1          | 10           | 10               |
+  | 2          | 20           | 30               |
+  | 3          | 30           | 60               |
+  | 4          | 40           | 100              |
+  | 5          | 50           | 150              |
+  | 6          | 60           | 210              |
+  | 7          | 70           | 280              |
+  | 8          | 80           | 350              |
+  +------------+--------------+------------------+
+  On day 8 the window is days 2-8, so day 1 no longer counts.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `0 <= active_users <= 2 * 10^9`; totals can exceed the 32-bit integer range
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return day_number, active_users and rolling_7d_total (days d-6..d), ordered by day_number.
+    SELECT day_number, active_users, active_users AS rolling_7d_total
+    FROM daily_active
+    ORDER BY day_number;
+reference_solutions:
+  sql: |
+    SELECT d.day_number,
+           d.active_users,
+           (SELECT SUM(x.active_users)
+            FROM daily_active x
+            WHERE x.day_number BETWEEN d.day_number - 6 AND d.day_number) AS rolling_7d_total
+    FROM daily_active d
+    ORDER BY d.day_number;
+sql_setup: |
+  CREATE TABLE daily_active (
+    day_number INTEGER PRIMARY KEY,
+    active_users INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - missing days contribute nothing; a ROWS-based window gets days 8, 9 and 15 wrong"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_active (day_number, active_users) VALUES
+        (1, 100), (2, 120), (3, 90), (5, 110),
+        (8, 130), (9, 80), (15, 60);
+    expected_rows: [[1, 100, 100], [2, 120, 220], [3, 90, 310], [5, 110, 420], [8, 130, 450], [9, 80, 410], [15, 60, 140]]
+  - id: t2
+    description: "Example 2 - consecutive days; day 1 leaves the window on day 8"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_active (day_number, active_users) VALUES
+        (1, 10), (2, 20), (3, 30), (4, 40),
+        (5, 50), (6, 60), (7, 70), (8, 80);
+    expected_rows: [[1, 10, 10], [2, 20, 30], [3, 30, 60], [4, 40, 100], [5, 50, 150], [6, 60, 210], [7, 70, 280], [8, 80, 350]]
+  - id: t3
+    hidden: true
+    description: "Empty table returns no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single day"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_active (day_number, active_users) VALUES
+        (42, 7);
+    expected_rows: [[42, 7, 7]]
+  - id: t5
+    hidden: true
+    description: "Boundary - a day exactly 6 days earlier is included, 7 days earlier is not"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_active (day_number, active_users) VALUES
+        (10, 1), (16, 2), (17, 4);
+    expected_rows: [[10, 1, 1], [16, 2, 3], [17, 4, 6]]
+  - id: t6
+    hidden: true
+    description: "Rows inserted out of order, day 0 present - ORDER BY required"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_active (day_number, active_users) VALUES
+        (30, 5), (0, 3), (12, 8), (3, 2),
+        (6, 1);
+    expected_rows: [[0, 3, 3], [3, 2, 5], [6, 1, 6], [12, 8, 9], [30, 5, 5]]
+  - id: t7
+    hidden: true
+    description: "Large values - totals exceed the 32-bit range"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_active (day_number, active_users) VALUES
+        (1, 2000000000), (2, 2000000000), (3, 2000000000), (4, 0),
+        (5, 1500000000);
+    expected_rows: [[1, 2000000000, 2000000000], [2, 2000000000, 4000000000], [3, 2000000000, 6000000000], [4, 0, 6000000000], [5, 1500000000, 7500000000]]
+  - id: t8
+    hidden: true
+    description: "Zero-activity days still appear with their totals"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_active (day_number, active_users) VALUES
+        (1, 0), (2, 0), (9, 0), (10, 5);
+    expected_rows: [[1, 0, 0], [2, 0, 0], [9, 0, 0], [10, 5, 5]]
+  - id: t9
+    hidden: true
+    description: "Gaps longer than a week - each total is the day itself"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_active (day_number, active_users) VALUES
+        (100, 9), (200, 8), (300, 7);
+    expected_rows: [[100, 9, 9], [200, 8, 8], [300, 7, 7]]
+  - id: t10
+    hidden: true
+    description: "Sixty-day calendar with recurring gaps"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_active (day_number, active_users) VALUES
+        (1, 42), (2, 79), (5, 89), (6, 25),
+        (7, 62), (8, 99), (9, 35), (12, 45),
+        (13, 82), (14, 18), (15, 55), (16, 92),
+        (19, 102), (20, 38), (21, 75), (23, 48),
+        (26, 58), (27, 95), (28, 31), (29, 68),
+        (30, 105), (34, 51), (35, 88), (36, 24),
+        (37, 61), (40, 71), (41, 7), (42, 44),
+        (43, 81), (47, 27), (48, 64), (49, 101),
+        (50, 37), (51, 74), (54, 84), (56, 57),
+        (57, 94), (58, 30);
+    expected_rows: [[1, 42, 42], [2, 79, 121], [5, 89, 210], [6, 25, 235], [7, 62, 297], [8, 99, 354], [9, 35, 310], [12, 45, 266], [13, 82, 323], [14, 18, 279], [15, 55, 235], [16, 92, 292], [19, 102, 349], [20, 38, 305], [21, 75, 362], [23, 48, 263], [26, 58, 219], [27, 95, 276], [28, 31, 232], [29, 68, 300], [30, 105, 357], [34, 51, 255], [35, 88, 312], [36, 24, 268], [37, 61, 224], [40, 71, 295], [41, 7, 251], [42, 44, 207], [43, 81, 264], [47, 27, 159], [48, 64, 216], [49, 101, 273], [50, 37, 229], [51, 74, 303], [54, 84, 360], [56, 57, 252], [57, 94, 309], [58, 30, 265]]
+expected_concepts:
+  - "range-based (value) windows versus row-based windows"
+  - "correlated subquery or self-join on a day range"
+  - "SUM(...) OVER (ORDER BY day_number RANGE BETWEEN 6 PRECEDING AND CURRENT ROW)"
+  - "gaps in time series data"
+  - "deterministic ORDER BY"
+optimal_complexity: {time: "O(n log n) with a range window or an index range scan per row", space: "O(n)"}
+rubric:
+  excellent: "Uses a RANGE window frame or a correlated subquery or self-join on day_number - 6 .. day_number, explains why ROWS BETWEEN 6 PRECEDING is wrong with missing days, keeps every original row and orders the output."
+  good: "Correct query after a hint about missing days or the inclusive boundary."
+  weak: "Uses ROWS BETWEEN 6 PRECEDING, LAG over six rows, a 7-day boundary that is off by one, or fills missing days with invented rows."
+  criteria:
+    correctness: "All tests pass, including gaps, exact window boundaries, out-of-order inserts and large totals."
+    efficiency: "Set-based query; mentions that the primary key index makes each range lookup cheap."
+    code_quality: "Clear aliases and an explicitly named rolling_7d_total column."
+    edge_cases: "Empty table, a single day, gaps longer than a week and zero-activity days."
+    communication: "Explains the difference between the previous six rows and the previous six days."
+hints:
+  - "The window is defined by calendar days, not by rows; think about what happens to 'the previous six rows' when a day is missing."
+  - "For each row you need the rows whose day_number falls between day_number - 6 and day_number inclusive; that is a range condition on the value, which a correlated subquery, a self-join or a value-based window frame can express."
+  - "Either SELECT each row with (SELECT SUM(active_users) FROM daily_active x WHERE x.day_number BETWEEN d.day_number - 6 AND d.day_number), or use SUM(active_users) OVER (ORDER BY day_number RANGE BETWEEN 6 PRECEDING AND CURRENT ROW); finish with ORDER BY day_number."
+followups:
+  - "How would you also output rows for the missing days with a total, using a generated calendar?"
+  - "How would you compute a rolling seven-day count of distinct users from a raw events table?"
+  - "Which index or partitioning would keep this fast on years of per-tenant data?"
+  - "How would you flag days whose total drops more than 30 percent against the previous week?"
+common_errors:
+  - "Using ROWS BETWEEN 6 PRECEDING AND CURRENT ROW, which spans more than seven days when rows are missing."
+  - "Using BETWEEN day_number - 7 AND day_number, which covers eight days."
+  - "Filtering to days that have a full seven-day history instead of returning every row."
+  - "Leaving out ORDER BY and relying on insertion order."

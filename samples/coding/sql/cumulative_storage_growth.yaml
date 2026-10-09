@@ -1,0 +1,194 @@
+version: 1
+slug: cumulative_storage_growth
+title: Cumulative Storage Growth
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [cloud, data_analyst, platform]
+time_limit_minutes: 13
+prompt_markdown: |
+  ## Cumulative Storage Growth
+
+  An object-storage bucket logs every upload in table `storage_uploads`. Nothing is ever deleted, so
+  the bucket only grows. The capacity-planning team wants a daily growth curve.
+
+  Table `storage_uploads`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | uploaded_on | TEXT | upload date formatted `'YYYY-MM-DD'` |
+  | bytes | BIGINT | size of the uploaded object, `>= 0`; single objects can exceed 2^31 bytes |
+
+  For every date that has **at least one upload** return:
+
+  - `day`: the date,
+  - `bytes_added`: the total bytes uploaded on that date,
+  - `cumulative_bytes`: the total bytes uploaded on that date and all earlier dates.
+
+  Dates without uploads are not returned. Order the result by `day` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  storage_uploads
+  +----+-------------+------------+
+  | id | uploaded_on | bytes      |
+  +----+-------------+------------+
+  | 1  | 2026-06-01  | 1500000000 |
+  | 2  | 2026-06-01  | 800000000  |
+  | 3  | 2026-06-03  | 4000000000 |
+  | 4  | 2026-06-02  | 250000000  |
+  +----+-------------+------------+
+
+  Output
+  +------------+-------------+------------------+
+  | day        | bytes_added | cumulative_bytes |
+  +------------+-------------+------------------+
+  | 2026-06-01 | 2300000000  | 2300000000       |
+  | 2026-06-02 | 250000000   | 2550000000       |
+  | 2026-06-03 | 4000000000  | 6550000000       |
+  +------------+-------------+------------------+
+  ```
+
+  ### Example 2
+  ```
+  storage_uploads
+  +----+-------------+-------+
+  | id | uploaded_on | bytes |
+  +----+-------------+-------+
+  | 10 | 2026-07-15  | 5     |
+  | 11 | 2026-07-15  | 0     |
+  | 12 | 2026-07-15  | 95    |
+  +----+-------------+-------+
+
+  Output
+  +------------+-------------+------------------+
+  | day        | bytes_added | cumulative_bytes |
+  +------------+-------------+------------------+
+  | 2026-07-15 | 100         | 100              |
+  +------------+-------------+------------------+
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `0 <= bytes <= 10^13`; totals fit in a signed 64-bit integer.
+  - `uploaded_on` always uses the exact format above (text order equals date order).
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return day, bytes_added and cumulative_bytes (running total), one row per upload date, ordered by day.
+    SELECT uploaded_on AS day, bytes AS bytes_added, bytes AS cumulative_bytes
+    FROM storage_uploads
+    ORDER BY uploaded_on;
+reference_solutions:
+  sql: |
+    SELECT uploaded_on AS day,
+           SUM(bytes) AS bytes_added,
+           SUM(SUM(bytes)) OVER (ORDER BY uploaded_on) AS cumulative_bytes
+    FROM storage_uploads
+    GROUP BY uploaded_on
+    ORDER BY uploaded_on;
+sql_setup: |
+  CREATE TABLE storage_uploads (
+    id INTEGER PRIMARY KEY,
+    uploaded_on TEXT NOT NULL,
+    bytes BIGINT NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - several uploads on one day, totals beyond 32-bit, out-of-order ids"
+    ordered: true
+    setup_sql: |
+      INSERT INTO storage_uploads (id, uploaded_on, bytes) VALUES
+        (1, '2026-06-01', 1500000000), (2, '2026-06-01', 800000000), (3, '2026-06-03', 4000000000),
+        (4, '2026-06-02', 250000000);
+    expected_rows: [["2026-06-01", 2300000000, 2300000000], ["2026-06-02", 250000000, 2550000000], ["2026-06-03", 4000000000, 6550000000]]
+  - id: t2
+    description: "Example 2 - one day with a zero-byte upload"
+    ordered: true
+    setup_sql: |
+      INSERT INTO storage_uploads (id, uploaded_on, bytes) VALUES (10, '2026-07-15', 5), (11, '2026-07-15', 0), (12, '2026-07-15', 95);
+    expected_rows: [["2026-07-15", 100, 100]]
+  - id: t3
+    hidden: true
+    description: "Empty table returns no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single upload"
+    ordered: true
+    setup_sql: "INSERT INTO storage_uploads (id, uploaded_on, bytes) VALUES (1, '2026-01-01', 4096);"
+    expected_rows: [["2026-01-01", 4096, 4096]]
+  - id: t5
+    hidden: true
+    description: "Days with gaps are not filled in; running total carries across the gap"
+    ordered: true
+    setup_sql: |
+      INSERT INTO storage_uploads (id, uploaded_on, bytes) VALUES
+        (1, '2026-02-01', 100), (2, '2026-02-10', 200), (3, '2026-02-28', 300), (4, '2026-03-01', 400);
+    expected_rows: [["2026-02-01", 100, 100], ["2026-02-10", 200, 300], ["2026-02-28", 300, 600], ["2026-03-01", 400, 1000]]
+  - id: t6
+    hidden: true
+    description: "Many uploads per day inserted in random date order - one row per day (no per-upload rows)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO storage_uploads (id, uploaded_on, bytes) VALUES
+        (1, '2026-05-03', 7), (2, '2026-05-01', 3), (3, '2026-05-02', 11), (4, '2026-05-01', 5),
+        (5, '2026-05-03', 13), (6, '2026-05-02', 2), (7, '2026-05-01', 1), (8, '2026-05-03', 17),
+        (9, '2026-05-02', 19), (10, '2026-05-01', 23);
+    expected_rows: [["2026-05-01", 32, 32], ["2026-05-02", 32, 64], ["2026-05-03", 37, 101]]
+  - id: t7
+    hidden: true
+    description: "Very large objects - running total near 10^14 needs 64-bit arithmetic"
+    ordered: true
+    setup_sql: |
+      INSERT INTO storage_uploads (id, uploaded_on, bytes) VALUES
+        (1, '2026-08-01', 10000000000000), (2, '2026-08-01', 9999999999999), (3, '2026-08-02', 10000000000000),
+        (4, '2026-08-03', 8589934592), (5, '2026-08-03', 4294967296);
+    expected_rows: [["2026-08-01", 19999999999999, 19999999999999], ["2026-08-02", 10000000000000, 29999999999999], ["2026-08-03", 12884901888, 30012884901887]]
+  - id: t8
+    hidden: true
+    description: "A day with only zero-byte uploads still appears and keeps the cumulative total unchanged"
+    ordered: true
+    setup_sql: |
+      INSERT INTO storage_uploads (id, uploaded_on, bytes) VALUES
+        (1, '2026-09-01', 500), (2, '2026-09-02', 0), (3, '2026-09-02', 0), (4, '2026-09-03', 250);
+    expected_rows: [["2026-09-01", 500, 500], ["2026-09-02", 0, 500], ["2026-09-03", 250, 750]]
+  - id: t9
+    hidden: true
+    description: "Year boundary ordering of text dates"
+    ordered: true
+    setup_sql: |
+      INSERT INTO storage_uploads (id, uploaded_on, bytes) VALUES
+        (1, '2026-01-01', 30), (2, '2025-12-31', 20), (3, '2025-01-15', 10), (4, '2026-01-01', 40);
+    expected_rows: [["2025-01-15", 10, 10], ["2025-12-31", 20, 30], ["2026-01-01", 70, 100]]
+expected_concepts:
+  - "GROUP BY aggregation before a window"
+  - "running total with SUM() OVER (ORDER BY ...)"
+  - "nesting an aggregate inside a window function"
+  - "64-bit integer columns"
+optimal_complexity: {time: "O(n log n) for grouping and ordering (O(n) with an index on uploaded_on)", space: "O(d) for d distinct days"}
+rubric:
+  excellent: "Aggregates per day first, then applies SUM(...) OVER (ORDER BY day) (nested aggregate or a CTE), explains why windowing raw rows produces one row per upload, and keeps BIGINT arithmetic."
+  good: "Reaches a correct query after a hint about grouping before the running total."
+  weak: "Returns one row per upload, computes a running total per upload row, or uses a self-join that double-counts."
+  criteria:
+    correctness: "All tests pass, including several uploads per day, gaps, zero-byte days and very large values."
+    efficiency: "Groups once and runs a single window pass instead of a correlated subquery per day."
+    code_quality: "Readable CTE or nested aggregate with clear aliases and an explicit ORDER BY."
+    edge_cases: "Empty table, single upload, zero-byte uploads, year boundaries and 64-bit totals."
+    communication: "Explains the order of evaluation: GROUP BY, then window functions, then ORDER BY."
+hints:
+  - "Split the job in two: first get one total per day, then accumulate those daily totals."
+  - "Window functions are evaluated after GROUP BY, so a window can run over the grouped rows - or you can group in a CTE first."
+  - "Group by uploaded_on to get SUM(bytes) per day, then compute SUM of those daily sums OVER (ORDER BY uploaded_on), either as SUM(SUM(bytes)) OVER (...) or in an outer query over a CTE."
+followups:
+  - "How would you also return the days with no uploads, carrying the previous total forward?"
+  - "How would you handle deletions recorded as negative byte counts?"
+  - "Why does the default window frame matter if two rows share the same ordering value?"
+common_errors:
+  - "Applying the running SUM to raw upload rows, which returns one row per upload instead of per day."
+  - "Using a correlated subquery per day, which is correct but quadratic on large tables."
+  - "Casting to a 32-bit integer, which overflows on multi-gigabyte totals."

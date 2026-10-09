@@ -1,0 +1,593 @@
+# Curated questions: system design, distributed data (1 of 4): sharding, partitioning and data placement.
+# `defaults` are merged into every question (question keys win). Easy questions override round_types.
+version: 1
+defaults:
+  role_tags: [backend, dba, data]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------- easy
+  - external_key: system_design.distributed_data.cost_of_sharding
+    competency_key: databases
+    topic: What sharding takes away
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A teammate proposes sharding our main user database across several servers. Before agreeing, what
+      capabilities of a single database would we lose or have to rebuild ourselves, and how would that shape
+      your recommendation?
+    expected_concepts:
+      - joins and transactions across shards become hard or impossible
+      - global unique constraints and auto-increment ids no longer work as-is
+      - cross-shard queries and reporting need scatter-gather or a separate store
+      - operational cost of many databases (backups, migrations, monitoring)
+      - alternatives first (indexes, caching, read replicas, bigger hardware, partitioning)
+    rubric:
+      excellent: Names several concrete losses (cross-shard joins and transactions, global constraints, simple ids, reporting) plus the operational burden, and recommends exhausting cheaper options while defining what load would justify sharding.
+      good: Mentions joins or transactions across shards and some operational overhead, and suggests trying simpler scaling first.
+      weak: Treats sharding as a free performance win or cannot name what it costs.
+    followups:
+      - Which of those losses would hurt our product the most, and how would you design around it?
+      - What measurements would convince you that sharding is really needed now?
+    common_errors:
+      - Sharding before checking whether indexes, caching or replicas would solve the problem.
+
+  - external_key: system_design.distributed_data.hash_vs_range_partitioning
+    competency_key: distributed_systems
+    topic: Hash versus range partitioning
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Say we have an orders table that is too big for one machine. Most queries fetch a single customer's
+      orders, but finance also runs reports over date ranges. How would you think about partitioning by hash
+      versus by range here?
+    expected_concepts:
+      - hash partitioning spreads load evenly but scatters range scans
+      - range partitioning keeps ranges together but risks hot partitions on recent data
+      - partition key should match the dominant access pattern (customer id)
+      - secondary access paths (date reports) served by another store or index
+      - compound keys such as customer id plus order date
+    rubric:
+      excellent: Matches the key to the dominant query, explains the even-load versus range-scan trade-off including the hot latest-date partition, and proposes a separate path for date reporting.
+      good: Explains the basic difference between hash and range partitioning and picks customer id with a reason.
+      weak: Picks a scheme without relating it to the queries, or does not see the hotspot from time-based ranges.
+    followups:
+      - What happens to write load if you range-partition by order date?
+      - How would finance's date-range report run if you choose hash by customer?
+    common_errors:
+      - Partitioning by creation time and sending all new writes to one partition.
+
+  - external_key: system_design.distributed_data.ids_without_autoincrement
+    competency_key: databases
+    topic: Primary keys once data is spread out
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Once rows are written on many shards, a single auto-increment counter stops being an option. What would
+      you use for primary keys instead, and what trade-offs would guide your choice?
+    expected_concepts:
+      - random UUIDs (no coordination, but poor index locality and large size)
+      - time-ordered ids such as UUIDv7, ULID or Snowflake-style ids
+      - per-shard ranges or a central allocator handing out blocks
+      - sortability and index insert locality
+      - not leaking business volume through sequential ids
+    rubric:
+      excellent: Compares random, time-ordered and block-allocated ids on coordination, index locality, size and ordering, and picks one with a reason tied to the workload.
+      good: Suggests UUIDs or Snowflake-style ids and names at least one trade-off.
+      weak: Proposes a single shared counter without seeing the bottleneck, or only says use UUIDs with no reasoning.
+    followups:
+      - Why can random UUIDs slow down inserts into a B-tree index?
+      - Would you ever embed the shard number in the id, and what does that cost later?
+    common_errors:
+      - Ignoring the write amplification that fully random keys cause in clustered indexes.
+
+  - external_key: system_design.distributed_data.consistent_hashing_intro
+    competency_key: distributed_systems
+    topic: Why consistent hashing exists
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      We place cache keys on servers using the key's hash modulo the number of servers, and every time we add
+      a server the hit rate collapses. Explain why that happens and how you would change the placement scheme.
+    expected_concepts:
+      - modulo placement remaps almost every key when the server count changes
+      - consistent hashing ring moves only about 1/N of keys
+      - virtual nodes to even out load
+      - rendezvous (highest random weight) hashing as an alternative
+      - warming or gradual rollout when adding capacity
+    rubric:
+      excellent: Explains the mass remapping precisely, describes consistent or rendezvous hashing with virtual nodes and how much data moves, and mentions easing the change in gradually.
+      good: Identifies that modulo remaps most keys and proposes consistent hashing.
+      weak: Blames the new server's capacity or cannot explain why keys move.
+    followups:
+      - Why do virtual nodes help when servers have different sizes?
+      - How would you add capacity without a cold-cache spike even with consistent hashing?
+    common_errors:
+      - Believing consistent hashing guarantees perfectly even load without virtual nodes.
+
+  # ------------------------------------------------------------- medium
+  - external_key: system_design.distributed_data.tenant_placement_skewed_sizes
+    competency_key: distributed_systems
+    topic: Placing tenants of very different sizes
+    difficulty: medium
+    text: >-
+      You run a B2B SaaS product where most customers are small, but a handful are a thousand times bigger
+      than average. How would you decide where each tenant's data lives across your database fleet?
+    expected_concepts:
+      - tenant id as shard key to keep a tenant's queries local
+      - a placement directory instead of pure hashing so tenants can move
+      - dedicated shards or cells for the largest tenants
+      - bin-packing small tenants and rebalancing over time
+      - per-tenant limits and monitoring of growth
+    rubric:
+      excellent: Uses tenant-local placement through a lookup directory, isolates the very large tenants, explains how tenants are moved as they grow and how placement decisions are monitored.
+      good: Shards by tenant id and recognises that big tenants need special handling.
+      weak: Hashes tenants blindly with no plan for the giants or for moving tenants later.
+    followups:
+      - A small tenant suddenly grows tenfold in a month. What happens and what do you do?
+      - How would a query that spans all tenants, such as an internal admin report, work?
+    common_errors:
+      - Assuming tenant sizes stay stable after initial placement.
+
+  - external_key: system_design.distributed_data.directory_vs_algorithmic_routing
+    competency_key: system_design
+    topic: Lookup directory versus computed shard routing
+    difficulty: medium
+    text: >-
+      There are two broad ways to find which shard holds a key: compute it from the key, or look it up in a
+      directory. Talk me through how you'd choose between them for a system you expect to grow a lot.
+    expected_concepts:
+      - algorithmic routing needs no lookup but makes moves expensive
+      - directory allows moving individual keys or tenants
+      - directory must be highly available and cached by clients
+      - stale routing caches and redirect or retry handling
+      - hybrid with logical buckets mapped to physical shards
+    rubric:
+      excellent: Weighs flexibility against the extra dependency, designs the directory for availability and caching, handles stale routes, and suggests mapping keys to many logical buckets as a middle ground.
+      good: Explains both approaches and the main trade-off of flexibility versus simplicity.
+      weak: Picks one without considering how data moves later or what happens when the directory is down.
+    followups:
+      - How do clients find out that their cached routing information is stale?
+      - What would you store in the directory and how big would it get?
+    common_errors:
+      - Making the directory a single point of failure on every request.
+
+  - external_key: system_design.distributed_data.local_vs_global_secondary_index
+    competency_key: distributed_systems
+    topic: Local versus global secondary indexes
+    difficulty: medium
+    text: >-
+      Our accounts are sharded by account id, but support staff need to look accounts up by email address.
+      How would you design that lookup, and what are the trade-offs of the options?
+    expected_concepts:
+      - local (per-shard) index requires querying every shard
+      - global index partitioned by email gives single-shard lookup
+      - global index updated asynchronously or within a cross-shard write
+      - consistency gap between base data and global index
+      - separate lookup table or search store as alternatives
+    rubric:
+      excellent: Contrasts scatter-gather on local indexes with a global index partitioned by email, explains how the global index is kept up to date and what inconsistency window that creates, and chooses based on lookup rate.
+      good: Proposes a separate email-to-account mapping and notes it must be kept in sync.
+      weak: Suggests adding a normal index without realising it only covers one shard.
+    followups:
+      - How would you also enforce that emails are unique across all shards?
+      - What does a support agent see if the global index is a few seconds behind?
+    common_errors:
+      - Forgetting that the email index must itself be partitioned and replicated.
+
+  - external_key: system_design.distributed_data.scatter_gather_top_k
+    competency_key: system_design
+    topic: Ranking queries across many shards
+    difficulty: medium
+    text: >-
+      Product sales are spread across sixty-four shards and the business wants a page showing the top fifty
+      products by revenue for any chosen week. How would you design that?
+    expected_concepts:
+      - scatter-gather with per-shard partial aggregation
+      - why per-shard top-50 is not exactly the global top-50 when products span shards
+      - precomputed rollups or a separate analytical store
+      - tail latency of fan-out across many shards
+      - freshness requirements decide between live query and batch
+    rubric:
+      excellent: Spots that products appear on many shards so per-shard top-k is inexact, proposes pre-aggregating revenue per product per week in a separate store, and discusses fan-out tail latency and freshness.
+      good: Describes scatter-gather and merging, and considers precomputing the result.
+      weak: Runs a full query on every shard on each page load without noticing correctness or latency issues.
+    followups:
+      - How would you make the answer exact if you kept the live scatter-gather?
+      - What if one of the sixty-four shards is slow or unavailable?
+    common_errors:
+      - Merging per-shard top-k lists and assuming the result is exact.
+
+  - external_key: system_design.distributed_data.write_hot_key
+    competency_key: distributed_systems
+    topic: One key receiving a flood of writes
+    difficulty: medium
+    text: >-
+      A celebrity account posts something and millions of users like it within minutes. The like count for
+      that post lives on one shard, which falls over. How would you redesign how those writes are handled?
+    expected_concepts:
+      - splitting a hot key into several sub-keys (salting) and summing on read
+      - buffering and batching increments in memory or a queue
+      - approximate or delayed counts for display
+      - detecting hot keys automatically
+      - keeping the per-user like record separate from the aggregate count
+    rubric:
+      excellent: Separates the per-user like records from the aggregate, spreads the counter over sub-keys or batches increments asynchronously, explains read-side merging and accepted staleness, and covers detecting hot keys.
+      good: Suggests sharding the counter or batching writes with some reasoning.
+      weak: Only proposes a bigger server or more replicas, which do not spread writes to one key.
+    followups:
+      - How do you prevent the same user liking twice once the writes are buffered?
+      - How would you decide when to split a key and when to merge it back?
+    common_errors:
+      - Adding read replicas to fix a write hotspot.
+
+  - external_key: system_design.distributed_data.social_graph_partitioning
+    competency_key: distributed_systems
+    topic: Partitioning a follower graph
+    difficulty: medium
+    text: >-
+      Design how you'd store a follow graph for a social network with hundreds of millions of users, where
+      you need both who-do-I-follow and who-follows-me lookups to be fast.
+    expected_concepts:
+      - storing edges twice, partitioned by each endpoint
+      - keeping the two directions consistent (async or transactional write)
+      - very large follower lists for popular accounts
+      - pagination of edge lists
+      - counts maintained separately from edge lists
+    rubric:
+      excellent: Stores edges in both directions partitioned by the owning user, explains how the two copies stay consistent, handles accounts with huge follower lists and keeps counts separately.
+      good: Proposes forward and reverse edge tables partitioned by user id.
+      weak: Puts the whole graph in one table keyed by edge id with no access-pattern reasoning.
+    followups:
+      - What happens if the write to the reverse edge fails?
+      - How would you compute mutual follows efficiently?
+    common_errors:
+      - Ignoring that one popular user's follower list can be larger than a whole shard should hold.
+
+  - external_key: system_design.distributed_data.wide_column_message_partitions
+    competency_key: databases
+    topic: Partition design in a wide-column store
+    difficulty: medium
+    text: >-
+      You're storing chat message history in a wide-column database like Cassandra. How would you design the
+      partition and clustering keys so that loading recent messages in a conversation stays fast for years?
+    expected_concepts:
+      - conversation id as partition key with time-ordered clustering
+      - bucketing by time period to bound partition size
+      - descending clustering order for recent-first reads
+      - query-first modelling and denormalised tables per access pattern
+      - tombstones and deletes in long-lived partitions
+    rubric:
+      excellent: Designs a partition key of conversation plus time bucket, explains why unbounded partitions hurt, orders clustering for recent-first reads and mentions tombstone costs.
+      good: Uses conversation id as the partition key and time as clustering key.
+      weak: Models it like a relational table with joins or keys every message individually.
+    followups:
+      - How does the reader find the right bucket when a conversation was quiet for months?
+      - What would a second table look like to list a user's conversations by latest activity?
+    common_errors:
+      - Letting a busy conversation grow into one enormous partition.
+
+  - external_key: system_design.distributed_data.time_series_partitioning
+    competency_key: data_engineering
+    topic: Partitioning sensor time-series data
+    difficulty: medium
+    text: >-
+      We collect readings from two million IoT sensors every ten seconds. Users mostly view the last day for
+      a single device, and data scientists scan months across many devices. How would you partition and store this?
+    expected_concepts:
+      - device-plus-time-bucket keys to avoid a single hot time partition
+      - write throughput estimate (about 200k writes per second)
+      - downsampling and rollups for older data
+      - hot recent storage versus cheap columnar storage for history
+      - retention by dropping whole time partitions
+    rubric:
+      excellent: Estimates the write rate, partitions to spread current writes while keeping per-device reads local, serves analysts from a columnar copy, and plans rollups and partition-level retention.
+      good: Partitions by device and time with some thought for retention.
+      weak: Partitions purely by timestamp so all writes hit one partition, or ignores the two different workloads.
+    followups:
+      - How would you handle sensors that send data late or out of order?
+      - What would you keep at full resolution and for how long?
+    common_errors:
+      - Serving both the dashboard and analyst scans from the same storage layout.
+
+  - external_key: system_design.distributed_data.geo_partitioning_locations
+    competency_key: system_design
+    topic: Partitioning location data geographically
+    difficulty: medium
+    text: >-
+      For a ride-hailing app, driver locations update every few seconds and riders search for nearby drivers.
+      How would you partition that location data, and what happens near partition boundaries?
+    expected_concepts:
+      - spatial keys such as geohash, S2 or H3 cells
+      - query neighbouring cells for searches near borders
+      - dense cities create hot cells, so split cells adaptively
+      - mostly in-memory, short-lived data with TTLs
+      - driver moving between cells means delete-and-insert
+    rubric:
+      excellent: Uses a spatial cell scheme, searches neighbouring cells at boundaries, splits dense areas into finer cells, and treats locations as ephemeral in-memory state with expiry.
+      good: Partitions by geohash or city and mentions boundary queries.
+      weak: Stores all locations in one table and computes distances for every driver per request.
+    followups:
+      - How would you handle a stadium emptying out with ten thousand people requesting rides?
+      - What happens to a driver's entry if their app stops sending updates?
+    common_errors:
+      - Forgetting that the nearest driver may be just across a cell border.
+
+  - external_key: system_design.distributed_data.logical_shards_planning
+    competency_key: distributed_systems
+    topic: Logical shards ahead of physical ones
+    difficulty: medium
+    text: >-
+      You're starting a sharded design today with four database servers, but expect to need forty within a
+      few years. How would you set things up now so that growth doesn't require a painful rewrite?
+    expected_concepts:
+      - many logical shards (for example 1024) mapped onto few physical servers
+      - moving whole logical shards rather than re-hashing keys
+      - mapping table and routing that can change over time
+      - capacity planning for per-shard size and moves
+      - tooling for shard moves built early
+    rubric:
+      excellent: Proposes a large fixed number of logical shards mapped to physical hosts, explains how a logical shard moves with minimal disruption, and plans the routing map and tooling from day one.
+      good: Suggests over-provisioning logical shards so they can later be spread out.
+      weak: Picks four shards with hash modulo four and does not consider future moves.
+    followups:
+      - How would you choose the number of logical shards?
+      - Walk me through moving one logical shard to a new server while it takes writes.
+    common_errors:
+      - Choosing a logical shard count that cannot be split further later.
+
+  - external_key: system_design.distributed_data.global_uniqueness_constraint
+    competency_key: databases
+    topic: Enforcing uniqueness across shards
+    difficulty: medium
+    text: >-
+      Users are sharded by user id, but usernames must be unique across the whole platform. How would you
+      guarantee that, including when two people try to claim the same name at the same moment?
+    expected_concepts:
+      - separate table partitioned by username as the arbiter
+      - conditional insert or compare-and-set on the username key
+      - reservation then confirmation to cover the two-write problem
+      - cleanup of abandoned reservations
+      - normalisation such as case folding before checking
+    rubric:
+      excellent: Makes a username-keyed record the single source of truth with an atomic conditional write, covers the gap between claiming the name and creating the user, cleans up orphans, and normalises names.
+      good: Proposes a username lookup table with a unique constraint and handles the race.
+      weak: Checks every shard for the name before inserting, which is slow and still racy.
+    followups:
+      - How would renaming a user work under this design?
+      - What if the user-creation write fails after the username was claimed?
+    common_errors:
+      - Check-then-insert across shards without any atomic arbiter.
+
+  - external_key: system_design.distributed_data.reference_data_in_shards
+    competency_key: databases
+    topic: Shared reference data in a sharded system
+    difficulty: medium
+    text: >-
+      In a sharded order system, almost every query joins orders to small shared tables such as currencies,
+      countries and product categories. Where would you keep that reference data, and how do you keep it consistent?
+    expected_concepts:
+      - replicating small reference tables to every shard
+      - propagating changes to all copies and versioning them
+      - caching reference data in the application instead of joining
+      - snapshotting values onto orders when history must not change
+      - size and change-rate thresholds for each approach
+    rubric:
+      excellent: Chooses per-table based on size and change rate, explains how replicated copies are updated and checked, and recognises when values should be copied onto the order for historical correctness.
+      good: Suggests replicating small tables to each shard or caching them in the app.
+      weak: Keeps reference data on one shard and joins across shards on every query.
+    followups:
+      - A category is renamed. Which orders should show the new name, and why?
+      - How would you detect that one shard has an out-of-date copy?
+    common_errors:
+      - Forgetting that historical records may need the value as it was at the time.
+
+  # ------------------------------------------------------------- hard
+  - external_key: system_design.distributed_data.automatic_range_splitting
+    competency_key: distributed_systems
+    topic: Automatic range splits and merges
+    difficulty: hard
+    text: >-
+      Design the mechanism in a range-partitioned database that automatically splits a range when it gets too
+      large or too busy, and merges ranges that become small. What has to happen for a split to be safe while
+      the range keeps serving reads and writes?
+    expected_concepts:
+      - split triggers on size and load, choosing split keys from load samples
+      - split as a metadata change on existing replicas rather than copying data
+      - atomic update of range descriptors in a consistent meta store
+      - clients with stale range caches retrying after redirect
+      - rebalancing new ranges to other nodes afterwards and avoiding split loops
+    rubric:
+      excellent: Designs load-and-size triggers with sensible split-key choice, makes the split an atomic metadata change on the existing replicas, handles in-flight requests and stale client caches, and covers rebalancing, merges and hysteresis.
+      good: Describes splitting at a midpoint and updating routing metadata, with some thought for in-flight traffic.
+      weak: Proposes copying the data to a new node and switching over without addressing writes during the copy or routing updates.
+    followups:
+      - A single key is hot. Why doesn't splitting help, and what would you do instead?
+      - How do you stop the system from splitting and merging the same range repeatedly?
+    common_errors:
+      - Splitting by key midpoint when the load is concentrated on a few keys.
+
+  - external_key: system_design.distributed_data.cross_shard_transfer
+    competency_key: distributed_systems
+    topic: Atomic changes spanning two shards
+    difficulty: hard
+    text: >-
+      Wallet balances are sharded by user, and a transfer between two users usually touches two different
+      shards. How would you make transfers correct, and what happens if something crashes halfway?
+    expected_concepts:
+      - two-phase commit with a durable coordinator log and its blocking risk
+      - saga with a debit, credit and compensating action plus idempotency keys
+      - ledger entries instead of in-place balance updates
+      - recovery of in-doubt transfers after coordinator failure
+      - invariant checks and reconciliation (money is never created or lost)
+    rubric:
+      excellent: Compares two-phase commit and a ledger-based saga in depth, designs idempotent steps and crash recovery for in-doubt transfers, preserves the never-negative and conservation invariants, and adds reconciliation.
+      good: Proposes 2PC or a saga with compensation and explains one failure case.
+      weak: Updates both shards sequentially and hopes nothing fails between the writes.
+    followups:
+      - The coordinator dies after the prepare phase. What do the participants do?
+      - How would a user's displayed balance look during an in-flight transfer?
+    common_errors:
+      - Designing compensations that are not idempotent and can run twice.
+
+  - external_key: system_design.distributed_data.id_generator_service
+    competency_key: system_design
+    topic: Designing a unique id generator
+    difficulty: hard
+    text: >-
+      Design a service that issues unique, roughly time-ordered 64-bit ids at a million ids per second across
+      several data centres. What happens when a machine's clock jumps backwards?
+    expected_concepts:
+      - bit layout of timestamp, worker id and sequence
+      - assigning worker ids safely through coordination or leases
+      - clock regression handling (wait, refuse, or logical clock fallback)
+      - embedding generation in clients versus a central service
+      - epoch choice and lifetime of the bit layout
+    rubric:
+      excellent: Designs a sound bit layout with capacity maths, assigns worker ids without collisions, handles clock regression and sequence overflow explicitly, and discusses library versus service deployment.
+      good: Describes a Snowflake-style layout and recognises the clock problem.
+      weak: Uses a central counter or random numbers without addressing throughput, ordering or collisions.
+    followups:
+      - How many years does your layout last, and how many ids per millisecond per worker?
+      - Two hosts accidentally get the same worker id. How would you detect or prevent it?
+    common_errors:
+      - Ignoring sequence overflow within a single millisecond.
+
+  - external_key: system_design.distributed_data.cell_tenant_migration
+    competency_key: system_design
+    topic: Moving a tenant between cells live
+    difficulty: hard
+    text: >-
+      Your platform is split into independent cells, each with its own databases, and tenants are assigned to
+      cells. Design the process for moving a large tenant to a different cell without downtime and without
+      losing or duplicating writes.
+    expected_concepts:
+      - bulk copy plus change data capture to catch up
+      - short write freeze or fencing at cutover
+      - routing layer update and draining in-flight requests
+      - verification of copied data before and after cutover
+      - rollback plan and cleanup of the source copy
+    rubric:
+      excellent: Designs snapshot-plus-CDC copying, a fenced cutover with a brief pause and routing switch, verification by counts and checksums, and a rollback path, while addressing caches, queues and background jobs tied to the old cell.
+      good: Describes copying data, catching up with changes and switching routing.
+      weak: Proposes exporting and importing the tenant during a maintenance window with no plan for writes in flight.
+    followups:
+      - Which non-database state tied to the tenant would you have to move as well?
+      - How would you prove that nothing was lost after the move?
+    common_errors:
+      - Forgetting background jobs or caches that still point to the old cell after cutover.
+
+  - external_key: system_design.distributed_data.global_leaderboard_ranks
+    competency_key: system_design
+    topic: Global rank across a huge user base
+    difficulty: hard
+    text: >-
+      A mobile game with eighty million players wants a global leaderboard where any player can see their
+      exact rank, not just the top hundred. Scores change constantly. How would you design this?
+    expected_concepts:
+      - sorted sets work for top-N but one structure cannot hold everything on one node
+      - score-range bucketing with per-bucket counts to compute rank
+      - exact rank for the top, approximate rank further down
+      - write path batching and eventual updates of counts
+      - periodic reconciliation or rebuilds
+    rubric:
+      excellent: Recognises the single-node limit, designs score-bucket counts or a partitioned order-statistic structure to compute rank, distinguishes exact top ranks from approximate deep ranks, and explains update and rebuild costs.
+      good: Uses sorted sets partitioned in some way and explains how top-N works, with some idea for deep ranks.
+      weak: Proposes counting every player with a higher score on each request.
+    followups:
+      - How would you show friends-only leaderboards alongside the global one?
+      - What would you do at a season reset when every score goes back to zero?
+    common_errors:
+      - Assuming one in-memory sorted set can hold and update eighty million entries at high write rates indefinitely.
+
+  - external_key: system_design.distributed_data.kv_store_partitioning_membership
+    competency_key: distributed_systems
+    topic: Membership and partitioning in a key-value store
+    difficulty: hard
+    text: >-
+      Imagine you're designing a leaderless distributed key-value store. How would nodes learn about each
+      other, decide which nodes own which keys, and handle a node joining, leaving or simply going quiet?
+    expected_concepts:
+      - consistent hashing with virtual nodes and replication to the next N nodes
+      - gossip-based membership and failure detection (for example phi accrual)
+      - distinguishing temporary failure from permanent removal
+      - streaming data to joining nodes and hinted handoff for down nodes
+      - seed nodes and avoiding split membership views
+    rubric:
+      excellent: Combines ring-based ownership with gossip membership and a tunable failure detector, separates transient outages from permanent decommissioning, and explains data streaming on joins and hinted handoff.
+      good: Describes consistent hashing with replicas and some way to detect failed nodes.
+      weak: Relies on a static configuration file of nodes or a single master without addressing failures.
+    followups:
+      - Why shouldn't a node that missed a few heartbeats immediately lose its key ranges?
+      - How would you handle nodes with very different disk sizes?
+    common_errors:
+      - Treating every missed heartbeat as permanent node loss and triggering huge data moves.
+
+  - external_key: system_design.distributed_data.changing_shard_key
+    competency_key: databases
+    topic: Changing the shard key of a live dataset
+    difficulty: hard
+    text: >-
+      Years ago a team sharded a twenty-terabyte dataset by creation date, and now nearly every query needs
+      to filter by customer. How would you move to customer-based sharding while the system stays online?
+    expected_concepts:
+      - build the new layout alongside the old (backfill plus change capture)
+      - dual-write or CDC-driven sync with idempotent, ordered apply
+      - shadow reads comparing old and new results
+      - gradual read cutover by percentage or by customer
+      - throttling backfill to protect production and a rollback path
+    rubric:
+      excellent: Lays out a phased migration with backfill, change capture, shadow-read verification, gradual cutover and rollback, and manages load and ordering issues during the copy.
+      good: Proposes copying into a new layout with dual writes and a cutover step.
+      weak: Proposes a big-bang export and reimport, or ignores writes made during the migration.
+    followups:
+      - How would you handle a row updated during the backfill of its range?
+      - What signals would make you pause or roll back the cutover?
+    common_errors:
+      - Dual-writing without a way to detect and fix divergence between the two layouts.
+
+  - external_key: system_design.distributed_data.data_residency_placement
+    competency_key: system_design
+    topic: Data residency with cross-region interaction
+    difficulty: hard
+    text: >-
+      Regulation requires each user's personal data to be stored in their home region, yet users in different
+      regions message each other and appear in shared workspaces. How would you design data placement and access?
+    expected_concepts:
+      - homing each user's records in one region with a global directory
+      - separating personal data from non-personal or shared metadata
+      - cross-region reads served by remote calls rather than replication
+      - latency and availability impact of remote calls
+      - auditability and backups that also respect residency
+    rubric:
+      excellent: Homes personal data per region via a directory, splits personal fields from replicable metadata, defines how cross-region views fetch data without copying it, and covers latency, failure behaviour, backups and logs.
+      good: Pins users to regions and explains how cross-region features fetch data.
+      weak: Replicates everything everywhere or ignores how shared features work across regions.
+    followups:
+      - A user moves to another country. What happens to their data?
+      - Where do logs, analytics events and backups go under this design?
+    common_errors:
+      - Forgetting that logs, caches and backups also hold personal data.
+
+  - external_key: system_design.distributed_data.evaluating_distributed_sql
+    competency_key: databases
+    topic: Evaluating a move to distributed SQL
+    difficulty: hard
+    text: >-
+      Your team maintains hand-rolled application-level sharding over MySQL and is considering a distributed
+      SQL database instead. How would you evaluate whether to switch, and what would you test before committing?
+    expected_concepts:
+      - workload replay or representative benchmarks including tail latency
+      - cross-node transaction latency and contention behaviour
+      - failure testing (node loss, network partitions, region outage)
+      - operational maturity, tooling, backups and upgrades
+      - migration path, compatibility gaps and cost
+    rubric:
+      excellent: Defines evaluation criteria from the real workload, tests latency, contention and failure behaviour, checks SQL compatibility and operations, and weighs migration risk and cost against the pain of the current setup.
+      good: Proposes benchmarking and some failure testing with a migration plan.
+      weak: Relies on vendor claims or a simple throughput benchmark.
+    followups:
+      - Which query patterns do you expect to get slower, and why?
+      - How would you migrate incrementally rather than all at once?
+    common_errors:
+      - Benchmarking only single-row reads and missing contention and cross-range transaction costs.

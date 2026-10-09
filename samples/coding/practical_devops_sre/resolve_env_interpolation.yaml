@@ -1,0 +1,207 @@
+version: 1
+slug: resolve_env_interpolation
+title: Environment Variable Interpolation
+difficulty: medium
+competency_keys: [algorithms, problem_solving, debugging]
+role_tags: [devops, platform, backend]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Environment Variable Interpolation
+
+  A deployment pipeline renders a service's environment file before the container starts. Each entry of
+  `definitions` is a line `NAME=value`: the name is the text before the **first** `=` and the value is
+  everything after it. If the same name is defined more than once, only its **last** line counts, and a
+  name counts as **defined** even when its value is empty.
+
+  Inside a value, the `$` character introduces one of three forms; all other characters are copied as
+  they are:
+
+  - `$$` is a literal `$`.
+  - `${X}` is replaced by the **resolved** value of variable `X`, or by the empty string if `X` is not
+    defined.
+  - `${X:-default}` is replaced by the resolved value of `X` if `X` is defined (even if that value is
+    empty), and otherwise by the literal text `default`.
+
+  References are resolved recursively: a referenced variable's value is itself interpolated first.
+  If resolving a variable would need a variable that lies on a **reference cycle** (a chain of references
+  between defined variables that leads back to where it started, including a variable referencing
+  itself), then that variable's entire resolved value is the literal string `<CYCLE>`. This applies to
+  every variable on the cycle and to every variable whose resolution reaches one. A default is only
+  used for an undefined name, so it never creates a cycle.
+
+  Return `"NAME=resolved"` for every distinct defined name, sorted by name in ASCII order.
+
+  ### Example 1
+  ```
+  Input:  definitions = ["HOST=db.internal", "PORT=5432", "DB_URL=postgres://${HOST}:${PORT}/app", "LOGS=${LOG_DIR:-/var/log}/api", "PRICE=$$5"]
+  Output: ["DB_URL=postgres://db.internal:5432/app", "HOST=db.internal", "LOGS=/var/log/api", "PORT=5432", "PRICE=$5"]
+  Explanation: LOG_DIR is undefined, so its default /var/log is used. PRICE uses $$ for a literal dollar.
+  ```
+
+  ### Example 2
+  ```
+  Input:  definitions = ["A=x${B}", "B=${A}y", "C=${A}", "D=old", "D=new-${MISSING}", "MODE=", "RUN=[${MODE:-safe}]"]
+  Output: ["A=<CYCLE>", "B=<CYCLE>", "C=<CYCLE>", "D=new-", "MODE=", "RUN=[]"]
+  Explanation: A and B reference each other and C depends on A, so all three are <CYCLE>. Only the last
+  line of D counts and MISSING is undefined without a default (empty). MODE is defined with an empty
+  value, so RUN does not use the default.
+  ```
+
+  ### Constraints
+  - `0 <= definitions.length <= 500`
+  - Names match `[A-Z_][A-Z0-9_]*`; every line contains `=` and every value is at most 200 characters.
+  - Every `$` in a value is part of `$$` or starts a well-formed `${X}` or `${X:-default}`, where `X` is a
+    valid name and `default` contains no `$`, `{` or `}`.
+  - Every resolved value is at most 10^4 characters long.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: resolve_env_interpolation
+  params:
+    - {name: definitions, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def resolve_env_interpolation(definitions: list[str]) -> list[str]:
+        raw: dict[str, str] = {}
+        for line in definitions:
+            name, value = line.split("=", 1)
+            raw[name] = value
+        resolved: dict[str, str] = {}
+        broken: set[str] = set()
+        visiting: set[str] = set()
+
+        def resolve(name: str) -> bool:
+            """Resolve name into resolved[name]; False when it depends on a cycle."""
+            if name in resolved:
+                return name not in broken
+            if name in visiting:
+                return False
+            visiting.add(name)
+            text = raw[name]
+            out: list[str] = []
+            ok = True
+            i = 0
+            while i < len(text):
+                if text[i] != "$":
+                    out.append(text[i])
+                    i += 1
+                elif text[i + 1] == "$":
+                    out.append("$")
+                    i += 2
+                else:
+                    end = text.index("}", i)
+                    ref, _, default = text[i + 2:end].partition(":-")
+                    if ref in raw:
+                        if resolve(ref):
+                            out.append(resolved[ref])
+                        else:
+                            ok = False
+                    else:
+                        out.append(default)
+                    i = end + 1
+            visiting.discard(name)
+            if not ok:
+                broken.add(name)
+            resolved[name] = "".join(out) if ok else "<CYCLE>"
+            return ok
+
+        for name in raw:
+            resolve(name)
+        return [name + "=" + resolved[name] for name in sorted(raw)]
+  javascript: |
+    function resolveEnvInterpolation(definitions) {
+      const raw = new Map();
+      for (const line of definitions) {
+        const at = line.indexOf("=");
+        raw.set(line.slice(0, at), line.slice(at + 1));
+      }
+      const CYCLE = "<CYCLE>";
+      const resolved = new Map();
+      const failedNames = new Set();
+      const visiting = new Set();
+      // Returns null when the variable depends on a cycle.
+      const resolve = (name) => {
+        if (resolved.has(name)) return failedNames.has(name) ? null : resolved.get(name);
+        if (visiting.has(name)) return null;
+        visiting.add(name);
+        const text = raw.get(name);
+        let out = "";
+        let failed = false;
+        let i = 0;
+        while (i < text.length) {
+          const ch = text[i];
+          if (ch !== "$") {
+            out += ch;
+            i += 1;
+          } else if (text[i + 1] === "$") {
+            out += "$";
+            i += 2;
+          } else {
+            const end = text.indexOf("}", i);
+            const inner = text.slice(i + 2, end);
+            const sep = inner.indexOf(":-");
+            const ref = sep >= 0 ? inner.slice(0, sep) : inner;
+            const fallback = sep >= 0 ? inner.slice(sep + 2) : "";
+            if (raw.has(ref)) {
+              const value = resolve(ref);
+              if (value === null) failed = true;
+              else out += value;
+            } else {
+              out += fallback;
+            }
+            i = end + 1;
+          }
+        }
+        visiting.delete(name);
+        if (failed) failedNames.add(name);
+        resolved.set(name, failed ? CYCLE : out);
+        return failed ? null : out;
+      };
+      const names = [...raw.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      return names.map((name) => {
+        resolve(name);
+        return name + "=" + resolved.get(name);
+      });
+    }
+tests:
+  - {id: t1, args: [["HOST=db.internal", "PORT=5432", "DB_URL=postgres://${HOST}:${PORT}/app", "LOGS=${LOG_DIR:-/var/log}/api", "PRICE=$$5"]], expected: ["DB_URL=postgres://db.internal:5432/app", "HOST=db.internal", "LOGS=/var/log/api", "PORT=5432", "PRICE=$5"], description: "Example 1 - nested references, default for an undefined name, $$ escape"}
+  - {id: t2, args: [["A=x${B}", "B=${A}y", "C=${A}", "D=old", "D=new-${MISSING}", "MODE=", "RUN=[${MODE:-safe}]"]], expected: ["A=<CYCLE>", "B=<CYCLE>", "C=<CYCLE>", "D=new-", "MODE=", "RUN=[]"], description: "Example 2 - two-variable cycle plus a dependent; redefinition; defined-but-empty beats the default"}
+  - {id: t3, hidden: true, args: [[]], expected: [], description: "No definitions - empty result"}
+  - {id: t4, hidden: true, args: [["PATH=${PATH}:/opt/bin", "HOME=${USER_HOME:-/root}"]], expected: ["HOME=/root", "PATH=<CYCLE>"], description: "Self-reference is a cycle; a variable using a default for an undefined name next to it is fine"}
+  - {id: t5, hidden: true, args: [["P=${Q}", "Q=${R}", "R=${S}", "S=${T}", "T=${R}", "OK=fine"]], expected: ["OK=fine", "P=<CYCLE>", "Q=<CYCLE>", "R=<CYCLE>", "S=<CYCLE>", "T=<CYCLE>"], description: "Chain leading into a three-cycle - every variable on and before the cycle is <CYCLE>, an unrelated one is not"}
+  - {id: t6, hidden: true, args: [["X=$${X}", "Y=$$$$", "Z=a$$${Y}b"]], expected: ["X=${X}", "Y=$$", "Z=a$$$b"], description: "$$ directly before a brace is a literal dollar, not a reference; $$$$ gives two dollars"}
+  - {id: t7, hidden: true, args: [["M=<CYCLE>", "L=pre-${M}", "BASE=v1", "LEFT=${BASE}-l", "RIGHT=${BASE}-r", "TOP=${LEFT}+${RIGHT}"]], expected: ["BASE=v1", "L=pre-<CYCLE>", "LEFT=v1-l", "M=<CYCLE>", "RIGHT=v1-r", "TOP=v1-l+v1-r"], description: "Literal text <CYCLE> in a value is not a cycle; shared (diamond) references resolve once correctly"}
+  - {id: t8, hidden: true, args: [["OUT=${LATER:-fallback}|${NONE:-}|${GONE}", "LATER=", "EQ=a=b=c"]], expected: ["EQ=a=b=c", "LATER=", "OUT=||"], description: "Default ignored when name defined later in the list; empty default; undefined without default gives empty"}
+  - {id: t9, hidden: true, args: [["A=${B}", "B=${A}", "B=stop", "C=${A}${B}"]], expected: ["A=stop", "B=stop", "C=stopstop"], description: "Redefinition removes a cycle: only the last line of a name counts"}
+  - {id: t10, hidden: true, args: [["V00=${V01}0", "V01=${V02}1", "V02=${V03}2", "V03=${V04}3", "V04=${V05}4", "V05=${V06}5", "V06=${V07}6", "V07=${V08}7", "V08=${V09}8", "V09=${V10}9", "V10=${V11}0", "V11=${V12}1", "V12=${V13}2", "V13=${V14}3", "V14=${V15}4", "V15=${V16}5", "V16=${V17}6", "V17=${V18}7", "V18=${V19}8", "V19=${V20}9", "V20=${V21}0", "V21=${V22}1", "V22=${V23}2", "V23=${V24}3", "V24=${V25}4", "V25=${V26}5", "V26=${V27}6", "V27=${V28}7", "V28=${V29}8", "V29=${V30}9", "V30=${V31}0", "V31=${V32}1", "V32=${V33}2", "V33=${V34}3", "V34=${V35}4", "V35=${V36}5", "V36=${V37}6", "V37=${V38}7", "V38=${V39}8", "V39=${V40}9", "V40=${V41}0", "V41=${V42}1", "V42=${V43}2", "V43=${V44}3", "V44=${V45}4", "V45=${V46}5", "V46=${V47}6", "V47=${V48}7", "V48=${V49}8", "V49=${V50}9", "V50=${V51}0", "V51=${V52}1", "V52=${V53}2", "V53=${V54}3", "V54=${V55}4", "V55=${V56}5", "V56=${V57}6", "V57=${V58}7", "V58=${V59}8", "V59=end"]], expected: ["V00=end87654321098765432109876543210987654321098765432109876543210", "V01=end8765432109876543210987654321098765432109876543210987654321", "V02=end876543210987654321098765432109876543210987654321098765432", "V03=end87654321098765432109876543210987654321098765432109876543", "V04=end8765432109876543210987654321098765432109876543210987654", "V05=end876543210987654321098765432109876543210987654321098765", "V06=end87654321098765432109876543210987654321098765432109876", "V07=end8765432109876543210987654321098765432109876543210987", "V08=end876543210987654321098765432109876543210987654321098", "V09=end87654321098765432109876543210987654321098765432109", "V10=end8765432109876543210987654321098765432109876543210", "V11=end876543210987654321098765432109876543210987654321", "V12=end87654321098765432109876543210987654321098765432", "V13=end8765432109876543210987654321098765432109876543", "V14=end876543210987654321098765432109876543210987654", "V15=end87654321098765432109876543210987654321098765", "V16=end8765432109876543210987654321098765432109876", "V17=end876543210987654321098765432109876543210987", "V18=end87654321098765432109876543210987654321098", "V19=end8765432109876543210987654321098765432109", "V20=end876543210987654321098765432109876543210", "V21=end87654321098765432109876543210987654321", "V22=end8765432109876543210987654321098765432", "V23=end876543210987654321098765432109876543", "V24=end87654321098765432109876543210987654", "V25=end8765432109876543210987654321098765", "V26=end876543210987654321098765432109876", "V27=end87654321098765432109876543210987", "V28=end8765432109876543210987654321098", "V29=end876543210987654321098765432109", "V30=end87654321098765432109876543210", "V31=end8765432109876543210987654321", "V32=end876543210987654321098765432", "V33=end87654321098765432109876543", "V34=end8765432109876543210987654", "V35=end876543210987654321098765", "V36=end87654321098765432109876", "V37=end8765432109876543210987", "V38=end876543210987654321098", "V39=end87654321098765432109", "V40=end8765432109876543210", "V41=end876543210987654321", "V42=end87654321098765432", "V43=end8765432109876543", "V44=end876543210987654", "V45=end87654321098765", "V46=end8765432109876", "V47=end876543210987", "V48=end87654321098", "V49=end8765432109", "V50=end876543210", "V51=end87654321", "V52=end8765432", "V53=end876543", "V54=end87654", "V55=end8765", "V56=end876", "V57=end87", "V58=end8", "V59=end"], description: "Stress - 60-variable reference chain resolved recursively (deep dependency order)"}
+expected_concepts:
+  - recursive resolution with memoisation
+  - cycle detection with an in-progress (visiting) state during depth-first search
+  - propagating a failure to every dependent variable
+  - a small character scanner for escapes and references
+  - last-definition-wins parsing and defined-but-empty versus undefined
+optimal_complexity: {time: "O(D + total resolved output) with memoisation", space: O(D + output)}
+rubric:
+  excellent: Writes a clean scanner for the three forms, resolves recursively with memoisation and a visiting set, propagates the cycle marker to dependents without confusing it with literal text, and explains defined-but-empty versus undefined.
+  good: Correct recursive resolution and cycle detection after a hint about marking variables in progress or about the default rule.
+  weak: Uses repeated string replacement that loops forever on cycles, treats $$ as the start of a reference, applies the default to empty values, or leaves dependents of a cycle partially resolved.
+  criteria:
+    correctness: All tests pass, including self-references, chains into a cycle, escapes and redefinitions.
+    efficiency: Each variable is resolved once thanks to memoisation instead of re-expanding shared references.
+    code_quality: The scanner and the resolver are separated clearly; the cycle marker is not detected by searching the output text.
+    edge_cases: Empty values, undefined references with and without defaults, $$ next to a reference and no definitions at all.
+    communication: Explains how the visiting state distinguishes a cycle from a variable that is simply shared by several others.
+hints:
+  - Treat the variables as a graph in which a reference to another defined variable is an edge; each variable's value depends on the values at the end of its edges.
+  - Resolve with a recursive function plus a cache, and remember which variables are currently being resolved. Reaching one of those again means you have found a cycle.
+  - Keep the last value per name. To resolve a name, scan its value left to right, copy a dollar for a doubled dollar, and for a reference either recurse (defined name) or use the default text (undefined name). Mark the name as in progress before scanning, and if any recursive call reports a cycle, store the cycle marker as this name's whole value. Cache every finished result and output the names in sorted order.
+followups:
+  - How would you report the exact cycle path to the operator instead of a marker?
+  - Docker Compose also applies the default when the variable is set but empty. How would you support both forms?
+  - What would you do to protect the renderer from values that grow exponentially through repeated references?
+common_errors:
+  - Substituting by repeated find-and-replace until nothing changes, which never terminates on a cycle.
+  - Detecting cycles by checking whether the output contains the marker text, which breaks on dependents of cycles.
+  - Using the default when the referenced variable is defined with an empty value.
+  - Handling $$ after reference parsing, so a doubled dollar followed by a brace is misread as a reference.

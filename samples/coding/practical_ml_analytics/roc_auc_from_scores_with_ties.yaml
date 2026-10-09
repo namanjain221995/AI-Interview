@@ -1,0 +1,158 @@
+version: 1
+slug: roc_auc_from_scores_with_ties
+title: ROC AUC of a Fraud Model with Tied Scores
+difficulty: medium
+competency_keys: [machine_learning, algorithms, problem_solving]
+role_tags: [ml, data_scientist, data_analyst]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## ROC AUC of a Fraud Model with Tied Scores
+
+  The payments team retrains its fraud model every night and gates the release on its **ROC AUC**
+  measured on a labelled holdout set of transactions. You are writing that metric for the release
+  pipeline.
+
+  `scores[i]` is the model's fraud score for transaction `i` (higher means more suspicious) and
+  `labels[i]` is `1` if the transaction was really fraud (a *positive*) or `0` if it was legitimate
+  (a *negative*).
+
+  Define the AUC through pairs: consider every pair made of one positive and one negative
+  transaction. The pair scores `1` if the positive has a **strictly higher** score than the
+  negative, `0.5` if the two scores are **equal**, and `0` otherwise. The AUC is the average pair
+  score over all `P * N` pairs, where `P` and `N` are the numbers of positives and negatives.
+
+  Return `-1.0` when there are no positives or no negatives (the AUC is undefined). Scores are
+  compared exactly as given: two scores tie only when they are the same number. Answers are compared
+  with a tolerance of `1e-6`.
+
+  The holdout set can hold `10^5` transactions, so checking every pair is too slow; aim for
+  `O(n log n)`.
+
+  ### Example 1
+  ```
+  Input:  scores = [0.9, 0.7, 0.4, 0.2], labels = [1, 0, 1, 0]
+  Output: 0.75
+  Explanation: the pairs (0.9 vs 0.7), (0.9 vs 0.2) and (0.4 vs 0.2) are ranked correctly and
+  (0.4 vs 0.7) is not: 3 of 4 pairs.
+  ```
+
+  ### Example 2
+  ```
+  Input:  scores = [0.8, 0.5, 0.5, 0.1], labels = [1, 1, 0, 0]
+  Output: 0.875
+  Explanation: 0.8 beats both negatives (2 points); the positive 0.5 ties the negative 0.5 (0.5
+  points) and beats 0.1 (1 point). 3.5 / 4 = 0.875.
+  ```
+
+  ### Example 3
+  ```
+  Input:  scores = [0.3, 0.6], labels = [1, 1]
+  Output: -1.0
+  Explanation: there are no negatives, so no pairs exist.
+  ```
+
+  ### Constraints
+  - `0 <= scores.length == labels.length <= 10^5`
+  - `-10^6 <= scores[i] <= 10^6`
+  - `labels[i]` is `0` or `1`
+  - `P * N` can reach `2.5 * 10^9`, which does not fit in a 32-bit integer.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: roc_auc
+  params:
+    - {name: scores, type: "float[]"}
+    - {name: labels, type: "int[]"}
+  return_type: float
+  comparison: float_tolerance
+reference_solutions:
+  python: |
+    def roc_auc(scores: list[float], labels: list[int]) -> float:
+        positives = sum(labels)
+        negatives = len(labels) - positives
+        if positives == 0 or negatives == 0:
+            return -1.0
+        pairs = sorted(zip(scores, labels))
+        doubled = 0          # twice the sum of pair scores, kept as an exact integer
+        negatives_below = 0  # negatives with a strictly lower score than the current group
+        i = 0
+        while i < len(pairs):
+            j = i
+            group_pos = group_neg = 0
+            while j < len(pairs) and pairs[j][0] == pairs[i][0]:
+                if pairs[j][1] == 1:
+                    group_pos += 1
+                else:
+                    group_neg += 1
+                j += 1
+            doubled += 2 * group_pos * negatives_below + group_pos * group_neg
+            negatives_below += group_neg
+            i = j
+        return doubled / (2 * positives * negatives)
+  javascript: |
+    function rocAuc(scores, labels) {
+      const n = scores.length;
+      let positives = 0;
+      for (const label of labels) positives += label;
+      const negatives = n - positives;
+      if (positives === 0 || negatives === 0) return -1;
+      const order = scores.map((_, i) => i).sort((a, b) => scores[a] - scores[b]);
+      let doubled = 0;
+      let negativesBelow = 0;
+      let i = 0;
+      while (i < n) {
+        let j = i;
+        let groupPos = 0;
+        let groupNeg = 0;
+        while (j < n && scores[order[j]] === scores[order[i]]) {
+          if (labels[order[j]] === 1) groupPos++;
+          else groupNeg++;
+          j++;
+        }
+        doubled += 2 * groupPos * negativesBelow + groupPos * groupNeg;
+        negativesBelow += groupNeg;
+        i = j;
+      }
+      return doubled / (2 * positives * negatives);
+    }
+tests:
+  - {id: t1, args: [[0.9, 0.7, 0.4, 0.2], [1, 0, 1, 0]], expected: 0.75, description: "Example 1 - no ties, one mis-ordered pair"}
+  - {id: t2, args: [[0.8, 0.5, 0.5, 0.1], [1, 1, 0, 0]], expected: 0.875, description: "Example 2 - a positive and a negative tie and the pair counts 0.5"}
+  - {id: t3, args: [[0.3, 0.6], [1, 1]], expected: -1.0, description: "Example 3 - no negatives returns -1.0"}
+  - {id: t4, hidden: true, args: [[0.2, 0.9, 0.4], [0, 0, 0]], expected: -1.0, description: "No positives returns -1.0"}
+  - {id: t5, hidden: true, args: [[], []], expected: -1.0, description: "Empty holdout set returns -1.0"}
+  - {id: t6, hidden: true, args: [[0.5, 0.5, 0.5, 0.5, 0.5], [1, 0, 0, 1, 0]], expected: 0.5, description: "Every score identical - every pair ties so AUC is exactly 0.5"}
+  - {id: t7, hidden: true, args: [[0.1, 0.95, 0.3, 0.85, 0.2, 0.99], [0, 1, 0, 1, 0, 1]], expected: 1.0, description: "Unsorted input with perfect separation - AUC 1.0"}
+  - {id: t8, hidden: true, args: [[3.5, -1.0, 2.0, -2.5], [0, 1, 0, 1]], expected: 0.0, description: "Perfectly inverted model with negative scores (raw logits) - AUC 0.0"}
+  - {id: t9, hidden: true, args: [[0.7, 0.7, 0.7, 0.3, 0.3, 0.9, 0.1, 0.7], [1, 0, 0, 1, 0, 0, 1, 1]], expected: 0.28125, description: "Several tie groups each mixing positives and negatives - tie handling inside every group matters"}
+  - {id: t10, hidden: true, args: [[0.56, 0.19, 0.32, 0.37, 0.4, 0.82, 0.26, 0.72, 0.46, 0.4, 0.56, 0.63, 0.46, 0.62, 0.37, 0.47, 0.5, 0.4, 0.43, 0.38, 0.62, 0.23, 0.46, 0.26, 0.61, 0.34, 0.65, 0.29, 0.31, 0.37, 0.33, 0.55, 0.4, 0.42, 0.26, 0.43, 0.37, 0.47, 0.63, 0.43, 0.35, 0.0, 0.45, 0.75, 0.7, 0.74, 0.69, 0.46, 0.66, 0.57, 0.34, 0.66, 0.41, 0.84, 0.54, 0.68, 0.17, 0.42, 0.69, 0.56, 0.46, 0.78, 0.23, 0.32, 0.03, 0.2, 0.0, 0.87, 0.25, 0.59, 0.48, 0.62, 0.21, 0.46, 0.37, 0.62, 0.49, 0.22, 0.6, 0.62, 0.23, 0.47, 0.72, 0.63, 0.32, 0.55, 0.59, 0.14, 0.51, 0.37, 0.49, 0.58, 0.38, 0.41, 0.42, 0.28, 0.37, 0.55, 0.41, 0.83, 0.62, 0.67, 0.54, 0.49, 0.49, 0.52, 0.23, 0.54, 0.52, 0.36, 0.52, 0.05, 0.32, 0.33, 0.26, 0.47, 0.45, 0.48, 0.63, 0.64, 0.06, 0.56, 0.68, 0.37, 0.2, 0.82, 0.67, 0.09, 0.88, 0.6, 0.45, 0.3, 0.85, 0.15, 0.78, 0.49, 0.6, 0.44, 0.52, 0.21, 0.5, 0.76, 0.43, 0.52, 0.52, 0.35, 0.29, 0.43, 0.59, 0.32, 0.65, 0.67, 0.45, 0.52, 0.43, 0.84, 0.2, 0.41, 0.0, 0.67, 0.5, 0.64, 0.76, 0.76, 0.51, 0.31, 0.38, 0.63, 0.4, 0.35, 0.36, 0.65, 0.41, 0.31, 0.26, 0.67, 0.73, 0.64, 0.5, 0.54, 0.57, 0.67, 0.47, 0.49, 0.73, 0.31, 0.79, 0.52, 0.35, 0.77, 0.82, 0.4, 0.31, 0.58, 0.62, 0.76, 0.36, 0.16, 0.54, 0.69, 0.83, 0.52, 0.55, 0.44, 0.6, 0.48, 0.39, 0.53, 0.6, 0.61, 0.29, 0.23, 0.72, 0.47, 0.32, 0.53, 0.63, 0.63, 0.54, 0.07, 0.21, 0.46, 0.56, 0.4, 0.34, 0.3, 0.27, 0.19, 0.48, 0.58, 0.33, 0.39, 0.8, 0.41, 0.38, 0.52, 0.55, 0.35, 0.36, 0.27, 0.47, 0.45, 0.38, 0.91, 0.38, 0.4, 0.73, 0.8, 0.66, 0.43, 0.43, 0.51, 0.38, 0.38, 0.64, 0.14, 0.17, 0.34, 0.83, 0.75, 0.36, 0.43, 0.47, 0.66, 0.54, 0.55, 0.52, 0.17, 0.45, 0.63, 0.32, 0.61, 0.47, 0.33, 0.68, 0.47, 0.56, 0.69, 0.47, 0.24, 0.36, 0.49, 0.64, 0.34, 0.47, 0.08, 0.55, 0.39, 0.21, 0.28, 0.48, 0.9, 0.47, 0.28, 0.71, 0.42, 0.66, 0.63, 0.43, 0.23, 0.52, 0.73, 0.32, 0.41, 0.56, 0.34, 0.41, 0.01, 0.37, 0.61, 0.53, 0.45, 0.31, 0.12, 0.24, 0.53, 0.64, 0.45, 0.6, 0.5, 0.5, 0.47, 0.79, 0.56, 0.19, 0.33, 0.65, 0.45, 0.79, 0.2, 0.5, 0.47, 0.58, 0.5, 0.6, 0.39, 0.64, 0.58, 0.58, 0.63, 0.44, 0.41, 0.5, 0.66, 0.17, 0.81, 0.7, 0.53, 0.22, 0.53, 0.46, 0.35, 0.21, 0.27, 0.46, 0.61, 0.59, 0.58, 0.68, 0.57, 0.64, 0.28, 0.76, 0.07, 0.19, 0.76, 0.6, 0.63, 0.18, 0.26, 0.72, 0.66, 0.46, 0.38, 0.41, 1.0, 0.77, 0.34, 0.12, 0.11, 0.25, 0.7, 0.34, 0.44, 0.2, 0.05, 0.48, 0.13, 0.3, 0.73, 0.29, 0.39, 0.36, 0.71, 0.41, 0.21, 0.56, 0.73, 0.7, 0.56, 0.29, 0.82, 0.18, 0.68, 0.66, 0.1, 0.33, 0.51, 0.35, 0.27, 0.5, 0.88, 0.11, 0.66, 0.45, 0.37, 0.34, 0.49, 0.49, 0.24, 0.49, 0.06, 0.58, 0.45, 0.37, 1.0, 0.19, 0.34, 0.48, 0.18, 0.73, 0.12, 0.46, 0.52, 0.34, 0.63, 0.57, 0.74, 0.79, 0.52, 0.2, 0.33, 0.57, 0.2, 0.96, 0.0, 0.5, 0.5, 0.51, 0.73, 0.78, 0.62, 0.32, 0.53, 0.32, 0.31, 0.58, 0.38, 0.63, 0.61, 0.49, 0.35, 0.75, 0.43, 0.26, 0.43, 0.52, 0.32, 0.3, 0.7, 0.15, 0.18, 0.35, 0.49, 0.46, 0.65, 0.69, 0.17, 0.36, 0.69, 0.45, 0.17, 0.21, 0.4, 0.76, 0.09, 0.43, 0.44, 0.78, 0.34, 0.66, 0.26, 0.59, 0.12, 0.29, 0.59, 0.81, 0.76, 0.48, 0.44, 0.34, 0.31, 0.68, 0.22, 0.24, 0.52, 0.27, 0.36, 0.24, 1.0, 0.71, 0.52, 0.37, 0.4, 0.38, 0.63, 0.55, 0.52, 0.22, 0.5, 0.33, 0.79, 0.22, 0.35, 0.61, 0.14, 0.43, 0.07, 0.47, 0.65, 0.41, 0.54, 0.27, 0.76, 0.32, 0.0, 0.0, 0.65, 0.36, 0.32, 0.87, 0.11, 0.47, 0.51, 0.34, 0.58, 0.63, 0.45, 0.52, 0.67, 0.3, 0.2, 0.64, 0.01, 0.86, 0.71, 0.72, 0.71, 0.99, 0.52, 0.54, 0.0, 0.61, 0.32, 0.5, 0.45, 0.46, 0.57, 0.71, 0.23, 0.72, 0.29, 0.3, 0.54, 0.76, 0.51, 0.32, 0.11, 0.42, 0.3, 0.51, 0.3, 0.79, 0.28, 0.54, 0.66, 0.8, 0.77, 0.17, 0.67, 0.57, 0.63, 0.2, 0.25, 0.4, 0.53, 0.0, 0.49, 0.34, 0.3], [0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]], expected: 0.770531400966, description: "Stress - 600 transactions with scores rounded to 2 decimals (many ties); O(n^2) is still feasible here but the counts must be exact"}
+expected_concepts:
+  - AUC as the probability that a random positive outranks a random negative
+  - sorting by score and grouping equal scores
+  - counting negatives below each positive with a running total
+  - half credit for ties (average ranks / Mann-Whitney U)
+  - 64-bit counts for P * N
+optimal_complexity: {time: O(n log n), space: O(n)}
+rubric:
+  excellent: Explains the pairwise definition, sorts once and sweeps groups of equal scores while keeping a running count of lower negatives, gives tied pairs half credit, guards the undefined case and uses 64-bit or floating-point accumulation for P * N; can connect the result to the rank-sum (Mann-Whitney) formula.
+  good: Correct O(n log n) sweep or rank-sum solution that needs a hint about tie groups or the undefined case; or a correct O(n^2) solution that is then improved with guidance.
+  weak: Only an O(n^2) pair loop, ignores ties (counting them as 0 or 1), builds a trapezoid ROC curve incorrectly at tied thresholds, or divides by zero when one class is missing.
+  criteria:
+    correctness: All tests pass within tolerance, including all-tied scores, inverted models and missing classes.
+    efficiency: One sort plus a linear sweep; no per-pair work.
+    code_quality: Tie groups are processed explicitly and the counters have clear names.
+    edge_cases: Empty input, one class only, every score tied and negative raw scores.
+    communication: Explains what AUC means for the fraud team and why ties deserve half credit.
+hints:
+  - Instead of comparing every pair, think about how many negatives sit below each positive once the transactions are sorted by score.
+  - Process equal scores together as one group, since positives and negatives inside the same group tie with each other and each such pair is worth half a point.
+  - Sort by score, walk the groups of equal scores from lowest to highest keeping a running count of negatives already passed, add each group's positives times that count plus half of positives times negatives inside the group, then divide by the number of positive-negative pairs (returning -1.0 if either class is empty).
+followups:
+  - How is this related to the Mann-Whitney U statistic and average ranks?
+  - Why can AUC look good while the model is useless at the fraud team's chosen alert threshold?
+  - How would you compute a confidence interval for this AUC on a small holdout set?
+  - How would you compute AUC over a stream of scores that does not fit in memory?
+common_errors:
+  - Ignoring ties, which inflates or deflates the AUC when many scores are rounded.
+  - Comparing every pair in O(n^2), which is too slow for 10^5 transactions.
+  - Overflowing a 32-bit integer when multiplying P by N.
+  - Dividing by zero instead of returning -1.0 when one class is missing.

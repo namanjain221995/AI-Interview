@@ -1,0 +1,153 @@
+version: 1
+slug: cosine_top_k_similar_items
+title: Top-k Similar Products by Embedding
+difficulty: medium
+competency_keys: [machine_learning, algorithms, data_structures]
+role_tags: [ml, llm, backend, data_scientist]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Top-k Similar Products by Embedding
+
+  The "you may also like" panel shows the products whose **embedding vectors** point in the most
+  similar direction to the product a shopper is viewing. The embedding service exports the catalogue
+  as one flat list: `m` products, each a vector of `dim` numbers, stored one after another, so product
+  `i` is `embeddings[i * dim]` to `embeddings[i * dim + dim - 1]` and `m = embeddings.length / dim`.
+
+  The similarity of product `i` to the `query` vector (length `dim`) is the **cosine similarity**
+  `dot(v_i, query) / (|v_i| * |query|)`, where `|x|` is the Euclidean length. If `v_i` or `query` has
+  length zero, the similarity is defined as `0.0`.
+
+  Return the indices of the `min(k, m)` most similar products, ordered by similarity **descending**;
+  products with equal similarity are ordered by **lower index first**. Treat two similarities as equal
+  when they differ by at most `10^-9`, so floating-point noise does not decide ties.
+
+  ### Example 1
+  ```
+  Input:  embeddings = [1.0, 0.0, 0.0, 1.0, 1.0, 1.0, -1.0, 0.0], dim = 2, query = [2.0, 1.0], k = 2
+  Output: [2, 0]
+  Explanation: the products are [1, 0], [0, 1], [1, 1] and [-1, 0]; their similarities are 0.894, 0.447, 0.949 and -0.894
+  ```
+
+  ### Example 2
+  ```
+  Input:  embeddings = [0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 1.0, 2.0, 2.0, 0.0, -3.0, 0.0], dim = 3, query = [1.0, 0.0, 0.0], k = 4
+  Output: [1, 2, 0, 3]
+  Explanation: products 1 and 2 are identical (1/3 each, lower index first); product 0 is a zero vector and product 3 is orthogonal, both 0.0
+  ```
+
+  ### Example 3
+  ```
+  Input:  embeddings = [0.5, -0.5], dim = 1, query = [3.0], k = 5
+  Output: [0, 1]
+  ```
+
+  ### Constraints
+  - `1 <= dim <= 512`, `embeddings.length` is a multiple of `dim` and `0 <= m <= 10^4`
+  - `query.length == dim`
+  - `-10^6 <= embeddings[j], query[j] <= 10^6`
+  - `1 <= k <= 10^4`
+
+  **Follow-up:** sorting all `m` products costs `O(m log m)` after scoring; how would you keep only the
+  best `k` in `O(m log k)`, and why can you skip normalising the query when ranking?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: top_k_similar
+  params:
+    - {name: embeddings, type: "float[]"}
+    - {name: dim, type: int}
+    - {name: query, type: "float[]"}
+    - {name: k, type: int}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import math
+    from functools import cmp_to_key
+
+
+    def top_k_similar(embeddings: list[float], dim: int, query: list[float], k: int) -> list[int]:
+        m = len(embeddings) // dim
+        q_norm = math.sqrt(sum(x * x for x in query))
+        scores = []
+        for i in range(m):
+            row = embeddings[i * dim:(i + 1) * dim]
+            norm = math.sqrt(sum(x * x for x in row))
+            if norm == 0 or q_norm == 0:
+                scores.append(0.0)
+            else:
+                scores.append(sum(a * b for a, b in zip(row, query)) / (norm * q_norm))
+
+        def compare(i: int, j: int) -> int:
+            if abs(scores[i] - scores[j]) > 1e-9:
+                return -1 if scores[i] > scores[j] else 1
+            return i - j
+
+        return sorted(range(m), key=cmp_to_key(compare))[:k]
+  javascript: |
+    function topKSimilar(embeddings, dim, query, k) {
+      const m = Math.floor(embeddings.length / dim);
+      let qNorm = 0;
+      for (const x of query) qNorm += x * x;
+      qNorm = Math.sqrt(qNorm);
+      const scores = [];
+      for (let i = 0; i < m; i++) {
+        let dot = 0;
+        let norm = 0;
+        for (let j = 0; j < dim; j++) {
+          const v = embeddings[i * dim + j];
+          dot += v * query[j];
+          norm += v * v;
+        }
+        norm = Math.sqrt(norm);
+        scores.push(norm === 0 || qNorm === 0 ? 0 : dot / (norm * qNorm));
+      }
+      const order = Array.from({ length: m }, (_, i) => i);
+      order.sort((a, b) => {
+        if (Math.abs(scores[a] - scores[b]) > 1e-9) return scores[b] - scores[a];
+        return a - b;
+      });
+      return order.slice(0, k);
+    }
+tests:
+  - {id: t1, args: [[1.0, 0.0, 0.0, 1.0, 1.0, 1.0, -1.0, 0.0], 2, [2.0, 1.0], 2], expected: [2, 0], description: "Example 1"}
+  - {id: t2, args: [[0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 1.0, 2.0, 2.0, 0.0, -3.0, 0.0], 3, [1.0, 0.0, 0.0], 4], expected: [1, 2, 0, 3], description: "Example 2 - identical vectors tie, zero vector and orthogonal vector both score 0.0"}
+  - {id: t3, args: [[0.5, -0.5], 1, [3.0], 5], expected: [0, 1], description: "Example 3 - k larger than the catalogue"}
+  - {id: t4, hidden: true, args: [[], 3, [1.0, 2.0, 3.0], 2], expected: [], description: "Empty catalogue"}
+  - {id: t5, hidden: true, args: [[1.0, 2.0, -1.0, 0.5, 3.0, 3.0], 2, [0.0, 0.0], 2], expected: [0, 1], description: "Zero query - every similarity is 0.0 so the lowest indices win"}
+  - {id: t6, hidden: true, args: [[2.0, 4.0, 1.0, 2.0, 3.0, 1.0], 2, [3.0, 1.0], 3], expected: [2, 0, 1], description: "Scalar multiples have equal cosine similarity - lower index first"}
+  - {id: t7, hidden: true, args: [[-1.0, 0.0, -1.0, -1.0, 0.0, -1.0], 2, [1.0, 0.2], 3], expected: [2, 1, 0], description: "All similarities negative - least negative first"}
+  - {id: t8, hidden: true, args: [[1000000.0, 0.0, 0.0, 0.001, 0.001, 0.0, -2.0, 5.0, 0.0], 3, [1.0, 1.0, 0.0], 2], expected: [1, 0], description: "Very different magnitudes - cosine ignores vector length"}
+  - {id: t9, hidden: true, args: [[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3], 8, [0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5], 4], expected: [0, 4, 1, 2], description: "Eight-dimensional embeddings including a zero row"}
+  - {id: t10, hidden: true, args: [[3.0, 4.0, -3.0, -4.0, 4.0, 3.0], 2, [3.0, 4.0], 1], expected: [0], description: "k = 1 picks the exact match"}
+  - {id: t11, hidden: true, args: [[-6.0, -8.0, -9.0, -3.0, 1.0, 3.0, -4.0, 0.0, -5.0, -3.0, 1.0, 3.0, 2.0, 8.0, 6.0, -1.0, -4.0, 2.0, -8.0, 2.0, 3.0, -4.0, -3.0, -2.0, -3.0, 7.0, 2.0, 1.0, 4.0, 1.0, 7.0, -3.0, -2.0, -5.0, -7.0, 0.0, 5.0, 6.0, -2.0, 3.0, -1.0, 0.0, 3.0, -1.0, 6.0, -6.0, 8.0, 2.0, 0.0, 5.0, -6.0, -2.0, -6.0, -1.0, -1.0, 1.0, 1.0, -7.0, 4.0, -3.0, -5.0, 4.0, 9.0, 0.0, 2.0, -2.0, -5.0, 3.0, -4.0, -8.0, 0.0, -1.0, 3.0, 3.0, 5.0, 2.0, -3.0, -3.0, -9.0, -2.0, 4.0, 8.0, -4.0, 1.0, -2.0, 2.0, 1.0, -3.0, 5.0, -4.0, 6.0, 0.0, -1.0, 7.0, -8.0, 3.0, 6.0, 1.0, -3.0, -1.0, 0.0, -5.0, 2.0, 2.0, -6.0, 6.0, 7.0, -2.0, 1.0, 0.0, -7.0, 1.0, -5.0, -6.0, -2.0, -3.0, 2.0, 5.0, 3.0, 0.0, -4.0, -1.0, 8.0, 3.0, 3.0, -7.0, -6.0, -1.0, -3.0, 4.0, -1.0, 2.0, 4.0, -2.0, 4.0, -2.0, -2.0, -8.0, 9.0, 1.0, 5.0, 3.0, -5.0, -3.0, -1.0, -3.0, 0.0, 0.0, 6.0, 8.0, 5.0, 3.0, 0.0, 2.0, -9.0, -1.0, -6.0, -4.0, -4.0, 2.0, 1.0, 7.0, 1.0, -2.0, -5.0, 1.0, 6.0, 1.0, 2.0, -5.0, -8.0, -3.0, -4.0, 6.0, -3.0, 0.0, 3.0, 0.0, 2.0, 3.0, -3.0, -6.0, 7.0, -1.0, 4.0, 5.0, -7.0, 2.0, -2.0, -1.0, -2.0, -2.0, 5.0, -7.0, 3.0, 1.0, -1.0, 4.0, 8.0, -3.0, 6.0, -2.0, -6.0, 0.0, 0.0, -8.0, -1.0, 3.0, -6.0, 3.0, 4.0, -1.0, 1.0, -3.0, 9.0, 2.0, -5.0, 8.0, -5.0, -2.0, 2.0, 2.0, 0.0, 1.0, -4.0, -4.0, 5.0, -3.0, 3.0, 7.0, -9.0, 0.0, -3.0, 1.0, -4.0, 3.0, 4.0, -5.0, 1.0, -1.0, -2.0, 6.0, 6.0, 2.0, 5.0, 0.0, -8.0, -2.0, -1.0, -6.0, -3.0, 1.0, 6.0, 5.0, 2.0, -3.0, 0.0, -1.0, 7.0, 0.0, -6.0, -7.0, -7.0, 3.0, 1.0, 4.0, -2.0, -1.0, -5.0, -2.0, 3.0, 2.0, 2.0, -8.0, 8.0, -2.0, -4.0, 3.0, -6.0, 1.0, 3.0, -3.0, -1.0, -3.0, -3.0, 8.0, 4.0, 0.0, 4.0, 2.0, 9.0, 3.0, -2.0, -4.0, -5.0, -1.0, 5.0, 7.0, 0.0, 2.0, -1.0, 1.0, 5.0, -2.0, 6.0, -5.0, -9.0, 1.0, 0.0, 6.0, -4.0, -3.0, -6.0, 0.0, 1.0, 0.0, 1.0, -6.0, 6.0, 3.0, -5.0, 5.0, -8.0, -1.0, 2.0, -1.0, -3.0, 2.0, -4.0, -7.0, 2.0, -2.0, 3.0, 4.0, 7.0, 1.0, -3.0, -2.0, -7.0, -3.0, 4.0, -8.0, -2.0, 0.0, -2.0, 3.0, 3.0, 3.0, 5.0, -3.0, 8.0, -1.0, -1.0, 8.0, -6.0, 2.0, 6.0, 2.0, -1.0, -2.0, 0.0, -4.0, 4.0, 1.0, -6.0, 7.0, 9.0, -3.0, 1.0, 1.0, -5.0, 0.0, -5.0, -5.0, 0.0, 3.0, 2.0, 6.0, 5.0, -1.0, -4.0, 0.0, -9.0, 2.0, 3.0, -6.0, -4.0, -2.0, -3.0, 5.0, 1.0, 1.0, 4.0, -1.0, 6.0, -3.0, -2.0, -7.0, -8.0, 0.0, 5.0, 4.0, -3.0, 3.0, -1.0, -2.0, 2.0, -1.0, 6.0, -8.0, 7.0, 2.0, 0.0, 3.0, -7.0, -2.0, -6.0, -3.0, -2.0, 1.0, 1.0, 8.0, 3.0, -3.0, -5.0, 2.0, 8.0, 0.0, 2.0, -4.0, -6.0, 3.0, -4.0, 7.0, -1.0, -1.0, 3.0, 1.0, 4.0, 2.0, -3.0, -5.0, 9.0, -2.0, 4.0, 6.0, -5.0, 1.0, -2.0, 0.0, 0.0, -3.0, 5.0, -6.0, 5.0, 0.0, -1.0, 5.0, -9.0, 3.0, 6.0, -1.0, -4.0, -1.0, 0.0, -7.0, 1.0, 2.0, -6.0, 4.0, 6.0, -2.0, 1.0, -2.0, -8.0, 1.0, -5.0, -8.0, -3.0, -3.0, 2.0, 3.0, 2.0, 0.0, -4.0, -3.0, 7.0, 3.0, 3.0, 8.0, -7.0, -1.0, -3.0, 2.0, -2.0, 2.0, 4.0, -4.0, 3.0, -2.0, -2.0, 7.0, 8.0, 1.0, 5.0, 1.0, -6.0, -3.0, -1.0, -5.0, -1.0, 0.0, 6.0, 6.0, 4.0, 3.0, 0.0, 0.0, 9.0, -1.0, -6.0, -6.0, -5.0, 2.0, 1.0, 5.0, 0.0, -2.0, -5.0, -1.0, 5.0, 1.0, 2.0, -7.0, -9.0, -3.0, -4.0, 4.0, -4.0, 0.0, 3.0, -2.0, 1.0, 3.0, -3.0, -8.0, 6.0, -1.0, 4.0, 3.0, -8.0, 2.0, -2.0, -3.0, -3.0, -2.0, 5.0, 8.0, 2.0, 1.0, -1.0, 2.0, 7.0, -3.0, 6.0, -4.0, -7.0, 0.0, 0.0, 7.0, -2.0, 3.0, -6.0, 1.0, 3.0, -1.0, 1.0, -5.0, 8.0, 2.0, -5.0, 6.0, -6.0, -2.0, 2.0, 0.0, -1.0, 1.0, -4.0, -6.0, 4.0, -3.0, 3.0, 5.0, 9.0, 0.0, -3.0, -1.0, -5.0, 3.0, 4.0, -7.0, 0.0, -1.0, -2.0, 4.0, 5.0, 2.0, 5.0, -2.0, -9.0, -2.0, -1.0, -8.0, -4.0, 1.0, 6.0, 3.0, 1.0, -3.0, 0.0, -3.0, 6.0, 0.0, -6.0, 8.0, -8.0, 3.0, 1.0, 2.0, -3.0, -1.0, -5.0, -4.0, 2.0, 2.0, 2.0, 7.0, 7.0, -2.0, -4.0, 1.0, -7.0, 1.0, 3.0, -5.0, -2.0, -3.0, -3.0, 6.0, 3.0, 0.0, 4.0, 0.0, 8.0, 3.0, -2.0, -6.0, -6.0, -1.0, 5.0, 5.0, -1.0, 2.0, -1.0, -1.0, 4.0, -2.0, 6.0, -7.0, 9.0, 1.0, 0.0, 4.0, -5.0, -3.0, -6.0, -2.0, 0.0, 0.0, 1.0, -8.0, 5.0, 3.0, -5.0, 3.0, -9.0, -1.0, 2.0, -3.0, -4.0, 2.0, -4.0, 8.0, 1.0, -2.0, 3.0, 2.0, 6.0, 1.0, -3.0, -4.0, -8.0, -3.0, 4.0, 7.0, -3.0, 0.0, -2.0, 1.0, 2.0, 3.0, 5.0, -5.0, 7.0, -1.0, -1.0, 6.0, -7.0, 2.0, 6.0, 0.0, -2.0, -2.0, 0.0, -6.0, 3.0, 1.0, -6.0, 5.0, 8.0, -3.0, 1.0, -1.0, -6.0, 0.0, -5.0, -7.0, -1.0, 3.0, 2.0, 4.0, 4.0, -1.0, -4.0, -2.0, 9.0, 2.0, 3.0, -8.0, -5.0, -2.0, -3.0, 3.0, 0.0, 1.0, 4.0, -3.0, 5.0, -3.0, -2.0, 8.0, -9.0, 0.0, 5.0, 2.0, -4.0, 3.0, -1.0, -4.0, 1.0, -1.0, 6.0, 7.0, 6.0, 2.0, 0.0, 1.0, -8.0, -2.0, -6.0, -5.0, -3.0, 1.0, 1.0, 6.0, 2.0, -3.0, -5.0, 0.0, 7.0, 0.0, 2.0, -6.0, -7.0, 3.0, -4.0, 5.0, -2.0, -1.0], 4, [0.5, -1.0, 2.0, 0.25], 10], expected: [144, 53, 155, 167, 11, 87, 90, 79, 178, 64], description: "200 products of dimension 4"}
+expected_concepts:
+  - "cosine similarity as a normalised dot product"
+  - "row-major indexing of a flattened matrix"
+  - "zero-norm guard to avoid division by zero"
+  - "stable ranking with a tie-break on index"
+  - "top-k selection with a bounded heap"
+optimal_complexity: {time: "O(m * dim + m log k) with a size-k heap", space: "O(m) for the scores, or O(k) when scoring on the fly"}
+rubric:
+  excellent: "Indexes the flat array correctly, guards zero-length vectors, ranks with a comparator that applies the tolerance and the index tie-break, and discusses a size-k heap plus approximate nearest-neighbour indexes for large catalogues."
+  good: "Correct scores and ordering with a full sort; needs a hint for zero vectors or tie-breaking."
+  weak: "Ranks by raw dot product, divides by zero for empty vectors, mis-slices the flat array or ignores the index tie-break."
+  criteria:
+    correctness: "All tests pass, including zero vectors, a zero query, scalar multiples and k larger than m."
+    efficiency: "Each product is scored once in O(dim); selection is O(m log m) or better."
+    code_quality: "Separate scoring and ranking steps with clear names for the norms and the dot product."
+    edge_cases: "Empty catalogue, zero query, negative similarities and very different vector magnitudes."
+    communication: "Explains why cosine ignores vector length and why a tolerance is needed when comparing floats."
+hints:
+  - "Score every product first, then worry about ordering; product i occupies a contiguous slice of the flat list."
+  - "Cosine similarity divides the dot product by both lengths, so a vector of length zero needs its own branch. For the ordering, compare scores first and fall back to the index when they are within 10^-9."
+  - "Compute the query norm once, loop over products computing dot and norm in one pass over the slice, store each score (0.0 for zero norms), sort the indices with a comparator on (score descending within tolerance, index ascending) and return the first min(k, m)."
+followups:
+  - "How would you serve this for ten million products with a latency budget of a few milliseconds?"
+  - "If all embeddings were stored pre-normalised, what would the ranking reduce to?"
+  - "How would you exclude the product the shopper is already viewing, or products out of stock?"
+  - "What changes if you need the k least similar products for diversity sampling?"
+common_errors:
+  - "Ranking by raw dot product, which favours long vectors."
+  - "Dividing by a zero norm and producing NaN, which breaks the sort."
+  - "Slicing the flat array as embeddings[i : i + dim] instead of embeddings[i * dim : (i + 1) * dim]."
+  - "Comparing floats exactly so that equal similarities computed differently are ordered arbitrarily."

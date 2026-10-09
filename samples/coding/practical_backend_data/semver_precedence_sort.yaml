@@ -1,0 +1,185 @@
+version: 1
+slug: semver_precedence_sort
+title: Sort Release Versions by SemVer Precedence
+difficulty: medium
+competency_keys: [algorithms, problem_solving, code_quality]
+role_tags: [devops, platform, backend, qa]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Sort Release Versions by SemVer Precedence
+
+  The release dashboard lists every build tag published for a service, and the "latest" badge goes to
+  the version with the highest precedence. Plain string sorting puts `1.10.0` before `1.2.0` and
+  `2.0.0-rc.1` after `2.0.0`, so you are asked to sort the tags properly.
+
+  Every input string is a valid semantic version `MAJOR.MINOR.PATCH`, optionally followed by
+  `-PRERELEASE` and then optionally by `+BUILD`. Sort them in **ascending precedence** using these
+  rules:
+
+  1. Compare `MAJOR`, then `MINOR`, then `PATCH` as **numbers**.
+  2. If the three numbers are equal, a version **with** a pre-release ranks **below** the same version
+     without one (`1.2.0-rc.1` < `1.2.0`).
+  3. Two pre-releases are compared identifier by identifier, splitting on `.`:
+     - two identifiers made only of digits compare as **numbers**;
+     - two identifiers that contain a letter or a hyphen compare by **ASCII** character order;
+     - a numeric identifier ranks **below** an alphanumeric one;
+     - if all shared identifiers are equal, the version with **fewer** identifiers ranks lower
+       (`alpha` < `alpha.1`).
+  4. Build metadata (everything after `+`) is **ignored**. The pre-release is the text between the
+     first `-` and the `+` (if any), so a hyphen inside the build metadata does not start a pre-release.
+
+  Versions with equal precedence (for example `1.0.0+a` and `1.0.0+b`, or two identical strings) keep
+  their **input order**. Return the original strings, reordered.
+
+  ### Example 1
+  ```
+  Input:  versions = ["1.10.0", "1.2.0", "1.2.0-rc.1", "1.2.0-beta", "2.0.0",
+                      "1.2.0-alpha.10", "1.2.0-alpha.9"]
+  Output: ["1.2.0-alpha.9", "1.2.0-alpha.10", "1.2.0-beta", "1.2.0-rc.1", "1.2.0",
+           "1.10.0", "2.0.0"]
+  ```
+
+  ### Example 2
+  ```
+  Input:  versions = ["1.0.0+build.7", "1.0.0-alpha", "1.0.0+build.3", "1.0.0-alpha.1",
+                      "1.0.0-alpha.beta", "1.0.0-1"]
+  Output: ["1.0.0-1", "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta",
+           "1.0.0+build.7", "1.0.0+build.3"]
+  Explanation: "1" is numeric, so it ranks below "alpha". "1.0.0+build.7" and "1.0.0+build.3"
+  have equal precedence and keep their input order.
+  ```
+
+  ### Constraints
+  - `0 <= versions.length <= 10^4`
+  - every string is a valid semantic version of at most 100 characters
+  - numeric parts and numeric identifiers have no leading zeros (except `0` itself) and at most 18
+    digits, so they fit in a signed 64-bit integer but not always in a double
+  - identifiers contain only ASCII letters, digits and `-`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: sort_versions
+  params:
+    - {name: versions, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    from functools import cmp_to_key
+
+
+    def sort_versions(versions: list[str]) -> list[str]:
+        def parse(version: str) -> tuple[list[int], list[str]]:
+            core = version.split("+", 1)[0]          # build metadata never matters
+            if "-" in core:
+                release, pre = core.split("-", 1)    # pre-release may itself contain '-'
+                return [int(x) for x in release.split(".")], pre.split(".")
+            return [int(x) for x in core.split(".")], []
+
+        def compare_ids(a: str, b: str) -> int:
+            a_num, b_num = a.isdigit(), b.isdigit()
+            if a_num and b_num:
+                return (int(a) > int(b)) - (int(a) < int(b))
+            if a_num != b_num:
+                return -1 if a_num else 1            # numeric ranks below alphanumeric
+            return (a > b) - (a < b)                 # ASCII order
+
+        def compare(x: tuple[list[int], list[str]], y: tuple[list[int], list[str]]) -> int:
+            if x[0] != y[0]:
+                return -1 if x[0] < y[0] else 1
+            pre_x, pre_y = x[1], y[1]
+            if not pre_x or not pre_y:
+                return (not pre_x) - (not pre_y)     # a plain release ranks above a pre-release
+            for a, b in zip(pre_x, pre_y):
+                result = compare_ids(a, b)
+                if result:
+                    return result
+            return (len(pre_x) > len(pre_y)) - (len(pre_x) < len(pre_y))
+
+        keyed = sorted(
+            ((parse(v), i, v) for i, v in enumerate(versions)),
+            key=cmp_to_key(lambda p, q: compare(p[0], q[0]) or (p[1] - q[1])),
+        )
+        return [v for _, _, v in keyed]
+  javascript: |
+    function sortVersions(versions) {
+      const isNum = (s) => /^[0-9]+$/.test(s);
+      // No leading zeros, so a longer digit string is a larger number (safe beyond 2^53).
+      const compareNum = (a, b) =>
+        a.length !== b.length ? (a.length < b.length ? -1 : 1) : a < b ? -1 : a > b ? 1 : 0;
+      const parse = (version) => {
+        const core = version.split("+")[0];
+        const dash = core.indexOf("-");
+        const release = (dash < 0 ? core : core.slice(0, dash)).split(".");
+        const pre = dash < 0 ? [] : core.slice(dash + 1).split(".");
+        return { release, pre };
+      };
+      const compareIds = (a, b) => {
+        const aNum = isNum(a);
+        const bNum = isNum(b);
+        if (aNum && bNum) return compareNum(a, b);
+        if (aNum !== bNum) return aNum ? -1 : 1;
+        return a < b ? -1 : a > b ? 1 : 0;
+      };
+      const compare = (x, y) => {
+        for (let i = 0; i < 3; i++) {
+          const c = compareNum(x.release[i], y.release[i]);
+          if (c !== 0) return c;
+        }
+        if (x.pre.length === 0 || y.pre.length === 0) {
+          return (x.pre.length === 0 ? 1 : 0) - (y.pre.length === 0 ? 1 : 0);
+        }
+        const n = Math.min(x.pre.length, y.pre.length);
+        for (let i = 0; i < n; i++) {
+          const c = compareIds(x.pre[i], y.pre[i]);
+          if (c !== 0) return c;
+        }
+        return x.pre.length - y.pre.length;
+      };
+      return versions
+        .map((v, i) => ({ v, i, p: parse(v) }))
+        .sort((a, b) => compare(a.p, b.p) || a.i - b.i)
+        .map((e) => e.v);
+    }
+tests:
+  - {id: t1, args: [["1.10.0", "1.2.0", "1.2.0-rc.1", "1.2.0-beta", "2.0.0", "1.2.0-alpha.10", "1.2.0-alpha.9"]], expected: ["1.2.0-alpha.9", "1.2.0-alpha.10", "1.2.0-beta", "1.2.0-rc.1", "1.2.0", "1.10.0", "2.0.0"], description: "Example 1 - numeric core comparison and pre-releases below the release"}
+  - {id: t2, args: [["1.0.0+build.7", "1.0.0-alpha", "1.0.0+build.3", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-1"]], expected: ["1.0.0-1", "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0+build.7", "1.0.0+build.3"], description: "Example 2 - numeric below alphanumeric, shorter prefix first, build metadata ties keep input order"}
+  - {id: t3, hidden: true, args: [[]], expected: [], description: "Empty list"}
+  - {id: t4, hidden: true, args: [["10.0.0", "9.0.0", "1.0.10", "1.0.9", "0.0.1", "0.10.0", "0.9.9"]], expected: ["0.0.1", "0.9.9", "0.10.0", "1.0.9", "1.0.10", "9.0.0", "10.0.0"], description: "Core parts compared as numbers, not strings"}
+  - {id: t5, hidden: true, args: [["1.0.0-beta", "1.0.0-Beta", "1.0.0-be-ta", "1.0.0-b", "1.0.0-beta2", "1.0.0-BETA"]], expected: ["1.0.0-BETA", "1.0.0-Beta", "1.0.0-b", "1.0.0-be-ta", "1.0.0-beta", "1.0.0-beta2"], description: "Alphanumeric identifiers in ASCII order - uppercase first, hyphen inside an identifier, prefix strings"}
+  - {id: t6, hidden: true, args: [["1.0.0-rc.11", "1.0.0-rc.2.1", "1.0.0-rc", "1.0.0-rc.2", "1.0.0-alpha.0a", "1.0.0-alpha.x", "1.0.0-alpha.1"]], expected: ["1.0.0-alpha.1", "1.0.0-alpha.0a", "1.0.0-alpha.x", "1.0.0-rc", "1.0.0-rc.2", "1.0.0-rc.2.1", "1.0.0-rc.11"], description: "Multi-segment pre-releases - numeric segments numerically, '0a' is alphanumeric, shorter list first"}
+  - {id: t7, hidden: true, args: [["2.1.0+b", "2.1.0", "2.1.0+a", "2.1.0-rc.1+x", "2.1.0-rc.1", "1.0.0+sha-5114f85", "1.0.0-rc.1"]], expected: ["1.0.0-rc.1", "1.0.0+sha-5114f85", "2.1.0-rc.1+x", "2.1.0-rc.1", "2.1.0+b", "2.1.0", "2.1.0+a"], description: "Stable order for equal precedence; a hyphen inside build metadata is not a pre-release"}
+  - {id: t8, hidden: true, args: [["9007199254740993.0.0", "9007199254740992.0.0", "1.0.0-rc.900719925474099311", "1.0.0-rc.900719925474099310", "1.0.0-rc.99"]], expected: ["1.0.0-rc.99", "1.0.0-rc.900719925474099310", "1.0.0-rc.900719925474099311", "9007199254740992.0.0", "9007199254740993.0.0"], description: "Numbers beyond 2^53 - double-precision parsing would tie or misorder them"}
+  - {id: t9, hidden: true, args: [["3.4.5"]], expected: ["3.4.5"], description: "Single version"}
+  - {id: t10, hidden: true, args: [["2.0.1-1", "1.3.9", "10.0.1-1", "0.0.0", "10.3.1+ci.77", "0.3.0-beta.2.rc", "0.0.9-0.1", "1.0.1+b1", "0.12.1+b1", "10.0.0+sha-9f2", "2.3.9+ci.77", "0.12.1-0.x-1.1+sha-9f2", "0.0.9+20261008", "2.12.9-beta.1", "0.12.1-alpha", "0.3.0-2", "2.0.0", "10.3.0", "0.12.0", "1.12.1-rc.alpha", "2.0.0-alpha.0", "1.12.1-0+sha-9f2", "10.12.1", "2.0.1", "0.12.1", "10.12.0", "1.3.1", "1.0.9-1.rc", "0.3.1", "2.0.9+sha-9f2", "10.3.1-rc.1", "0.0.0-x-1.2+ci.77", "2.3.9-1.2.2", "10.3.0-2.11", "0.0.9-1.0", "0.0.0", "0.3.0-11", "2.0.0-11.11.x-1+ci.77", "0.0.0-x-1.alpha", "1.0.9", "1.3.1-alpha", "10.12.9+20261008", "2.0.0+b1", "2.12.0+b1", "1.3.9-beta.rc.2", "2.12.1", "0.12.9", "1.3.0-2+b1", "2.12.9", "10.0.1-2", "0.0.0", "1.3.0", "0.0.0+b1", "10.0.9", "0.0.0", "10.0.1+20261008", "2.12.9", "0.12.0-2.x-1.11", "2.3.0-0.2.rc", "1.0.9-0+20261008"]], expected: ["0.0.0-x-1.2+ci.77", "0.0.0-x-1.alpha", "0.0.0", "0.0.0", "0.0.0", "0.0.0+b1", "0.0.0", "0.0.9-0.1", "0.0.9-1.0", "0.0.9+20261008", "0.3.0-2", "0.3.0-11", "0.3.0-beta.2.rc", "0.3.1", "0.12.0-2.x-1.11", "0.12.0", "0.12.1-0.x-1.1+sha-9f2", "0.12.1-alpha", "0.12.1+b1", "0.12.1", "0.12.9", "1.0.1+b1", "1.0.9-0+20261008", "1.0.9-1.rc", "1.0.9", "1.3.0-2+b1", "1.3.0", "1.3.1-alpha", "1.3.1", "1.3.9-beta.rc.2", "1.3.9", "1.12.1-0+sha-9f2", "1.12.1-rc.alpha", "2.0.0-11.11.x-1+ci.77", "2.0.0-alpha.0", "2.0.0", "2.0.0+b1", "2.0.1-1", "2.0.1", "2.0.9+sha-9f2", "2.3.0-0.2.rc", "2.3.9-1.2.2", "2.3.9+ci.77", "2.12.0+b1", "2.12.1", "2.12.9-beta.1", "2.12.9", "2.12.9", "10.0.0+sha-9f2", "10.0.1-1", "10.0.1-2", "10.0.1+20261008", "10.0.9", "10.3.0-2.11", "10.3.0", "10.3.1-rc.1", "10.3.1+ci.77", "10.12.0", "10.12.1", "10.12.9+20261008"], description: "60 mixed versions with duplicates, build metadata and multi-part pre-releases"}
+expected_concepts:
+  - custom comparator with a total order
+  - parsing the core, pre-release and build parts in the right order
+  - numeric versus lexical comparison
+  - stable sorting for equal keys
+  - numbers too large for double precision
+optimal_complexity: {time: O(n log n * L) where L is the version length, space: O(n * L)}
+rubric:
+  excellent: Parses each version once (stripping build metadata before looking for the pre-release), writes a comparator that follows all four rules, relies on or enforces stability for ties, and handles numbers beyond 2^53 by comparing digit strings by length then lexically or with 64-bit integers.
+  good: Correct comparator for core and pre-release rules with a hint about build metadata, stability or large numbers.
+  weak: Sorts strings lexicographically, compares pre-release identifiers only as strings, ranks a release below its pre-release, or splits on the first hyphen anywhere in the string.
+  criteria:
+    correctness: All tests pass, including numeric versus alphanumeric identifiers, prefix lists, build metadata ties and very large numbers.
+    efficiency: One parse per version and an O(n log n) comparison sort; no re-parsing inside the comparator in the hot path.
+    code_quality: A small parse helper and an identifier comparator that read like the specification.
+    edge_cases: Empty list, identical versions, hyphens in identifiers and build metadata, uppercase identifiers.
+    communication: Explains why stability matters and how ties between builds are resolved.
+hints:
+  - Split each version into its numeric core, its list of pre-release identifiers and its build metadata, which you can discard; compare the pieces in that order.
+  - A missing pre-release beats any pre-release of the same core; between two pre-releases, walk the identifiers in parallel and decide on the first difference, falling back to the length of the lists.
+  - Remove everything from the plus sign first and only then split on the first hyphen; for identifiers, compare digit-only pairs by length then character by character (no leading zeros), put digit-only before alphanumeric, compare the rest by ASCII, and use a stable sort or the input index as the final tie-breaker.
+followups:
+  - How would you pick only the highest version without sorting the whole list?
+  - How would you answer "the newest stable release" or "the newest release matching ^1.2"?
+  - What would you do with strings that are not valid semantic versions?
+  - Why is sort stability observable in this problem?
+common_errors:
+  - Sorting the raw strings, so 1.10.0 lands before 1.2.0.
+  - Comparing pre-release identifiers only as strings, so alpha.10 lands before alpha.9.
+  - Splitting on the first hyphen before removing the build metadata.
+  - Ranking a release below its own pre-release or treating build metadata as significant.
+  - Parsing 16+ digit numbers into double-precision floats, which merges distinct values.

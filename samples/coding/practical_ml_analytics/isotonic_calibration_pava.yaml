@@ -1,0 +1,141 @@
+version: 1
+slug: isotonic_calibration_pava
+title: Isotonic Calibration of Model Scores
+difficulty: hard
+competency_keys: [machine_learning, algorithms, data_structures]
+role_tags: [ml, data_scientist]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Isotonic Calibration of Model Scores
+
+  A lead-scoring model ranks sales leads, and the team wants its scores turned into calibrated
+  conversion probabilities. Leads were grouped into buckets by score, and the buckets are given in
+  order of **increasing model score**. For bucket `i` you know `values[i]`, the observed conversion
+  rate in that bucket, and `weights[i] > 0`, how much evidence the bucket carries (for example the
+  number of leads in it).
+
+  A higher score should never mean a lower probability, so the calibrated curve must be
+  **non-decreasing**. Return the list `fitted` (same length as `values`) that
+
+  - is non-decreasing: `fitted[0] <= fitted[1] <= ... <= fitted[n - 1]`, and
+  - minimises the weighted squared error `sum(weights[i] * (values[i] - fitted[i])^2)`.
+
+  This solution is unique. Return one fitted value per input position, in input order. Values are
+  compared with a relative tolerance of `1e-6` (`|actual - expected| <= 1e-6 * max(1, |expected|)`).
+
+  ### Example 1
+  ```
+  Input:  values = [0.1, 0.3, 0.2, 0.4], weights = [1.0, 1.0, 1.0, 1.0]
+  Output: [0.1, 0.25, 0.25, 0.4]
+  Explanation: 0.3 followed by 0.2 breaks the order; the best fix gives both buckets their mean, 0.25.
+  ```
+
+  ### Example 2
+  ```
+  Input:  values = [0.25, 0.75, 0.5, 0.0], weights = [2.0, 1.0, 1.0, 4.0]
+  Output: [0.21875, 0.21875, 0.21875, 0.21875]
+  Explanation: pooling buckets 1 and 2 gives 0.625; adding bucket 3 gives (0.75 + 0.5 + 0.0) / 6, about
+  0.2083, which is below bucket 0's 0.25, so everything is pooled: (0.5 + 0.75 + 0.5 + 0.0) / 8 = 0.21875.
+  ```
+
+  ### Constraints
+  - `0 <= values.length == weights.length <= 10^5` (empty input returns an empty list)
+  - `0.0 <= values[i] <= 1.0`
+  - `0 < weights[i] <= 10^6`
+
+  **Follow-up:** a solution that repeatedly rescans the whole list for violations is `O(n^2)`. Aim for
+  `O(n)` amortised time.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: isotonic_fit
+  params:
+    - {name: values, type: "float[]"}
+    - {name: weights, type: "float[]"}
+  return_type: "float[]"
+  comparison: float_tolerance
+  tolerance: 1e-06
+reference_solutions:
+  python: |
+    def isotonic_fit(values: list[float], weights: list[float]) -> list[float]:
+        # Each block: [weighted sum, total weight, number of positions].
+        blocks: list[list[float]] = []
+        for value, weight in zip(values, weights):
+            blocks.append([value * weight, weight, 1])
+            while len(blocks) > 1 and blocks[-2][0] / blocks[-2][1] > blocks[-1][0] / blocks[-1][1]:
+                total, weight_sum, count = blocks.pop()
+                blocks[-1][0] += total
+                blocks[-1][1] += weight_sum
+                blocks[-1][2] += count
+        fitted: list[float] = []
+        for total, weight_sum, count in blocks:
+            fitted.extend([total / weight_sum] * int(count))
+        return fitted
+  javascript: |
+    function isotonicFit(values, weights) {
+      // Each block: weighted sum, total weight, number of positions.
+      const sums = [];
+      const totals = [];
+      const counts = [];
+      for (let i = 0; i < values.length; i++) {
+        sums.push(values[i] * weights[i]);
+        totals.push(weights[i]);
+        counts.push(1);
+        let top = sums.length - 1;
+        while (top > 0 && sums[top - 1] / totals[top - 1] > sums[top] / totals[top]) {
+          sums[top - 1] += sums.pop();
+          totals[top - 1] += totals.pop();
+          counts[top - 1] += counts.pop();
+          top--;
+        }
+      }
+      const fitted = [];
+      for (let b = 0; b < sums.length; b++) {
+        const mean = sums[b] / totals[b];
+        for (let c = 0; c < counts[b]; c++) fitted.push(mean);
+      }
+      return fitted;
+    }
+tests:
+  - {id: t1, args: [[0.1, 0.3, 0.2, 0.4], [1.0, 1.0, 1.0, 1.0]], expected: [0.1, 0.25, 0.25, 0.4], description: "Example 1 - one adjacent violation pooled with equal weights"}
+  - {id: t2, args: [[0.25, 0.75, 0.5, 0.0], [2.0, 1.0, 1.0, 4.0]], expected: [0.21875, 0.21875, 0.21875, 0.21875], description: "Example 2 - pooled block violates the earlier block, so pooling cascades to the front"}
+  - {id: t3, hidden: true, args: [[], []], expected: [], description: "Empty input returns an empty list"}
+  - {id: t4, hidden: true, args: [[0.42], [7.0]], expected: [0.42], description: "Single bucket is returned unchanged"}
+  - {id: t5, hidden: true, args: [[0.0, 0.1, 0.1, 0.5, 0.9], [3.0, 1.0, 2.0, 1.0, 5.0]], expected: [0.0, 0.1, 0.1, 0.5, 0.9], description: "Already non-decreasing with ties - no pooling at all"}
+  - {id: t6, hidden: true, args: [[0.9, 0.7, 0.5, 0.3, 0.1], [1.0, 2.0, 3.0, 4.0, 5.0]], expected: [0.36666666666666664, 0.36666666666666664, 0.36666666666666664, 0.36666666666666664, 0.36666666666666664], description: "Strictly decreasing - everything collapses to one weighted mean"}
+  - {id: t7, hidden: true, args: [[0.6, 0.2, 0.5, 0.1, 0.8, 0.3], [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]], expected: [0.35, 0.35, 0.35, 0.35, 0.55, 0.55], description: "Several separate pools including one that later grows"}
+  - {id: t8, hidden: true, args: [[0.2, 0.8, 0.6, 0.7, 0.65, 0.9], [1.0, 1000000.0, 1.0, 1.0, 1.0, 0.5]], expected: [0.2, 0.7999995500013499, 0.7999995500013499, 0.7999995500013499, 0.7999995500013499, 0.9], description: "A huge weight pins the pooled value near its own rate (weighted, not plain, mean)"}
+  - {id: t9, hidden: true, args: [[0.3, 0.3, 0.1, 0.3, 0.3], [1.0, 1.0, 2.0, 1.0, 1.0]], expected: [0.2, 0.2, 0.2, 0.3, 0.3], description: "Equal neighbours are not violations; a dip pools backwards across a tie"}
+  - {id: t10, hidden: true, args: [[0.5, 0.5, 0.5, 0.5], [0.001, 0.002, 0.5, 9.0]], expected: [0.5, 0.5, 0.5, 0.5], description: "Constant rates with tiny fractional weights stay unchanged"}
+  - {id: t11, hidden: true, args: [[0.0, 0.0, 0.0, 0.183, 0.07, 0.114, 0.0, 0.0, 0.02, 0.22, 0.108, 0.0, 0.0, 0.0, 0.015, 0.119, 0.035, 0.271, 0.0, 0.0, 0.285, 0.061, 0.0, 0.164, 0.0, 0.0, 0.0, 0.17, 0.22, 0.271, 0.335, 0.003, 0.204, 0.0, 0.0, 0.178, 0.196, 0.373, 0.082, 0.162, 0.039, 0.326, 0.195, 0.0, 0.268, 0.0, 0.324, 0.0, 0.393, 0.186, 0.408, 0.0, 0.417, 0.086, 0.254, 0.335, 0.424, 0.357, 0.019, 0.0, 0.026, 0.245, 0.159, 0.43, 0.288, 0.091, 0.198, 0.298, 0.411, 0.062, 0.097, 0.269, 0.176, 0.42, 0.129, 0.335, 0.366, 0.019, 0.35, 0.504, 0.321, 0.066, 0.051, 0.094, 0.47, 0.307, 0.101, 0.382, 0.184, 0.314, 0.398, 0.151, 0.489, 0.061, 0.169, 0.131, 0.299, 0.567, 0.182, 0.459, 0.287, 0.238, 0.531, 0.4, 0.356, 0.389, 0.253, 0.176, 0.271, 0.487, 0.223, 0.145, 0.207, 0.277, 0.29, 0.247, 0.418, 0.54, 0.491, 0.454, 0.419, 0.409, 0.374, 0.594, 0.193, 0.52, 0.257, 0.64, 0.598, 0.233, 0.493, 0.256, 0.581, 0.221, 0.318, 0.268, 0.518, 0.445, 0.252, 0.637, 0.432, 0.433, 0.678, 0.421, 0.242, 0.663, 0.572, 0.386, 0.398, 0.291, 0.685, 0.489, 0.301, 0.445, 0.671, 0.465, 0.278, 0.693, 0.509, 0.778, 0.377, 0.579, 0.323, 0.536, 0.376, 0.41, 0.402, 0.746, 0.628, 0.5, 0.741, 0.604, 0.793, 0.717, 0.716, 0.495, 0.693, 0.347, 0.557, 0.734, 0.609, 0.712, 0.626, 0.837, 0.698, 0.755, 0.484, 0.828, 0.561, 0.697, 0.506, 0.877, 0.51, 0.521, 0.428, 0.423, 0.668, 0.46, 0.909, 0.767, 0.69, 0.914, 0.894, 0.853, 0.608, 0.452, 0.635, 0.544, 0.819, 0.699, 0.452, 0.597, 0.696, 0.735, 0.81, 0.737, 0.748, 0.717, 0.942, 0.959, 0.885, 0.863, 0.524, 0.988, 0.922, 0.856, 0.839, 0.745, 0.982, 0.954, 0.919, 0.984, 0.978, 0.677, 0.704, 0.566, 0.986, 0.821, 0.964, 0.696, 0.592, 0.889, 1.0, 1.0, 0.779, 0.649, 0.685, 0.743, 0.729, 0.675, 0.642, 0.896, 0.979, 1.0, 0.954, 0.665, 0.748, 0.631, 0.742, 0.917, 0.886, 0.785, 0.63, 1.0, 0.92, 0.835, 0.65, 0.894, 1.0, 1.0, 0.88, 1.0, 0.703, 0.791, 0.823, 0.731, 1.0, 0.919, 0.928, 1.0, 0.855, 1.0, 1.0, 0.99, 0.809, 1.0, 0.749, 1.0, 0.955, 1.0, 0.844, 0.832, 0.944, 1.0, 0.798, 1.0, 1.0, 0.846, 0.748, 0.781], [7.0, 27.0, 21.0, 45.0, 22.0, 11.0, 47.0, 37.0, 21.0, 40.0, 33.0, 31.0, 16.0, 7.0, 9.0, 30.0, 48.0, 48.0, 48.0, 13.0, 11.0, 21.0, 15.0, 10.0, 8.0, 24.0, 33.0, 40.0, 44.0, 3.0, 20.0, 36.0, 12.0, 27.0, 44.0, 40.0, 45.0, 16.0, 8.0, 5.0, 15.0, 22.0, 22.0, 36.0, 23.0, 29.0, 42.0, 21.0, 19.0, 8.0, 1.0, 22.0, 12.0, 27.0, 16.0, 4.0, 31.0, 42.0, 41.0, 26.0, 1.0, 23.0, 2.0, 36.0, 42.0, 29.0, 6.0, 5.0, 13.0, 20.0, 42.0, 40.0, 28.0, 37.0, 42.0, 15.0, 28.0, 2.0, 19.0, 37.0, 23.0, 2.0, 21.0, 22.0, 15.0, 24.0, 9.0, 38.0, 41.0, 47.0, 1.0, 12.0, 19.0, 46.0, 7.0, 46.0, 3.0, 28.0, 2.0, 20.0, 20.0, 49.0, 17.0, 22.0, 39.0, 46.0, 5.0, 38.0, 42.0, 50.0, 40.0, 15.0, 7.0, 47.0, 22.0, 13.0, 43.0, 37.0, 35.0, 23.0, 48.0, 6.0, 14.0, 34.0, 17.0, 34.0, 28.0, 32.0, 47.0, 22.0, 2.0, 25.0, 40.0, 14.0, 31.0, 31.0, 3.0, 50.0, 25.0, 44.0, 21.0, 17.0, 14.0, 22.0, 12.0, 25.0, 25.0, 18.0, 41.0, 5.0, 27.0, 27.0, 35.0, 9.0, 27.0, 14.0, 5.0, 8.0, 50.0, 19.0, 4.0, 40.0, 26.0, 2.0, 44.0, 30.0, 15.0, 11.0, 32.0, 38.0, 41.0, 19.0, 25.0, 46.0, 1.0, 9.0, 11.0, 30.0, 4.0, 15.0, 7.0, 7.0, 33.0, 17.0, 26.0, 46.0, 21.0, 4.0, 37.0, 22.0, 2.0, 45.0, 13.0, 13.0, 13.0, 10.0, 10.0, 37.0, 20.0, 17.0, 28.0, 4.0, 27.0, 37.0, 11.0, 9.0, 29.0, 17.0, 6.0, 7.0, 35.0, 36.0, 24.0, 15.0, 11.0, 20.0, 20.0, 1.0, 44.0, 42.0, 16.0, 49.0, 14.0, 12.0, 41.0, 32.0, 25.0, 41.0, 7.0, 43.0, 31.0, 26.0, 28.0, 33.0, 4.0, 26.0, 35.0, 24.0, 33.0, 42.0, 33.0, 25.0, 15.0, 36.0, 31.0, 32.0, 43.0, 11.0, 35.0, 22.0, 6.0, 34.0, 46.0, 29.0, 14.0, 39.0, 15.0, 14.0, 43.0, 22.0, 24.0, 17.0, 50.0, 30.0, 41.0, 10.0, 8.0, 47.0, 32.0, 8.0, 5.0, 15.0, 2.0, 24.0, 41.0, 38.0, 31.0, 23.0, 17.0, 35.0, 10.0, 37.0, 19.0, 36.0, 50.0, 25.0, 28.0, 43.0, 47.0, 34.0, 22.0, 34.0, 39.0, 46.0, 47.0, 19.0, 40.0, 15.0, 2.0, 35.0]], expected: [0.0, 0.0, 0.0, 0.06256284153005463, 0.06256284153005463, 0.06256284153005463, 0.06256284153005463, 0.06256284153005463, 0.06256284153005463, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.08272584269662922, 0.11747345132743363, 0.11747345132743363, 0.11747345132743363, 0.11747345132743363, 0.11747345132743363, 0.11747345132743363, 0.11747345132743363, 0.11747345132743363, 0.15932950191570883, 0.15932950191570883, 0.15932950191570883, 0.15932950191570883, 0.15932950191570883, 0.15932950191570883, 0.15932950191570883, 0.15932950191570883, 0.15932950191570883, 0.15932950191570883, 0.15932950191570883, 0.1993223684210526, 0.1993223684210526, 0.1993223684210526, 0.1993223684210526, 0.1993223684210526, 0.1993223684210526, 0.1993223684210526, 0.1993223684210526, 0.2133354037267081, 0.2133354037267081, 0.2133354037267081, 0.2133354037267081, 0.2133354037267081, 0.2133354037267081, 0.2133354037267081, 0.22707798165137616, 0.22707798165137616, 0.22707798165137616, 0.22707798165137616, 0.22707798165137616, 0.22707798165137616, 0.22707798165137616, 0.22707798165137616, 0.22707798165137616, 0.22707798165137616, 0.2307058823529412, 0.2307058823529412, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.26380108499095845, 0.299, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.3280957854406131, 0.418, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.43388628762541803, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49109064327485374, 0.49579225352112677, 0.49579225352112677, 0.49579225352112677, 0.49579225352112677, 0.49579225352112677, 0.49579225352112677, 0.49579225352112677, 0.49579225352112677, 0.49579225352112677, 0.49579225352112677, 0.49579225352112677, 0.49579225352112677, 0.49579225352112677, 0.5839753086419753, 0.5839753086419753, 0.5839753086419753, 0.6456774193548387, 0.6456774193548387, 0.6456774193548387, 0.6456774193548387, 0.6456774193548387, 0.6456774193548387, 0.6456774193548387, 0.6456774193548387, 0.6456774193548387, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6480502645502646, 0.6905724381625441, 0.6905724381625441, 0.6905724381625441, 0.6905724381625441, 0.6905724381625441, 0.6905724381625441, 0.6905724381625441, 0.6905724381625441, 0.6905724381625441, 0.6905724381625441, 0.6905724381625441, 0.6905724381625441, 0.6905724381625441, 0.6905724381625441, 0.6960000000000001, 0.735, 0.7562884615384615, 0.7562884615384615, 0.7562884615384615, 0.7562884615384615, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8256370716510903, 0.8790664451827243, 0.8790664451827243, 0.8790664451827243, 0.8790664451827243, 0.8790664451827243, 0.8790664451827243, 0.8790664451827243, 0.8790664451827243, 0.8790664451827243, 0.8790664451827243, 0.8790664451827243, 0.8790664451827243, 0.8790664451827243, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059, 0.9252166212534059], description: "300 noisy buckets on a rising trend - stress for the stack-based pooling"}
+expected_concepts:
+  - pool adjacent violators algorithm (PAVA)
+  - stack of blocks storing weighted sum, total weight and size
+  - cascading merges after a pooled block lowers its mean
+  - weighted mean as the least-squares fit of a block
+  - isotonic regression for probability calibration
+optimal_complexity: {time: "O(n) amortised (each block is merged at most once)", space: "O(n)"}
+rubric:
+  excellent: "Implements pool-adjacent-violators with a stack of (weighted sum, weight, size) blocks, keeps merging backwards while the previous block's mean is larger, expands blocks to per-position values, argues the O(n) amortised bound and connects the result to calibration (and to Platt scaling as an alternative)."
+  good: "Correct output with a repeated-scan PAVA that is O(n^2) in the worst case, or a stack version reached after a hint about cascading merges."
+  weak: "Uses plain instead of weighted means, merges only the immediate violating pair without re-checking earlier blocks, clips values to the previous maximum, or returns one value per block instead of per position."
+  criteria:
+    correctness: "All tests pass, including cascading pools, ties, heavy weights and fully decreasing input."
+    efficiency: "Linear amortised time with a stack; no repeated full rescans."
+    code_quality: "Block state kept together, clear merge loop, no floating-point equality tricks."
+    edge_cases: "Empty input, single bucket, equal neighbours and very small or very large weights."
+    communication: "Explains why pooling to the weighted mean is optimal for a block and why merging never needs to be undone."
+hints:
+  - When two neighbouring buckets are out of order, the best non-decreasing fit for just those two gives them one shared value. Which single value minimises their weighted squared error?
+  - Pool violating neighbours into a block whose fitted value is the block's weighted mean. A pooled block can end up with a lower mean than the block before it, so after every merge you must check backwards again.
+  - Walk the buckets once while keeping a stack of blocks, each holding its weighted sum, total weight and number of positions. Push each bucket as a new block, then while the block below the top has a larger mean, merge the top into it. Finally expand every block into its mean repeated once per position.
+followups:
+  - Why does merging never need to be undone - can a pooled block ever split again later?
+  - How would you apply the fitted calibration to a new score that falls between two buckets?
+  - When would you prefer Platt scaling (a fitted sigmoid) over isotonic calibration?
+  - How would you measure whether calibration actually improved, for example with a reliability diagram or the Brier score?
+common_errors:
+  - Using plain averages and ignoring the weights.
+  - Merging only the current violating pair without re-checking against earlier blocks.
+  - Clipping each value to the running maximum, which is monotone but not least-squares optimal.
+  - Returning one value per block instead of one per input position.
+  - Sorting the buckets by observed rate, which destroys the score order the fit must respect.

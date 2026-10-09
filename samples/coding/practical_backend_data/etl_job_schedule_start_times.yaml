@@ -1,0 +1,282 @@
+version: 1
+slug: etl_job_schedule_start_times
+title: "Simulate an ETL Job Scheduler"
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [data, platform, devops, backend]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Simulate an ETL Job Scheduler
+
+  The data platform runs its nightly ETL pipeline on a fixed pool of identical workers. Before changing the
+  scheduler, the team wants a simulator that predicts **when each job starts**, so they can compare it with
+  the real run logs.
+
+  Job `i` is called `names[i]` (names are unique) and runs for `durations[i]` time units once started. Each
+  pair `[before, after]` in `deps` means `after` may only start once `before` has **finished**. The same pair
+  may appear more than once; it means the same as appearing once.
+
+  **Priority.** The **critical path** of a job is its own duration plus the largest critical path among the
+  jobs that directly depend on it (just its own duration if nothing depends on it). It is the length of the
+  longest chain of work that cannot finish before this job does.
+
+  **Scheduling rules.** There are `workers` workers and the clock starts at `0`. At every moment when a job
+  finishes, and at time `0`:
+
+  1. First process **all** jobs that finish at this moment: their workers become free, and every job whose
+     dependencies have now all finished becomes **ready**.
+  2. Then, while there is a free worker and a ready job, start the ready job with the **largest critical
+     path**; on a tie, the job whose name is **smaller** (plain string comparison) starts first.
+
+  A worker never stays idle while a job is ready, and jobs are never interrupted.
+
+  Return the start time of every job, **in the order of `names`**. If the dependencies contain a cycle (so
+  some job could never start), return an empty list `[]`.
+
+  ### Example 1
+  ```
+  Input:  names = ["extract_orders", "extract_users", "transform_sales", "load_warehouse", "refresh_dashboard"],
+          durations = [4, 2, 5, 3, 1],
+          deps = [["extract_orders", "transform_sales"], ["extract_users", "transform_sales"], ["transform_sales", "load_warehouse"], ["extract_users", "refresh_dashboard"]],
+          workers = 2
+  Output: [0, 0, 4, 9, 2]
+  Explanation: critical paths are 12, 10, 8, 3 and 1. At time 0 the two extracts start; refresh_dashboard
+  waits. extract_users finishes at 2 and refresh_dashboard starts. extract_orders finishes at 4, so
+  transform_sales starts at 4 and load_warehouse at 9.
+  ```
+
+  ### Example 2
+  ```
+  Input:  names = ["a", "b", "c", "d"], durations = [3, 3, 3, 1], deps = [["a", "d"]], workers = 1
+  Output: [0, 3, 6, 9]
+  Explanation: a has the largest critical path (3 + 1). At time 3, b and c are tied at 3 and b wins by
+  name. At time 6, c (3) beats d (1).
+  ```
+
+  ### Example 3
+  ```
+  Input:  names = ["stage", "publish", "verify"], durations = [2, 2, 2], deps = [["stage", "publish"], ["publish", "verify"], ["verify", "stage"]], workers = 3
+  Output: []
+  ```
+
+  ### Constraints
+  - `1 <= names.length == durations.length <= 2000`
+  - names are unique, non-empty, lowercase letters, digits and underscores
+  - `1 <= durations[i] <= 10^5`
+  - `0 <= deps.length <= 10^4`; every pair names two jobs from `names` (a job may name itself, which is a cycle)
+  - `1 <= workers <= 100`
+
+  **Follow-up:** why is "longest critical path first" a good heuristic for the overall finish time, and when
+  is it not optimal?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: schedule_etl_jobs
+  params:
+    - {name: names, type: "string[]"}
+    - {name: durations, type: "int[]"}
+    - {name: deps, type: "string[][]"}
+    - {name: workers, type: int}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import heapq
+    from collections import deque
+
+
+    def schedule_etl_jobs(names: list[str], durations: list[int], deps: list[list[str]], workers: int) -> list[int]:
+        n = len(names)
+        index = {name: i for i, name in enumerate(names)}
+        edges = {(index[a], index[b]) for a, b in deps}  # repeated pairs count once
+        children: list[list[int]] = [[] for _ in range(n)]
+        indegree = [0] * n
+        for a, b in edges:
+            children[a].append(b)
+            indegree[b] += 1
+
+        # Kahn's algorithm: topological order, or detect a cycle
+        remaining = indegree[:]
+        queue = deque(i for i in range(n) if remaining[i] == 0)
+        order: list[int] = []
+        while queue:
+            u = queue.popleft()
+            order.append(u)
+            for v in children[u]:
+                remaining[v] -= 1
+                if remaining[v] == 0:
+                    queue.append(v)
+        if len(order) < n:
+            return []
+
+        # critical path = own duration + longest chain of dependents (reverse topological order)
+        critical = [0] * n
+        for u in reversed(order):
+            critical[u] = durations[u] + max((critical[v] for v in children[u]), default=0)
+
+        start = [-1] * n
+        ready = [(-critical[i], names[i], i) for i in range(n) if indegree[i] == 0]
+        heapq.heapify(ready)
+        running: list[tuple[int, int]] = []  # (finish time, job)
+        free = workers
+        time = 0
+        done = 0
+        while done < n:
+            while running and running[0][0] == time:
+                _, u = heapq.heappop(running)
+                free += 1
+                done += 1
+                for v in children[u]:
+                    indegree[v] -= 1
+                    if indegree[v] == 0:
+                        heapq.heappush(ready, (-critical[v], names[v], v))
+            while free > 0 and ready:
+                _, _, u = heapq.heappop(ready)
+                start[u] = time
+                free -= 1
+                heapq.heappush(running, (time + durations[u], u))
+            if running:
+                time = running[0][0]
+        return start
+  javascript: |
+    class MinHeap {
+      constructor(less) { this.a = []; this.less = less; }
+      get size() { return this.a.length; }
+      peek() { return this.a[0]; }
+      push(x) {
+        const a = this.a;
+        a.push(x);
+        let i = a.length - 1;
+        while (i > 0) {
+          const p = (i - 1) >> 1;
+          if (!this.less(a[i], a[p])) break;
+          [a[i], a[p]] = [a[p], a[i]];
+          i = p;
+        }
+      }
+      pop() {
+        const a = this.a;
+        const top = a[0];
+        const last = a.pop();
+        if (a.length > 0) {
+          a[0] = last;
+          let i = 0;
+          for (;;) {
+            const l = 2 * i + 1, r = l + 1;
+            let m = i;
+            if (l < a.length && this.less(a[l], a[m])) m = l;
+            if (r < a.length && this.less(a[r], a[m])) m = r;
+            if (m === i) break;
+            [a[i], a[m]] = [a[m], a[i]];
+            i = m;
+          }
+        }
+        return top;
+      }
+    }
+
+    function scheduleEtlJobs(names, durations, deps, workers) {
+      const n = names.length;
+      const index = new Map(names.map((name, i) => [name, i]));
+      const children = Array.from({ length: n }, () => []);
+      const indegree = new Array(n).fill(0);
+      const seen = new Set();
+      for (const [a, b] of deps) {
+        const u = index.get(a), v = index.get(b);
+        const key = u * n + v;
+        if (seen.has(key)) continue; // repeated pairs count once
+        seen.add(key);
+        children[u].push(v);
+        indegree[v] += 1;
+      }
+
+      const remaining = indegree.slice();
+      const order = [];
+      for (let i = 0; i < n; i++) if (remaining[i] === 0) order.push(i);
+      for (let k = 0; k < order.length; k++) {
+        for (const v of children[order[k]]) {
+          remaining[v] -= 1;
+          if (remaining[v] === 0) order.push(v);
+        }
+      }
+      if (order.length < n) return [];
+
+      const critical = new Array(n).fill(0);
+      for (let k = n - 1; k >= 0; k--) {
+        const u = order[k];
+        let best = 0;
+        for (const v of children[u]) best = Math.max(best, critical[v]);
+        critical[u] = durations[u] + best;
+      }
+
+      const byPriority = (x, y) =>
+        critical[x] !== critical[y] ? critical[x] > critical[y] : names[x] < names[y];
+      const ready = new MinHeap(byPriority);
+      for (let i = 0; i < n; i++) if (indegree[i] === 0) ready.push(i);
+      const running = new MinHeap((x, y) => x[0] < y[0]); // [finish time, job]
+      const start = new Array(n).fill(-1);
+      let free = workers, time = 0, done = 0;
+      while (done < n) {
+        while (running.size > 0 && running.peek()[0] === time) {
+          const [, u] = running.pop();
+          free += 1;
+          done += 1;
+          for (const v of children[u]) {
+            indegree[v] -= 1;
+            if (indegree[v] === 0) ready.push(v);
+          }
+        }
+        while (free > 0 && ready.size > 0) {
+          const u = ready.pop();
+          start[u] = time;
+          free -= 1;
+          running.push([time + durations[u], u]);
+        }
+        if (running.size > 0) time = running.peek()[0];
+      }
+      return start;
+    }
+tests:
+  - {id: t1, args: [["extract_orders", "extract_users", "transform_sales", "load_warehouse", "refresh_dashboard"], [4, 2, 5, 3, 1], [["extract_orders", "transform_sales"], ["extract_users", "transform_sales"], ["transform_sales", "load_warehouse"], ["extract_users", "refresh_dashboard"]], 2], expected: [0, 0, 4, 9, 2], description: "Example 1 - diamond-shaped pipeline on two workers"}
+  - {id: t2, args: [["a", "b", "c", "d"], [3, 3, 3, 1], [["a", "d"]], 1], expected: [0, 3, 6, 9], description: "Example 2 - one worker; longest critical path first, ties broken by name"}
+  - {id: t3, args: [["stage", "publish", "verify"], [2, 2, 2], [["stage", "publish"], ["publish", "verify"], ["verify", "stage"]], 3], expected: [], description: "Example 3 - dependency cycle returns []"}
+  - {id: t4, hidden: true, args: [["solo"], [7], [], 1], expected: [0], description: "Single job with no dependencies starts at 0"}
+  - {id: t5, hidden: true, args: [["x", "y"], [1, 1], [["x", "x"]], 4], expected: [], description: "Self-dependency is a cycle"}
+  - {id: t6, hidden: true, args: [["d", "c", "b", "a", "e"], [5, 5, 5, 5, 5], [], 2], expected: [5, 5, 0, 0, 10], description: "Independent equal jobs - ties by name (a, b first), not by input order"}
+  - {id: t7, hidden: true, args: [["p", "q", "r", "s"], [2, 3, 1, 4], [["p", "q"], ["p", "q"], ["q", "r"], ["p", "q"]], 2], expected: [0, 2, 5, 0], description: "Repeated dependency pairs count once (indegree must not be double counted)"}
+  - {id: t8, hidden: true, args: [["short", "long_root", "child1", "child2", "filler"], [6, 1, 9, 9, 6], [["long_root", "child1"], ["long_root", "child2"]], 2], expected: [10, 0, 1, 6, 0], description: "A 1-unit job with a long chain behind it beats longer standalone jobs (critical path, not duration)"}
+  - {id: t9, hidden: true, args: [["a", "b", "c", "d", "e"], [2, 2, 3, 1, 1], [["a", "c"], ["b", "c"], ["c", "d"], ["c", "e"]], 3], expected: [0, 0, 2, 5, 5], description: "Completions at the same time release a job that starts at that same time; idle workers wait"}
+  - {id: t10, hidden: true, args: [["j1", "j2", "j3", "j4", "j5", "j6"], [100000, 100000, 100000, 100000, 100000, 100000], [["j1", "j2"], ["j2", "j3"], ["j3", "j4"], ["j4", "j5"], ["j5", "j6"]], 8], expected: [0, 100000, 200000, 300000, 400000, 500000], description: "Long chain with more workers than jobs - strictly sequential, large durations"}
+  - {id: t11, hidden: true, args: [["job_43", "job_35", "job_54", "job_37", "job_49", "job_08", "job_09", "job_55", "job_25", "job_31", "job_11", "job_42", "job_20", "job_32", "job_45", "job_58", "job_38", "job_18", "job_56", "job_14", "job_21", "job_19", "job_04", "job_02", "job_28", "job_46", "job_12", "job_59", "job_27", "job_48", "job_05", "job_17", "job_26", "job_13", "job_00", "job_40", "job_36", "job_06", "job_34", "job_24", "job_52", "job_30", "job_23", "job_07", "job_10", "job_03", "job_51", "job_15", "job_29", "job_01", "job_33", "job_41", "job_57", "job_53", "job_44", "job_50", "job_22", "job_47", "job_16", "job_39"], [25, 20, 2, 24, 27, 11, 10, 17, 5, 22, 20, 39, 38, 1, 39, 22, 5, 20, 23, 20, 31, 21, 12, 31, 31, 12, 4, 17, 2, 23, 26, 2, 36, 27, 24, 25, 38, 1, 29, 3, 12, 40, 13, 8, 16, 30, 23, 33, 23, 34, 17, 30, 7, 38, 24, 19, 3, 28, 6, 14], [["job_49", "job_08"], ["job_54", "job_55"], ["job_49", "job_55"], ["job_31", "job_20"], ["job_09", "job_58"], ["job_32", "job_58"], ["job_35", "job_38"], ["job_09", "job_38"], ["job_32", "job_38"], ["job_49", "job_18"], ["job_55", "job_56"], ["job_35", "job_21"], ["job_55", "job_19"], ["job_32", "job_19"], ["job_49", "job_02"], ["job_31", "job_02"], ["job_43", "job_28"], ["job_49", "job_28"], ["job_58", "job_28"], ["job_19", "job_46"], ["job_02", "job_46"], ["job_35", "job_59"], ["job_37", "job_59"], ["job_55", "job_59"], ["job_12", "job_59"], ["job_45", "job_27"], ["job_49", "job_48"], ["job_25", "job_48"], ["job_56", "job_48"], ["job_21", "job_48"], ["job_12", "job_48"], ["job_59", "job_48"], ["job_20", "job_05"], ["job_31", "job_17"], ["job_31", "job_26"], ["job_11", "job_26"], ["job_21", "job_26"], ["job_32", "job_13"], ["job_58", "job_13"], ["job_49", "job_00"], ["job_18", "job_00"], ["job_02", "job_00"], ["job_13", "job_40"], ["job_40", "job_36"], ["job_43", "job_24"], ["job_58", "job_24"], ["job_56", "job_24"], ["job_02", "job_24"], ["job_13", "job_24"], ["job_54", "job_52"], ["job_37", "job_52"], ["job_26", "job_52"], ["job_43", "job_30"], ["job_59", "job_30"], ["job_13", "job_30"], ["job_40", "job_30"], ["job_34", "job_30"], ["job_12", "job_23"], ["job_08", "job_07"], ["job_25", "job_07"], ["job_31", "job_07"], ["job_32", "job_07"], ["job_06", "job_07"], ["job_07", "job_10"], ["job_04", "job_03"], ["job_55", "job_51"], ["job_34", "job_51"], ["job_32", "job_15"], ["job_48", "job_15"], ["job_13", "job_15"], ["job_43", "job_29"], ["job_18", "job_29"], ["job_56", "job_29"], ["job_12", "job_29"], ["job_40", "job_29"], ["job_03", "job_29"], ["job_11", "job_01"], ["job_52", "job_01"], ["job_10", "job_01"], ["job_37", "job_33"], ["job_49", "job_33"], ["job_24", "job_33"], ["job_56", "job_41"], ["job_07", "job_41"], ["job_35", "job_57"], ["job_24", "job_57"], ["job_35", "job_53"], ["job_08", "job_53"], ["job_42", "job_53"], ["job_17", "job_53"], ["job_23", "job_53"], ["job_31", "job_44"], ["job_20", "job_44"], ["job_35", "job_50"], ["job_49", "job_50"], ["job_32", "job_50"], ["job_48", "job_50"], ["job_40", "job_22"], ["job_24", "job_22"], ["job_53", "job_22"], ["job_21", "job_47"], ["job_02", "job_47"], ["job_48", "job_47"], ["job_54", "job_16"], ["job_08", "job_16"], ["job_21", "job_16"], ["job_28", "job_16"], ["job_50", "job_16"], ["job_11", "job_39"], ["job_02", "job_39"], ["job_00", "job_39"], ["job_47", "job_39"]], 3], expected: [140, 0, 27, 29, 0, 117, 0, 33, 112, 50, 51, 94, 158, 10, 210, 11, 395, 174, 71, 366, 20, 304, 128, 97, 273, 386, 72, 80, 400, 157, 325, 208, 76, 53, 249, 133, 261, 165, 128, 374, 196, 238, 180, 166, 194, 193, 351, 299, 351, 278, 377, 312, 388, 223, 342, 332, 398, 210, 394, 374], description: "60 jobs with a random DAG on 3 workers"}
+expected_concepts:
+  - "topological sort (Kahn's algorithm) with cycle detection"
+  - "longest path in a DAG by dynamic programming in reverse topological order"
+  - "event-driven simulation that jumps between completion times"
+  - "priority queue of ready jobs ordered by critical path then name"
+  - "min-heap of running jobs by finish time"
+  - "deduplicating repeated edges"
+optimal_complexity: {time: "O((n + m) log n)", space: "O(n + m)"}
+rubric:
+  excellent: "Detects cycles with Kahn's algorithm, computes critical paths in reverse topological order, simulates with a ready heap keyed by (critical path desc, name) and a running heap keyed by finish time, processes all same-time completions before starting jobs, deduplicates edges and explains the overall complexity."
+  good: "Correct simulation with a simpler structure, such as re-sorting the ready list at every event or stepping time one unit at a time on small inputs, or after a hint on same-time completions or repeated edges."
+  weak: "Schedules in plain topological order ignoring priority, starts jobs before all completions at that moment are processed, uses duration instead of critical path, or loops forever on a cycle."
+  criteria:
+    correctness: "All tests pass, including cycles, self-dependencies, repeated pairs, ties by name and simultaneous completions."
+    efficiency: "Jumps between events with heaps instead of iterating over every time unit; critical paths computed once with memoisation."
+    code_quality: "Graph building, cycle check, priority computation and simulation are distinct steps with clear names."
+    edge_cases: "Single job, no dependencies, more workers than jobs, long chains, large durations and repeated edges."
+    communication: "Explains why critical path is a sensible priority and what the simulation does at each event."
+hints:
+  - "Split the problem in two: first work out each job's priority and whether a valid order exists at all, then simulate the workers over time."
+  - "A topological order both detects a cycle and lets you compute every job's critical path by walking that order backwards. For the simulation you only need to look at the moments when a job finishes, not at every time unit."
+  - "Build the graph with each pair counted once, run Kahn's algorithm and return an empty list if not every job was ordered, then compute the critical paths from the end of that order. Keep a heap of ready jobs ordered by largest critical path and then smallest name, and a heap of running jobs ordered by finish time; at each event time pop every job finishing now and release its dependents, then fill the free workers from the ready heap and record their start times, and jump to the next finish time."
+followups:
+  - "How would you compute the overall pipeline finish time and the slack of each job?"
+  - "How would you adapt the simulation if workers had different speeds or jobs needed several workers?"
+  - "How would you handle a job that fails and must be retried after a delay?"
+  - "If the scheduler restarts mid-run, what state must be persisted to resume correctly?"
+common_errors:
+  - "Starting a job before processing every completion at the same moment, so a released job with higher priority is skipped."
+  - "Counting a repeated dependency twice, so the dependent job never becomes ready."
+  - "Using a job's own duration as the priority instead of its critical path."
+  - "Breaking ties by input order instead of by name."
+  - "Advancing time one unit at a time, which is far too slow for large durations."

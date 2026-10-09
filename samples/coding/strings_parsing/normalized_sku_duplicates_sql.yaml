@@ -1,0 +1,197 @@
+version: 1
+slug: normalized_sku_duplicates_sql
+title: Normalized SKU Duplicates (SQL)
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, dba, data, backend]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Normalized SKU Duplicates
+
+  Table `products`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | sku | VARCHAR(40) | stock-keeping unit typed in by hand; letters, digits, spaces, `-`, `_` and `.` |
+  | name | VARCHAR(100) | product name, not unique |
+
+  Merchandisers typed SKUs inconsistently, so `ab-12 3`, `AB123` and `ab 123` all mean the same item.
+  The **normalized SKU** is the SKU upper-cased with every space and every `-` removed (other characters
+  such as `_` and `.` are kept).
+
+  Return every normalized SKU that is shared by **two or more products**, with the number of products
+  that share it, as columns `normalized_sku` and `product_count`. Order the rows by `product_count`
+  descending, then by `normalized_sku` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  products
+  +----+---------+-----------------------+
+  | id | sku     | name                  |
+  +----+---------+-----------------------+
+  | 1  | ab-12 3 | USB-C cable 1m        |
+  | 2  | AB123   | USB-C cable 1m        |
+  | 3  | XY-9    | Wireless mouse        |
+  | 4  | xy9     | Wireless mouse (grey) |
+  | 5  | ab 123  | USB-C cable           |
+  | 6  | QZ-1    | Docking hub           |
+  +----+---------+-----------------------+
+
+  Output
+  +----------------+---------------+
+  | normalized_sku | product_count |
+  +----------------+---------------+
+  | AB123          | 3             |
+  | XY9            | 2             |
+  +----------------+---------------+
+  QZ1 belongs to a single product, so it is not reported.
+  ```
+
+  ### Example 2
+  ```
+  products
+  +----+------+-------------+
+  | id | sku  | name        |
+  +----+------+-------------+
+  | 1  | k-1  | Keyboard    |
+  | 2  | K1   | Keyboard    |
+  | 3  | b 7  | Monitor arm |
+  | 4  | B-7  | Monitor arm |
+  | 5  | c3   | Webcam      |
+  +----+------+-------------+
+
+  Output
+  +----------------+---------------+
+  | normalized_sku | product_count |
+  +----------------+---------------+
+  | B7             | 2             |
+  | K1             | 2             |
+  +----------------+---------------+
+  ```
+
+  ### Constraints
+  - Every SKU contains at least one letter or digit, so no normalized SKU is empty.
+  - SKUs use only ASCII letters, digits, spaces, `-`, `_` and `.`.
+  - Count products (rows), not distinct names.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return normalized_sku and product_count for every normalized SKU shared by 2+ products.
+    SELECT sku
+    FROM products;
+reference_solutions:
+  sql: |
+    SELECT UPPER(REPLACE(REPLACE(sku, ' ', ''), '-', '')) AS normalized_sku,
+           COUNT(*) AS product_count
+    FROM products
+    GROUP BY UPPER(REPLACE(REPLACE(sku, ' ', ''), '-', ''))
+    HAVING COUNT(*) >= 2
+    ORDER BY product_count DESC, normalized_sku ASC;
+sql_setup: |
+  CREATE TABLE products (
+    id INTEGER PRIMARY KEY,
+    sku VARCHAR(40) NOT NULL,
+    name VARCHAR(100) NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - three spellings of one SKU and a pair"
+    setup_sql: |
+      INSERT INTO products (id, sku, name) VALUES
+        (1, 'ab-12 3', 'USB-C cable 1m'), (2, 'AB123', 'USB-C cable 1m'), (3, 'XY-9', 'Wireless mouse'),
+        (4, 'xy9', 'Wireless mouse (grey)'), (5, 'ab 123', 'USB-C cable'), (6, 'QZ-1', 'Docking hub');
+    expected_rows: [["AB123", 3], ["XY9", 2]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - tie on count broken by normalized SKU"
+    setup_sql: |
+      INSERT INTO products (id, sku, name) VALUES
+        (1, 'k-1', 'Keyboard'), (2, 'K1', 'Keyboard'), (3, 'b 7', 'Monitor arm'), (4, 'B-7', 'Monitor arm'), (5, 'c3', 'Webcam');
+    expected_rows: [["B7", 2], ["K1", 2]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "All SKUs distinct after normalization - no rows"
+    setup_sql: |
+      INSERT INTO products (id, sku, name) VALUES (1, 'A-1', 'x'), (2, 'A-2', 'y'), (3, 'B1', 'z');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Identical raw SKUs (and names) still count each product"
+    setup_sql: |
+      INSERT INTO products (id, sku, name) VALUES (1, 'LP-55', 'Lamp'), (2, 'LP-55', 'Lamp'), (3, 'LP-55', 'Lamp');
+    expected_rows: [["LP55", 3]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Leading/trailing/multiple spaces and hyphens removed; underscores and dots are kept"
+    setup_sql: |
+      INSERT INTO products (id, sku, name) VALUES
+        (1, ' ab - 1 ', 'a'), (2, 'AB1', 'b'), (3, 'a-b-1', 'c'), (4, 'AB_1', 'd'), (5, 'ab.1', 'e'), (6, 'ab_1', 'f');
+    expected_rows: [["AB1", 3], ["AB_1", 2]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Count descending first, then ties sorted by normalized SKU (not by id)"
+    setup_sql: |
+      INSERT INTO products (id, sku, name) VALUES
+        (1, 'Z9', 'z'), (2, 'z-9', 'z'), (3, 'A1', 'a'), (4, 'a 1', 'a'), (5, 'M5', 'm'), (6, 'm5', 'm'), (7, 'm-5', 'm');
+    expected_rows: [["M5", 3], ["A1", 2], ["Z9", 2]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Prefix-related SKUs stay separate; shorter key sorts first on ties"
+    setup_sql: |
+      INSERT INTO products (id, sku, name) VALUES (1, 'AB12', 'p'), (2, 'AB1-2', 'q'), (3, 'AB1', 'r'), (4, 'ab-1', 's'), (5, 'AB123', 't');
+    expected_rows: [["AB1", 2], ["AB12", 2]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Larger catalog - mixed spellings, one group of five, groups of four, three and two, one singleton"
+    setup_sql: |
+      INSERT INTO products (id, sku, name) VALUES
+        (1, 'CB100', 'Item 1'), (2, 'cb100', 'Item 2'), (3, 'CB-100', 'Item 3'), (4, 'C B 1 0 0', 'Item 4'),
+        (5, 'cb - 100', 'Item 5'), (6, 'CB200', 'Item 6'), (7, 'MS10', 'Item 7'), (8, 'ms10', 'Item 8'),
+        (9, 'MS-10', 'Item 9'), (10, 'KB7', 'Item 10'), (11, 'kb7', 'Item 11'), (12, 'KB-7', 'Item 12'),
+        (13, 'HD4K', 'Item 13'), (14, 'hd4k', 'Item 14'), (15, 'PW65', 'Item 15'), (16, 'pw65', 'Item 16'),
+        (17, 'PW-65', 'Item 17'), (18, 'P W 6 5', 'Item 18');
+    expected_rows: [["CB100", 5], ["PW65", 4], ["KB7", 3], ["MS10", 3], ["HD4K", 2]]
+expected_concepts:
+  - "string normalisation with UPPER and nested REPLACE"
+  - "GROUP BY an expression"
+  - "HAVING to filter groups after aggregation"
+  - "deterministic multi-key ORDER BY"
+optimal_complexity: {time: "O(n log n) for grouping and sorting", space: "O(n)"}
+rubric:
+  excellent: "Normalises with UPPER and two REPLACE calls, groups by the expression, filters with HAVING COUNT(*) >= 2, orders by count descending then key, and suggests storing the normalized SKU in an indexed generated column or enforcing uniqueness on it."
+  good: "Correct query after a nudge about HAVING versus WHERE or about the tie-break order."
+  weak: "Filters on COUNT in WHERE, forgets one of the characters to strip, counts distinct names or leaves the order undefined."
+  criteria:
+    correctness: "All tests pass, including identical raw SKUs, kept underscores and dots, and tie ordering."
+    efficiency: "A single grouped pass; mentions an expression index or generated column for large catalogs."
+    code_quality: "The normalisation expression is written once (subquery, CTE or column alias) or clearly repeated."
+    edge_cases: "Empty table, no duplicates, leading and trailing spaces, and prefix-related SKUs."
+    communication: "Explains why the cleanup belongs at write time in a real catalog."
+hints:
+  - "Duplicates are only visible after every SKU has been rewritten into one canonical spelling, so start by building that canonical form."
+  - "Upper-case the SKU and strip the two noise characters with nested replace calls, then group by that expression and count rows per group."
+  - "Select the normalised expression and the row count, group by the same expression, keep groups whose count is at least two with a HAVING clause, and sort by the count from high to low and then by the normalised value."
+followups:
+  - "How would you stop new near-duplicate SKUs from being inserted?"
+  - "How would you list the product ids in each duplicate group?"
+  - "What changes if lowercase and uppercase letters outside ASCII can appear?"
+common_errors:
+  - "Putting COUNT(*) >= 2 in WHERE instead of HAVING."
+  - "Stripping only spaces or only hyphens."
+  - "Counting distinct names instead of products."
+  - "Ordering only by count, which leaves ties in an undefined order."

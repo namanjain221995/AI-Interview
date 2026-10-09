@@ -1,0 +1,224 @@
+version: 1
+slug: busiest_hour_per_day
+title: "Busiest Hour per Day"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [sre, data_analyst]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Busiest Hour per Day
+
+  Capacity planning wants to know when the API peaks. Every request handled by the API is logged
+  with its timestamp. For each calendar day, find the clock hour that received the most requests.
+
+  Table `api_requests`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | requested_at | TEXT | UTC timestamp formatted exactly `YYYY-MM-DD HH:MM:SS` (24-hour clock) |
+
+  The **day** of a request is the first 10 characters of `requested_at` (`YYYY-MM-DD`) and its
+  **hour** is the two characters at positions 12-13 (`00` to `23`), for example
+  `SUBSTR(requested_at, 12, 2)`.
+
+  Return one row per day that has at least one request, with the columns:
+
+  - `day`: the `YYYY-MM-DD` text;
+  - `hour`: the two-character hour text with the most requests on that day; when several hours tie
+    for the most, choose the **earliest** hour;
+  - `request_count`: the number of requests in that hour.
+
+  Order the result by `day` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite (do not use vendor-specific date
+  functions; plain string functions are enough).
+
+  ### Example 1
+  ```
+  api_requests
+  +----+---------------------+
+  | id | requested_at        |
+  +----+---------------------+
+  | 1  | 2024-03-01 09:15:00 |
+  | 2  | 2024-03-01 09:47:12 |
+  | 3  | 2024-03-01 14:02:59 |
+  | 4  | 2024-03-02 10:00:00 |
+  | 5  | 2024-03-02 23:59:59 |
+  | 6  | 2024-03-02 10:30:00 |
+  | 7  | 2024-03-01 14:30:00 |
+  | 8  | 2024-03-01 09:59:59 |
+  +----+---------------------+
+
+  Output
+  +------------+------+---------------+
+  | day        | hour | request_count |
+  +------------+------+---------------+
+  | 2024-03-01 | 09   | 3             |
+  | 2024-03-02 | 10   | 2             |
+  +------------+------+---------------+
+  ```
+
+  ### Example 2
+  ```
+  api_requests
+  +----+---------------------+
+  | id | requested_at        |
+  +----+---------------------+
+  | 1  | 2024-05-10 17:45:00 |
+  | 2  | 2024-05-10 08:05:00 |
+  | 3  | 2024-05-10 17:50:00 |
+  | 4  | 2024-05-10 08:55:00 |
+  | 5  | 2024-05-10 12:00:00 |
+  +----+---------------------+
+
+  Output
+  +------------+------+---------------+
+  | day        | hour | request_count |
+  +------------+------+---------------+
+  | 2024-05-10 | 08   | 2             |
+  +------------+------+---------------+
+  Hours 08 and 17 both have 2 requests; the earlier hour wins.
+  ```
+
+  ### Constraints
+  - At most `10^6` rows; the table may be empty.
+  - Every `requested_at` is a valid timestamp in the format above.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return day, hour (busiest, earliest on ties) and request_count per day, ordered by day.
+    SELECT SUBSTR(requested_at, 1, 10) AS day, '00' AS hour, COUNT(*) AS request_count
+    FROM api_requests
+    GROUP BY SUBSTR(requested_at, 1, 10)
+    ORDER BY day;
+reference_solutions:
+  sql: |
+    SELECT day, hour, request_count
+    FROM (
+      SELECT day,
+             hour,
+             request_count,
+             ROW_NUMBER() OVER (PARTITION BY day ORDER BY request_count DESC, hour) AS rn
+      FROM (
+        SELECT SUBSTR(requested_at, 1, 10) AS day,
+               SUBSTR(requested_at, 12, 2) AS hour,
+               COUNT(*) AS request_count
+        FROM api_requests
+        GROUP BY SUBSTR(requested_at, 1, 10), SUBSTR(requested_at, 12, 2)
+      ) hourly
+    ) ranked
+    WHERE rn = 1
+    ORDER BY day;
+sql_setup: |
+  CREATE TABLE api_requests (
+    id INTEGER PRIMARY KEY,
+    requested_at TEXT NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - two days with clear winners, rows not in time order"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_requests (id, requested_at) VALUES
+        (1, '2024-03-01 09:15:00'), (2, '2024-03-01 09:47:12'), (3, '2024-03-01 14:02:59'), (4, '2024-03-02 10:00:00'),
+        (5, '2024-03-02 23:59:59'), (6, '2024-03-02 10:30:00'), (7, '2024-03-01 14:30:00'), (8, '2024-03-01 09:59:59');
+    expected_rows: [["2024-03-01", "09", 3], ["2024-03-02", "10", 2]]
+  - id: t2
+    description: "Example 2 - tie between two hours, earliest hour wins"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_requests (id, requested_at) VALUES
+        (1, '2024-05-10 17:45:00'), (2, '2024-05-10 08:05:00'), (3, '2024-05-10 17:50:00'), (4, '2024-05-10 08:55:00'),
+        (5, '2024-05-10 12:00:00');
+    expected_rows: [["2024-05-10", "08", 2]]
+  - id: t3
+    hidden: true
+    description: "Empty table - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single request - its own hour with count 1"
+    ordered: true
+    setup_sql: "INSERT INTO api_requests (id, requested_at) VALUES (1, '2024-07-04 05:06:07');"
+    expected_rows: [["2024-07-04", "05", 1]]
+  - id: t5
+    hidden: true
+    description: "Three-way tie with the latest hour inserted first - must pick the earliest hour, one row per day"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_requests (id, requested_at) VALUES
+        (1, '2024-06-01 22:10:00'), (2, '2024-06-01 22:20:00'), (3, '2024-06-01 13:00:00'), (4, '2024-06-01 13:01:00'),
+        (5, '2024-06-01 07:30:00'), (6, '2024-06-01 07:31:00'), (7, '2024-06-01 18:00:00');
+    expected_rows: [["2024-06-01", "07", 2]]
+  - id: t6
+    hidden: true
+    description: "Midnight boundary - 23:59:59 belongs to the earlier day, 00:00:00 to the next; hour 00 is valid"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_requests (id, requested_at) VALUES
+        (1, '2024-12-31 23:59:58'), (2, '2024-12-31 23:59:59'), (3, '2025-01-01 00:00:00'), (4, '2025-01-01 00:00:01'),
+        (5, '2025-01-01 00:59:59'), (6, '2025-01-01 01:00:00'), (7, '2024-12-31 22:00:00');
+    expected_rows: [["2024-12-31", "23", 2], ["2025-01-01", "00", 3]]
+  - id: t7
+    hidden: true
+    description: "Same hour on different days counts separately; days inserted out of order and spanning months"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_requests (id, requested_at) VALUES
+        (1, '2024-02-29 11:00:00'), (2, '2024-01-15 11:05:00'), (3, '2024-02-29 11:10:00'), (4, '2024-01-15 16:00:00'),
+        (5, '2024-01-15 16:30:00'), (6, '2024-02-29 03:00:00'), (7, '2024-10-02 11:00:00'), (8, '2024-01-15 11:45:00'),
+        (9, '2024-01-15 16:45:00');
+    expected_rows: [["2024-01-15", "16", 3], ["2024-02-29", "11", 2], ["2024-10-02", "11", 1]]
+  - id: t8
+    hidden: true
+    description: "Hours 09 and 10 tie - zero-padded text ordering must pick 09"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_requests (id, requested_at) VALUES
+        (1, '2024-08-20 10:00:00'), (2, '2024-08-20 10:15:00'), (3, '2024-08-20 10:30:00'),
+        (4, '2024-08-20 09:00:00'), (5, '2024-08-20 09:15:00'), (6, '2024-08-20 09:30:00'), (7, '2024-08-20 21:00:00');
+    expected_rows: [["2024-08-20", "09", 3]]
+  - id: t9
+    hidden: true
+    description: "Busier day with a clear peak hour among many requests, plus a quiet day with one request per hour"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_requests (id, requested_at) VALUES
+        (1, '2024-09-09 08:01:00'), (2, '2024-09-09 08:02:00'), (3, '2024-09-09 12:00:00'), (4, '2024-09-09 12:05:00'),
+        (5, '2024-09-09 12:10:00'), (6, '2024-09-09 12:15:00'), (7, '2024-09-09 12:20:00'), (8, '2024-09-09 15:00:00'),
+        (9, '2024-09-09 15:01:00'), (10, '2024-09-09 15:02:00'), (11, '2024-09-09 15:03:00'), (12, '2024-09-09 19:00:00'),
+        (13, '2024-09-10 02:00:00'), (14, '2024-09-10 04:00:00'), (15, '2024-09-10 01:00:00'), (16, '2024-09-10 03:00:00'),
+        (17, '2024-09-09 12:59:59'), (18, '2024-09-09 13:00:00');
+    expected_rows: [["2024-09-09", "12", 6], ["2024-09-10", "01", 1]]
+expected_concepts:
+  - "deriving grouping keys with string functions"
+  - "two-level aggregation: count per (day, hour), then pick one per day"
+  - "ROW_NUMBER with a tie-breaking ORDER BY (or a correlated MAX with MIN hour)"
+  - "filtering on a window result in an outer query"
+  - "deterministic ORDER BY"
+optimal_complexity: {time: "O(n) to count plus O(g log g) to rank g (day, hour) groups", space: "O(g)"}
+rubric:
+  excellent: "Counts per (day, hour) first, ranks hours per day with ROW_NUMBER ordered by count descending then hour, keeps rank 1, orders by day, and explains why RANK or a bare MAX would return several rows or lose the hour on ties."
+  good: "Correct result after a hint about ties or about needing two levels of grouping."
+  weak: "Takes MAX of the count but cannot recover which hour it belongs to, returns several rows per day on ties, or picks the latest hour."
+  criteria:
+    correctness: "All tests pass, including ties, the midnight boundary and the 09 versus 10 ordering."
+    efficiency: "One aggregation and one window pass; no per-day correlated subquery over raw rows required."
+    code_quality: "Readable nested queries or CTEs with clear names and the exact output columns."
+    edge_cases: "Empty table, single request, multi-way ties and days spanning month or year ends."
+    communication: "Explains the tie-breaking rule and how it is enforced in SQL."
+hints:
+  - "The answer needs two steps: first count requests per day and hour, then choose one hour for each day."
+  - "Once you have the counts, rank the hours inside each day by count from highest to lowest; the tie rule tells you what the second sort key must be, and the rank must never give two rows the same number."
+  - "In a subquery group by the day substring and hour substring with COUNT(*), then in an outer query apply ROW_NUMBER() partitioned by day ordered by the count descending and the hour ascending, keep rows numbered 1 and order by day."
+followups:
+  - "How would you return the top three hours per day instead of one?"
+  - "How would the query change if timestamps were stored in UTC but the report must use a local time zone?"
+  - "How would you precompute this so a dashboard can show it for a whole year instantly?"
+common_errors:
+  - "Using RANK or comparing with MAX(count), which returns several rows when hours tie."
+  - "Grouping by the full timestamp or by hour only, which mixes different days or never groups."
+  - "Ordering ties by hour descending or not at all, so the result depends on the engine."
+  - "Using engine-specific date functions such as strftime or EXTRACT that do not run on the other database."

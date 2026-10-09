@@ -1,0 +1,603 @@
+# Curated system design questions: frontend and mobile client architecture, part 3.
+# Offline-first and mobile app architecture: local stores and outboxes, sync and conflicts,
+# background work, server-driven UI, partner SDKs, shared business logic, messaging,
+# large offline datasets, multi-device convergence, super apps and on-device models.
+# round_types follow difficulty: easy -> system_design/combined; medium and hard -> system_design/deep_technical/combined.
+version: 1
+defaults:
+  role_tags: [frontend, mobile, fullstack]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.frontend_mobile_architecture.offline_news_reader
+    competency_key: mobile_development
+    topic: Offline reading in a news app
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Commuters want to read our news app on the underground where there's no signal. How would you design the
+      app so the latest articles are available offline when they need them?
+    expected_concepts:
+      - prefetching top articles while on Wi-Fi or charging
+      - storing articles and images in a local database and file cache
+      - a storage budget with eviction of old content
+      - showing what is available offline and when it was updated
+      - respecting user settings for mobile data usage
+    rubric:
+      excellent: Designs scheduled prefetching under sensible conditions, local storage with a budget and eviction, and clear offline indicators, while respecting data usage preferences.
+      good: Caches recent articles locally and shows them offline.
+      weak: Relies on the HTTP cache alone or downloads everything regardless of storage and data costs.
+    followups:
+      - How would you decide which articles to download for each reader?
+      - What happens when the phone is low on storage?
+    common_errors:
+      - Prefetching large images over mobile data without asking.
+
+  - external_key: system_design.frontend_mobile_architecture.mobile_startup_bootstrap
+    competency_key: mobile_development
+    topic: What a mobile app loads at launch
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Our mobile app makes eight network calls before the home screen appears, and launch feels slow. How would
+      you redesign what the app loads at startup and when?
+    expected_concepts:
+      - rendering cached content immediately and refreshing in the background
+      - deferring non-critical calls until after first screen
+      - combining startup configuration into one call or using a backend for frontend
+      - timeouts and fallbacks so a slow call does not block launch
+      - measuring launch time in production
+    rubric:
+      excellent: Shows cached content first, separates critical from deferrable work, consolidates config calls with timeouts and fallbacks, and measures launch time with real-user data.
+      good: Suggests caching and deferring some calls.
+      weak: Suggests a longer splash screen or running all calls in parallel without questioning them.
+    followups:
+      - What should the app show on first launch when there's no cache yet?
+      - How would you stop new teams adding more calls to startup?
+    common_errors:
+      - Blocking the first screen on remote config or analytics initialisation.
+
+  - external_key: system_design.frontend_mobile_architecture.preferences_sync_across_devices
+    competency_key: mobile_development
+    topic: Syncing user settings across devices
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Users want their app settings, like notification choices and display preferences, to follow them from
+      their phone to their tablet and the web. How would you design that sync?
+    expected_concepts:
+      - storing settings on the server per user with local caching
+      - per-setting timestamps or versions to merge changes
+      - which settings are per device versus per account
+      - applying changes offline and syncing later
+      - pushing updates to other devices or refreshing on open
+    rubric:
+      excellent: Distinguishes account-wide and device-specific settings, merges per setting rather than per blob, supports offline changes and propagates updates to other devices.
+      good: Stores settings on the server and syncs them on app open.
+      weak: Keeps settings only locally or overwrites the whole settings object on every save.
+    followups:
+      - Two devices change different settings while offline; what should happen?
+      - Which settings should stay on one device only?
+    common_errors:
+      - Syncing the whole settings document so one device overwrites another's changes.
+
+  - external_key: system_design.frontend_mobile_architecture.offline_capability_matrix
+    competency_key: mobile_development
+    topic: Deciding which features work offline
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      For a personal finance app with balances, transactions, budgets and payments, how would you decide which
+      features should work offline and how the app should behave for each of them?
+    expected_concepts:
+      - read-only access to cached balances and history with a last-updated time
+      - local editing of budgets queued for sync
+      - blocking or queueing actions that need the server, such as payments
+      - clear messaging about offline and stale data
+      - security of cached financial data on the device
+    rubric:
+      excellent: Classifies features by risk and need for server confirmation, designs behaviour for each with clear staleness messaging, and protects cached data on the device.
+      good: Separates read-only offline features from those that need a connection.
+      weak: Treats the whole app as either online-only or fully offline without distinguishing risk.
+    followups:
+      - Should a payment be queued offline? Why or why not?
+      - How would you show that a balance might be out of date?
+    common_errors:
+      - Showing cached balances as if they were current.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.frontend_mobile_architecture.offline_outbox_dependencies
+    competency_key: mobile_development
+    topic: Offline outbox with dependent operations
+    difficulty: medium
+    text: >-
+      In an offline-first project management app, a user creates a project, adds tasks to it and then renames it,
+      all while offline. How would you design the queue of pending changes so this syncs correctly later?
+    expected_concepts:
+      - client-generated ids so dependent records can reference each other
+      - ordered operations with dependencies preserved
+      - idempotency keys so retries do not duplicate records
+      - coalescing operations on the same record where safe
+      - handling a rejected operation and its dependants
+      - durable persistence of the queue across restarts
+    rubric:
+      excellent: Uses client-generated ids and an ordered, durable outbox with idempotent operations, explains coalescing, and handles a server rejection that affects later operations.
+      good: Queues operations in order with retries and some idempotency.
+      weak: Sends whatever is newest when online or loses ordering and identity between related records.
+    followups:
+      - The server rejects the project creation; what happens to the queued tasks?
+      - How would you show the user which changes have not synced yet?
+    common_errors:
+      - Waiting for server-generated ids before child records can be created offline.
+
+  - external_key: system_design.frontend_mobile_architecture.field_inspection_offline
+    competency_key: mobile_development
+    topic: Offline inspection app with photos
+    difficulty: medium
+    text: >-
+      Inspectors use a mobile app to complete long checklists with dozens of photos at remote sites, often with no
+      signal for a whole day. How would you design the app's data, storage and upload flow?
+    expected_concepts:
+      - local database for checklist answers with frequent autosave
+      - storing photos as files with metadata and compression
+      - background, resumable uploads with retries when connectivity returns
+      - separating form data sync from large media upload
+      - storage monitoring and protection against data loss
+      - sync status per inspection
+    rubric:
+      excellent: Separates structured data from media, autosaves locally, uploads in resumable background tasks that respect battery and network, and guards against data loss with clear sync status.
+      good: Stores data and photos locally and uploads when online.
+      weak: Keeps answers in memory until submission or uploads everything in one request.
+    followups:
+      - The app is killed by the OS halfway through an upload; what happens?
+      - How would you prevent the phone running out of storage on a big site?
+    common_errors:
+      - Submitting form data and photos as one large request that fails as a whole.
+
+  - external_key: system_design.frontend_mobile_architecture.conflict_resolution_ux
+    competency_key: mobile_development
+    topic: Presenting sync conflicts to users
+    difficulty: medium
+    text: >-
+      In a shared notes app that works offline, two people sometimes edit the same note while disconnected. Beyond
+      the merge algorithm, how would you design what the user experiences when a conflict happens?
+    expected_concepts:
+      - automatic merging where changes do not overlap
+      - preserving both versions rather than silently discarding one
+      - surfacing conflicts in context with clear choices
+      - keeping history so a wrong choice can be undone
+      - choosing merge granularity such as field or paragraph level
+    rubric:
+      excellent: Merges automatically at a fine granularity, never loses data, presents remaining conflicts clearly in context with history to recover, and explains which conflicts deserve user attention.
+      good: Keeps both versions and asks the user to choose.
+      weak: Applies last write wins silently or shows a technical error message.
+    followups:
+      - When is last write wins actually acceptable?
+      - How would you handle a conflict on a note the user is not currently looking at?
+    common_errors:
+      - Silently discarding one person's work.
+
+  - external_key: system_design.frontend_mobile_architecture.server_driven_ui
+    competency_key: mobile_development
+    topic: Server-driven UI for mobile screens
+    difficulty: medium
+    text: >-
+      The growth team wants to change the layout of the home and promotion screens in our mobile app weekly
+      without waiting for app store releases. How would you design a server-driven UI system for that?
+    expected_concepts:
+      - a component schema the server sends and the app renders natively
+      - versioning so older app versions receive layouts they support
+      - fallbacks for unknown components
+      - caching layouts for offline and fast start
+      - limits on scope so core flows stay in native code
+      - tooling and preview for the people editing layouts
+    rubric:
+      excellent: Designs a versioned component schema with capability negotiation, fallbacks and caching, keeps critical flows native, and considers editing tools and testing.
+      good: Proposes JSON layouts rendered by native components with some versioning.
+      weak: Proposes web views for everything or a schema with no handling of older app versions.
+    followups:
+      - An app version from a year ago receives a layout with a new component; what happens?
+      - How would you test that a layout change will not break the screen?
+    common_errors:
+      - Ignoring that old app versions stay installed for a long time.
+
+  - external_key: system_design.frontend_mobile_architecture.offline_maps_regions
+    competency_key: mobile_development
+    topic: Downloadable offline map regions
+    difficulty: medium
+    text: >-
+      Let's design offline maps for a hiking app, where users download a region before a trip and need maps,
+      trails and search to work without signal. How would you design downloads, storage and updates?
+    expected_concepts:
+      - vector tiles packaged per region and zoom range
+      - size estimates before download and resumable background downloads
+      - a local index for offline search of places and trails
+      - updating regions with deltas and expiry
+      - storage management and deleting old regions
+    rubric:
+      excellent: Packages regions as vector tiles with size estimates and resumable downloads, adds a local search index, and designs updates, expiry and storage management.
+      good: Downloads tiles for a region and serves them offline.
+      weak: Relies on the map library's normal cache or downloads raster tiles at every zoom level.
+    followups:
+      - The map data for a region is updated; how does the app refresh it without a full download?
+      - How would you keep GPS tracking running with the screen off?
+    common_errors:
+      - Underestimating storage for raster tiles at high zoom levels.
+
+  - external_key: system_design.frontend_mobile_architecture.activity_tracker_background
+    competency_key: mobile_development
+    topic: Continuous activity recording in the background
+    difficulty: medium
+    text: >-
+      A running app records route and pace for a two-hour run with the phone in a pocket and the screen off. How
+      would you design the recording and upload so data isn't lost and the battery lasts?
+    expected_concepts:
+      - foreground service on Android and background location mode on iOS
+      - adaptive location accuracy and sampling intervals
+      - writing samples to local storage incrementally
+      - recovery if the app process is killed mid-recording
+      - uploading the finished activity in the background with retries
+    rubric:
+      excellent: Uses the correct platform mechanisms for long-running work, tunes sampling for battery, persists data incrementally with crash recovery and uploads reliably afterwards.
+      good: Uses background location with local storage and later upload.
+      weak: Keeps samples in memory or assumes the app keeps running normally in the background.
+    followups:
+      - The OS kills the app after an hour; how much data is lost?
+      - How would you smooth out noisy GPS points?
+    common_errors:
+      - Relying on in-memory buffers that vanish when the process is killed.
+
+  - external_key: system_design.frontend_mobile_architecture.offline_session_auth
+    competency_key: mobile_development
+    topic: Authentication for apps used offline for days
+    difficulty: medium
+    text: >-
+      A warehouse app must keep working offline for several days at a time, but our access tokens expire after an
+      hour. How would you design authentication and session handling for that situation?
+    expected_concepts:
+      - separating local app unlock from server authorisation
+      - long-lived refresh tokens stored in secure hardware-backed storage
+      - local unlock with PIN or biometrics while offline
+      - queued actions authorised when the device reconnects and refreshes
+      - remote revocation and device wipe on reconnect
+    rubric:
+      excellent: Separates local access from server authorisation, stores long-lived credentials securely, uses local unlock offline, and handles revocation and replay of queued actions on reconnect.
+      good: Uses secure storage for refresh tokens and allows offline use with local unlock.
+      weak: Extends access tokens to weeks or stores passwords on the device.
+    followups:
+      - A device is reported lost while offline; what protects the data?
+      - The user's permissions change while they are offline; what happens to queued actions?
+    common_errors:
+      - Storing raw credentials to log in again silently.
+
+  - external_key: system_design.frontend_mobile_architecture.mobile_payments_checkout
+    competency_key: mobile_development
+    topic: Reliable checkout on mobile networks
+    difficulty: medium
+    text: >-
+      Our mobile checkout sometimes charges customers but shows them an error because the network dropped at the
+      wrong moment. How would you redesign the checkout flow on the client and its interaction with the backend?
+    expected_concepts:
+      - idempotency keys generated per checkout attempt
+      - treating unknown outcomes as pending and querying status
+      - handling redirects for bank authentication and returning to the app
+      - persisting checkout state across app restarts
+      - clear user messaging that avoids duplicate payments
+    rubric:
+      excellent: Uses idempotency keys and an explicit pending state with status reconciliation, survives app restarts and bank redirects, and designs messaging that prevents duplicate attempts.
+      good: Adds idempotency and retries with some status checking.
+      weak: Retries the charge on error or tells the user to try again.
+    followups:
+      - The app is killed during the bank verification step; what happens when it reopens?
+      - How long should the client keep checking the status?
+    common_errors:
+      - Treating a timeout as a failure and allowing a second charge.
+
+  - external_key: system_design.frontend_mobile_architecture.mobile_feed_prefetch
+    competency_key: mobile_development
+    topic: Prefetching media in a mobile feed
+    difficulty: medium
+    text: >-
+      Our short-video feed app needs the next video to start instantly when users swipe, but we can't burn through
+      their data and battery. How would you design prefetching and caching for the feed?
+    expected_concepts:
+      - prefetching the first segments of the next few items only
+      - adapting to network type, measured bandwidth and data saver settings
+      - a bounded disk and memory cache with eviction
+      - cancelling prefetches when the user scrolls away quickly
+      - measuring start time and wasted bytes
+    rubric:
+      excellent: Prefetches partial content for a small window, adapts to network and user settings, bounds caches, cancels wasted work and measures both start time and waste.
+      good: Prefetches the next items with some caching and network awareness.
+      weak: Downloads whole videos ahead regardless of network or never prefetches.
+    followups:
+      - How many items ahead would you prefetch, and what would change that number?
+      - How would you know whether prefetching is wasting too much data?
+    common_errors:
+      - Unbounded caches that grow until the OS clears the app's storage.
+
+  - external_key: system_design.frontend_mobile_architecture.mobile_sdk_for_partners
+    competency_key: mobile_development
+    topic: Designing a mobile SDK used by other apps
+    difficulty: medium
+    text: >-
+      We're building a mobile SDK that other companies embed in their apps to offer our identity verification
+      flow. How would you design the SDK so it's easy to integrate and safe to ship inside someone else's app?
+    expected_concepts:
+      - a small, stable public API with semantic versioning
+      - minimal dependencies to avoid conflicts and size growth
+      - running heavy work off the main thread and not blocking the host
+      - theming hooks so the flow matches the host app
+      - error reporting without collecting the host's data
+      - distribution through standard package managers for both platforms
+    rubric:
+      excellent: Designs a minimal, stable API with careful dependency and size management, threading discipline, theming and privacy-safe diagnostics, and plans versioning for long-lived integrations.
+      good: Provides a clean API, documentation and versioning with some attention to size.
+      weak: Exposes internal classes, bundles large dependencies or ignores its impact on the host app.
+    followups:
+      - The host app uses a different version of a networking library than you do; what happens?
+      - How would you get crash reports from the SDK without capturing the host's data?
+    common_errors:
+      - Pulling in large transitive dependencies that clash with the host app.
+
+  - external_key: system_design.frontend_mobile_architecture.ride_hailing_rider_app
+    competency_key: mobile_development
+    topic: Rider app for a ride-hailing service
+    difficulty: medium
+    text: >-
+      Let's design the rider side of a ride-hailing app, from requesting a ride to watching the driver approach and
+      completing the trip. How would you structure the app's state and real-time updates?
+    expected_concepts:
+      - an explicit trip state machine driven by server events
+      - real-time driver location over a persistent connection with smooth interpolation
+      - restoring the current trip after the app is killed or the phone restarts
+      - push notifications for key events when the app is in the background
+      - handling reconnection and missed events
+    rubric:
+      excellent: Models the trip as a server-authoritative state machine, handles live location with interpolation, restores state after process death and reconnects without missing transitions.
+      good: Uses real-time updates for location and status with some state handling.
+      weak: Polls for everything and keeps trip state only in memory.
+    followups:
+      - The rider's phone loses connection as the driver arrives; what do they see?
+      - How would you keep the driver marker moving smoothly between updates?
+    common_errors:
+      - Letting the client decide trip state transitions on its own.
+
+  - external_key: system_design.frontend_mobile_architecture.mobile_shared_core_logic
+    competency_key: mobile_development
+    topic: Sharing business logic between iOS and Android
+    difficulty: medium
+    text: >-
+      Our iOS and Android apps implement the same pricing, validation and sync logic separately, and they keep
+      disagreeing. How would you design a way to share that logic while keeping native user interfaces?
+    expected_concepts:
+      - shared core in Kotlin Multiplatform, Rust or C++ with native UI on top
+      - clear boundary of what belongs in the shared layer
+      - async interop with Swift concurrency and Kotlin coroutines
+      - build, debugging and team skill impact
+      - shared test suite for the core logic
+    rubric:
+      excellent: Proposes a shared core with a well-defined boundary, weighs technology options on interop, tooling and team skills, and adds shared tests and an incremental adoption path.
+      good: Proposes a cross-platform core technology with reasons.
+      weak: Proposes rewriting both apps in a cross-platform UI framework without considering alternatives.
+    followups:
+      - What would you deliberately keep out of the shared layer?
+      - How would iOS engineers debug a crash inside the shared code?
+    common_errors:
+      - Moving UI state into the shared core and fighting each platform's lifecycle.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.frontend_mobile_architecture.mobile_chat_message_store
+    competency_key: mobile_development
+    topic: Message storage and delivery in a mobile chat app
+    difficulty: hard
+    text: >-
+      Let's design the client side of a mobile messaging app with one-to-one and group chats, offline sending,
+      delivery receipts and years of history. How would you design the local data model and the sync with the server?
+    expected_concepts:
+      - local database as the source of truth for the UI
+      - client message ids for idempotent sending and deduplication
+      - server sequence numbers per conversation for ordering and gap detection
+      - incremental sync from a cursor after reconnect
+      - paging old history on demand and pruning media
+      - send states such as pending, sent, delivered and failed
+    rubric:
+      excellent: Designs a local-first store with client ids, server-assigned ordering, gap detection and cursor-based catch-up, explicit message states and history paging with storage limits.
+      good: Stores messages locally with send states and syncs missed messages on reconnect.
+      weak: Renders messages straight from the socket with no local store or ordering strategy.
+    followups:
+      - A message is sent offline and the clock on the phone is wrong; where does it appear in the conversation?
+      - How would you sync a group chat with ten thousand new messages after a week offline?
+    common_errors:
+      - Ordering messages by device clock.
+
+  - external_key: system_design.frontend_mobile_architecture.multi_device_offline_convergence
+    competency_key: mobile_development
+    topic: Converging data edited offline on several devices
+    difficulty: hard
+    text: >-
+      A task app works fully offline on phone, tablet and web, and users edit the same lists on several devices
+      before any of them reconnect. How would you design the sync model so every device ends up with the same data?
+    expected_concepts:
+      - per-field or operation-level change tracking rather than whole-record overwrite
+      - logical clocks or server-assigned versions for ordering
+      - CRDTs or deterministic merge rules for lists and ordering
+      - tombstones for deletes and their cleanup
+      - schema versioning when devices run different app versions
+    rubric:
+      excellent: Designs operation or field-level sync with deterministic merge rules or CRDTs, handles deletes with tombstones, orders changes without trusting device clocks, and accounts for mixed app versions.
+      good: Uses per-field versions or timestamps with a reasonable merge policy.
+      weak: Uses whole-record last write wins based on device timestamps.
+    followups:
+      - One device deletes a list while another adds tasks to it offline; what should happen?
+      - How would you reorder items concurrently without conflicts?
+    common_errors:
+      - Trusting device clocks to decide which edit wins.
+
+  - external_key: system_design.frontend_mobile_architecture.sales_catalog_offline
+    competency_key: mobile_development
+    topic: Large product catalogue available offline
+    difficulty: hard
+    text: >-
+      Sales reps need a tablet app with the full catalogue of two hundred thousand products, customer-specific
+      pricing and images, fully searchable offline. How would you design the initial load, ongoing updates and
+      search on the device?
+    expected_concepts:
+      - bulk initial download as compressed snapshots rather than paged API calls
+      - delta updates from a change cursor
+      - on-device full-text search index
+      - lazy image download with priority for frequently used items
+      - per-rep scoping of pricing data and secure storage
+      - integrity checks and recovery from partial syncs
+    rubric:
+      excellent: Uses compressed snapshots for initial load, cursor-based deltas, a local search index, prioritised media download and scoped secure data, with recovery from interrupted syncs.
+      good: Downloads data in bulk, syncs changes and adds local search.
+      weak: Pages through the normal API for every product or depends on online search.
+    followups:
+      - A price list changes for one customer segment; how does that reach the right tablets?
+      - The initial download fails at sixty percent; what happens next?
+    common_errors:
+      - Initial sync through thousands of small paged requests.
+
+  - external_key: system_design.frontend_mobile_architecture.venue_ticket_scanning
+    competency_key: mobile_development
+    topic: Offline ticket scanning at a venue
+    difficulty: hard
+    text: >-
+      At a stadium, staff scan tickets on phones at forty gates, and connectivity drops when the crowd arrives. How
+      would you design the scanning app so entry stays fast and the same ticket can't be used twice?
+    expected_concepts:
+      - signed tickets that can be verified offline
+      - preloading the ticket list and revocations before doors open
+      - local-first validation with scans synced between devices when possible
+      - peer-to-peer or local network sharing of scans as a fallback
+      - accepting a bounded risk and reconciling duplicates afterwards
+      - fast scan feedback and override flows for staff
+    rubric:
+      excellent: Designs offline verification with signatures and preloaded data, shares scan state across devices by several paths, explicitly reasons about the duplicate-entry risk window and reconciliation.
+      good: Validates tickets offline from a preloaded list and syncs scans when online.
+      weak: Requires an online check for every scan.
+    followups:
+      - Two gates scan a copied ticket within seconds while both are offline; what happens?
+      - How would you get late ticket sales onto the devices?
+    common_errors:
+      - Claiming double use can be fully prevented without any connectivity.
+
+  - external_key: system_design.frontend_mobile_architecture.super_app_mini_apps
+    competency_key: mobile_development
+    topic: Hosting mini apps inside a super app
+    difficulty: hard
+    text: >-
+      Our company wants one mobile super app where internal teams and selected partners ship mini apps, like
+      bookings or food ordering, without a full app release each time. How would you design the host and the
+      mini app platform?
+    expected_concepts:
+      - runtime choice such as web views, JavaScript bundles or server-driven UI
+      - a permissioned bridge API to native capabilities
+      - downloading, versioning and caching mini app bundles with signing
+      - isolation of storage and data between mini apps
+      - shared login, payments and navigation provided by the host
+      - store policy constraints on downloaded code
+    rubric:
+      excellent: Chooses a runtime with clear trade-offs, designs a permissioned bridge, signed and versioned bundle delivery, data isolation and shared host services, and addresses store policies.
+      good: Describes mini apps in web views or bundles with a bridge and some permissions.
+      weak: Compiles every mini app into the host binary or gives mini apps unrestricted native access.
+    followups:
+      - How would a partner mini app request the user's location?
+      - A mini app version is broken in production; how do you roll it back?
+    common_errors:
+      - Ignoring app store rules about downloading executable code.
+
+  - external_key: system_design.frontend_mobile_architecture.calendar_two_way_sync
+    competency_key: mobile_development
+    topic: Two-way calendar sync on mobile
+    difficulty: hard
+    text: >-
+      Our scheduling app needs to sync appointments both ways with the phone's built-in calendar and with our
+      servers, including recurring events and edits made in either place. How would you design that sync?
+    expected_concepts:
+      - mapping ids between local calendar events and server records
+      - change detection on the device calendar and on the server
+      - recurrence rules and exceptions for single occurrences
+      - time zones and daylight saving changes
+      - loop prevention so synced changes are not echoed back
+      - permissions and the user removing access
+    rubric:
+      excellent: Designs id mapping, change detection on both sides, correct handling of recurrence exceptions and time zones, and prevents sync loops, with graceful handling of revoked permissions.
+      good: Syncs both ways with id mapping and some handling of recurring events.
+      weak: Copies events one way only or ignores recurrence and time zones.
+    followups:
+      - The user moves one occurrence of a weekly meeting in the phone's calendar; what changes on the server?
+      - How do you avoid an edit bouncing back and forth forever?
+    common_errors:
+      - Storing local wall-clock times without time zone information.
+
+  - external_key: system_design.frontend_mobile_architecture.encrypted_messaging_multi_device
+    competency_key: mobile_development
+    topic: End-to-end encrypted messaging across devices
+    difficulty: hard
+    text: >-
+      Suppose our messaging app adds end-to-end encryption and users want the same conversations on their phone,
+      tablet and desktop. How would you design key management and message history on the clients?
+    expected_concepts:
+      - per-device key pairs with private keys in secure hardware-backed storage
+      - encrypting each message for every recipient device
+      - linking a new device and verifying it
+      - history transfer or encrypted backups for new devices
+      - handling a removed or compromised device
+    rubric:
+      excellent: Uses per-device keys in secure storage, explains fan-out encryption to devices, designs device linking with verification, history transfer or backups, and revocation of lost devices.
+      good: Describes per-device keys and encryption for each device with some device linking approach.
+      weak: Shares one private key across devices through the server or stores keys in plain app storage.
+    followups:
+      - How does a newly linked tablet see messages from last month?
+      - What happens to future messages when a user removes a lost phone?
+    common_errors:
+      - Syncing private keys through the server in a form the server can read.
+
+  - external_key: system_design.frontend_mobile_architecture.mobile_multi_team_modules
+    competency_key: mobile_development
+    topic: One mobile app built by many feature teams
+    difficulty: hard
+    text: >-
+      Ten feature teams build one large mobile app, release on a fixed weekly train, and keep breaking each
+      other's features and build times. How would you design the app's module structure and release process?
+    expected_concepts:
+      - feature modules with public interfaces and hidden implementations
+      - navigation and dependency injection across modules without direct coupling
+      - build caching and building only affected modules
+      - feature flags so incomplete work can merge without blocking the train
+      - ownership, quality gates and crash attribution per module
+    rubric:
+      excellent: Designs interface and implementation module splits, decoupled navigation and dependency injection, faster builds, flag-based trunk development and per-team ownership of quality on the release train.
+      good: Proposes feature modules and some build and release improvements.
+      weak: Proposes separate apps per team or more manual testing before each release.
+    followups:
+      - How would one feature open a screen owned by another team without depending on its code?
+      - A team's crash rate spikes after the train ships; how is it spotted and handled?
+    common_errors:
+      - Feature modules that depend directly on each other's implementations.
+
+  - external_key: system_design.frontend_mobile_architecture.on_device_model_delivery
+    competency_key: mobile_development
+    topic: Delivering machine learning models to devices
+    difficulty: hard
+    text: >-
+      Our app runs an on-device model for document scanning, and the ML team wants to ship improved models every
+      few weeks. How would you design how models are delivered, selected and monitored on users' devices?
+    expected_concepts:
+      - downloading models separately from the app binary with versioning and signing
+      - choosing model variants by device capability and OS
+      - falling back to a bundled model or server inference
+      - staged rollout of models with quality and performance monitoring
+      - storage and download conditions such as Wi-Fi and battery
+    rubric:
+      excellent: Decouples model delivery from app releases with signed, versioned downloads, selects variants per device, has fallbacks and staged rollouts with on-device quality and latency metrics.
+      good: Downloads models remotely with versioning and some fallback.
+      weak: Bundles each new model in an app release or downloads large models without conditions.
+    followups:
+      - A new model is slower on older phones; how would you find out and react?
+      - How would you compare model quality in production without collecting users' documents?
+    common_errors:
+      - Collecting user images to evaluate the model without consent.

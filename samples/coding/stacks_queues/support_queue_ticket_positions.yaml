@@ -1,0 +1,244 @@
+version: 1
+slug: support_queue_ticket_positions
+title: Support Queue Ticket Positions
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, support_engineer, backend, dba]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Support Queue Ticket Positions
+
+  A help desk routes every ticket into a queue (`billing`, `network`, ...). Agents always pick up the
+  most urgent ticket first, and the status page shows each waiting customer their **position** in line.
+
+  Table `tickets`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | queue | VARCHAR(40) | queue name, lowercase letters only |
+  | priority | INTEGER | `1` is the most urgent; larger numbers are less urgent |
+  | created_at | VARCHAR(19) | creation time as text in the fixed format `YYYY-MM-DD HH:MM:SS` |
+  | status | VARCHAR(10) | one of `open`, `pending`, `closed` |
+
+  Only tickets whose status is `open` are waiting in line; `pending` and `closed` tickets take no place.
+  Inside each queue, the waiting tickets are ordered by
+
+  1. `priority` ascending, then
+  2. `created_at` ascending (older first), then
+  3. `id` ascending, so no two tickets ever share a position.
+
+  Return one row per open ticket with the columns `queue`, `ticket_id` and `queue_position` (the 1-based
+  position in its queue, with no gaps), ordered by `queue` ascending and then `queue_position` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  tickets
+  +----+----------+----------+---------------------+---------+
+  | id | queue    | priority | created_at          | status  |
+  +----+----------+----------+---------------------+---------+
+  | 1  | billing  | 2        | 2026-03-02 09:00:00 | open    |
+  | 2  | network  | 1        | 2026-03-02 09:05:00 | open    |
+  | 3  | billing  | 1        | 2026-03-02 10:30:00 | open    |
+  | 4  | billing  | 1        | 2026-03-02 08:15:00 | closed  |
+  | 5  | network  | 3        | 2026-03-01 17:45:00 | open    |
+  | 6  | billing  | 2        | 2026-03-01 22:10:00 | open    |
+  | 7  | network  | 1        | 2026-03-02 09:05:00 | pending |
+  +----+----------+----------+---------------------+---------+
+
+  Output
+  +---------+-----------+----------------+
+  | queue   | ticket_id | queue_position |
+  +---------+-----------+----------------+
+  | billing | 3         | 1              |
+  | billing | 6         | 2              |
+  | billing | 1         | 3              |
+  | network | 2         | 1              |
+  | network | 5         | 2              |
+  +---------+-----------+----------------+
+  Ticket 4 is closed and ticket 7 is pending, so neither takes a place. Tickets 6 and 1 share priority 2;
+  ticket 6 was created earlier.
+  ```
+
+  ### Example 2
+  ```
+  tickets
+  +----+--------+----------+---------------------+--------+
+  | id | queue  | priority | created_at          | status |
+  +----+--------+----------+---------------------+--------+
+  | 10 | access | 3        | 2026-01-05 08:00:00 | open   |
+  | 11 | access | 1        | 2026-01-05 12:00:00 | open   |
+  | 12 | access | 2        | 2026-01-04 23:59:59 | open   |
+  +----+--------+----------+---------------------+--------+
+
+  Output
+  +--------+-----------+----------------+
+  | queue  | ticket_id | queue_position |
+  +--------+-----------+----------------+
+  | access | 11        | 1              |
+  | access | 12        | 2              |
+  | access | 10        | 3              |
+  +--------+-----------+----------------+
+  Priority decides before age: ticket 11 is the newest but the most urgent.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `1 <= priority <= 5`
+  - Every `created_at` value uses exactly the format `YYYY-MM-DD HH:MM:SS`.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return queue, ticket_id and queue_position for every open ticket.
+    SELECT queue, id AS ticket_id, 1 AS queue_position
+    FROM tickets
+    WHERE status = 'open'
+    ORDER BY queue, id;
+reference_solutions:
+  sql: |
+    SELECT
+      queue,
+      id AS ticket_id,
+      ROW_NUMBER() OVER (
+        PARTITION BY queue
+        ORDER BY priority, created_at, id
+      ) AS queue_position
+    FROM tickets
+    WHERE status = 'open'
+    ORDER BY queue, queue_position;
+sql_setup: |
+  CREATE TABLE tickets (
+    id INTEGER PRIMARY KEY,
+    queue VARCHAR(40) NOT NULL,
+    priority INTEGER NOT NULL,
+    created_at VARCHAR(19) NOT NULL,
+    status VARCHAR(10) NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - closed and pending tickets excluded, priority tie broken by created_at"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, queue, priority, created_at, status) VALUES
+        (1, 'billing', 2, '2026-03-02 09:00:00', 'open'),
+        (2, 'network', 1, '2026-03-02 09:05:00', 'open'),
+        (3, 'billing', 1, '2026-03-02 10:30:00', 'open'),
+        (4, 'billing', 1, '2026-03-02 08:15:00', 'closed'),
+        (5, 'network', 3, '2026-03-01 17:45:00', 'open'),
+        (6, 'billing', 2, '2026-03-01 22:10:00', 'open'),
+        (7, 'network', 1, '2026-03-02 09:05:00', 'pending');
+    expected_rows: [["billing", 3, 1], ["billing", 6, 2], ["billing", 1, 3], ["network", 2, 1], ["network", 5, 2]]
+  - id: t2
+    description: "Example 2 - single queue, priority beats age"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, queue, priority, created_at, status) VALUES
+        (10, 'access', 3, '2026-01-05 08:00:00', 'open'),
+        (11, 'access', 1, '2026-01-05 12:00:00', 'open'),
+        (12, 'access', 2, '2026-01-04 23:59:59', 'open');
+    expected_rows: [["access", 11, 1], ["access", 12, 2], ["access", 10, 3]]
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "No open tickets at all"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, queue, priority, created_at, status) VALUES
+        (1, 'billing', 1, '2026-02-01 10:00:00', 'closed'),
+        (2, 'network', 2, '2026-02-01 11:00:00', 'pending');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Same priority and same created_at - id breaks the tie even when inserted out of order"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, queue, priority, created_at, status) VALUES
+        (9, 'hardware', 2, '2026-04-10 14:00:00', 'open'),
+        (3, 'hardware', 2, '2026-04-10 14:00:00', 'open'),
+        (7, 'hardware', 2, '2026-04-10 14:00:00', 'open'),
+        (5, 'hardware', 1, '2026-04-10 15:00:00', 'open');
+    expected_rows: [["hardware", 5, 1], ["hardware", 3, 2], ["hardware", 7, 3], ["hardware", 9, 4]]
+  - id: t6
+    hidden: true
+    description: "Closed tickets ahead in line leave no gaps in positions"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, queue, priority, created_at, status) VALUES
+        (1, 'billing', 1, '2026-05-01 08:00:00', 'closed'),
+        (2, 'billing', 1, '2026-05-01 08:01:00', 'open'),
+        (3, 'billing', 1, '2026-05-01 08:02:00', 'closed'),
+        (4, 'billing', 2, '2026-05-01 07:00:00', 'open'),
+        (5, 'billing', 1, '2026-05-01 08:03:00', 'pending'),
+        (6, 'billing', 3, '2026-05-01 06:00:00', 'open');
+    expected_rows: [["billing", 2, 1], ["billing", 4, 2], ["billing", 6, 3]]
+  - id: t7
+    hidden: true
+    description: "Numbering restarts per queue; queue with only closed tickets is absent"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, queue, priority, created_at, status) VALUES
+        (1, 'network', 2, '2026-06-01 09:00:00', 'open'),
+        (2, 'access', 1, '2026-06-01 09:30:00', 'open'),
+        (3, 'network', 1, '2026-06-01 10:00:00', 'open'),
+        (4, 'access', 1, '2026-06-01 09:10:00', 'open'),
+        (5, 'billing', 1, '2026-06-01 08:00:00', 'closed'),
+        (6, 'network', 2, '2026-06-01 08:59:59', 'open'),
+        (7, 'access', 4, '2026-06-01 07:00:00', 'open');
+    expected_rows: [["access", 4, 1], ["access", 2, 2], ["access", 7, 3], ["network", 3, 1], ["network", 6, 2], ["network", 1, 3]]
+  - id: t8
+    hidden: true
+    description: "Timestamps across days, months and years ordered as text"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, queue, priority, created_at, status) VALUES
+        (1, 'billing', 2, '2026-01-01 00:00:00', 'open'),
+        (2, 'billing', 2, '2025-12-31 23:59:59', 'open'),
+        (3, 'billing', 2, '2026-01-01 00:00:01', 'open'),
+        (4, 'billing', 2, '2025-11-30 12:00:00', 'open'),
+        (5, 'billing', 2, '2026-10-01 09:00:00', 'open');
+    expected_rows: [["billing", 4, 1], ["billing", 2, 2], ["billing", 1, 3], ["billing", 3, 4], ["billing", 5, 5]]
+  - id: t9
+    hidden: true
+    description: "Single open ticket"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, queue, priority, created_at, status) VALUES
+        (42, 'hardware', 5, '2026-07-07 07:07:07', 'open');
+    expected_rows: [["hardware", 42, 1]]
+expected_concepts:
+  - ROW_NUMBER window function
+  - PARTITION BY to restart numbering per queue
+  - multi-column ORDER BY inside the window for deterministic tie-breaking
+  - filtering rows before numbering them
+  - ordering the final result separately from the window order
+optimal_complexity: {time: "O(n log n) for the sort behind the window", space: O(n)}
+rubric:
+  excellent: "Uses ROW_NUMBER() OVER (PARTITION BY queue ORDER BY priority, created_at, id), filters to open tickets before numbering, explains why RANK or DENSE_RANK would be wrong here, orders the output explicitly and suggests an index on (status, queue, priority, created_at, id)."
+  good: "Reaches a correct window-function query after a hint about filtering first, the tie-breakers or the final ORDER BY."
+  weak: "Numbers tickets across all queues, counts closed or pending tickets, relies on insertion order, or leaves ties unresolved."
+  criteria:
+    correctness: "All tests pass, including ties on priority and created_at, non-open tickets and empty tables."
+    efficiency: "A single set-based query with one window; no correlated subquery per row."
+    code_quality: "Readable window clause and clear output column aliases."
+    edge_cases: "Queues with no open tickets, identical priority and timestamp, a single ticket and empty input."
+    communication: "Explains the difference between ROW_NUMBER, RANK and DENSE_RANK and why the id tie-breaker is needed."
+hints:
+  - "Each queue numbers its own waiting tickets from 1, and only open tickets are waiting; which SQL feature computes a running number per group?"
+  - "A window function with PARTITION BY queue restarts the numbering in every queue; the ORDER BY inside the window must encode priority, then age, then id."
+  - "Select from tickets WHERE status = 'open' and compute ROW_NUMBER() OVER (PARTITION BY queue ORDER BY priority, created_at, id) AS queue_position, then ORDER BY queue, queue_position for the final result."
+followups:
+  - "How would you return only the tickets in the first three positions of each queue?"
+  - "Why is it safe to compare created_at as text here, and when would it not be?"
+  - "How would you compute the same positions on a database without window functions?"
+  - "Which index would make this query cheap on millions of tickets, most of them closed?"
+common_errors:
+  - "Applying the status filter outside a subquery after numbering, so closed tickets still take positions."
+  - "Using RANK or DENSE_RANK without the id tie-breaker, which gives two tickets the same position."
+  - "Forgetting PARTITION BY, which numbers tickets across every queue."
+  - "Omitting the final ORDER BY and relying on the window order for the output."

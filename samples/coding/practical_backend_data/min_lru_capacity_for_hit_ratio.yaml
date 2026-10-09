@@ -1,0 +1,178 @@
+version: 1
+slug: min_lru_capacity_for_hit_ratio
+title: "Smallest LRU Cache for a Target Hit Ratio"
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [sre, platform, backend, cloud]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Smallest LRU Cache for a Target Hit Ratio
+
+  The platform team is sizing the in-memory cache that sits in front of a configuration service. They
+  captured a production **access trace**: the keys the service looked up, in order. The cache uses
+  **least-recently-used (LRU)** eviction, and memory is expensive, so they want the smallest cache that
+  still meets the hit-ratio objective.
+
+  An LRU cache with capacity `c` (the number of keys it can hold) behaves like this for each access in the
+  trace, starting empty:
+
+  - If the key is in the cache, the access is a **hit** and the key becomes the most recently used one.
+  - Otherwise it is a **miss**: the key is inserted as the most recently used one, and if the cache now
+    holds more than `c` keys, the least recently used key is evicted.
+
+  Write `min_cache_capacity(accesses, target_pct)` that returns the **smallest capacity `c >= 1`** for which
+  replaying the whole trace gives `hits * 100 >= target_pct * n`, where `n` is the length of the trace.
+  Return `-1` if no capacity reaches the target, not even a cache large enough to hold every key.
+
+  Keys are compared exactly (case-sensitive).
+
+  ### Example 1
+  ```
+  Input:  accesses = ["a", "b", "c", "a", "b", "c", "a"], target_pct = 40
+  Output: 3
+  Explanation: with capacity 1 or 2 every access misses (the cyclic pattern always evicts the key that is
+  needed next); with capacity 3 the last four accesses hit, and 4 * 100 >= 40 * 7
+  ```
+
+  ### Example 2
+  ```
+  Input:  accesses = ["user:7", "user:9", "user:7", "cfg", "user:9", "user:7", "cfg", "user:7"], target_pct = 50
+  Output: 3
+  Explanation: capacity 2 gives 2 hits (25%); capacity 3 gives 5 hits (62.5%)
+  ```
+
+  ### Example 3
+  ```
+  Input:  accesses = ["x", "y", "x", "z"], target_pct = 50
+  Output: -1
+  Explanation: even an unlimited cache misses the first access of x, y and z, so at most 1 of 4 accesses hits
+  ```
+
+  ### Constraints
+  - `1 <= accesses.length <= 10^5`
+  - `1 <= accesses[i].length <= 40`; keys are printable ASCII without spaces
+  - `0 <= target_pct <= 100`
+
+  **Follow-up:** simulating the cache once per candidate capacity is far too slow for a long trace. Can you
+  get the answer for every capacity from a single pass, in `O(n log n)`?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: min_cache_capacity
+  params:
+    - {name: accesses, type: "string[]"}
+    - {name: target_pct, type: int}
+  return_type: int
+  comparison: exact
+reference_solutions:
+  python: |
+    def min_cache_capacity(accesses: list[str], target_pct: int) -> int:
+        n = len(accesses)
+        tree = [0] * (n + 1)  # Fenwick tree over positions: 1 = latest access of some key
+
+        def add(i: int, delta: int) -> None:
+            i += 1
+            while i <= n:
+                tree[i] += delta
+                i += i & -i
+
+        def prefix(i: int) -> int:  # sum of positions 0..i-1
+            total = 0
+            while i > 0:
+                total += tree[i]
+                i -= i & -i
+            return total
+
+        last: dict[str, int] = {}
+        distances: list[int] = []  # stack distance of every repeated access
+        for i, key in enumerate(accesses):
+            p = last.get(key)
+            if p is not None:
+                # distinct keys whose latest access lies strictly between p and i
+                distances.append(prefix(i) - prefix(p + 1))
+                add(p, -1)
+            add(i, 1)
+            last[key] = i
+
+        need = (target_pct * n + 99) // 100  # smallest hit count with hits * 100 >= target_pct * n
+        if need == 0:
+            return 1
+        if need > len(distances):
+            return -1
+        distances.sort()
+        # an access with stack distance d hits exactly when capacity > d
+        return distances[need - 1] + 1
+  javascript: |
+    function minCacheCapacity(accesses, targetPct) {
+      const n = accesses.length;
+      const tree = new Array(n + 1).fill(0);
+      const add = (i, delta) => {
+        for (i += 1; i <= n; i += i & -i) tree[i] += delta;
+      };
+      const prefix = (i) => {
+        let total = 0;
+        for (; i > 0; i -= i & -i) total += tree[i];
+        return total;
+      };
+      const last = new Map();
+      const distances = [];
+      for (let i = 0; i < n; i++) {
+        const key = accesses[i];
+        if (last.has(key)) {
+          const p = last.get(key);
+          distances.push(prefix(i) - prefix(p + 1));
+          add(p, -1);
+        }
+        add(i, 1);
+        last.set(key, i);
+      }
+      const need = Math.ceil((targetPct * n) / 100);
+      if (need === 0) return 1;
+      if (need > distances.length) return -1;
+      distances.sort((a, b) => a - b);
+      return distances[need - 1] + 1;
+    }
+tests:
+  - {id: t1, args: [["a", "b", "c", "a", "b", "c", "a"], 40], expected: 3, description: "Example 1 - cyclic scan of three keys; every repeat has stack distance 2"}
+  - {id: t2, args: [["user:7", "user:9", "user:7", "cfg", "user:9", "user:7", "cfg", "user:7"], 50], expected: 3, description: "Example 2 - mixed distances; the answer is the 4th smallest distance plus one"}
+  - {id: t3, args: [["x", "y", "x", "z"], 50], expected: -1, description: "Example 3 - unreachable target even with unlimited capacity returns -1"}
+  - {id: t4, hidden: true, args: [["only"], 0], expected: 1, description: "Single access with target 0 - capacity 1 suffices"}
+  - {id: t5, hidden: true, args: [["only"], 1], expected: -1, description: "Single access with a positive target - first access always misses, -1"}
+  - {id: t6, hidden: true, args: [["s", "s", "s", "s", "s"], 80], expected: 1, description: "Same key repeated - exactly 4 of 5 hit at capacity 1 (boundary hits*100 == target*n)"}
+  - {id: t7, hidden: true, args: [["s", "s", "s", "s", "s"], 100], expected: -1, description: "Target 100 is never reachable because the first access misses"}
+  - {id: t8, hidden: true, args: [["a", "b", "a", "b", "c", "d", "e", "a", "b", "e", "d", "c", "a"], 31], expected: 5, description: "Ceiling rounding of the required hit count (31% of 13 needs 5 hits, not 4)"}
+  - {id: t9, hidden: true, args: [["a", "b", "b", "b", "c", "a", "d", "a", "b"], 44], expected: 3, description: "Repeated back-to-back accesses (distance 0) mixed with a long-distance reuse; distinct keys, not accesses, are counted"}
+  - {id: t10, hidden: true, args: [["p", "q", "r", "s", "t", "u"], 10], expected: -1, description: "All keys distinct - no hit is possible, -1"}
+  - {id: t11, hidden: true, args: [["hot0", "k4", "k6", "hot0", "hot0", "hot0", "hot2", "k7", "k37", "scan0", "k36", "hot0", "hot3", "hot2", "hot3", "hot5", "hot3", "hot0", "k36", "scan1", "hot0", "k27", "k29", "hot2", "hot7", "k15", "hot1", "hot1", "hot4", "scan2", "hot3", "hot1", "k26", "hot5", "k36", "k20", "hot1", "hot7", "hot0", "scan3", "hot5", "hot6", "hot4", "k28", "hot1", "k1", "k22", "hot0", "hot7", "scan4", "hot0", "hot9", "hot2", "hot9", "k35", "hot2", "hot9", "k9", "hot0", "scan5", "k0", "hot4", "hot0", "hot1", "hot10", "k32", "k3", "hot9", "k35", "scan6", "hot1", "hot4", "hot0", "hot0", "hot0", "hot0", "hot1", "hot9", "k9", "scan7", "k22", "k30", "hot8", "k29", "hot1", "hot6", "k30", "k10", "hot0", "scan8", "k23", "hot3", "hot3", "k5", "k16", "hot9", "hot0", "hot3", "k39", "scan9", "k12", "k25", "k14", "hot2", "k1", "k30", "hot5", "k28", "k22", "scan10", "k23", "hot0", "hot1", "hot11", "k0", "hot5", "k5", "k7", "k12", "scan11", "hot0", "k21", "hot10", "k29", "hot10", "k10", "k1", "hot9", "k9", "scan12", "k38", "k22", "hot3", "hot7", "k6", "hot10", "hot9", "k13", "hot0", "scan13", "hot6", "hot3", "k3", "k22", "k37", "k33", "hot10", "hot3", "hot0", "scan14", "hot0", "hot7", "hot2", "k35", "hot5", "hot2", "k35", "hot0", "hot0", "scan15", "hot0", "k4", "hot4", "hot3", "k28", "hot7", "hot0", "hot9", "k35", "scan16", "k12", "k8", "hot1", "hot5", "hot0", "hot0", "k23", "hot9", "k14", "scan17", "k6", "hot2", "k14", "hot2", "hot1", "hot1", "k1", "hot2", "k24", "scan18", "hot4", "hot0", "k14", "k6", "hot0", "k11", "hot0", "hot9", "k16", "scan19", "hot3", "hot2", "hot0", "k11", "hot0", "k5", "k5", "k14", "hot8", "scan20", "hot1", "hot10", "hot0", "hot0", "hot0", "hot0", "hot1", "k18", "hot5", "scan21", "hot7", "k2", "hot6", "hot0", "hot10", "hot8", "hot2", "k25", "k19", "scan22", "k14", "hot8", "k8", "hot1", "hot0", "hot6", "hot0", "hot8", "k18", "scan23", "hot5", "hot0", "hot0", "hot1", "k20", "hot11", "hot1", "hot1", "hot3", "scan24", "hot3", "hot0", "hot1", "hot0", "hot0", "hot3", "k38", "hot1", "k9", "scan0", "hot4", "hot8", "k32", "k32", "hot3", "hot8", "k37", "k14", "hot0", "scan1", "k6", "hot2", "hot0", "hot0", "hot2", "hot10", "k5", "k4", "k30", "scan2", "hot0", "hot6", "hot6", "k31", "k4", "hot5", "k39", "k12", "hot0", "scan3", "hot6", "hot3", "hot0", "hot5", "k31", "hot3", "hot2", "hot9", "hot11", "scan4", "k1", "hot0", "hot11", "k24", "hot10", "hot4", "hot3", "k8", "k32", "scan5", "hot0", "hot2", "k25", "hot0", "hot2", "hot0", "hot1", "k0", "hot1", "scan6", "hot10", "hot0", "k16", "hot1", "k37", "hot10", "k3", "hot0", "k9", "scan7", "hot0", "hot0", "hot10", "k25", "k35", "hot6", "hot6", "hot6", "k18", "scan8", "hot9", "hot0", "hot0", "hot6", "k25", "k19", "hot5", "hot4", "hot3", "scan9", "k35", "hot9", "k28", "hot3", "hot0", "hot1", "hot7", "hot0", "k24", "scan10", "hot3", "hot1", "hot0", "k8", "k33", "k13", "hot9", "hot5", "hot1", "scan11", "k1", "hot2", "k30", "k31", "hot1", "k33", "k28", "hot0", "hot3", "scan12", "k29", "hot7", "hot0", "hot0", "k8", "k33", "k7", "hot1", "k12", "scan13", "hot0", "k0", "hot11", "hot1", "k15", "hot0", "hot11", "k19", "hot0", "scan14", "k26", "hot0", "hot1", "hot5", "k23", "k12", "hot1", "k4", "hot11", "scan15", "hot8", "hot0", "k18", "hot4", "k14", "hot9", "hot4", "k3", "hot11", "scan16", "hot0", "hot1", "k20", "k5", "k21", "hot5", "hot2", "hot6", "k21", "scan17", "hot0", "hot0", "hot9", "hot6", "hot7", "hot7", "hot5", "hot3", "hot1", "scan18", "k30", "hot2", "k25", "hot0", "hot10", "hot6", "k21", "hot1", "k2", "scan19", "hot6", "hot0", "hot6", "k4", "hot0", "hot10", "k24", "k27", "k8", "scan20", "k11", "hot10", "hot5", "hot0", "k29", "hot7", "hot0", "k15", "hot5", "scan21", "hot3", "hot2", "hot0", "k13", "hot2", "k28", "hot0", "hot9", "hot3", "scan22", "k7", "k18", "hot3", "hot6", "hot0", "hot0", "k37", "hot0", "hot0", "scan23", "hot5", "hot2", "hot0", "k14", "k23", "hot1", "hot0", "k37", "hot0", "scan24", "hot0", "k0", "hot4", "k13", "hot1", "hot11", "hot6", "k0", "k26", "scan0", "k11", "k4", "hot7", "hot0", "hot1", "hot4", "hot0", "k26", "k19", "scan1", "hot0", "k22", "hot0", "k23", "k25", "k13", "k27", "k27", "hot0", "scan2", "hot1", "k8", "hot3", "k25", "hot4", "hot3", "hot0", "hot10", "hot2", "scan3", "k12", "hot8", "hot9", "hot4", "k5", "k39", "k10", "k14", "k39", "scan4", "k30", "hot0", "hot3", "hot0", "hot6", "k2", "k2", "k20", "hot4", "scan5", "hot4", "hot2", "hot2", "k28", "hot0", "hot11", "hot2", "k29", "k30", "scan6", "hot0", "hot1", "k32", "hot0", "k5", "k20", "k32", "hot6", "k8", "scan7", "hot0", "k7", "hot11", "hot10", "k10", "k14", "hot1", "k10", "hot4", "scan8", "k29", "hot3", "k13", "hot4", "hot1", "hot1", "k17", "k24", "hot7", "scan9", "hot3", "k23", "k28", "hot4", "k6", "hot3", "k23", "hot11", "hot1", "scan10", "k28", "hot4", "k18", "k16", "hot11", "k20", "k2", "hot1", "k26", "scan11", "hot9", "hot0", "k1", "hot3", "hot3", "hot2", "hot0", "hot8", "hot0", "scan12", "k9", "hot0", "hot5", "hot7", "k3", "k35", "k38", "k28", "k33", "scan13", "k15", "hot0", "hot0", "hot0", "k6", "hot3", "k9", "hot3", "k26", "scan14", "k11", "hot0", "k30", "k0", "hot2", "k5", "k28", "hot11", "hot4", "scan15", "hot9", "k16", "k17", "k27", "k33", "k18", "k13", "hot3", "hot9", "scan16", "k12", "k20", "hot1", "k24", "k34", "hot8", "k1", "hot6", "hot1", "scan17", "hot4", "hot9", "hot0", "hot10", "hot0", "hot0", "k2", "k2", "hot4", "scan18", "hot8", "k4", "k24", "hot0", "hot0", "k5", "k18", "hot0", "k13", "scan19", "hot1", "hot1", "k3", "k23", "k38", "hot8", "k1", "k1", "hot7", "scan20", "hot5", "hot0", "k5", "hot0", "hot3", "hot6", "hot1", "hot5", "k31", "scan21", "hot10", "hot4", "hot7", "k14", "hot0", "k5", "hot11", "hot0", "hot0", "scan22", "k5", "hot5", "hot1", "hot3", "hot11", "k29", "hot4", "k38", "k22", "scan23", "hot3", "k28", "k20", "hot2", "k37", "hot1", "k15", "hot0", "k39", "scan24", "hot0", "hot1", "hot0", "hot0", "k6", "hot5", "hot0", "hot1", "hot0", "scan0", "hot9", "hot9", "hot0", "k27", "k32", "k18", "hot0", "k25", "hot0", "scan1", "k36", "hot5", "k37", "k11", "k29", "hot0", "k26", "hot1", "k10", "scan2", "hot2", "hot4", "hot5", "k11", "k20", "k24", "k6", "hot3", "hot7", "scan3", "k33", "hot8", "hot0", "hot0", "k23", "hot2", "k13", "k11", "hot6", "scan4", "hot11", "hot0", "hot1", "hot2", "hot5", "hot0", "hot6", "k33", "k25", "scan5", "hot0", "k4", "k12", "hot3", "hot11", "hot4", "k26", "hot1", "hot0", "scan6", "k22", "k14", "hot1", "hot2", "hot0", "k17", "hot5", "hot2", "k5", "scan7", "k23", "hot1", "hot0", "hot1", "k33", "k37", "hot0", "k18", "hot0", "scan8", "hot0", "k22", "k13", "k34", "hot9", "k5", "k35", "k19", "hot5", "scan9", "hot6", "hot9", "hot0", "hot0", "hot0", "hot0", "hot2", "hot8", "hot8", "scan10", "hot3", "k29", "hot2", "k4", "hot1", "k1", "k21", "k6", "hot2", "scan11", "k2", "hot2", "hot0", "k21", "hot3", "k13", "hot1", "hot0", "hot1", "scan12", "hot1", "k32", "hot0", "hot0", "hot6", "hot11", "hot11", "hot3", "hot3", "scan13", "hot0", "hot8", "hot7", "hot3", "hot1", "hot5", "k5", "hot5", "hot6", "scan14", "hot0", "hot7", "k0", "hot8", "k35", "k19", "hot0", "hot3", "hot10", "scan15", "hot3", "k26", "hot10", "hot0", "hot4", "k9", "hot2", "hot4", "hot0", "scan16", "hot0", "k7", "k5", "hot0", "hot0", "hot2", "k3", "hot6", "k9", "scan17", "k5", "hot3", "hot5", "k3", "k0", "hot9", "k39", "hot1", "k10", "scan18", "k31", "k20", "hot3", "hot5", "hot7", "hot4", "k26", "hot7", "hot0", "scan19", "k21", "hot0", "k38", "hot4", "k9", "k19", "hot11", "hot1", "hot7", "scan20", "hot2", "k20", "hot2", "hot7", "k2", "hot0", "k36", "hot11", "k35", "scan21", "k31", "hot0", "hot7", "hot6", "k14", "hot0", "hot6", "k37", "k24", "scan22", "hot0", "k4", "hot4", "k33", "hot3", "hot0", "hot7", "hot4", "hot7", "scan23", "k15", "hot11", "hot0", "k5", "hot4", "hot3", "hot0", "k36", "hot3", "scan24"], 55], expected: 26, description: "1000-access skewed trace with hot keys and a periodic scan (O(n^2) stack scans are slow in spirit)"}
+expected_concepts:
+  - "LRU inclusion (stack) property: a larger LRU cache always holds a superset of a smaller one"
+  - "reuse (stack) distance: distinct keys accessed since the previous access of the same key"
+  - "an access hits with capacity c exactly when its stack distance is less than c"
+  - "Fenwick tree (or balanced tree) over last-access positions to count distinct keys in a range"
+  - "integer ceiling of the required hit count without floating point"
+  - "order statistic on the sorted distances (or a histogram) to pick the capacity"
+optimal_complexity: {time: "O(n log n)", space: "O(n)"}
+rubric:
+  excellent: "Recognises the LRU stack property, computes each access's stack distance with a Fenwick tree over last-access positions in O(n log n), derives the capacity as the k-th smallest distance plus one with an exact integer ceiling for k, and covers target 0, unreachable targets and back-to-back repeats."
+  good: "Correct answers using stack distances computed with an O(n * distinct keys) recency list, or binary search over capacity with a full LRU simulation per probe, with a clear explanation of why hits grow with capacity."
+  weak: "Simulates every capacity from 1 upwards without any monotonicity argument, mis-models LRU (for example FIFO eviction or counting accesses instead of distinct keys between reuses), or uses floating-point percentages that break at the boundary."
+  criteria:
+    correctness: "All tests pass, including exact-boundary ratios, target 0 and unreachable targets."
+    efficiency: "Stack distances in O(n log n) with a Fenwick tree; recognises that binary search over capacity with simulation is O(n log n * log n) at best and per-capacity simulation is quadratic."
+    code_quality: "Separates computing the distance of each access from choosing the capacity; Fenwick helpers are small and correct."
+    edge_cases: "Single access, all keys distinct, the same key repeated, target 0, target 100 and ceiling rounding of the required hits."
+    communication: "Explains the inclusion property and why a first access is always a miss regardless of capacity."
+hints:
+  - "Think about which accesses hit for a given capacity: a key that was used before is still cached only if not too many other keys were touched since its previous use."
+  - "Define for every repeated access the number of distinct other keys accessed since the previous access of the same key; with capacity c the access hits exactly when that number is less than c, so you can collect these numbers once and reason about every capacity at the same time."
+  - "Keep a Fenwick tree over trace positions with a one at the latest position of each key; when a key repeats, the count of ones strictly between its previous position and now is its distance, then move its one to the current position. Compute the required hits as a ceiling with integers, and if that is more than the number of repeats return minus one, otherwise sort the distances and answer the required-th smallest plus one (or one when nothing is required)."
+followups:
+  - "How would you report the hit ratio for every capacity from 1 to the number of distinct keys at once?"
+  - "Does the same single-pass trick work for FIFO eviction? Why or why not?"
+  - "The trace has a billion accesses and does not fit in memory. How would you estimate the curve with sampling?"
+  - "How would the answer change if objects had different sizes and capacity were measured in bytes?"
+common_errors:
+  - "Counting all accesses between two uses of a key instead of distinct keys, which overstates the needed capacity."
+  - "Treating a first access as a possible hit, so unreachable targets do not return -1."
+  - "Computing the required hits with floating point or floor division, which is off by one at exact boundaries."
+  - "Returning 0 for target 0 even though the capacity must be at least 1."
+  - "Assuming hits jump to the maximum once capacity reaches the number of distinct keys and missing smaller sufficient capacities."

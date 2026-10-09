@@ -1,0 +1,592 @@
+# Curated questions: problem solving / production troubleshooting (part 3 of 4).
+# Reasoning through production incidents step by step: symptoms, hypotheses, evidence, mitigation.
+version: 1
+defaults:
+  role_tags: [devops, sre, backend, support_engineer]
+  round_types: [problem_solving, combined]
+  kind: scenario
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: problem_solving.production_troubleshooting.safari_checkout_failure
+    competency_key: debugging
+    topic: Failure limited to one browser
+    difficulty: easy
+    text: >-
+      After today's release, customers using Safari say the checkout button does nothing, while Chrome and
+      Firefox users can check out normally. How would you track this down?
+    expected_concepts:
+      - reproduce in the affected browser and version
+      - browser console errors and failed network requests
+      - unsupported JavaScript or CSS features, or a browser-specific API
+      - diff the release for frontend changes touching checkout
+      - roll back or hotfix and add cross-browser tests
+    rubric:
+      excellent: Reproduces in the affected browser, uses console and network evidence to find the failing code, ties it to a change in the release, mitigates quickly and adds cross-browser coverage.
+      good: Reproduces in Safari and checks console errors.
+      weak: Asks customers to switch browsers or investigates the backend despite the browser-specific pattern.
+    followups:
+      - You can't reproduce it on your own Safari. What would you ask the customer for?
+      - How would you measure how many customers are affected?
+    common_errors:
+      - Overlooking that browser-specific symptoms rule out most backend causes.
+
+  - external_key: problem_solving.production_troubleshooting.logged_success_customer_failure
+    competency_key: technical_support
+    topic: Server logs success while the customer saw a failure
+    difficulty: easy
+    text: >-
+      A customer says their payment failed and they got an error screen, but your server logs show the request
+      completed successfully and the charge went through. How would you explain and investigate the mismatch?
+    expected_concepts:
+      - the client or an intermediate proxy timed out before the server finished
+      - compare client timeout, proxy timeout and server processing time
+      - check for a retry that may have caused a duplicate charge
+      - tell the customer the true payment status
+      - idempotency keys and clearer pending states in the client
+    rubric:
+      excellent: Explains that the response was lost or timed out in between, checks timeouts at each layer and processing time for that request, checks for duplicates, resolves the customer's situation and proposes idempotency and better client handling.
+      good: Suspects a timeout between client and server and checks for a duplicate charge.
+      weak: Tells the customer the logs show success and closes the ticket.
+    followups:
+      - The customer retried and was charged twice. What do you do now and later?
+      - How can a client show a reliable status after a timeout?
+    common_errors:
+      - Treating server logs as proof of what the user experienced.
+
+  - external_key: problem_solving.production_troubleshooting.redirect_loop_after_https
+    competency_key: networking
+    topic: Redirect loop after moving TLS to the load balancer
+    difficulty: easy
+    text: >-
+      You moved TLS termination from the application servers to the load balancer, and now browsers report
+      "too many redirects" on every page. What do you think is happening, and how would you fix it?
+    expected_concepts:
+      - the app sees plain HTTP from the load balancer and redirects to HTTPS
+      - the load balancer forwards the request over HTTP again, creating a loop
+      - forwarded protocol headers (X-Forwarded-Proto) and trusting the proxy
+      - verify with curl and response headers
+      - test redirects as part of infrastructure changes
+    rubric:
+      excellent: Explains the loop caused by the app seeing HTTP behind the load balancer, confirms it with request traces or curl, fixes it by honouring forwarded headers from a trusted proxy, and suggests testing for it.
+      good: Identifies the HTTP-to-HTTPS redirect as the cause and suggests using forwarded headers.
+      weak: Clears browser cookies or disables HTTPS.
+    followups:
+      - Why should the application trust that header only from the load balancer?
+      - How would you verify the fix without a browser?
+    common_errors:
+      - Turning off HTTPS redirects entirely instead of fixing protocol detection.
+
+  - external_key: problem_solving.production_troubleshooting.high_error_rate_low_traffic
+    competency_key: observability
+    topic: Alarming error rate on very low traffic
+    difficulty: easy
+    text: >-
+      You get paged at four in the morning because a service's error rate hit fifty percent. When you look, the
+      service only received eight requests in that window. How would you decide what to do, tonight and
+      afterwards?
+    expected_concepts:
+      - small sample sizes make percentages noisy
+      - check whether the failing requests represent real user impact
+      - look at what the failures were (one client, a bot, a real bug)
+      - minimum request counts or absolute thresholds in alerts
+      - follow up on any genuine bug during working hours
+    rubric:
+      excellent: Checks the actual failures to judge real impact, explains why low volume makes ratios noisy, decides proportionately whether to act now, and fixes the alert with minimum volume or a different signal.
+      good: Recognises low traffic makes the ratio misleading and adjusts the alert.
+      weak: Either ignores the page without checking the errors or escalates it as a major outage.
+    followups:
+      - What if those four failed requests came from your largest customer?
+      - How would you alert on a low-traffic but important service?
+    common_errors:
+      - Silencing the alert without looking at the failed requests.
+
+  - external_key: problem_solving.production_troubleshooting.job_runs_on_every_replica
+    competency_key: distributed_systems
+    topic: Scheduled task running on every replica
+    difficulty: easy
+    text: >-
+      After you scaled a service from one instance to three, customers started receiving every daily summary
+      email three times. How would you confirm the cause and fix it properly?
+    expected_concepts:
+      - an in-process scheduler runs on each replica
+      - confirm with logs from each instance at send time
+      - move the job to a single scheduler or use leader election or a distributed lock
+      - make sending idempotent per customer per day
+      - check other in-process scheduled tasks for the same issue
+    rubric:
+      excellent: Ties the tripling to the replica count, confirms with per-instance logs, moves scheduling to one place or uses a lock, adds idempotent sending as a safety net and audits other scheduled tasks.
+      good: Identifies the job running on each replica and proposes a single scheduler.
+      weak: Scales back to one instance as the permanent fix.
+    followups:
+      - What happens with a distributed lock if the instance holding it crashes mid-send?
+      - What other background tasks would you check?
+    common_errors:
+      - Fixing only this job while other in-process tasks have the same flaw.
+
+  - external_key: problem_solving.production_troubleshooting.image_pull_failures_scaleup
+    competency_key: kubernetes
+    topic: New pods failing to pull images during scale-up
+    difficulty: easy
+    text: >-
+      During a traffic spike, your cluster tries to add pods, but many of the new ones fail to start because
+      they can't pull their container image. The existing pods are fine. How would you troubleshoot it?
+    expected_concepts:
+      - pod events showing the pull error message
+      - registry rate limits, authentication or credentials expiring
+      - network path from new nodes to the registry
+      - new nodes lacking cached images
+      - mirrors or pull-through caches and pre-pulling images
+    rubric:
+      excellent: Reads the exact pull error from events, distinguishes rate limiting, auth and network causes, explains why existing pods are unaffected, and proposes a registry mirror or pre-pulling for scale events.
+      good: Checks events and suspects rate limits or credentials.
+      weak: Deletes and recreates pods hoping the pull succeeds.
+    followups:
+      - Why does this only show up during scale-up?
+      - How would you remove the registry as a single point of failure?
+    common_errors:
+      - Not reading the event message that states why the pull failed.
+
+  - external_key: problem_solving.production_troubleshooting.error_log_flood
+    competency_key: observability
+    topic: Error logs flooding while users seem fine
+    difficulty: easy
+    text: >-
+      A service has started writing thousands of identical error lines per second, but user-facing metrics look
+      normal. How would you decide how urgent this is and what to do about it?
+    expected_concepts:
+      - check whether the error corresponds to failed user requests
+      - find what triggers it and when it started (deploy, dependency, data)
+      - side effects of the log volume itself (disk, logging cost, pipeline backpressure)
+      - rate limit or lower the log level as a stopgap
+      - fix the underlying cause rather than just hiding it
+    rubric:
+      excellent: Checks real user impact, finds the trigger and start time, notices the secondary risks from the log volume itself, applies a stopgap and fixes the cause.
+      good: Investigates the error and its start time and judges urgency.
+      weak: Mutes the log line or ignores it because users seem fine.
+    followups:
+      - The log volume is filling the disk and slowing the logging pipeline for other services. Does that change urgency?
+      - How would you prevent one service from overwhelming shared logging?
+    common_errors:
+      - Ignoring that excessive logging can itself cause an outage.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: problem_solving.production_troubleshooting.spot_capacity_reclaimed
+    competency_key: incident_response
+    topic: Losing interruptible capacity during peak
+    difficulty: medium
+    text: >-
+      Your batch and API workers run mostly on discounted interruptible cloud instances. During peak hours, the
+      provider reclaimed a large share of them at once and your service is degraded. What do you do now, and
+      what do you change afterwards?
+    expected_concepts:
+      - shift load to on-demand capacity immediately
+      - prioritise latency-sensitive work over batch work
+      - check whether interruption notices were handled gracefully
+      - diversify instance types and zones for interruptible capacity
+      - keep a baseline of stable capacity for critical services
+    rubric:
+      excellent: Restores capacity with on-demand instances, protects user-facing traffic by deferring batch work, and redesigns the capacity mix with diversification and a stable baseline for critical paths.
+      good: Launches on-demand instances and suggests a mix of capacity types.
+      weak: Waits for interruptible capacity to return or abandons it entirely without analysis.
+    followups:
+      - How would you decide what share of capacity can safely be interruptible?
+      - What should a worker do when it receives an interruption notice?
+    common_errors:
+      - Running critical user-facing traffic entirely on interruptible capacity.
+
+  - external_key: problem_solving.production_troubleshooting.cloud_quota_blocks_scaleup
+    competency_key: incident_response
+    topic: Account limits blocking recovery
+    difficulty: medium
+    text: >-
+      In the middle of an incident you try to launch more instances to absorb load, and the cloud provider
+      rejects the request because you've hit an account limit. How would you proceed?
+    expected_concepts:
+      - read the exact limit being hit (instance type, region, IPs, volumes)
+      - request an urgent increase through the provider's support path
+      - free capacity elsewhere (non-critical workloads, other instance types or regions)
+      - reduce demand while capacity is constrained
+      - track limits against headroom so this is caught beforehand
+    rubric:
+      excellent: Identifies which limit applies, pursues an urgent increase while freeing or substituting capacity and shedding non-critical load, and sets up limit monitoring relative to failure scenarios.
+      good: Requests a limit increase and looks for alternative instance types.
+      weak: Keeps retrying the launch or waits for the provider without any other action.
+    followups:
+      - Which non-critical workloads would you turn off first?
+      - How would you know you're close to a limit next time?
+    common_errors:
+      - Not tracking provider quotas as part of capacity planning.
+
+  - external_key: problem_solving.production_troubleshooting.node_not_ready_several
+    competency_key: kubernetes
+    topic: Several nodes going NotReady together
+    difficulty: medium
+    text: >-
+      Within a couple of minutes, five nodes in your Kubernetes cluster went NotReady, and their pods are being
+      rescheduled onto the remaining nodes, which are now overloaded. How would you approach this?
+    expected_concepts:
+      - look for what the failing nodes share (zone, node pool, image, recent change)
+      - kubelet and container runtime status and node conditions
+      - resource pressure, network partition to the control plane, or a bad agent rollout
+      - protect remaining capacity (pause rescheduling of low-priority work, add nodes)
+      - pod priority, disruption budgets and spreading across zones
+    rubric:
+      excellent: Looks for the common factor between the failed nodes, checks node conditions and kubelet logs, protects the remaining nodes from overload, and discusses priorities and spreading to limit future impact.
+      good: Checks node conditions and kubelet logs and looks for a shared cause.
+      weak: Reboots nodes one by one without identifying why they failed together.
+    followups:
+      - All five nodes got a new monitoring agent version an hour ago. What next?
+      - How do you stop rescheduled pods from taking down healthy nodes too?
+    common_errors:
+      - Treating a correlated failure as five independent node problems.
+
+  - external_key: problem_solving.production_troubleshooting.bastion_unavailable_during_incident
+    competency_key: incident_response
+    topic: Losing access to production during an incident
+    difficulty: medium
+    text: >-
+      You're paged for a production issue, and when you try to get onto the servers, your single sign-on and
+      bastion access are also failing. How would you go about investigating and restoring access?
+    expected_concepts:
+      - check if access failure and the production issue share a cause
+      - use whatever access remains (cloud console, managed tooling, read-only dashboards)
+      - documented break-glass access with audit and approval
+      - coordinate with the identity or security team
+      - afterwards, test emergency access paths regularly
+    rubric:
+      excellent: Considers whether both failures share a cause, uses remaining access paths, follows a controlled break-glass procedure with audit, and proposes regular testing of emergency access.
+      good: Uses alternative access through the cloud console and involves the right team.
+      weak: Tries to bypass security controls in an ad hoc way or simply waits.
+    followups:
+      - What makes a break-glass procedure safe rather than a security hole?
+      - How would you test emergency access without causing an incident?
+    common_errors:
+      - Inventing shortcuts around access controls under pressure.
+
+  - external_key: problem_solving.production_troubleshooting.table_bloat_gradual_slowdown
+    competency_key: databases
+    topic: Gradual slowdown from table bloat
+    difficulty: medium
+    text: >-
+      Queries against a heavily updated PostgreSQL table have slowly got slower over several weeks. The table
+      takes up five times more disk space than before, even though the row count is about the same. How would
+      you investigate?
+    expected_concepts:
+      - dead tuples from updates and deletes not being reclaimed
+      - autovacuum not keeping up, or blocked by long-running transactions
+      - check bloat estimates, vacuum statistics and oldest transaction age
+      - online repacking or tuning autovacuum for the table
+      - find and fix what blocks cleanup
+    rubric:
+      excellent: Explains how updates leave dead rows, checks vacuum statistics and long-open transactions that prevent cleanup, reclaims space safely online and tunes autovacuum for the table.
+      good: Identifies bloat and suggests vacuuming or repacking.
+      weak: Adds indexes or hardware without explaining why size grew with a flat row count.
+    followups:
+      - An idle-in-transaction session has been open for three weeks. Why does that matter?
+      - Why isn't a full vacuum a great idea on a busy table?
+    common_errors:
+      - Running a blocking full rewrite on a busy production table.
+
+  - external_key: problem_solving.production_troubleshooting.deadlock_errors_after_release
+    competency_key: databases
+    topic: Deadlocks appearing after a release
+    difficulty: medium
+    text: >-
+      After a release, the database started reporting deadlocks several times a minute, and some customer
+      operations fail with errors. How would you find the conflicting code paths and fix them?
+    expected_concepts:
+      - database deadlock reports show the statements and locks involved
+      - two transactions locking rows or tables in different orders
+      - map statements back to code paths changed in the release
+      - consistent lock ordering, smaller transactions or retries on deadlock
+      - mitigate by rolling back if impact is high
+    rubric:
+      excellent: Uses the deadlock reports to identify both transactions, maps them to the changed code, explains the lock ordering conflict and fixes it with consistent ordering or shorter transactions, with retries as a safety net.
+      good: Reads the deadlock logs and identifies the conflicting queries.
+      weak: Only adds retries or rolls back without understanding the conflict.
+    followups:
+      - Why are retries alone not a complete fix?
+      - How could you catch this before a release?
+    common_errors:
+      - Treating deadlocks as a database bug rather than an access-order problem.
+
+  - external_key: problem_solving.production_troubleshooting.cache_hit_ratio_drop
+    competency_key: observability
+    topic: Falling cache hit ratio
+    difficulty: medium
+    text: >-
+      Over one afternoon, your cache hit ratio dropped from ninety-five percent to about sixty, and database
+      load climbed accordingly. No code was deployed. How would you work out why?
+    expected_concepts:
+      - cache memory full and evicting keys
+      - change in access pattern (new traffic, crawler, campaign hitting cold keys)
+      - key cardinality explosion (unique parameters in keys)
+      - cache node restarts or TTL changes
+      - eviction, memory and key count metrics
+    rubric:
+      excellent: Checks evictions, memory and key counts, examines what traffic is missing the cache, distinguishes capacity problems from access pattern or key design changes, and protects the database meanwhile.
+      good: Checks memory and evictions and considers traffic changes.
+      weak: Just adds cache memory without finding the cause.
+    followups:
+      - A crawler is requesting millions of unique URLs. What do you do?
+      - How would you protect the database while the hit ratio is low?
+    common_errors:
+      - Assuming more memory fixes a key design or traffic pattern problem.
+
+  - external_key: problem_solving.production_troubleshooting.old_app_versions_break
+    competency_key: api_design
+    topic: Backend change breaking older client versions
+    difficulty: medium
+    text: >-
+      After a backend release, users on mobile app versions from last year start seeing crashes, while current
+      versions work fine. You can't force everyone to update. How would you investigate and resolve it?
+    expected_concepts:
+      - segment crash reports and API errors by app version
+      - diff API responses between releases (removed or renamed fields, new enum values)
+      - restore compatibility on the server side quickly
+      - versioned contracts and supporting a defined range of client versions
+      - contract tests against older clients
+    rubric:
+      excellent: Uses version segmentation to locate the breaking change, restores compatibility server-side, and proposes contract testing and a policy for supported client versions.
+      good: Identifies an API contract change and reverts it.
+      weak: Pushes a forced update or tells users to upgrade as the only fix.
+    followups:
+      - The change was a new value in an enum field. Why would that crash an older client?
+      - How do you decide when to stop supporting an old app version?
+    common_errors:
+      - Assuming adding fields or enum values is always backward compatible.
+
+  - external_key: problem_solving.production_troubleshooting.rollback_did_not_fix
+    competency_key: incident_response
+    topic: Rollback that did not help
+    difficulty: medium
+    text: >-
+      Errors started right after a deploy, so you rolled back, but the errors are still there fifteen minutes
+      later. How do you think about what to do next?
+    expected_concepts:
+      - verify the rollback actually completed everywhere
+      - the deploy may have changed state that persists (data, schema, cache, config)
+      - the timing may be coincidental with another change or external event
+      - widen the search to other changes and dependencies
+      - keep stakeholders updated as the hypothesis changes
+    rubric:
+      excellent: Confirms the rollback took effect, considers persistent side effects of the deploy and unrelated causes that coincided, broadens the search systematically, and communicates the changed picture.
+      good: Checks that the rollback completed and looks for other changes.
+      weak: Keeps assuming the deploy is the cause or rolls back further without evidence.
+    followups:
+      - The deploy ran a data migration. How does that change things?
+      - How would you find other changes made in the same window?
+    common_errors:
+      - Anchoring on the first hypothesis after evidence has contradicted it.
+
+  - external_key: problem_solving.production_troubleshooting.several_changes_before_incident
+    competency_key: problem_solving
+    topic: Several changes before an incident
+    difficulty: medium
+    text: >-
+      In the hour before an incident started, there was an application deploy, a load balancer configuration
+      change, and a vendor library update in another service. How would you figure out which one, if any,
+      caused it?
+    expected_concepts:
+      - align exact timings of each change with the first symptom
+      - match the symptom's scope to each change's blast radius
+      - evidence from logs, traces and metrics for each hypothesis
+      - revert the most likely and least risky change first if impact is high
+      - better change tracking so the timeline is easy to build
+    rubric:
+      excellent: Builds a precise timeline, compares each change's scope with the symptom's scope, gathers evidence for each hypothesis, and chooses which change to revert first by likelihood and risk.
+      good: Builds a timeline and checks each change for correlation.
+      weak: Reverts all three at once or picks one based on a hunch.
+    followups:
+      - Reverting all three is easy. Why might you still avoid that?
+      - How would a change log across teams help next time?
+    common_errors:
+      - Ignoring changes made by other teams or vendors.
+
+  - external_key: problem_solving.production_troubleshooting.overnight_cloud_cost_spike
+    competency_key: problem_solving
+    topic: Sudden overnight cloud cost spike
+    difficulty: medium
+    text: >-
+      Your cloud bill dashboard shows yesterday's spend was four times normal, almost all from data transfer.
+      Nothing obvious was released. How would you find what's generating the traffic and stop it?
+    expected_concepts:
+      - break down cost by service, region, resource and transfer type
+      - flow logs or network metrics to find top talkers
+      - common causes (retry loops, misconfigured replication, cross-region traffic, public exposure)
+      - check for security issues such as data exfiltration or abuse
+      - budgets and anomaly alerts on spend
+    rubric:
+      excellent: Narrows cost down by dimension, uses flow data to find the source, considers both bugs and security abuse, stops the traffic safely and adds spend anomaly alerting.
+      good: Breaks down the bill and finds the resource generating traffic.
+      weak: Waits for the monthly bill review or guesses without data.
+    followups:
+      - The traffic goes to an unknown external address. What changes about your response?
+      - How quickly would you want to be alerted about cost anomalies?
+    common_errors:
+      - Ruling out a security cause without checking.
+
+  - external_key: problem_solving.production_troubleshooting.search_missing_new_items
+    competency_key: distributed_systems
+    topic: Search index falling behind the database
+    difficulty: medium
+    text: >-
+      Sellers complain that products they created this morning still don't show up in search, although the
+      product pages exist. How would you work out where the indexing pipeline is stuck?
+    expected_concepts:
+      - trace a missing product from database to change events to indexer to index
+      - check lag and errors at each stage
+      - indexer rejecting documents (mapping errors, size limits)
+      - backfill or reindex the missing items
+      - freshness monitoring for the index
+    rubric:
+      excellent: Follows a specific missing item through each stage, finds where it stopped and why, backfills safely and adds end-to-end freshness monitoring.
+      good: Checks indexer lag and errors and reindexes.
+      weak: Triggers a full reindex without finding why items were missed.
+    followups:
+      - Only products with a certain category are missing. What does that suggest?
+      - How would you measure index freshness continuously?
+    common_errors:
+      - Running a full reindex that hides the cause and loads the cluster.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: problem_solving.production_troubleshooting.accidental_bulk_delete
+    competency_key: incident_response
+    topic: Accidental bulk deletion in production
+    difficulty: hard
+    text: >-
+      An engineer ran a cleanup script against production and accidentally deleted about forty thousand customer
+      records. The application is still running and new writes keep arriving. Walk me through how you would
+      respond.
+    expected_concepts:
+      - stop further damage (halt the script, block related jobs)
+      - decide recovery source (point-in-time restore, backups, replicas, event logs)
+      - restore into a separate place and merge back rather than overwriting live data
+      - handle writes made since the deletion and dependent data
+      - communication, customer impact assessment and safeguards afterwards
+    rubric:
+      excellent: Stops the damage, picks a recovery source, restores into a separate environment and reconciles carefully with writes since, considers dependent data and customer impact, and proposes safeguards such as reviewed scripts and soft deletes, without blaming the engineer.
+      good: Restores from backup and reconciles, with some safeguards.
+      weak: Restores the whole database over production and loses newer writes, or focuses on blame.
+    followups:
+      - Why not just restore the whole database to the moment before the delete?
+      - How would you verify the recovered data is complete?
+    common_errors:
+      - Overwriting live data with a backup and losing writes made since.
+
+  - external_key: problem_solving.production_troubleshooting.coordination_service_latency
+    competency_key: distributed_systems
+    topic: Coordination service slowness causing leader churn
+    difficulty: hard
+    text: >-
+      Across several systems that rely on your etcd or ZooKeeper cluster, you see frequent leader elections,
+      lock timeouts and services briefly going read-only. How would you investigate the coordination layer?
+    expected_concepts:
+      - coordination service latency (disk fsync, network, CPU) and its own leader changes
+      - session or lease timeouts expiring under latency
+      - clients overloading it (too many watches, large values, high write rate)
+      - check its metrics and logs for slow disk or elections
+      - isolate it on fast dedicated disks and reduce client load
+    rubric:
+      excellent: Explains how coordination latency cascades into lease expiry and elections across clients, checks disk, network and client load metrics on the cluster, and both stabilises it and reduces misuse by clients.
+      good: Suspects the coordination cluster and checks its latency and elections.
+      weak: Tunes timeouts in each client without examining the shared cluster.
+    followups:
+      - Disk fsync latency on the cluster nodes is spiking. What would cause that?
+      - Is raising every client's session timeout a good fix?
+    common_errors:
+      - Treating the symptoms in each dependent system separately.
+
+  - external_key: problem_solving.production_troubleshooting.active_active_write_conflicts
+    competency_key: distributed_systems
+    topic: Conflicting writes in an active-active setup
+    difficulty: hard
+    text: >-
+      You run an active-active setup across two regions. Customers occasionally report that a change they made
+      to their account settings reverted a few minutes later. How would you investigate and fix this?
+    expected_concepts:
+      - concurrent writes in both regions and the conflict resolution rule (last write wins)
+      - clock skew affecting timestamp-based resolution
+      - users or background jobs writing in both regions
+      - audit logs to reconstruct the conflicting writes
+      - region affinity per user, versioning or merge strategies
+    rubric:
+      excellent: Reconstructs the conflicting writes from logs, explains how the resolution rule and clock skew lose updates, identifies what writes in both regions, and proposes home-region routing or versioned merges.
+      good: Identifies write conflicts and suggests routing users to one region.
+      weak: Treats it as a caching bug without considering cross-region conflicts.
+    followups:
+      - A background sync job writes in both regions. How does that change your fix?
+      - What are the costs of pinning each user to a home region?
+    common_errors:
+      - Trusting wall-clock timestamps across regions for conflict resolution.
+
+  - external_key: problem_solving.production_troubleshooting.slow_latency_creep_weeks
+    competency_key: problem_solving
+    topic: Latency creeping up with no clear change
+    difficulty: hard
+    text: >-
+      Over the past six weeks, your API's median latency has crept up by about forty percent, a little each day,
+      with no single deploy or event that lines up. How would you go about finding the cause?
+    expected_concepts:
+      - break latency down by endpoint, tenant and dependency to find where growth lives
+      - correlate with gradually growing quantities (data size, table size, cache keys, tenant size)
+      - compare traces or profiles from six weeks ago and now
+      - consider many small regressions adding up across deploys
+      - performance budgets or benchmarks to catch drift
+    rubric:
+      excellent: Decomposes latency to locate the growth, tests hypotheses about gradually growing data or accumulated small regressions using historical traces and profiles, and proposes guardrails against drift.
+      good: Breaks latency down by endpoint and suspects data growth.
+      weak: Looks for a single culprit change and gives up when none appears.
+    followups:
+      - The growth is all in one query whose table grows steadily. What would you do?
+      - How would you detect slow drift earlier?
+    common_errors:
+      - Only looking for a step change when the problem is gradual.
+
+  - external_key: problem_solving.production_troubleshooting.bimodal_latency_distribution
+    competency_key: observability
+    topic: Two clusters in the latency distribution
+    difficulty: hard
+    text: >-
+      Looking at a latency histogram for one endpoint, you see two distinct humps, one around twenty
+      milliseconds and another around four hundred. Averages and percentiles alone didn't show this. How would
+      you explain the second hump?
+    expected_concepts:
+      - two populations of requests taking different paths
+      - candidates (cache hit versus miss, cold instances, one slow dependency or zone, retries)
+      - split the data by dimensions (instance, zone, tenant, cache status) until humps separate
+      - traces of requests from each hump
+      - a fixed gap like four hundred milliseconds can indicate a timeout and retry
+    rubric:
+      excellent: Interprets two humps as two request populations, slices by dimensions to find what separates them, uses traces to confirm, and notices that a constant offset may indicate a timeout and retry.
+      good: Suggests cache misses or a slow subset and investigates by slicing the data.
+      weak: Reports a single percentile and does not explain the distribution.
+    followups:
+      - The slow hump is almost exactly the client's retry timeout plus the fast hump. What does that suggest?
+      - How would you add the right dimensions to your metrics without blowing up cardinality?
+    common_errors:
+      - Summarising a multimodal distribution with one number.
+
+  - external_key: problem_solving.production_troubleshooting.disk_growth_stable_data
+    competency_key: databases
+    topic: Database disk growing without data growth
+    difficulty: hard
+    text: >-
+      The disk on your primary database is filling fast, and at this rate it will be full in about six hours,
+      yet the actual table and index sizes have barely changed. How would you find what's consuming the space
+      and avoid an outage?
+    expected_concepts:
+      - write-ahead or binary logs being retained
+      - a replication slot or lagging replica preventing log cleanup
+      - failing archiving or backup jobs keeping logs
+      - temporary files from large queries
+      - buy time (expand disk) while removing the retention cause safely
+    rubric:
+      excellent: Measures what is using the space, identifies retained logs held back by an inactive replication slot, lagging replica or failing archive, buys time by expanding storage and fixes the retention cause without losing replica consistency.
+      good: Suspects retained logs or a replication problem and expands the disk.
+      weak: Deletes log files by hand or only expands the disk without finding the cause.
+    followups:
+      - The slot belongs to a decommissioned replica. What do you do, and what are the risks?
+      - What alerts would have caught this earlier?
+    common_errors:
+      - Manually deleting database log files from the filesystem.

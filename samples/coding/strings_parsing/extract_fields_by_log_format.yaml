@@ -1,0 +1,208 @@
+version: 1
+slug: extract_fields_by_log_format
+title: "Extract Fields by Log Format"
+difficulty: hard
+competency_keys: [algorithms, problem_solving]
+role_tags: [sre, backend, data]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Extract Fields by Log Format
+
+  A log shipping pipeline lets each team describe its log lines with a small **format string** instead of
+  a regular expression, for example:
+
+  ```
+  {ip} - [{time}] "{req}" {status}
+  ```
+
+  - `{name}` is a **placeholder**: it matches any **non-empty** run of characters (any character,
+    including spaces and braces in the line).
+  - Every other character of the format is **literal** and must appear in the line exactly
+    (case-sensitive).
+  - Two placeholders are never directly next to each other in the format.
+  - The **whole** line must be matched, from its first character to its last.
+
+  A line can often be split in more than one way. The pipeline always picks the split in which the
+  **first** placeholder takes the **shortest** value possible; among those, the second placeholder takes
+  the shortest value possible, and so on.
+
+  Write `extract_format_fields(log_format, line)` that returns the placeholder values **in the order the
+  placeholders appear in the format**, or an empty list if the line cannot be matched at all.
+
+  ### Example 1
+  ```
+  Input:  log_format = "{ip} - [{time}] \"{req}\" {status}"
+          line = "10.0.0.7 - [12/Mar/2026:10:00:01] \"GET /health HTTP/1.1\" 200"
+  Output: ["10.0.0.7", "12/Mar/2026:10:00:01", "GET /health HTTP/1.1", "200"]
+  ```
+
+  ### Example 2
+  ```
+  Input:  log_format = "{service}-{env}", line = "billing-api-prod"
+  Output: ["billing", "api-prod"]
+  Explanation: "billing" / "api-prod" and "billing-api" / "prod" both match; the first placeholder
+  takes the shortest value, so "billing" wins
+  ```
+
+  ### Example 3
+  ```
+  Input:  log_format = "[{level}] {msg}", line = "INFO started"
+  Output: []
+  Explanation: the line does not start with the literal "["
+  ```
+
+  ### Constraints
+  - `1 <= log_format.length <= 200`, `0 <= line.length <= 5000`
+  - Both strings consist of printable ASCII characters.
+  - In `log_format`, `{` and `}` only appear as placeholder delimiters; every placeholder name is
+    1 to 20 characters from `a-z`, `0-9` and `_`.
+  - `log_format` contains at least one placeholder and at most 50, and no two placeholders are adjacent.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: extract_format_fields
+  params:
+    - {name: log_format, type: string}
+    - {name: line, type: string}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def extract_format_fields(log_format: str, line: str) -> list[str]:
+        # Split the format into literals around the placeholders: L0 {p1} L1 {p2} ... {pk} Lk.
+        literals: list[str] = []
+        current: list[str] = []
+        i = 0
+        while i < len(log_format):
+            if log_format[i] == "{":
+                literals.append("".join(current))
+                current = []
+                i = log_format.index("}", i) + 1
+            else:
+                current.append(log_format[i])
+                i += 1
+        literals.append("".join(current))
+        k = len(literals) - 1
+        n = len(line)
+        if not line.startswith(literals[0]):
+            return []
+
+        # can_start[pos]: placeholders p..k and their literals can match line[pos:] exactly.
+        # good[p][e]: placeholder p may end right before e (literal p matches at e and the rest fits).
+        can_start = [False] * (n + 2)
+        can_start[n] = True  # after the last literal we must be at the end of the line
+        good: list[list[bool]] = [[] for _ in range(k + 1)]
+        for p in range(k, 0, -1):
+            lit = literals[p]
+            ok = [False] * (n + 1)
+            for e in range(n - len(lit) + 1):
+                if can_start[e + len(lit)] and line.startswith(lit, e):
+                    ok[e] = True
+            good[p] = ok
+            starts = [False] * (n + 2)
+            seen = False
+            for pos in range(n, -1, -1):
+                starts[pos] = seen  # some end e > pos works, so the value is non-empty
+                seen = seen or ok[pos]
+            can_start = starts
+
+        pos = len(literals[0])
+        if not can_start[pos]:
+            return []
+        values: list[str] = []
+        for p in range(1, k + 1):
+            end = pos + 1
+            while not good[p][end]:
+                end += 1
+            values.append(line[pos:end])
+            pos = end + len(literals[p])
+        return values
+  javascript: |
+    function extractFormatFields(logFormat, line) {
+      const literals = [];
+      let current = "";
+      for (let i = 0; i < logFormat.length; i++) {
+        if (logFormat[i] === "{") {
+          literals.push(current);
+          current = "";
+          i = logFormat.indexOf("}", i);
+        } else {
+          current += logFormat[i];
+        }
+      }
+      literals.push(current);
+      const k = literals.length - 1;
+      const n = line.length;
+      if (!line.startsWith(literals[0])) return [];
+
+      let canStart = new Uint8Array(n + 2);
+      canStart[n] = 1;
+      const good = new Array(k + 1);
+      for (let p = k; p >= 1; p--) {
+        const lit = literals[p];
+        const ok = new Uint8Array(n + 1);
+        for (let e = 0; e + lit.length <= n; e++) {
+          if (canStart[e + lit.length] && line.startsWith(lit, e)) ok[e] = 1;
+        }
+        good[p] = ok;
+        const starts = new Uint8Array(n + 2);
+        let seen = 0;
+        for (let pos = n; pos >= 0; pos--) {
+          starts[pos] = seen;
+          if (ok[pos]) seen = 1;
+        }
+        canStart = starts;
+      }
+
+      let pos = literals[0].length;
+      if (!canStart[pos]) return [];
+      const values = [];
+      for (let p = 1; p <= k; p++) {
+        let end = pos + 1;
+        while (!good[p][end]) end++;
+        values.push(line.slice(pos, end));
+        pos = end + literals[p].length;
+      }
+      return values;
+    }
+tests:
+  - {id: t1, args: ["{ip} - [{time}] \"{req}\" {status}", "10.0.0.7 - [12/Mar/2026:10:00:01] \"GET /health HTTP/1.1\" 200"], expected: ["10.0.0.7", "12/Mar/2026:10:00:01", "GET /health HTTP/1.1", "200"], description: "Example 1 - access log with literals between every field"}
+  - {id: t2, args: ["{service}-{env}", "billing-api-prod"], expected: ["billing", "api-prod"], description: "Example 2 - ambiguous split, first placeholder takes the shortest value"}
+  - {id: t3, args: ["[{level}] {msg}", "INFO started"], expected: [], description: "Example 3 - leading literal missing, no match"}
+  - {id: t4, hidden: true, args: ["{name}.tar.gz", "backup.tar.gz.tar.gz"], expected: ["backup.tar.gz"], description: "Trailing literal must sit at the very end, so the first occurrence is not the answer"}
+  - {id: t5, hidden: true, args: ["{a}/{b}/{c}", "p//q/r"], expected: ["p", "/q", "r"], description: "Literal right after a placeholder start would give an empty value; must skip to the next occurrence"}
+  - {id: t6, hidden: true, args: ["{key}={value}", "retries="], expected: [], description: "Last placeholder would be empty - no match"}
+  - {id: t7, hidden: true, args: ["{all}", "any {thing} goes"], expected: ["any {thing} goes"], description: "Whole line is one placeholder; braces and spaces inside the value"}
+  - {id: t8, hidden: true, args: ["{all}", ""], expected: [], description: "Empty line cannot fill a non-empty placeholder"}
+  - {id: t9, hidden: true, args: ["GET {path} {code}", "get /x 200"], expected: [], description: "Literals are case-sensitive"}
+  - {id: t10, hidden: true, args: ["{a}-{b}-{c}-{d}-{e}-{f}-{g}|{h}", "x-|-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-y-yz"], expected: [], description: "Stress: 600-character line whose only '|' is too early - exponential for unmemoised backtracking, expect no match"}
+expected_concepts:
+  - "splitting the format into alternating literals and placeholders"
+  - "suffix feasibility (dynamic programming from the right) over line positions"
+  - "greedy leftmost-shortest reconstruction guided by the feasibility table"
+  - "avoiding exponential backtracking when a match fails"
+  - "anchoring both ends of the line and enforcing non-empty values"
+optimal_complexity: {time: "O(n * f) where n is the line length and f the format length", space: "O(n * k) for k placeholders (O(n) with a smarter reconstruction)"}
+rubric:
+  excellent: "Parses the format into literals, precomputes from the right which (placeholder, position) states can still finish the line, then rebuilds the answer left to right by taking the earliest feasible end for each placeholder; explains why this gives the shortest-first split and why it stays polynomial when the line does not match."
+  good: "Correct recursive search that tries the shortest value first and memoises on (placeholder index, position), or the DP with a small fix after running the tests (for example the non-empty rule or the end anchor)."
+  weak: "Takes the first occurrence of each literal without checking that the rest can still match, allows empty values, ignores the end of the line, or uses unmemoised backtracking that times out on lines that do not match."
+  criteria:
+    correctness: "All tests pass, including tie-breaking, literals at both ends, empty-value rejection and lines that do not match."
+    efficiency: "Polynomial in the line and format length; no exponential backtracking on long non-matching lines."
+    code_quality: "Format parsing is separated from matching; clear names for literals, positions and the feasibility table."
+    edge_cases: "Leading and trailing literals, a format that is a single placeholder, braces and spaces inside values, empty line, repeated literals."
+    communication: "States the tie-breaking rule precisely and explains why the feasibility check makes the greedy reconstruction safe."
+hints:
+  - "Break the format into the literal pieces that sit between the placeholders; the line must then be cut so that each literal piece sits at a specific position, with a non-empty gap before each one that becomes a placeholder value."
+  - "Taking the first occurrence of the next literal is not enough, because that choice can make the rest of the line impossible to match; you need to know, for every placeholder and every starting position in the line, whether the remaining part of the format can still match the rest of the line."
+  - "Fill a feasibility table from the last placeholder backwards over line positions, marking where each literal can sit so that the rest still fits and the line ends exactly; then walk forwards and give each placeholder the earliest end position (at least one character long) that the table marks as feasible, which yields the shortest-first split in polynomial time."
+followups:
+  - "How would you support an escape so that a literal brace can appear in the format?"
+  - "What changes if some placeholders are typed, for example a number-only placeholder?"
+  - "How would you match one format against millions of lines efficiently, for example by compiling it once?"
+  - "How would the answer differ if the last placeholder had to take the longest value instead?"
+common_errors:
+  - "Searching for the next literal starting at the current position, which produces an empty placeholder value."
+  - "Taking the first occurrence of each literal without checking that the remaining format can still match, so a valid line is rejected."
+  - "Forgetting that the last literal (or the last placeholder) must reach exactly the end of the line."
+  - "Plain backtracking without memoisation, which explodes on long lines that do not match."

@@ -1,0 +1,283 @@
+version: 1
+slug: plan_tier_as_of_date
+title: Plan Tier as of a Date
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data, backend, product_manager]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Plan Tier as of a Date
+
+  Finance is reconciling the invoices issued on **15 February 2026** and needs to know which plan tier
+  each account was on that day. Plan history is kept as validity ranges.
+
+  Table `subscription_history`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | account_id | INTEGER | the customer account |
+  | tier | VARCHAR(20) | plan tier, for example `starter`, `growth`, `enterprise` |
+  | valid_from | TEXT | `'YYYY-MM-DD'`, first day the row applies (**inclusive**) |
+  | valid_to | TEXT | `'YYYY-MM-DD'`, first day the row no longer applies (**exclusive**); **NULL** while the row is still open |
+
+  `(account_id, valid_from)` is the primary key. A row applies on day `D` when
+  `valid_from <= D < valid_to`, or `valid_from <= D` when `valid_to` is NULL. A row with
+  `valid_to = valid_from` never applies. Dates are fixed-width text, so comparing them as text
+  compares them in time.
+
+  The history is written by two systems, so an account's rows can **overlap**: a plan change is
+  sometimes recorded before the previous row has been closed. When several rows of the same account
+  apply on the day, the one with the **latest `valid_from`** wins.
+
+  Return `account_id` and `tier` for every account that has at least one row applying on
+  `'2026-02-15'`, one row per account. Accounts with no applying row (not started yet, cancelled
+  earlier, or in a gap) are left out. Sort by `account_id` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  subscription_history
+  +------------+------------+------------+------------+
+  | account_id | tier       | valid_from | valid_to   |
+  +------------+------------+------------+------------+
+  | 1          | starter    | 2025-11-01 | 2026-02-15 |
+  | 1          | growth     | 2026-02-15 | NULL       |
+  | 2          | growth     | 2025-06-01 | 2026-01-31 |
+  | 3          | enterprise | 2026-02-16 | NULL       |
+  | 4          | starter    | 2026-01-10 | NULL       |
+  +------------+------------+------------+------------+
+
+  Output
+  +------------+---------+
+  | account_id | tier    |
+  +------------+---------+
+  | 1          | growth  |
+  | 4          | starter |
+  +------------+---------+
+  Account 1's starter row ends on 2026-02-15 (exclusive) and its growth row starts that day.
+  Account 2 lapsed in January and account 3 only starts on 2026-02-16.
+  ```
+
+  ### Example 2
+  ```
+  subscription_history
+  +------------+---------+------------+------------+
+  | account_id | tier    | valid_from | valid_to   |
+  +------------+---------+------------+------------+
+  | 5          | starter | 2025-12-01 | NULL       |
+  | 5          | growth  | 2026-02-01 | 2026-03-01 |
+  | 6          | growth  | 2026-02-15 | 2026-02-16 |
+  +------------+---------+------------+------------+
+
+  Output
+  +------------+--------+
+  | account_id | tier   |
+  +------------+--------+
+  | 5          | growth |
+  | 6          | growth |
+  +------------+--------+
+  Both of account 5's rows apply on the day; the growth row started later, so it wins.
+  Account 6's row covers exactly one day, 2026-02-15.
+  ```
+
+  ### Constraints
+  - `0 <= rows in subscription_history <= 10^5`
+  - `valid_to` is NULL or `>= valid_from`
+  - the date `'2026-02-15'` is fixed; you may write it as a literal
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return account_id and tier for every account with a row applying on 2026-02-15, ordered by account_id.
+    SELECT s.account_id, s.tier
+    FROM subscription_history s
+    WHERE s.valid_to IS NULL
+    ORDER BY s.account_id;
+reference_solutions:
+  sql: |
+    SELECT s.account_id, s.tier
+    FROM subscription_history s
+    WHERE s.valid_from <= '2026-02-15'
+      AND (s.valid_to IS NULL OR s.valid_to > '2026-02-15')
+      AND NOT EXISTS (
+        SELECT 1
+        FROM subscription_history t
+        WHERE t.account_id = s.account_id
+          AND t.valid_from > s.valid_from
+          AND t.valid_from <= '2026-02-15'
+          AND (t.valid_to IS NULL OR t.valid_to > '2026-02-15')
+      )
+    ORDER BY s.account_id;
+sql_setup: |
+  CREATE TABLE subscription_history (
+    account_id INTEGER NOT NULL,
+    tier VARCHAR(20) NOT NULL,
+    valid_from TEXT NOT NULL,
+    valid_to TEXT,
+    PRIMARY KEY (account_id, valid_from)
+  );
+tests:
+  - id: t1
+    description: "Example 1 - change exactly on the day, lapsed account, account starting the next day, open row"
+    setup_sql: |
+      INSERT INTO subscription_history (account_id, tier, valid_from, valid_to) VALUES
+        (1, 'starter', '2025-11-01', '2026-02-15'), (1, 'growth', '2026-02-15', NULL), (2, 'growth', '2025-06-01', '2026-01-31'), (3, 'enterprise', '2026-02-16', NULL),
+        (4, 'starter', '2026-01-10', NULL);
+    expected_rows: [[1, "growth"], [4, "starter"]]
+    ordered: true
+  - id: t2
+    description: "Example 2 - overlapping rows (latest valid_from wins) and a one-day row"
+    setup_sql: |
+      INSERT INTO subscription_history (account_id, tier, valid_from, valid_to) VALUES
+        (5, 'starter', '2025-12-01', NULL), (5, 'growth', '2026-02-01', '2026-03-01'), (6, 'growth', '2026-02-15', '2026-02-16');
+    expected_rows: [[5, "growth"], [6, "growth"]]
+    ordered: true
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    expected_rows: []
+    ordered: true
+  - id: t4
+    hidden: true
+    description: "Zero-length rows (valid_from = valid_to) never apply - alone the account is omitted; next to an open older row the older row wins"
+    setup_sql: |
+      INSERT INTO subscription_history (account_id, tier, valid_from, valid_to) VALUES
+        (10, 'growth', '2026-02-15', '2026-02-15'), (11, 'starter', '2025-01-01', NULL), (11, 'enterprise', '2026-02-15', '2026-02-15');
+    expected_rows: [[11, "starter"]]
+    ordered: true
+  - id: t5
+    hidden: true
+    description: "Latest-row trap - the account's newest row has already ended or starts in the future, so an older open row is the answer (picking the newest row first and then filtering loses the account)"
+    setup_sql: |
+      INSERT INTO subscription_history (account_id, tier, valid_from, valid_to) VALUES
+        (20, 'starter', '2025-01-01', NULL), (20, 'growth', '2026-01-01', '2026-02-01'), (21, 'starter', '2025-01-01', NULL), (21, 'enterprise', '2026-03-01', NULL);
+    expected_rows: [[20, "starter"], [21, "starter"]]
+    ordered: true
+  - id: t6
+    hidden: true
+    description: "Boundary days - valid_from on the day applies, valid_to the next day applies, valid_to on the day does not, valid_from the next day does not"
+    setup_sql: |
+      INSERT INTO subscription_history (account_id, tier, valid_from, valid_to) VALUES
+        (30, 'starter', '2026-02-15', '2026-03-01'), (31, 'growth', '2026-01-01', '2026-02-16'), (32, 'growth', '2026-01-01', '2026-02-15'), (33, 'enterprise', '2026-02-16', '2026-04-01'),
+        (34, 'starter', '2026-02-14', '2026-02-15');
+    expected_rows: [[30, "starter"], [31, "growth"]]
+    ordered: true
+  - id: t7
+    hidden: true
+    description: "Three overlapping open rows plus closed history - only the latest applying valid_from is returned (one row per account)"
+    setup_sql: |
+      INSERT INTO subscription_history (account_id, tier, valid_from, valid_to) VALUES
+        (40, 'starter', '2024-05-01', '2025-05-01'), (40, 'starter', '2025-05-01', NULL), (40, 'growth', '2025-09-01', NULL), (40, 'enterprise', '2026-01-20', NULL),
+        (41, 'growth', '2023-01-01', NULL);
+    expected_rows: [[40, "enterprise"], [41, "growth"]]
+    ordered: true
+  - id: t8
+    hidden: true
+    description: "Gap between rows covering the day (paused account) and output sorted by account_id rather than insertion order"
+    setup_sql: |
+      INSERT INTO subscription_history (account_id, tier, valid_from, valid_to) VALUES
+        (900, 'growth', '2025-01-01', NULL), (55, 'starter', '2025-01-01', '2026-02-01'), (55, 'starter', '2026-03-01', NULL), (7, 'enterprise', '2025-07-01', '2027-01-01'),
+        (120, 'starter', '2026-02-10', '2026-02-20');
+    expected_rows: [[7, "enterprise"], [120, "starter"], [900, "growth"]]
+    ordered: true
+  - id: t9
+    hidden: true
+    description: "Stress: 60 accounts - odd ones lapsed on 2026-02-01, even ones still open, every fourth with an overlapping newer row starting shortly before or after the day"
+    setup_sql: |
+      INSERT INTO subscription_history (account_id, tier, valid_from, valid_to) VALUES
+        (1, 'starter', '2025-01-01', '2025-07-01'), (1, 'growth', '2025-07-01', '2026-02-01'), (2, 'starter', '2025-01-01', '2025-07-01'), (2, 'enterprise', '2025-07-01', NULL),
+        (3, 'starter', '2025-01-01', '2025-07-01'), (3, 'starter', '2025-07-01', '2026-02-01'), (4, 'starter', '2025-01-01', '2025-07-01'), (4, 'growth', '2025-07-01', NULL),
+        (4, 'enterprise', '2026-02-14', NULL), (5, 'starter', '2025-01-01', '2025-07-01'), (5, 'enterprise', '2025-07-01', '2026-02-01'), (6, 'starter', '2025-01-01', '2025-07-01'),
+        (6, 'starter', '2025-07-01', NULL), (7, 'starter', '2025-01-01', '2025-07-01'), (7, 'growth', '2025-07-01', '2026-02-01'), (8, 'starter', '2025-01-01', '2025-07-01'),
+        (8, 'enterprise', '2025-07-01', NULL), (8, 'starter', '2026-02-18', NULL), (9, 'starter', '2025-01-01', '2025-07-01'), (9, 'starter', '2025-07-01', '2026-02-01'),
+        (10, 'starter', '2025-01-01', '2025-07-01'), (10, 'growth', '2025-07-01', NULL), (11, 'starter', '2025-01-01', '2025-07-01'), (11, 'enterprise', '2025-07-01', '2026-02-01'),
+        (12, 'starter', '2025-01-01', '2025-07-01'), (12, 'starter', '2025-07-01', NULL), (12, 'growth', '2026-02-12', NULL), (13, 'starter', '2025-01-01', '2025-07-01'),
+        (13, 'growth', '2025-07-01', '2026-02-01'), (14, 'starter', '2025-01-01', '2025-07-01'), (14, 'enterprise', '2025-07-01', NULL), (15, 'starter', '2025-01-01', '2025-07-01'),
+        (15, 'starter', '2025-07-01', '2026-02-01'), (16, 'starter', '2025-01-01', '2025-07-01'), (16, 'growth', '2025-07-01', NULL), (16, 'enterprise', '2026-02-16', NULL),
+        (17, 'starter', '2025-01-01', '2025-07-01'), (17, 'enterprise', '2025-07-01', '2026-02-01'), (18, 'starter', '2025-01-01', '2025-07-01'), (18, 'starter', '2025-07-01', NULL),
+        (19, 'starter', '2025-01-01', '2025-07-01'), (19, 'growth', '2025-07-01', '2026-02-01'), (20, 'starter', '2025-01-01', '2025-07-01'), (20, 'enterprise', '2025-07-01', NULL),
+        (20, 'starter', '2026-02-10', NULL), (21, 'starter', '2025-01-01', '2025-07-01'), (21, 'starter', '2025-07-01', '2026-02-01'), (22, 'starter', '2025-01-01', '2025-07-01'),
+        (22, 'growth', '2025-07-01', NULL), (23, 'starter', '2025-01-01', '2025-07-01'), (23, 'enterprise', '2025-07-01', '2026-02-01'), (24, 'starter', '2025-01-01', '2025-07-01'),
+        (24, 'starter', '2025-07-01', NULL), (24, 'growth', '2026-02-14', NULL), (25, 'starter', '2025-01-01', '2025-07-01'), (25, 'growth', '2025-07-01', '2026-02-01'),
+        (26, 'starter', '2025-01-01', '2025-07-01'), (26, 'enterprise', '2025-07-01', NULL), (27, 'starter', '2025-01-01', '2025-07-01'), (27, 'starter', '2025-07-01', '2026-02-01'),
+        (28, 'starter', '2025-01-01', '2025-07-01'), (28, 'growth', '2025-07-01', NULL), (28, 'enterprise', '2026-02-18', NULL), (29, 'starter', '2025-01-01', '2025-07-01'),
+        (29, 'enterprise', '2025-07-01', '2026-02-01'), (30, 'starter', '2025-01-01', '2025-07-01'), (30, 'starter', '2025-07-01', NULL), (31, 'starter', '2025-01-01', '2025-07-01'),
+        (31, 'growth', '2025-07-01', '2026-02-01'), (32, 'starter', '2025-01-01', '2025-07-01'), (32, 'enterprise', '2025-07-01', NULL), (32, 'starter', '2026-02-12', NULL),
+        (33, 'starter', '2025-01-01', '2025-07-01'), (33, 'starter', '2025-07-01', '2026-02-01'), (34, 'starter', '2025-01-01', '2025-07-01'), (34, 'growth', '2025-07-01', NULL),
+        (35, 'starter', '2025-01-01', '2025-07-01'), (35, 'enterprise', '2025-07-01', '2026-02-01'), (36, 'starter', '2025-01-01', '2025-07-01'), (36, 'starter', '2025-07-01', NULL),
+        (36, 'growth', '2026-02-16', NULL), (37, 'starter', '2025-01-01', '2025-07-01'), (37, 'growth', '2025-07-01', '2026-02-01'), (38, 'starter', '2025-01-01', '2025-07-01'),
+        (38, 'enterprise', '2025-07-01', NULL), (39, 'starter', '2025-01-01', '2025-07-01'), (39, 'starter', '2025-07-01', '2026-02-01'), (40, 'starter', '2025-01-01', '2025-07-01'),
+        (40, 'growth', '2025-07-01', NULL), (40, 'enterprise', '2026-02-10', NULL), (41, 'starter', '2025-01-01', '2025-07-01'), (41, 'enterprise', '2025-07-01', '2026-02-01'),
+        (42, 'starter', '2025-01-01', '2025-07-01'), (42, 'starter', '2025-07-01', NULL), (43, 'starter', '2025-01-01', '2025-07-01'), (43, 'growth', '2025-07-01', '2026-02-01'),
+        (44, 'starter', '2025-01-01', '2025-07-01'), (44, 'enterprise', '2025-07-01', NULL), (44, 'starter', '2026-02-14', NULL), (45, 'starter', '2025-01-01', '2025-07-01'),
+        (45, 'starter', '2025-07-01', '2026-02-01'), (46, 'starter', '2025-01-01', '2025-07-01'), (46, 'growth', '2025-07-01', NULL), (47, 'starter', '2025-01-01', '2025-07-01'),
+        (47, 'enterprise', '2025-07-01', '2026-02-01'), (48, 'starter', '2025-01-01', '2025-07-01'), (48, 'starter', '2025-07-01', NULL), (48, 'growth', '2026-02-18', NULL),
+        (49, 'starter', '2025-01-01', '2025-07-01'), (49, 'growth', '2025-07-01', '2026-02-01'), (50, 'starter', '2025-01-01', '2025-07-01'), (50, 'enterprise', '2025-07-01', NULL),
+        (51, 'starter', '2025-01-01', '2025-07-01'), (51, 'starter', '2025-07-01', '2026-02-01'), (52, 'starter', '2025-01-01', '2025-07-01'), (52, 'growth', '2025-07-01', NULL),
+        (52, 'enterprise', '2026-02-12', NULL), (53, 'starter', '2025-01-01', '2025-07-01'), (53, 'enterprise', '2025-07-01', '2026-02-01'), (54, 'starter', '2025-01-01', '2025-07-01'),
+        (54, 'starter', '2025-07-01', NULL), (55, 'starter', '2025-01-01', '2025-07-01'), (55, 'growth', '2025-07-01', '2026-02-01'), (56, 'starter', '2025-01-01', '2025-07-01'),
+        (56, 'enterprise', '2025-07-01', NULL), (56, 'starter', '2026-02-16', NULL), (57, 'starter', '2025-01-01', '2025-07-01'), (57, 'starter', '2025-07-01', '2026-02-01'),
+        (58, 'starter', '2025-01-01', '2025-07-01'), (58, 'growth', '2025-07-01', NULL), (59, 'starter', '2025-01-01', '2025-07-01'), (59, 'enterprise', '2025-07-01', '2026-02-01'),
+        (60, 'starter', '2025-01-01', '2025-07-01'), (60, 'starter', '2025-07-01', NULL), (60, 'growth', '2026-02-10', NULL);
+    expected_rows:
+      - [2, "enterprise"]
+      - [4, "enterprise"]
+      - [6, "starter"]
+      - [8, "enterprise"]
+      - [10, "growth"]
+      - [12, "growth"]
+      - [14, "enterprise"]
+      - [16, "growth"]
+      - [18, "starter"]
+      - [20, "starter"]
+      - [22, "growth"]
+      - [24, "growth"]
+      - [26, "enterprise"]
+      - [28, "growth"]
+      - [30, "starter"]
+      - [32, "starter"]
+      - [34, "growth"]
+      - [36, "starter"]
+      - [38, "enterprise"]
+      - [40, "enterprise"]
+      - [42, "starter"]
+      - [44, "starter"]
+      - [46, "growth"]
+      - [48, "starter"]
+      - [50, "enterprise"]
+      - [52, "enterprise"]
+      - [54, "starter"]
+      - [56, "enterprise"]
+      - [58, "growth"]
+      - [60, "growth"]
+    ordered: true
+expected_concepts:
+  - half-open validity ranges (inclusive start, exclusive end)
+  - NULL as an open-ended upper bound
+  - picking the latest applying row per group (NOT EXISTS, MAX subquery or ROW_NUMBER)
+  - filtering before choosing the latest row
+  - deterministic ORDER BY
+optimal_complexity: {time: "O(n log n), or O(n) with an index on (account_id, valid_from)", space: O(n)}
+rubric:
+  excellent: Filters rows that apply on the day with valid_from <= day < valid_to (handling NULL), then keeps only the applying row with the latest valid_from per account (NOT EXISTS, MAX or ROW_NUMBER), and explains why filtering must happen before choosing the latest row.
+  good: Correct after a hint about the exclusive end, NULL valid_to or overlapping rows.
+  weak: Uses BETWEEN or <= valid_to, ignores NULL valid_to, returns several rows per account, or picks each account's newest row before checking it applies.
+  criteria:
+    correctness: All tests pass, including overlaps, boundary days, zero-length rows and gaps.
+    efficiency: Single pass with an index-friendly predicate; no per-account procedural logic.
+    code_quality: Clear grouping of the range predicate and readable aliases.
+    edge_cases: Rows starting or ending exactly on the day, open rows, overlaps and empty history.
+    communication: Explains half-open ranges and why BETWEEN double-counts the boundary.
+hints:
+  - Start with a single row - write down exactly when it applies on a given day, remembering that the end date is exclusive and may be missing.
+  - Once you keep only rows that apply on 2026-02-15, an account can still have several of them; the tie-break is the latest valid_from among those applying rows, not among all rows.
+  - Filter rows with valid_from at or before the day and valid_to NULL or after the day, then keep a row only when no other applying row of the same account has a later valid_from (NOT EXISTS), or rank applying rows per account by valid_from descending and keep rank 1; sort by account_id.
+followups:
+  - How would you return the tier for every account on every day of February?
+  - How would you detect and repair overlapping rows in this table?
+  - What constraint or index would you add to stop overlaps in PostgreSQL?
+common_errors:
+  - Using BETWEEN valid_from AND valid_to, which also matches rows ending on the day.
+  - Comparing valid_to > day without handling NULL, which drops every open row.
+  - Choosing each account's newest row first and filtering afterwards, which loses accounts whose newest row is not applying.
+  - Returning every applying row, so overlapping accounts appear twice.

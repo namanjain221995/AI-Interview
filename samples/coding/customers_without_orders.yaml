@@ -1,0 +1,143 @@
+version: 1
+slug: customers_without_orders
+title: Customers Who Never Ordered
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [backend, data, general]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Customers Who Never Ordered
+
+  Table `customers`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | name | VARCHAR(100) | names are not unique |
+
+  Table `orders`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | customer_id | INTEGER | references `customers.id`; **NULL for guest checkouts** |
+  | amount | INTEGER | |
+
+  Return the `name` of every customer who has **never placed an order**, one row per customer, in any
+  order. Two different customers with the same name produce two rows.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example
+  ```
+  customers               orders
+  +----+-------+          +----+-------------+--------+
+  | id | name  |          | id | customer_id | amount |
+  +----+-------+          +----+-------------+--------+
+  | 1  | Joe   |          | 1  | 3           | 100    |
+  | 2  | Henry |          | 2  | 1           | 50     |
+  | 3  | Sam   |          +----+-------------+--------+
+  | 4  | Max   |
+  +----+-------+
+
+  Output
+  +-------+
+  | name  |
+  +-------+
+  | Henry |
+  | Max   |
+  +-------+
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return the name of every customer without any order (one row per customer).
+    SELECT name
+    FROM customers;
+reference_solutions:
+  sql: |
+    SELECT c.name
+    FROM customers c
+    WHERE NOT EXISTS (
+      SELECT 1 FROM orders o WHERE o.customer_id = c.id
+    );
+sql_setup: |
+  CREATE TABLE customers (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL
+  );
+  CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER REFERENCES customers (id),
+    amount INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: Example
+    setup_sql: |
+      INSERT INTO customers (id, name) VALUES (1, 'Joe'), (2, 'Henry'), (3, 'Sam'), (4, 'Max');
+      INSERT INTO orders (id, customer_id, amount) VALUES (1, 3, 100), (2, 1, 50);
+    expected_rows: [["Henry"], ["Max"]]
+  - id: t2
+    description: Every customer has ordered
+    setup_sql: |
+      INSERT INTO customers (id, name) VALUES (1, 'Joe'), (2, 'Ann');
+      INSERT INTO orders (id, customer_id, amount) VALUES (1, 1, 10), (2, 2, 20);
+    expected_rows: []
+  - id: t3
+    hidden: true
+    description: No orders at all - every customer is returned
+    setup_sql: "INSERT INTO customers (id, name) VALUES (1, 'Joe'), (2, 'Ann'), (3, 'Li');"
+    expected_rows: [["Joe"], ["Ann"], ["Li"]]
+  - id: t4
+    hidden: true
+    description: Empty tables
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: A customer with many orders is not duplicated or returned
+    setup_sql: |
+      INSERT INTO customers (id, name) VALUES (1, 'Joe'), (2, 'Ann');
+      INSERT INTO orders (id, customer_id, amount) VALUES (1, 1, 10), (2, 1, 20), (3, 1, 30);
+    expected_rows: [["Ann"]]
+  - id: t6
+    hidden: true
+    description: Two different customers share a name
+    setup_sql: |
+      INSERT INTO customers (id, name) VALUES (1, 'Max'), (2, 'Max'), (3, 'Joe');
+      INSERT INTO orders (id, customer_id, amount) VALUES (1, 3, 5);
+    expected_rows: [["Max"], ["Max"]]
+  - id: t7
+    hidden: true
+    description: Guest orders with NULL customer_id must not hide anyone (NOT IN pitfall)
+    setup_sql: |
+      INSERT INTO customers (id, name) VALUES (1, 'Joe'), (2, 'Henry'), (3, 'Sam');
+      INSERT INTO orders (id, customer_id, amount) VALUES (1, 1, 10), (2, NULL, 99), (3, NULL, 15);
+    expected_rows: [["Henry"], ["Sam"]]
+expected_concepts:
+  - anti-join (NOT EXISTS or LEFT JOIN ... IS NULL)
+  - NULL semantics of NOT IN
+  - avoiding duplicate rows from joins
+optimal_complexity: {time: O(n + m) with an index on orders.customer_id, space: O(1)}
+rubric:
+  excellent: Writes an anti-join with NOT EXISTS or LEFT JOIN ... IS NULL, explains why NOT IN breaks when the subquery returns NULL, and mentions indexing orders.customer_id.
+  good: Correct query for the basic cases, needing a hint about NULL customer_id or duplicate rows.
+  weak: Uses NOT IN against a nullable column, joins without filtering correctly, or de-duplicates by name.
+  criteria:
+    correctness: All tests pass, including guest orders with NULL customer_id and duplicate names.
+    efficiency: Uses a set-based anti-join rather than per-row procedural logic.
+    code_quality: Clear aliases and a readable predicate.
+    edge_cases: Empty tables, customers with several orders and NULL foreign keys.
+    communication: Explains three-valued logic in NOT IN.
+hints:
+  - You are looking for customers for whom a matching order does not exist — how do you express "does not exist" in SQL?
+  - Be careful with NOT IN when the subquery can return NULL; comparing with NULL is never true, which can make the whole predicate unknown.
+  - Use WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id), or LEFT JOIN orders and keep rows where the order id IS NULL.
+followups:
+  - Why does WHERE id NOT IN (SELECT customer_id FROM orders) return nothing once a guest order exists?
+  - Which index makes this query fast on millions of orders?
+  - How would you return customers with no orders in the last 90 days?
+common_errors:
+  - Using NOT IN against a nullable column, which returns no rows when any customer_id is NULL.
+  - Using DISTINCT on name, which collapses different customers who share a name.
+  - Joining customers to orders with an inner join and filtering, which can never find non-matching rows.

@@ -1,0 +1,167 @@
+version: 1
+slug: lowest_free_port_allocator
+title: Lowest Free Port Allocator
+difficulty: easy
+competency_keys: [data_structures, code_quality]
+role_tags: [backend, platform, network]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Lowest Free Port Allocator
+
+  A local dev-environment manager hands out TCP ports to preview containers, starting at port `base`. It
+  processes `operations` in order:
+
+  - `"alloc"`: pick the **lowest port `>= base` that is not currently allocated**, mark it allocated and
+    return it.
+  - `"free P"` (for example `"free 8001"`): release port `P` so it can be handed out again. If `P` is not
+    currently allocated (never handed out, already freed, or below `base`), the operation is ignored.
+
+  Return the list of ports returned by the `"alloc"` operations, in the order they were processed. Return
+  an empty list if there are no `"alloc"` operations.
+
+  ### Example 1
+  ```
+  Input:  base = 8000, operations = ["alloc", "alloc", "alloc", "free 8001", "alloc", "alloc"]
+  Output: [8000, 8001, 8002, 8001, 8003]
+  Explanation: 8001 is released and is the lowest free port at the fourth alloc
+  ```
+
+  ### Example 2
+  ```
+  Input:  base = 3000, operations = ["free 3000", "alloc", "free 3000", "free 3000", "alloc", "alloc"]
+  Output: [3000, 3000, 3001]
+  Explanation: the first free is ignored (3000 was not allocated yet) and the repeated free is ignored too
+  ```
+
+  ### Constraints
+  - `1 <= base <= 50000`
+  - `0 <= operations.length <= 10^4`
+  - Each operation is exactly `"alloc"` or `"free P"` with a single space and `0 <= P <= 70000`.
+  - You never need to worry about running out of ports.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: allocate_ports
+  params:
+    - {name: base, type: "int"}
+    - {name: operations, type: "string[]"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import heapq
+
+
+    def allocate_ports(base: int, operations: list[str]) -> list[int]:
+        next_fresh = base               # every port >= next_fresh has never been handed out
+        released: list[int] = []        # min-heap of free ports below next_fresh
+        allocated: set[int] = set()
+        result: list[int] = []
+        for op in operations:
+            if op == "alloc":
+                port = heapq.heappop(released) if released else next_fresh
+                if port == next_fresh:
+                    next_fresh += 1
+                allocated.add(port)
+                result.append(port)
+            else:
+                port = int(op.split()[1])
+                if port in allocated:
+                    allocated.remove(port)
+                    heapq.heappush(released, port)
+        return result
+  javascript: |
+    function allocatePorts(base, operations) {
+      const heap = [];
+      const push = (v) => {
+        heap.push(v);
+        let i = heap.length - 1;
+        while (i > 0) {
+          const p = (i - 1) >> 1;
+          if (heap[p] <= heap[i]) break;
+          [heap[p], heap[i]] = [heap[i], heap[p]];
+          i = p;
+        }
+      };
+      const pop = () => {
+        const top = heap[0];
+        const last = heap.pop();
+        if (heap.length > 0) {
+          heap[0] = last;
+          let i = 0;
+          while (true) {
+            const l = 2 * i + 1;
+            const r = l + 1;
+            let s = i;
+            if (l < heap.length && heap[l] < heap[s]) s = l;
+            if (r < heap.length && heap[r] < heap[s]) s = r;
+            if (s === i) break;
+            [heap[s], heap[i]] = [heap[i], heap[s]];
+            i = s;
+          }
+        }
+        return top;
+      };
+      let nextFresh = base;
+      const allocated = new Set();
+      const result = [];
+      for (const op of operations) {
+        if (op === "alloc") {
+          let port;
+          if (heap.length > 0) {
+            port = pop();
+          } else {
+            port = nextFresh;
+            nextFresh += 1;
+          }
+          allocated.add(port);
+          result.push(port);
+        } else {
+          const port = Number(op.split(" ")[1]);
+          if (allocated.has(port)) {
+            allocated.delete(port);
+            push(port);
+          }
+        }
+      }
+      return result;
+    }
+tests:
+  - {id: t1, args: [8000, ["alloc", "alloc", "alloc", "free 8001", "alloc", "alloc"]], expected: [8000, 8001, 8002, 8001, 8003], description: "Example 1 - a released port is reused before new ports"}
+  - {id: t2, args: [3000, ["free 3000", "alloc", "free 3000", "free 3000", "alloc", "alloc"]], expected: [3000, 3000, 3001], description: "Example 2 - frees of ports that are not allocated are ignored"}
+  - {id: t3, hidden: true, args: [5000, ["free 5000", "free 4999"]], expected: [], description: "No alloc operations - empty result"}
+  - {id: t4, hidden: true, args: [100, ["alloc", "free 99", "alloc", "free 0", "alloc"]], expected: [100, 101, 102], description: "Frees below base are ignored"}
+  - {id: t5, hidden: true, args: [9000, ["alloc", "alloc", "alloc", "alloc", "free 9003", "free 9000", "free 9002", "alloc", "alloc", "alloc", "alloc"]], expected: [9000, 9001, 9002, 9003, 9000, 9002, 9003, 9004], description: "Several released ports come back lowest first, then fresh ports continue"}
+  - {id: t6, hidden: true, args: [7000, ["alloc", "free 7005", "alloc", "free 7001", "free 7001", "alloc", "alloc"]], expected: [7000, 7001, 7001, 7002], description: "Free of a never-allocated port above the high-water mark and a double free"}
+  - {id: t7, hidden: true, args: [50000, ["alloc", "alloc", "free 50000", "free 50001", "alloc", "alloc", "alloc"]], expected: [50000, 50001, 50000, 50001, 50002], description: "Largest base; everything released, then reallocated in ascending order"}
+  - {id: t8, hidden: true, args: [1, ["alloc", "free 1", "alloc", "free 1", "alloc", "free 1", "alloc"]], expected: [1, 1, 1, 1], description: "Base 1 with the same port bouncing between allocated and free"}
+  - {id: t9, hidden: true, args: [20000, ["alloc", "free 20000", "free 20128", "alloc", "alloc", "free 20001", "free 20000", "alloc", "free 20000", "alloc", "free 20000", "alloc", "free 20000", "alloc", "free 20000", "alloc", "free 20000", "alloc", "alloc", "free 20000", "alloc", "free 20001", "alloc", "free 20001", "free 20001", "free 20085", "alloc", "free 20000", "free 20223", "alloc", "free 20000", "alloc", "free 20000", "alloc", "free 20000", "alloc", "free 20000", "alloc", "alloc", "free 20001", "alloc", "alloc", "free 20000", "alloc", "alloc", "alloc", "free 20002", "alloc", "free 20004", "alloc", "alloc", "alloc", "alloc", "free 20005", "free 20006", "alloc", "free 20003", "alloc", "alloc", "alloc", "alloc", "free 20007", "free 20006", "free 20002", "alloc", "alloc", "free 20008", "alloc", "free 20371", "alloc", "alloc", "free 20008", "free 20007", "free 20007", "free 20001", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20010", "free 20009", "alloc", "free 20012", "alloc", "free 20009", "free 20011", "alloc", "free 20010", "alloc", "alloc", "alloc", "free 20007", "alloc", "alloc", "free 20004", "free 20012", "free 20011", "free 20345", "alloc", "alloc", "free 20008", "free 20010", "free 20006", "alloc", "free 20013", "alloc", "alloc", "free 20010", "alloc", "alloc", "alloc", "free 20012", "alloc", "alloc", "free 20004", "alloc", "alloc", "alloc", "free 20011", "free 20012", "free 20010", "alloc", "alloc", "free 20016", "free 20011", "free 20013", "alloc", "free 20014", "free 20014", "alloc", "free 20382", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20023", "alloc", "alloc", "free 20015", "free 20012", "alloc", "free 20013", "alloc", "alloc", "alloc", "free 20018", "alloc", "free 20254", "alloc", "free 20021", "alloc", "free 20026", "free 20023", "free 20011", "free 20014", "alloc", "alloc", "free 20025", "alloc", "free 20008", "alloc", "free 20010", "alloc", "alloc", "alloc", "free 20025", "alloc", "free 20024", "free 20024", "free 20013", "free 20024", "alloc", "alloc", "alloc", "free 20023", "free 20366", "alloc", "alloc", "alloc", "alloc", "free 20016", "alloc", "free 20015", "free 20009", "alloc", "free 20026", "alloc", "free 20020", "alloc", "free 20026", "alloc", "free 20012", "alloc", "alloc", "free 20027", "alloc", "free 20015", "alloc", "alloc", "free 20011", "alloc", "alloc", "free 20025", "alloc", "alloc", "free 20019", "alloc", "free 20011", "free 20017", "free 20027", "alloc", "free 20022", "free 20025", "free 20031", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20024", "alloc", "alloc", "alloc", "free 20029", "free 20028", "free 20027", "alloc", "alloc", "alloc", "free 20028", "free 20031", "free 20027", "alloc", "alloc", "free 20034", "alloc", "free 20035", "alloc", "free 20027", "alloc", "free 20028", "free 20009", "free 20032", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20028", "alloc", "free 20023", "alloc", "alloc", "free 20030", "alloc", "alloc", "alloc", "free 20037", "alloc", "alloc", "free 20028", "free 20277", "free 20039", "free 20035", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20331", "alloc", "alloc", "free 20023", "alloc", "alloc", "alloc", "free 20041", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20040", "alloc", "alloc", "alloc", "alloc", "free 20033", "alloc", "free 20035", "alloc", "alloc", "alloc", "alloc", "free 20040", "free 20027", "alloc", "alloc", "alloc", "free 20013", "free 20039", "alloc", "alloc", "alloc", "alloc", "free 20043", "free 20035", "free 20045", "alloc", "alloc", "free 20035", "free 20059", "free 20059", "free 20037", "free 20023", "alloc", "alloc", "alloc", "alloc", "free 20050", "free 20052", "alloc", "alloc", "free 20027", "free 20053", "alloc", "alloc", "free 20024", "free 20054", "alloc", "free 20029", "alloc", "alloc", "free 20024", "alloc", "free 20048", "free 20061", "free 20026", "free 20057", "alloc", "free 20043", "free 20031", "alloc", "alloc", "alloc", "alloc", "free 20042", "alloc", "free 20029", "alloc", "alloc", "free 20057", "alloc", "alloc", "free 20062", "free 20037", "alloc", "free 20060", "alloc", "alloc", "free 20036", "alloc", "free 20061", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20061", "alloc", "alloc", "free 20050", "alloc", "free 20049", "alloc", "alloc", "alloc", "alloc", "free 20062", "free 20024", "alloc", "free 20062", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20028", "alloc", "alloc", "free 20068", "alloc", "free 20063", "alloc", "alloc", "alloc", "free 20071", "alloc", "alloc", "alloc", "free 20047", "alloc", "alloc", "alloc", "alloc", "free 20014", "free 20051", "free 20061", "free 20061", "alloc", "free 20203", "alloc", "alloc", "alloc", "free 20060", "free 20201", "alloc", "free 20084", "free 20336", "free 20059", "free 20080", "alloc", "free 20036", "free 20060", "free 20083", "alloc", "free 20026", "alloc", "free 20036", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20042", "free 20061", "alloc", "free 20076", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20036", "free 20060", "alloc", "free 20062", "free 20084", "free 20074", "free 20064", "free 20062", "alloc", "free 20057", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20076", "alloc", "free 20082", "alloc", "free 20076", "free 20030", "alloc", "alloc", "free 20067", "alloc", "free 20080", "alloc", "free 20065", "free 20060", "free 20054", "alloc", "free 20170", "alloc", "free 20015", "alloc", "free 20058", "alloc", "free 20267", "alloc", "free 20046", "free 20075", "alloc", "free 20070", "free 20080", "alloc", "free 20059", "alloc", "free 20308", "free 20060", "free 20202", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20069", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20083", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20036", "alloc", "free 20108", "alloc", "free 20081", "alloc", "alloc", "free 20230", "alloc", "alloc", "free 20090", "alloc", "free 20090", "free 20069", "alloc", "free 20025", "free 20094", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20072", "free 20104", "free 20062", "free 20089", "alloc", "alloc", "alloc", "free 20060", "free 20097", "free 20077", "alloc", "alloc", "alloc", "alloc", "free 20107", "free 20086", "alloc", "alloc", "free 20041", "alloc", "free 20087", "free 20069", "alloc", "alloc", "alloc", "alloc", "free 20091", "alloc", "free 20036", "alloc", "free 20116", "alloc", "alloc", "alloc", "alloc", "free 20113", "alloc", "free 20061", "alloc", "free 20116", "alloc", "alloc", "alloc", "alloc", "free 20093", "alloc", "free 20085", "alloc", "alloc", "free 20084", "alloc", "free 20089", "free 20078", "free 20100", "free 20118", "alloc", "free 20114", "alloc", "free 20114", "alloc", "alloc", "alloc", "alloc", "free 20105", "alloc", "free 20061", "alloc", "alloc", "free 20083", "free 20113", "free 20180", "free 20077", "alloc", "alloc", "free 20106", "alloc", "free 20109", "alloc", "alloc", "alloc", "free 20119", "alloc", "alloc", "free 20088", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20063", "alloc", "alloc", "free 20089", "alloc", "free 20087", "alloc", "free 20090", "alloc", "free 20125", "free 20295", "alloc", "free 20112", "free 20080", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20038", "alloc", "free 20125", "alloc", "free 20089", "free 20114", "alloc", "free 20089", "free 20048", "alloc", "free 20115", "free 20044", "alloc", "alloc", "free 20111", "alloc", "free 20126", "alloc", "alloc", "free 20116", "alloc", "free 20125", "alloc", "alloc", "free 20096", "free 20079", "alloc", "alloc", "alloc", "free 20122", "alloc", "free 20029", "alloc", "free 19999", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20142", "alloc", "alloc", "free 20083", "free 20127", "free 20114", "alloc", "free 20136", "free 20149", "free 20129", "alloc", "alloc", "free 20115", "alloc", "free 20135", "free 20088", "free 20057", "free 20089", "alloc", "free 20061", "free 20147", "free 20138", "alloc", "free 20139", "free 20102", "alloc", "alloc", "alloc", "free 20128", "free 20112", "free 20061", "free 20114", "alloc", "alloc", "alloc", "free 20071", "alloc", "free 20120", "alloc", "alloc", "alloc", "alloc", "free 20118", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20115", "free 20085", "free 20130", "alloc", "alloc", "free 20148", "free 20090", "alloc", "free 20101", "alloc", "free 20081", "free 20090", "alloc", "free 20071", "free 20147", "free 20117", "free 20084", "alloc", "alloc", "alloc", "free 20133", "free 20077", "free 20147", "free 20099", "alloc", "free 20148", "free 20089", "alloc", "alloc", "free 20143", "alloc", "alloc", "free 20090", "alloc", "alloc", "free 20143", "alloc", "free 20143", "free 20149", "alloc", "alloc", "alloc", "free 20146", "free 20105", "free 20088", "free 20134", "free 20113", "free 20148", "free 20055", "alloc", "alloc", "alloc", "alloc", "free 20141", "free 20141", "alloc", "alloc", "free 20143", "alloc", "free 20153", "free 20143", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20142", "free 20140", "alloc", "alloc", "free 20145", "free 20142", "free 20111", "free 20090", "alloc", "alloc", "free 20110", "alloc", "alloc", "alloc", "free 20095", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20162", "free 20138", "free 20144", "free 20082", "alloc", "free 20139", "free 20058", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20061", "alloc", "free 20364", "alloc", "free 20118", "free 20152", "alloc", "alloc", "alloc", "free 20157", "free 20144", "alloc", "alloc", "free 20158", "free 20143", "alloc", "alloc", "free 20143", "free 20118", "free 20153", "alloc", "alloc", "free 20155", "alloc", "alloc", "free 20147", "free 20160", "alloc", "alloc", "free 20154", "free 20163", "free 20143", "alloc", "alloc", "free 20124", "free 20058", "free 20143", "alloc", "alloc", "alloc", "alloc", "free 20060", "alloc", "alloc", "free 20150", "free 20089", "alloc", "alloc", "free 20039", "free 20146", "alloc", "free 20100", "free 20163", "alloc", "alloc", "free 20126", "alloc", "alloc", "free 20159", "alloc", "alloc", "alloc", "alloc", "free 20164", "alloc", "free 20092", "free 20163", "alloc", "alloc", "free 20156", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20126", "alloc", "alloc", "free 20154", "free 20151", "free 20143", "alloc", "alloc", "alloc", "free 20140", "free 20089", "alloc", "alloc", "free 20394", "free 20042", "alloc", "free 20164", "alloc", "alloc", "alloc", "alloc", "alloc", "alloc", "free 20367", "free 20083", "free 20153", "free 20144", "free 20060", "alloc", "alloc", "free 20122", "alloc", "free 20144", "alloc", "free 20116", "alloc", "free 20126", "alloc", "free 20178", "free 20143", "alloc", "alloc", "alloc", "free 20162", "alloc", "free 20125", "alloc", "alloc", "alloc", "alloc", "free 20162", "free 20138", "alloc", "free 20156", "alloc", "free 20162", "alloc"]], expected: [20000, 20000, 20001, 20000, 20000, 20000, 20000, 20000, 20000, 20001, 20000, 20001, 20001, 20000, 20000, 20000, 20000, 20000, 20002, 20001, 20003, 20000, 20004, 20005, 20002, 20004, 20006, 20007, 20008, 20005, 20003, 20006, 20009, 20010, 20002, 20006, 20007, 20008, 20011, 20001, 20007, 20008, 20012, 20013, 20014, 20009, 20010, 20009, 20010, 20011, 20012, 20007, 20015, 20004, 20011, 20006, 20008, 20010, 20010, 20012, 20013, 20012, 20016, 20004, 20017, 20018, 20010, 20011, 20011, 20012, 20013, 20014, 20016, 20019, 20020, 20021, 20022, 20023, 20024, 20025, 20026, 20023, 20027, 20012, 20013, 20015, 20028, 20018, 20029, 20021, 20011, 20014, 20023, 20008, 20010, 20025, 20026, 20025, 20013, 20024, 20030, 20023, 20031, 20032, 20033, 20016, 20009, 20015, 20020, 20026, 20012, 20034, 20027, 20015, 20035, 20011, 20036, 20025, 20037, 20019, 20011, 20017, 20022, 20025, 20027, 20031, 20038, 20039, 20040, 20041, 20024, 20042, 20043, 20027, 20028, 20029, 20027, 20028, 20031, 20034, 20027, 20009, 20028, 20032, 20035, 20044, 20028, 20023, 20045, 20030, 20046, 20047, 20037, 20048, 20028, 20035, 20039, 20049, 20050, 20051, 20052, 20053, 20023, 20054, 20055, 20041, 20056, 20057, 20058, 20059, 20040, 20060, 20061, 20062, 20033, 20035, 20063, 20064, 20065, 20027, 20040, 20066, 20013, 20039, 20067, 20068, 20035, 20043, 20023, 20035, 20037, 20045, 20050, 20052, 20027, 20053, 20024, 20029, 20054, 20024, 20026, 20031, 20043, 20048, 20057, 20042, 20029, 20059, 20057, 20061, 20037, 20060, 20062, 20036, 20061, 20069, 20070, 20071, 20072, 20073, 20074, 20061, 20075, 20050, 20049, 20076, 20077, 20078, 20024, 20062, 20079, 20080, 20081, 20082, 20083, 20028, 20084, 20068, 20063, 20085, 20086, 20071, 20087, 20088, 20047, 20089, 20090, 20091, 20014, 20051, 20061, 20092, 20060, 20059, 20036, 20026, 20036, 20060, 20080, 20083, 20084, 20042, 20061, 20076, 20093, 20094, 20095, 20096, 20097, 20098, 20036, 20060, 20057, 20062, 20064, 20074, 20084, 20076, 20082, 20030, 20076, 20067, 20080, 20054, 20060, 20015, 20058, 20065, 20046, 20070, 20059, 20060, 20075, 20080, 20099, 20100, 20101, 20069, 20102, 20103, 20104, 20105, 20106, 20107, 20108, 20109, 20110, 20111, 20112, 20113, 20083, 20114, 20115, 20116, 20117, 20118, 20036, 20108, 20081, 20119, 20120, 20121, 20090, 20069, 20025, 20090, 20094, 20122, 20123, 20062, 20072, 20089, 20060, 20077, 20097, 20104, 20086, 20107, 20041, 20069, 20087, 20124, 20125, 20091, 20036, 20116, 20126, 20127, 20128, 20113, 20061, 20116, 20129, 20130, 20131, 20093, 20085, 20132, 20084, 20078, 20089, 20100, 20114, 20118, 20133, 20105, 20061, 20134, 20077, 20083, 20106, 20109, 20113, 20135, 20119, 20136, 20088, 20137, 20138, 20139, 20140, 20141, 20142, 20143, 20144, 20063, 20145, 20089, 20087, 20090, 20125, 20080, 20112, 20146, 20147, 20148, 20038, 20125, 20089, 20048, 20044, 20089, 20111, 20114, 20115, 20116, 20125, 20126, 20079, 20096, 20149, 20122, 20029, 20150, 20151, 20152, 20153, 20154, 20142, 20155, 20083, 20114, 20127, 20115, 20057, 20061, 20088, 20089, 20102, 20061, 20112, 20114, 20071, 20120, 20128, 20129, 20135, 20118, 20136, 20138, 20139, 20147, 20085, 20115, 20090, 20101, 20081, 20071, 20084, 20090, 20077, 20089, 20099, 20117, 20130, 20090, 20133, 20143, 20143, 20147, 20148, 20055, 20088, 20105, 20113, 20134, 20141, 20143, 20143, 20146, 20148, 20149, 20153, 20156, 20157, 20158, 20159, 20160, 20161, 20162, 20163, 20164, 20140, 20142, 20090, 20111, 20110, 20142, 20145, 20095, 20165, 20166, 20167, 20168, 20082, 20058, 20138, 20139, 20144, 20162, 20061, 20169, 20118, 20152, 20170, 20144, 20157, 20143, 20158, 20118, 20143, 20153, 20155, 20147, 20160, 20143, 20154, 20058, 20124, 20143, 20163, 20060, 20171, 20089, 20150, 20039, 20100, 20146, 20126, 20163, 20159, 20172, 20173, 20174, 20164, 20092, 20163, 20156, 20175, 20176, 20177, 20178, 20126, 20179, 20143, 20151, 20154, 20089, 20140, 20042, 20164, 20180, 20181, 20182, 20183, 20184, 20060, 20083, 20122, 20144, 20116, 20126, 20143, 20153, 20178, 20162, 20125, 20185, 20186, 20187, 20138, 20156, 20162], description: "Stress - 1000 random operations including ignored frees"}
+expected_concepts:
+  - "min-heap of released ports combined with a high-water mark counter"
+  - "set of currently allocated ports to validate frees"
+  - "ignoring invalid or duplicate releases"
+  - "parsing simple command strings"
+optimal_complexity: {time: "O(q log q)", space: "O(q)"}
+rubric:
+  excellent: "Combines a high-water mark for never-used ports with a min-heap of released ports and a set of allocated ports, ignores invalid and duplicate frees, and explains O(log q) per operation versus scanning upward from base."
+  good: "Correct solution with a sorted structure or a linear scan from base; the heap improvement is discussed when prompted."
+  weak: "Pushes a port to the free pool on every free (so duplicate frees hand the same port out twice), forgets to reuse released ports, or scans from base on every alloc without noticing the cost."
+  criteria:
+    correctness: "All tests pass, including ignored frees, double frees and reuse in ascending order."
+    efficiency: "O(log q) per operation with a heap and a set; a linear scan per alloc is identified as O(q^2) worst case."
+    code_quality: "Command parsing is isolated and the allocator state (high-water mark, heap, set) is clearly named."
+    edge_cases: "No allocs, frees below base, frees of never-allocated or already freed ports, base at the limit."
+    communication: "Explains the invariant that every port in the heap is below the high-water mark and not allocated."
+hints:
+  - "Ports split into two groups: ports that were never handed out and ports that were handed out and later released. Which of the two always contains the lowest free port when it is not empty?"
+  - "Keep a counter for the next never-used port and a min-heap of released ports; an alloc takes from the heap when it is non-empty and otherwise uses the counter."
+  - "Also keep a set of currently allocated ports: a free only moves a port into the heap if the port is in that set (and removes it from the set), so duplicate or bogus frees are ignored; an alloc pops the smallest released port if there is one, otherwise hands out the counter and increments it, then records the port as allocated."
+followups:
+  - "How would you add an upper bound on the port range and report exhaustion?"
+  - "What changes if several processes call the allocator concurrently?"
+  - "How would you persist the allocator state across restarts?"
+  - "How would you support reserving a specific port on request?"
+common_errors:
+  - "Adding a port to the free pool on every free, so a double free leads to the same port being handed out twice."
+  - "Always handing out the next fresh port and never reusing released ones."
+  - "Accepting frees of ports below base or above the high-water mark."
+  - "Scanning upward from base on every alloc, which is quadratic for long sessions."

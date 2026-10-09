@@ -1,0 +1,163 @@
+version: 1
+slug: smallest_skill_cover_team
+title: Smallest Skill-Covering On-Call Team
+difficulty: hard
+competency_keys: [algorithms, problem_solving, data_structures]
+role_tags: [engineering_manager, sre, tech_lead, general]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Smallest Skill-Covering On-Call Team
+
+  You are staffing an on-call rotation. Every runbook skill in `required` must be held by at least one
+  person on the team. `engineers[i]` lists the skills engineer `i` holds; a list may be empty, may
+  repeat a skill and may contain skills that are not in `required` (those are simply ignored).
+
+  Return the indices of a team with the **fewest engineers** that covers every required skill, sorted
+  in ascending order. If several minimum-size teams exist, return the one whose sorted index list is
+  **lexicographically smallest** (compare the first index, then the second, and so on).
+
+  ### Example 1
+  ```
+  Input:  required = ["deploy", "dns", "postgres", "tls"],
+          engineers = [["deploy", "dns"], ["postgres"], ["tls", "postgres"], ["dns", "tls"], ["deploy"]]
+  Output: [0, 2]
+  Explanation: Engineer 0 covers deploy and dns, engineer 2 covers tls and postgres. No single engineer
+  covers all four skills.
+  ```
+
+  ### Example 2
+  ```
+  Input:  required = ["kafka", "redis", "vault"],
+          engineers = [["redis"], ["kafka", "vault"], ["vault", "redis", "kafka"]]
+  Output: [2]
+  Explanation: [0, 1] also covers everything, but a team of one is smaller.
+  ```
+
+  ### Example 3
+  ```
+  Input:  required = ["dns", "k8s", "tls"],
+          engineers = [["dns", "k8s"], ["tls"], ["k8s", "tls"], ["dns"]]
+  Output: [0, 1]
+  Explanation: [0, 1], [0, 2] and [2, 3] are all teams of two; [0, 1] is the smallest list.
+  ```
+
+  ### Constraints
+  - `1 <= required.length <= 16`; the required skills are distinct.
+  - `1 <= engineers.length <= 40`
+  - `0 <= engineers[i].length <= 16`
+  - Skills are non-empty strings of lowercase letters, digits and `-`.
+  - At least one team covering every required skill exists.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: smallest_skill_cover_team
+  params:
+    - {name: required, type: "string[]"}
+    - {name: engineers, type: "string[][]"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def smallest_skill_cover_team(required: list[str], engineers: list[list[str]]) -> list[int]:
+        bit = {skill: 1 << i for i, skill in enumerate(required)}
+        full = (1 << len(required)) - 1
+        masks = []
+        for skills in engineers:
+            mask = 0
+            for skill in skills:
+                mask |= bit.get(skill, 0)
+            masks.append(mask)
+        # holders[b] = distinct skill masks of the engineers holding skill b.
+        holders = [sorted({m for m in masks if m >> b & 1}) for b in range(len(required))]
+        # need[m] = fewest engineers whose skills cover every skill in the set m.
+        need = [0] * (full + 1)
+        for m in range(1, full + 1):
+            low = (m & -m).bit_length() - 1  # someone must cover the lowest missing skill
+            best = len(engineers) + 1
+            for h in holders[low]:
+                if need[m & ~h] < best:
+                    best = need[m & ~h]
+            need[m] = best + 1
+        # Greedy reconstruction: take the smallest index that keeps the team size optimal.
+        team: list[int] = []
+        remaining = full
+        for i, mask in enumerate(masks):
+            if remaining == 0:
+                break
+            if need[remaining & ~mask] == need[remaining] - 1:
+                team.append(i)
+                remaining &= ~mask
+        return team
+  javascript: |
+    function smallestSkillCoverTeam(required, engineers) {
+      const bit = new Map();
+      required.forEach((skill, i) => bit.set(skill, 1 << i));
+      const full = (1 << required.length) - 1;
+      const masks = engineers.map((skills) => {
+        let mask = 0;
+        for (const skill of skills) mask |= bit.get(skill) || 0;
+        return mask;
+      });
+      const holders = required.map((_, b) => [...new Set(masks.filter((m) => (m >> b) & 1))]);
+      const need = new Int32Array(full + 1);
+      for (let m = 1; m <= full; m++) {
+        let low = 0;
+        while (!((m >> low) & 1)) low++;
+        let best = engineers.length + 1;
+        for (const h of holders[low]) {
+          const candidate = need[m & ~h];
+          if (candidate < best) best = candidate;
+        }
+        need[m] = best + 1;
+      }
+      const team = [];
+      let remaining = full;
+      for (let i = 0; i < masks.length && remaining !== 0; i++) {
+        if (need[remaining & ~masks[i]] === need[remaining] - 1) {
+          team.push(i);
+          remaining &= ~masks[i];
+        }
+      }
+      return team;
+    }
+tests:
+  - {id: t1, args: [["deploy", "dns", "postgres", "tls"], [["deploy", "dns"], ["postgres"], ["tls", "postgres"], ["dns", "tls"], ["deploy"]]], expected: [0, 2], description: "Example 1"}
+  - {id: t2, args: [["kafka", "redis", "vault"], [["redis"], ["kafka", "vault"], ["vault", "redis", "kafka"]]], expected: [2], description: "Example 2 - one engineer beats lower indices"}
+  - {id: t3, args: [["dns", "k8s", "tls"], [["dns", "k8s"], ["tls"], ["k8s", "tls"], ["dns"]]], expected: [0, 1], description: "Example 3 - lexicographic tie-break"}
+  - {id: t4, hidden: true, args: [["oncall"], [[], ["oncall"], ["oncall"]]], expected: [1], description: "Single skill with an empty engineer first"}
+  - {id: t5, hidden: true, args: [["dns", "tls"], [["java", "dns", "dns"], ["tls", "go"], ["dns", "tls", "dns"]]], expected: [2], description: "Repeated and unknown skills are ignored"}
+  - {id: t6, hidden: true, args: [["s3", "iam", "vpc", "rds", "eks", "kms"], [["s3", "iam", "vpc", "rds"], ["s3", "iam", "eks"], ["vpc", "rds", "kms"]]], expected: [1, 2], description: "Greedy most-new-skills counterexample - greedy picks 3, optimum 2"}
+  - {id: t7, hidden: true, args: [["a1", "a2", "a3", "a4"], [["a1", "a2", "a3", "a4"], ["a1", "a2", "a3", "a4"], ["a1"]]], expected: [0], description: "Identical full engineers - pick index 0"}
+  - {id: t8, hidden: true, args: [["p", "q", "r", "s"], [["p"], ["q", "r"], ["r", "s"], ["p", "q"], ["s"]]], expected: [2, 3], description: "Indices 0 and 1 are in no minimum team - answer starts at index 2"}
+  - {id: t9, hidden: true, args: [["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9", "k10", "k11", "k12", "k13", "k14", "k15"], [[], ["k3"], ["x"], ["k0"], [], ["k15"], ["k7"], [], ["k1"], ["k12"], ["k2"], [], ["k9"], ["k4"], ["k14"], [], ["k5"], ["k11"], [], ["k6"], ["k13"], [], ["k10"], ["k8"], [], [], ["k3"], [], ["k0"], [], [], [], [], [], [], [], [], [], [], []]], expected: [1, 3, 5, 6, 8, 9, 10, 12, 13, 14, 16, 17, 19, 20, 22, 23], description: "Sixteen skills each held by one or two single-skill engineers among 40 - team of 16"}
+  - {id: t10, hidden: true, args: [["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9", "k10", "k11", "k12", "k13", "k14", "k15"], [["k0"], ["k7", "k3", "k2"], ["k2"], ["k13", "k0", "k14", "k1", "k3"], ["k0", "k8"], ["k13", "k3"], ["k8", "k12", "k13", "k0"], ["k13", "k5"], ["k4", "k3", "k12"], ["k3", "k1", "k6"], ["k11"], ["k8", "k12", "k0"], ["k3", "k14", "k6", "k1"], ["k9", "k13", "k10", "k15", "k5"], ["k6", "k11", "k1", "k0", "k10"], ["k9", "k1"], ["k3", "k6"], ["k14", "k10", "k13"], ["k5", "k15", "k14"], ["k8", "k11"], ["k5"], ["k7", "k2", "k15", "k6", "k4"], ["k7", "k10", "k5", "k12", "k0"], ["k1", "k12"], ["k12", "k4", "k1"], ["k10", "k3"], ["k12", "k14", "k10", "k7"], ["k8", "k2"], ["k8", "k11"], ["k13", "k14", "k9", "k6", "k5"], ["k4", "k8"], ["k2", "k12", "k0", "k1"], ["k5", "k12"], ["k2", "k6", "k14", "k9"], ["k8", "k15", "k13", "k0"], ["k8"], ["k3", "k4", "k6"], ["k14", "k0"], ["k5", "k8", "k1"], ["k6", "k2", "k5"]]], expected: [1, 6, 14, 21, 29], description: "Sixteen skills, 40 engineers with random overlapping skill sets - full DP"}
+expected_concepts:
+  - mapping required skills to bits and each engineer to a skill bitmask
+  - minimum set cover is NP-hard, so search over the 2^k skill subsets is acceptable for k <= 16
+  - dynamic programming over subsets of missing skills, branching only on engineers who hold the lowest missing skill
+  - reconstructing the lexicographically smallest optimal team greedily from the DP table
+  - alternative of iterative deepening backtracking with pruning
+optimal_complexity: {time: "O(2^k * n) for k required skills and n engineers", space: "O(2^k)"}
+rubric:
+  excellent: Encodes skills as bitmasks, computes the minimum team size for every subset of missing skills (branching on holders of one fixed missing skill), rebuilds the lexicographically smallest team by taking the first index that keeps the size optimal and justifies why that greedy reconstruction is correct.
+  good: Finds a correct minimum team with bitmask search or pruned backtracking and handles the tie-break, perhaps by enumerating teams of increasing size in lexicographic order.
+  weak: Uses the greedy pick-the-most-new-skills heuristic, ignores the tie-break, or enumerates all 2^40 subsets of engineers.
+  criteria:
+    correctness: All tests pass, including the greedy counterexample, tie-breaks and skills outside the required list.
+    efficiency: Exponential only in the number of required skills (at most 2^16 states), not in the number of engineers.
+    code_quality: Clear bitmask helpers, named DP table and a separate reconstruction step.
+    edge_cases: Empty skill lists, repeated or unknown skills, one engineer covering everything and every skill held by exactly one engineer.
+    communication: Explains why the reconstruction yields the lexicographically smallest minimum team.
+hints:
+  - Picking the engineer who adds the most new skills each time is not always optimal. There are at most 16 required skills, so the number of possible sets of still-missing skills is small.
+  - Turn each engineer into a bitmask over the required skills and compute, for every set of missing skills, the fewest engineers needed to cover it. One of the engineers holding the lowest missing skill must be in any cover of that set, so you only need to branch on them.
+  - Fill a table over all subsets of missing skills in increasing order, where the empty set needs zero engineers and any other set needs one plus the best value after removing the skills of an engineer who holds its lowest missing skill. Then walk the engineers by index starting from the full set of skills and take engineer i whenever removing their skills lowers the table value by exactly one; that yields a minimum team and, because you always take the smallest usable index, the lexicographically smallest one.
+followups:
+  - How would you handle 60 required skills, where a table over all subsets no longer fits?
+  - What if engineers had different costs and you wanted the cheapest team instead of the smallest?
+  - How would you require every skill to be covered by at least two people for redundancy?
+  - How does the greedy heuristic perform as an approximation, and what guarantee does it have?
+common_errors:
+  - Using the greedy most-new-skills heuristic, which can return a larger team.
+  - Enumerating subsets of engineers (up to 2^40) instead of subsets of skills.
+  - Returning any minimum team without applying the lexicographic tie-break.
+  - Crashing on skills that are not in the required list or counting duplicates twice.

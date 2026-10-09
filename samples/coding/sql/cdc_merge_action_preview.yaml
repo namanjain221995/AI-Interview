@@ -1,0 +1,241 @@
+version: 1
+slug: cdc_merge_action_preview
+title: "Merge Action Preview"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data, dba, backend]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Merge Action Preview
+
+  Every night a supplier feed is loaded into `staging_products`, and a merge job then makes
+  `target_products` (the live catalog) match it. Before the merge runs, the data team wants a dry
+  run that says what the merge would do to each SKU.
+
+  Tables `target_products` and `staging_products` have the same shape:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | sku | VARCHAR(20) | primary key, formatted like `SKU-0042` |
+  | name | VARCHAR(100) | **nullable** |
+  | price_cents | INTEGER | **nullable** |
+
+  Return one row for every SKU that appears in **either** table, with the columns `sku` and
+  `action`, where `action` is:
+
+  - `'insert'` when the SKU exists only in `staging_products`;
+  - `'delete'` when the SKU exists only in `target_products`;
+  - `'update'` when the SKU exists in both and `name` or `price_cents` differs;
+  - `'unchanged'` when the SKU exists in both and both columns are the same.
+
+  Comparisons are **NULL-safe**: two NULLs count as the same value, and NULL versus any non-NULL
+  value counts as a difference. Text comparison is exact (case-sensitive). Order the result by `sku`
+  ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite. Some engines this job has to support
+  have no `FULL OUTER JOIN`, so build the comparison without it.
+
+  ### Example 1
+  ```
+  target_products                         staging_products
+  +---------+-------------+-------------+ +---------+-------------+-------------+
+  | sku     | name        | price_cents | | sku     | name        | price_cents |
+  +---------+-------------+-------------+ +---------+-------------+-------------+
+  | SKU-100 | Desk Lamp   | 2599        | | SKU-100 | Desk Lamp   | 2599        |
+  | SKU-200 | Mouse Pad   | 899         | | SKU-200 | Mouse Pad   | 999         |
+  | SKU-300 | USB Hub     | 1999        | | SKU-400 | Monitor Arm | NULL        |
+  | SKU-400 | Monitor Arm | NULL        | | SKU-500 | Webcam      | 4999        |
+  +---------+-------------+-------------+ +---------+-------------+-------------+
+
+  Output
+  +---------+-----------+
+  | sku     | action    |
+  +---------+-----------+
+  | SKU-100 | unchanged |
+  | SKU-200 | update    |
+  | SKU-300 | delete    |
+  | SKU-400 | unchanged |
+  | SKU-500 | insert    |
+  +---------+-----------+
+  SKU-400 has a NULL price on both sides, which counts as unchanged.
+  ```
+
+  ### Example 2
+  ```
+  target_products                       staging_products
+  +---------+-------+-------------+     +---------+---------+-------------+
+  | sku     | name  | price_cents |     | sku     | name    | price_cents |
+  +---------+-------+-------------+     +---------+---------+-------------+
+  | SKU-010 | NULL  | 500         |     | SKU-010 | Charger | 500         |
+  | SKU-020 | Cable | NULL        |     | SKU-020 | Cable   | NULL        |
+  | SKU-030 | Stand | 1500        |     | SKU-030 | Stand   | NULL        |
+  +---------+-------+-------------+     +---------+---------+-------------+
+
+  Output
+  +---------+-----------+
+  | sku     | action    |
+  +---------+-----------+
+  | SKU-010 | update    |
+  | SKU-020 | unchanged |
+  | SKU-030 | update    |
+  +---------+-----------+
+  ```
+
+  ### Constraints
+  - Each table holds at most `10^6` rows; either or both may be empty.
+  - Every `sku` has the same format, so ordering by `sku` is unambiguous.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return sku and action ('insert', 'delete', 'update' or 'unchanged') for every SKU
+    -- in either table, ordered by sku.
+    SELECT sku, 'unchanged' AS action
+    FROM target_products
+    ORDER BY sku;
+reference_solutions:
+  sql: |
+    SELECT k.sku,
+           CASE
+             WHEN t.sku IS NULL THEN 'insert'
+             WHEN s.sku IS NULL THEN 'delete'
+             WHEN t.name <> s.name
+               OR (t.name IS NULL AND s.name IS NOT NULL)
+               OR (t.name IS NOT NULL AND s.name IS NULL)
+               OR t.price_cents <> s.price_cents
+               OR (t.price_cents IS NULL AND s.price_cents IS NOT NULL)
+               OR (t.price_cents IS NOT NULL AND s.price_cents IS NULL)
+             THEN 'update'
+             ELSE 'unchanged'
+           END AS action
+    FROM (
+      SELECT sku FROM target_products
+      UNION
+      SELECT sku FROM staging_products
+    ) k
+    LEFT JOIN target_products t ON t.sku = k.sku
+    LEFT JOIN staging_products s ON s.sku = k.sku
+    ORDER BY k.sku;
+sql_setup: |
+  CREATE TABLE target_products (
+    sku VARCHAR(20) PRIMARY KEY,
+    name VARCHAR(100),
+    price_cents INTEGER
+  );
+  CREATE TABLE staging_products (
+    sku VARCHAR(20) PRIMARY KEY,
+    name VARCHAR(100),
+    price_cents INTEGER
+  );
+tests:
+  - id: t1
+    description: "Example 1 - all four actions, NULL price on both sides is unchanged"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_products (sku, name, price_cents) VALUES
+        ('SKU-100', 'Desk Lamp', 2599), ('SKU-200', 'Mouse Pad', 899), ('SKU-300', 'USB Hub', 1999), ('SKU-400', 'Monitor Arm', NULL);
+      INSERT INTO staging_products (sku, name, price_cents) VALUES
+        ('SKU-100', 'Desk Lamp', 2599), ('SKU-200', 'Mouse Pad', 999), ('SKU-400', 'Monitor Arm', NULL), ('SKU-500', 'Webcam', 4999);
+    expected_rows: [["SKU-100", "unchanged"], ["SKU-200", "update"], ["SKU-300", "delete"], ["SKU-400", "unchanged"], ["SKU-500", "insert"]]
+  - id: t2
+    description: "Example 2 - NULL versus value in either direction is an update"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_products (sku, name, price_cents) VALUES
+        ('SKU-010', NULL, 500), ('SKU-020', 'Cable', NULL), ('SKU-030', 'Stand', 1500);
+      INSERT INTO staging_products (sku, name, price_cents) VALUES
+        ('SKU-010', 'Charger', 500), ('SKU-020', 'Cable', NULL), ('SKU-030', 'Stand', NULL);
+    expected_rows: [["SKU-010", "update"], ["SKU-020", "unchanged"], ["SKU-030", "update"]]
+  - id: t3
+    hidden: true
+    description: "Both tables empty - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Empty target - every staging SKU is an insert (LEFT JOIN from target alone finds nothing)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO staging_products (sku, name, price_cents) VALUES
+        ('SKU-003', 'Tape', 150), ('SKU-001', 'Pen', 120), ('SKU-002', NULL, NULL);
+    expected_rows: [["SKU-001", "insert"], ["SKU-002", "insert"], ["SKU-003", "insert"]]
+  - id: t5
+    hidden: true
+    description: "Empty staging - every target SKU is a delete"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_products (sku, name, price_cents) VALUES
+        ('SKU-002', 'Ruler', 300), ('SKU-001', NULL, 90);
+    expected_rows: [["SKU-001", "delete"], ["SKU-002", "delete"]]
+  - id: t6
+    hidden: true
+    description: "Rows with all-NULL attributes on both sides are unchanged; NULL name vs value is an update"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_products (sku, name, price_cents) VALUES
+        ('SKU-001', NULL, NULL), ('SKU-002', NULL, NULL), ('SKU-003', 'Clip', NULL);
+      INSERT INTO staging_products (sku, name, price_cents) VALUES
+        ('SKU-001', NULL, NULL), ('SKU-002', 'Folder', NULL), ('SKU-003', NULL, NULL);
+    expected_rows: [["SKU-001", "unchanged"], ["SKU-002", "update"], ["SKU-003", "update"]]
+  - id: t7
+    hidden: true
+    description: "Case-only name change and price 0 versus NULL are both updates"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_products (sku, name, price_cents) VALUES
+        ('SKU-011', 'widget', 700), ('SKU-012', 'Gadget', 0), ('SKU-013', 'Gizmo', 0);
+      INSERT INTO staging_products (sku, name, price_cents) VALUES
+        ('SKU-011', 'Widget', 700), ('SKU-012', 'Gadget', NULL), ('SKU-013', 'Gizmo', 0);
+    expected_rows: [["SKU-011", "update"], ["SKU-012", "update"], ["SKU-013", "unchanged"]]
+  - id: t8
+    hidden: true
+    description: "Identical tables - every SKU unchanged, each listed once"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_products (sku, name, price_cents) VALUES
+        ('SKU-501', 'Bin', 400), ('SKU-502', 'Shelf', 8000), ('SKU-503', NULL, 25);
+      INSERT INTO staging_products (sku, name, price_cents) VALUES
+        ('SKU-501', 'Bin', 400), ('SKU-502', 'Shelf', 8000), ('SKU-503', NULL, 25);
+    expected_rows: [["SKU-501", "unchanged"], ["SKU-502", "unchanged"], ["SKU-503", "unchanged"]]
+  - id: t9
+    hidden: true
+    description: "Mixed larger feed with interleaved SKUs - every action present and sorted by sku"
+    ordered: true
+    setup_sql: |
+      INSERT INTO target_products (sku, name, price_cents) VALUES
+        ('SKU-001', 'Alpha', 100), ('SKU-003', 'Gamma', 300), ('SKU-004', 'Delta', NULL), ('SKU-006', 'Zeta', 600),
+        ('SKU-007', NULL, 700), ('SKU-009', 'Iota', 900), ('SKU-010', 'Kappa', 1000), ('SKU-012', 'Mu', 1200);
+      INSERT INTO staging_products (sku, name, price_cents) VALUES
+        ('SKU-002', 'Beta', 200), ('SKU-003', 'Gamma', 301), ('SKU-004', 'Delta', NULL), ('SKU-005', 'Epsilon', NULL),
+        ('SKU-006', 'Zeta', 600), ('SKU-007', NULL, 700), ('SKU-009', 'Iota', NULL), ('SKU-010', 'Kappa v2', 1000),
+        ('SKU-011', 'Lambda', 1100);
+    expected_rows: [["SKU-001", "delete"], ["SKU-002", "insert"], ["SKU-003", "update"], ["SKU-004", "unchanged"], ["SKU-005", "insert"], ["SKU-006", "unchanged"], ["SKU-007", "unchanged"], ["SKU-009", "update"], ["SKU-010", "update"], ["SKU-011", "insert"], ["SKU-012", "delete"]]
+expected_concepts:
+  - "building the full key set with UNION of both tables' keys"
+  - "LEFT JOIN from the key set to both tables instead of FULL OUTER JOIN"
+  - "NULL-safe comparison (IS DISTINCT FROM or explicit IS NULL checks)"
+  - "CASE expression ordered from most to least specific"
+  - "three-valued logic of <> with NULLs"
+optimal_complexity: {time: "O(n log n) for the key union and joins (O(n) with hash joins)", space: "O(n)"}
+rubric:
+  excellent: "Builds the union of keys, left-joins both tables, classifies with a CASE whose NULL-safe comparisons treat NULL = NULL as equal, explains why plain <> misses NULL changes, and mentions IS DISTINCT FROM and FULL OUTER JOIN as alternatives."
+  good: "Correct structure but needs a hint about NULL-safe comparison or about SKUs that exist on only one side."
+  weak: "Starts from one table so inserts or deletes go missing, compares with plain <> so NULL changes are reported as unchanged, or produces duplicate rows."
+  criteria:
+    correctness: "All tests pass, including empty tables, NULL-versus-value changes and case-only changes."
+    efficiency: "Set-based joins on the primary key; no per-row subqueries required."
+    code_quality: "Readable CASE with the conditions in a clear order and the exact output labels."
+    edge_cases: "Empty sides, all-NULL rows, price 0 versus NULL and identical tables."
+    communication: "Explains three-valued logic and why the key union replaces FULL OUTER JOIN."
+hints:
+  - "Start by getting every SKU that exists on either side exactly once; then you can look up each side for it."
+  - "Combine the two key lists with UNION and LEFT JOIN that list to both tables; a missing row on one side tells you insert or delete. For the update check, remember that comparing anything with NULL using <> is never true."
+  - "Use a CASE that first checks whether the target row is missing (insert), then whether the staging row is missing (delete), then whether name or price differs where a difference also includes one side NULL and the other not, and otherwise returns unchanged; order by sku."
+followups:
+  - "How would you write the actual MERGE (or INSERT ... ON CONFLICT plus DELETE) once the preview looks right?"
+  - "How would you compare many columns at once without writing a NULL-safe check per column?"
+  - "Which indexes or statistics matter when both tables have tens of millions of rows?"
+common_errors:
+  - "Comparing with plain <>, so a change from a value to NULL is reported as unchanged."
+  - "Starting from target_products with a LEFT JOIN, which never reports inserts."
+  - "Using UNION ALL for the key set, which returns SKUs present in both tables twice."
+  - "Checking the update condition before the insert or delete conditions, so missing rows are mislabelled."

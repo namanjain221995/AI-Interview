@@ -1,0 +1,623 @@
+# System design: security architecture (1 of 4) — identity platforms, authentication and authorisation models.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [security, cloud]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.security_architecture.sso_for_internal_apps
+    competency_key: security
+    topic: Single sign-on for internal applications
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A company has around thirty internal web tools, and each one has its own username and password. How would
+      you design single sign-on across them, and what would you do about the tools that can't speak a modern
+      protocol?
+    expected_concepts:
+      - one central identity provider as the source of truth
+      - standard protocols such as OIDC or SAML per application
+      - group or role claims mapped to application permissions
+      - MFA enforced once at the identity provider
+      - an authenticating reverse proxy in front of legacy tools
+      - removing local accounts after migration
+    rubric:
+      excellent: Centralises authentication in one identity provider, integrates apps through OIDC or SAML with group-based authorisation, enforces MFA centrally and proposes a proxy for legacy tools plus a plan to retire local accounts.
+      good: Proposes a central identity provider with a standard protocol and MFA but is vague on legacy apps or on how permissions map.
+      weak: Suggests syncing the same password to every tool or a shared login, with no central control over access or offboarding.
+    followups:
+      - How would you handle a vendor tool that only supports its own local accounts?
+      - What happens to everyone's access if the identity provider is down?
+    common_errors:
+      - Leaving local admin accounts active in every tool after single sign-on is introduced.
+
+  - external_key: system_design.security_architecture.consumer_login_service
+    competency_key: security
+    topic: Login service for a consumer app
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      You're building the login service for a new consumer app that expects a few hundred thousand users in its
+      first year. Walk me through the main components you'd design and the protections you'd put around them.
+    expected_concepts:
+      - credential storage with a slow, salted password hash
+      - optional or required MFA and passkey support
+      - rate limiting and lockout that resist credential stuffing
+      - session or token issuance after login
+      - secure password reset and email verification
+      - logging of authentication events
+    rubric:
+      excellent: Covers credential storage, MFA, abuse protection, session issuance, reset and verification flows and logging as distinct components, and explains how each defends against a named attack.
+      good: Describes a reasonable login and session design with hashing and rate limiting but treats recovery or logging lightly.
+      weak: Stores passwords with a fast hash or reversible encryption, or ignores brute force and account recovery entirely.
+    followups:
+      - Would you build this yourself or use a managed identity service, and why?
+      - How would you stop a credential stuffing attack without locking out real users?
+    common_errors:
+      - Locking accounts after a few failures, which lets attackers lock out anyone they like.
+
+  - external_key: system_design.security_architecture.b2b_roles_model
+    competency_key: security
+    topic: Roles and permissions for a B2B product
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A B2B project management product needs roles for its customers, such as owner, admin, member and read-only
+      guest. How would you design the permission model so it's easy to understand today but can grow when
+      customers ask for custom roles?
+    expected_concepts:
+      - permissions as fine-grained actions, roles as bundles of permissions
+      - checks in code against permissions rather than role names
+      - roles scoped to an organisation or project
+      - default deny and least privilege for guests
+      - custom roles stored as data per tenant
+    rubric:
+      excellent: Separates permissions from roles, checks permissions rather than role names in code, scopes roles to organisations or projects and explains how custom roles become per-tenant data without code changes.
+      good: Proposes sensible roles and a permission table but checks role names directly in places.
+      weak: Hard-codes role names throughout the code with no notion of permissions or scope, so any new role means a code change.
+    followups:
+      - A customer wants a role that can see billing but nothing else. How does your model handle that?
+      - How would you stop an admin from granting themselves owner?
+    common_errors:
+      - Writing if-role-equals-admin checks across the codebase.
+
+  - external_key: system_design.security_architecture.web_and_mobile_sessions
+    competency_key: security
+    topic: Sessions across web and mobile clients
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your product has a web app and native mobile apps talking to the same backend. How would you design session
+      handling for both, and where would you keep the session credentials on each client?
+    expected_concepts:
+      - HttpOnly, Secure, SameSite cookies for the browser
+      - short-lived access tokens with refresh tokens for mobile
+      - platform secure storage such as Keychain or Keystore
+      - server-side ability to revoke sessions
+      - refresh token rotation and reuse detection
+    rubric:
+      excellent: Chooses cookies with the right flags for the browser and short-lived tokens plus rotating refresh tokens in secure storage for mobile, and explains how a session is revoked server-side.
+      good: Picks appropriate mechanisms for each client but is vague on revocation or refresh token handling.
+      weak: Stores long-lived tokens in browser local storage or plain mobile preferences with no way to revoke them.
+    followups:
+      - A user reports their phone was stolen. What can they and your support team do?
+      - How would you detect a refresh token being used by two different devices?
+    common_errors:
+      - Issuing access tokens that live for weeks because refresh logic felt complicated.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.security_architecture.token_issuance_service
+    competency_key: security
+    topic: Central token service for internal APIs
+    difficulty: medium
+    text: >-
+      About two hundred internal APIs each validate user credentials in their own way. Design a central token
+      service that issues tokens they can all verify, and explain how the APIs check those tokens without calling
+      the service on every request.
+    expected_concepts:
+      - signed tokens such as JWTs with audience and expiry
+      - public keys published through a JWKS endpoint and cached by verifiers
+      - short token lifetimes to bound misuse
+      - audience restriction so a token for one API is not accepted by another
+      - a shared verification library to avoid per-team mistakes
+      - signing keys held in a KMS or HSM
+    rubric:
+      excellent: Designs signed short-lived tokens with audience and scopes, local verification through cached published keys, a shared library that enforces algorithm and audience checks, and protected signing keys with rotation.
+      good: Proposes signed tokens with local verification but misses audience restriction or how keys are distributed and rotated.
+      weak: Has every API call the token service synchronously or accept tokens without checking signature, audience and expiry.
+    followups:
+      - How would you roll out a new signing key without any API rejecting valid tokens?
+      - What claims would you refuse to put in the token, and why?
+    common_errors:
+      - Letting every service accept any token signed by the issuer regardless of audience.
+
+  - external_key: system_design.security_architecture.sign_out_everywhere
+    competency_key: security
+    topic: Revoking user sessions quickly
+    difficulty: medium
+    text: >-
+      Users can press sign out of all devices, and the security team wants the same power when an account is
+      compromised. Your services verify self-contained access tokens locally. How would you design this so
+      revocation takes effect within a minute or so?
+    expected_concepts:
+      - short access token lifetimes with refresh as the control point
+      - revoking refresh tokens and server-side session records
+      - a session or user version or a revoked-after timestamp checked by services
+      - pushing revocation events to verifiers or caches
+      - trade-off between check latency and revocation speed
+    rubric:
+      excellent: Combines short access token lifetimes with revocation at refresh, adds a fast revocation signal such as a per-user revoked-after timestamp distributed to services, and reasons about the latency and failure trade-offs.
+      good: Revokes refresh tokens and shortens access token lifetimes but cannot get below the token lifetime for urgent cases.
+      weak: Claims deleting tokens on the client signs the user out, or proposes a central lookup on every request without considering scale.
+    followups:
+      - What happens if the revocation feed is delayed or a service misses an event?
+      - Would you treat an administrator account any differently?
+    common_errors:
+      - Forgetting that existing access tokens stay valid until they expire.
+
+  - external_key: system_design.security_architecture.mfa_and_enrolment
+    competency_key: security
+    topic: Multi-factor authentication for customers
+    difficulty: medium
+    text: >-
+      You're adding multi-factor authentication to a customer-facing product that today uses only passwords.
+      Design the enrolment, the login flow and what happens when someone loses their second factor.
+    expected_concepts:
+      - supported factors ranked by strength such as passkeys, authenticator apps and SMS
+      - enrolment requiring a recent strong login
+      - recovery codes generated at enrolment
+      - remembered devices with bounded lifetime
+      - recovery flow that does not quietly bypass MFA
+      - per-tenant or per-account enforcement policy
+    rubric:
+      excellent: Designs enrolment behind fresh authentication, offers factors with clear strength trade-offs, provides recovery codes and a deliberate, slower recovery path, and explains how remembered devices and enforcement policies work.
+      good: Covers factors and the login flow sensibly but treats lost factors as a simple support reset.
+      weak: Adds SMS codes only and lets support remove MFA on request with no verification.
+    followups:
+      - How would you stop a phished password from being used to enrol the attacker's own authenticator?
+      - What evidence would support need before removing a factor?
+    common_errors:
+      - Making the recovery path so easy that it becomes the real authentication method.
+
+  - external_key: system_design.security_architecture.risk_based_step_up
+    competency_key: security
+    topic: Step-up authentication for sensitive actions
+    difficulty: medium
+    text: >-
+      In a payments app, changing the payout bank account or adding a new API key should require more assurance
+      than viewing a dashboard. How would you design step-up authentication and decide when to trigger it?
+    expected_concepts:
+      - classifying actions by sensitivity
+      - recording authentication strength and time in the session
+      - re-authentication or a stronger factor for sensitive actions
+      - risk signals such as new device, location or unusual behaviour
+      - server-side enforcement on the sensitive endpoint
+      - notifications and cooling-off periods for high-impact changes
+    rubric:
+      excellent: Records how and when the user authenticated, enforces fresh strong authentication on the server for classified sensitive actions, adds risk signals and out-of-band notification or delay for the highest-impact changes.
+      good: Requires re-authentication for sensitive actions but enforcement or risk signals are thin.
+      weak: Relies on a front-end prompt that the API does not enforce, or applies the same check to every action.
+    followups:
+      - How long should a step-up remain valid before you ask again?
+      - How do you handle API clients that can't show an interactive prompt?
+    common_errors:
+      - Checking the step-up only in the user interface so a direct API call skips it.
+
+  - external_key: system_design.security_architecture.account_recovery
+    competency_key: security
+    topic: Account recovery that isn't the weakest link
+    difficulty: medium
+    text: >-
+      Attackers rarely break your login directly; they go after account recovery instead. How would you design
+      account recovery for a consumer service so that it's usable but doesn't undo the protection your login
+      provides?
+    expected_concepts:
+      - single-use, short-lived, high-entropy recovery tokens
+      - recovery bound to verified channels with notifications to all of them
+      - waiting periods and extra checks when MFA is enrolled
+      - revoking existing sessions after recovery
+      - rate limiting and monitoring of recovery attempts
+      - support-assisted recovery with defined evidence
+    rubric:
+      excellent: Designs token-based recovery with strict properties, notifies all verified channels, adds delay or extra proof for MFA-protected accounts, kills existing sessions and defines a strict support-assisted path with monitoring.
+      good: Uses secure reset tokens and notifications but has no answer for accounts with MFA or support-driven recovery.
+      weak: Relies on security questions or lets an email reset bypass every other factor without notice.
+    followups:
+      - The user's email account itself was compromised. How does your design limit the damage?
+      - How would you measure whether recovery is being abused?
+    common_errors:
+      - Not invalidating active sessions after a password reset.
+
+  - external_key: system_design.security_architecture.enterprise_sso_federation
+    competency_key: security
+    topic: Per-customer federation for a B2B SaaS
+    difficulty: medium
+    text: >-
+      Enterprise customers of your SaaS product want their staff to sign in through their own identity providers,
+      some with SAML and some with OIDC. Design how your platform supports per-customer federation.
+    expected_concepts:
+      - per-tenant identity provider configuration and metadata
+      - home realm discovery by email domain or tenant URL
+      - verified domain ownership before enforcing SSO
+      - just-in-time provisioning and attribute mapping to roles
+      - strict assertion validation such as signature, audience and replay
+      - break-glass admin access when the customer's provider fails
+    rubric:
+      excellent: Stores per-tenant provider config, routes users by verified domain or tenant, validates assertions strictly, maps attributes to roles with JIT provisioning and keeps a controlled fallback for tenant admins.
+      good: Supports per-tenant SAML and OIDC with discovery and provisioning but misses domain verification or fallback access.
+      weak: Accepts any assertion that parses, or lets one tenant's provider sign in users belonging to another tenant.
+    followups:
+      - How do you stop a tenant from claiming a domain that belongs to someone else?
+      - A customer rotates their signing certificate without telling you. What happens?
+    common_errors:
+      - Trusting the email claim from any tenant's provider to log into any account with that email.
+
+  - external_key: system_design.security_architecture.scim_deprovisioning
+    competency_key: security
+    topic: Automated user provisioning and removal
+    difficulty: medium
+    text: >-
+      A large customer complains that when people leave their company, those accounts stay active in your product
+      for weeks. Design automated provisioning and deprovisioning from customers' directories into your platform.
+    expected_concepts:
+      - SCIM endpoint per tenant with its own credential
+      - create, update and deactivate events mapped to accounts and groups
+      - deactivation revoking sessions, tokens and API keys immediately
+      - periodic reconciliation to catch missed events
+      - audit of every provisioning change
+      - ownership transfer for resources owned by removed users
+    rubric:
+      excellent: Designs a tenant-scoped SCIM integration, makes deactivation revoke every active credential at once, adds reconciliation for drift and handles audit and resource ownership.
+      good: Implements SCIM create and deactivate sensibly but forgets existing sessions or drift.
+      weak: Relies on customers removing users by hand or deletes accounts outright and loses the data they owned.
+    followups:
+      - The customer's directory sends a deactivation for the tenant's only admin. What do you do?
+      - How would you detect that a tenant's provisioning feed has silently stopped?
+    common_errors:
+      - Marking the user inactive while their personal API keys keep working.
+
+  - external_key: system_design.security_architecture.attribute_based_policies
+    competency_key: security
+    topic: Attribute-based access policies
+    difficulty: medium
+    text: >-
+      Roles are no longer enough: access now depends on things like the data's classification, the user's region
+      and whether they're on a managed device. How would you design an attribute-based authorisation layer, and
+      how would teams write, test and roll out policies safely?
+    expected_concepts:
+      - policy decision point separate from enforcement points
+      - trusted sources for subject, resource and environment attributes
+      - policy as code with review and automated tests
+      - shadow or dry-run evaluation before enforcement
+      - decision logging with the attributes used
+      - latency and caching of decisions
+    rubric:
+      excellent: Separates decision and enforcement, sources attributes from systems of record, treats policies as reviewed and tested code, rolls out in dry-run mode first and logs every decision with its inputs.
+      good: Describes a policy engine and attributes clearly but is weak on testing, rollout or attribute trustworthiness.
+      weak: Proposes adding more roles for each combination, or lets clients supply the attributes used for decisions.
+    followups:
+      - Where does the user's region attribute come from, and could they influence it?
+      - How would you explain to a user why they were denied?
+    common_errors:
+      - Accepting attributes from the request that the caller controls.
+
+  - external_key: system_design.security_architecture.oauth_provider_for_partners
+    competency_key: api_design
+    topic: Becoming an OAuth provider for third-party apps
+    difficulty: medium
+    text: >-
+      Your company wants third-party developers to build apps that access customers' data in your product with
+      the customer's permission. Design the authorisation server and the surrounding controls.
+    expected_concepts:
+      - authorisation code flow with PKCE and registered redirect URIs
+      - granular scopes and a clear consent screen
+      - app registration, review and verification
+      - short-lived access tokens and revocable refresh tokens
+      - per-app rate limits and the ability to suspend an app
+      - users and admins able to see and revoke granted apps
+    rubric:
+      excellent: Uses the authorisation code flow with PKCE and strict redirect validation, designs granular scopes and consent, adds app review, revocable tokens, per-app limits and admin visibility with kill switches.
+      good: Describes a correct OAuth flow and scopes but leaves out app vetting or revocation by customers.
+      weak: Hands out API keys tied to user passwords, or uses broad all-access scopes with no consent or revocation.
+    followups:
+      - A popular app turns out to be malicious. What can you do within minutes?
+      - How would a customer admin restrict which apps their staff may install?
+    common_errors:
+      - Allowing wildcard or loosely matched redirect URIs.
+
+  - external_key: system_design.security_architecture.developer_api_keys
+    competency_key: api_design
+    topic: API key system for developers
+    difficulty: medium
+    text: >-
+      Customers create API keys to call your public API from their scripts and servers. Design how keys are
+      created, stored, scoped, rotated and detected when they leak.
+    expected_concepts:
+      - shown once at creation and stored only as a hash
+      - recognisable prefix to support secret scanning
+      - scopes, expiry and optional IP restrictions
+      - overlapping keys for rotation without downtime
+      - last-used tracking and audit
+      - leak detection through scanning partnerships and automatic revocation
+    rubric:
+      excellent: Stores keys hashed and shows them once, uses a recognisable prefix for scanning, supports scopes, expiry and overlapping rotation, records last use and revokes automatically on confirmed leaks.
+      good: Hashes keys and supports revocation and scopes but has no rotation or leak detection story.
+      weak: Stores keys in plain text, issues one never-expiring all-powerful key per account.
+    followups:
+      - How do you look up a key quickly if you only store a hash?
+      - What would you tell a customer whose key appeared in a public repository?
+    common_errors:
+      - Logging the full key in request logs.
+
+  - external_key: system_design.security_architecture.cli_device_login
+    competency_key: security
+    topic: Signing in from CLIs and limited-input devices
+    difficulty: medium
+    text: >-
+      Your developer CLI and a smart TV app both need users to sign in, but neither can host a normal browser
+      login comfortably. How would you design authentication for them?
+    expected_concepts:
+      - OAuth device authorisation flow with a short user code
+      - loopback redirect with PKCE for desktop CLIs
+      - tokens stored in the OS credential store
+      - short-lived codes with polling limits
+      - showing the requesting device and location on the approval page
+      - phishing risk of device codes
+    rubric:
+      excellent: Chooses the device flow for limited-input devices and loopback with PKCE for CLIs, secures token storage, bounds code lifetime and polling, and recognises device-code phishing with mitigations.
+      good: Picks a workable flow for each and stores tokens reasonably but ignores phishing or code abuse.
+      weak: Asks users to type their password into the CLI or TV, or issues long-lived tokens stored in plain text files.
+    followups:
+      - How could an attacker abuse the device code flow to phish a user?
+      - How would a user see and revoke the CLI session later?
+    common_errors:
+      - Saving tokens in a world-readable dotfile.
+
+  - external_key: system_design.security_architecture.one_identity_many_products
+    competency_key: security
+    topic: One account across several products
+    difficulty: medium
+    text: >-
+      Your company runs three products that were built separately, each with its own user accounts, and the
+      business wants one account that works across all of them. Design the shared identity layer.
+    expected_concepts:
+      - a central identity service owning credentials and profile
+      - each product as an OIDC client with its own audience
+      - per-product authorisation remaining in the product
+      - account linking with proof of control of both accounts
+      - consent and data sharing boundaries between products
+      - migration path for existing accounts
+    rubric:
+      excellent: Centralises authentication while leaving authorisation in each product, links accounts only with proof of ownership, keeps per-product audiences and data boundaries, and lays out a staged migration.
+      good: Designs a central identity provider with OIDC clients but treats linking or data boundaries lightly.
+      weak: Merges the user tables by email address and shares one token across all products.
+    followups:
+      - Two existing accounts share an email but have different passwords. What happens?
+      - How do you stop a token issued for one product being replayed against another?
+    common_errors:
+      - Auto-merging accounts on matching email without verification.
+
+  - external_key: system_design.security_architecture.access_review_system
+    competency_key: security
+    topic: Periodic access reviews across applications
+    difficulty: medium
+    text: >-
+      Auditors want managers to review who has access to every important system each quarter, and today it's done
+      with spreadsheets that nobody trusts. Design a system that makes access reviews accurate and actually reduces
+      access.
+    expected_concepts:
+      - automated collection of entitlements from each system
+      - mapping accounts to people, including service and orphaned accounts
+      - reviews routed to owners with context such as last use
+      - revocation carried out automatically on rejection
+      - evidence retained for auditors
+      - risk-based frequency rather than reviewing everything equally
+    rubric:
+      excellent: Pulls entitlements automatically, resolves accounts to owners, gives reviewers usage context, executes revocations and keeps evidence, and focuses effort on high-risk access to avoid rubber-stamping.
+      good: Automates collection and routing but stops at recording decisions without enforcing them.
+      weak: Proposes a nicer spreadsheet or emailing managers lists of usernames to approve.
+    followups:
+      - How would you discourage reviewers from approving everything?
+      - What do you do with accounts that don't map to any current employee?
+    common_errors:
+      - Recording a rejection but never actually removing the access.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.security_architecture.global_identity_availability
+    competency_key: distributed_systems
+    topic: Highly available global login
+    difficulty: hard
+    text: >-
+      Your identity platform serves fifty million users across several regions, and if it's down nothing else
+      works. Design it for high availability while keeping security-critical changes like password changes and
+      account locks consistent everywhere.
+    expected_concepts:
+      - multi-region deployment with regional authentication paths
+      - which data needs strong consistency versus eventual consistency
+      - fast propagation of revocations and locks across regions
+      - local token verification so APIs survive identity outages
+      - graceful degradation such as extending existing sessions
+      - protecting the platform from login floods and retry storms
+    rubric:
+      excellent: Separates data needing strong consistency from data that can lag, designs fast cross-region revocation, keeps token verification local, and defines explicit degradation behaviour and abuse protection during regional failure.
+      good: Proposes a sound multi-region design but treats every write the same or ignores how revocations propagate.
+      weak: Runs a single primary region with backups, or replicates asynchronously without considering locks and password changes.
+    followups:
+      - A region is cut off with a stale copy of user data. Can users still sign in there, and what are the risks?
+      - How would you test failover without risking a real outage?
+    common_errors:
+      - Letting a lagging region accept an old password after a reset.
+
+  - external_key: system_design.security_architecture.identity_consolidation
+    competency_key: security
+    topic: Merging user bases after an acquisition
+    difficulty: hard
+    text: >-
+      After an acquisition, you need to merge the acquired company's ten million users into your identity
+      platform. Their passwords use a different hashing scheme, many emails overlap with your existing users,
+      and some accounts have MFA. Design the migration without forcing everyone to reset.
+    expected_concepts:
+      - importing foreign hashes and upgrading them on next login
+      - wrapping weak hashes inside a strong hash immediately
+      - handling overlapping emails through explicit verified linking
+      - carrying over MFA enrolments where safe
+      - staged cutover with dual running and rollback
+      - preserving audit history and user identifiers
+    rubric:
+      excellent: Imports and immediately wraps legacy hashes, rehashes on login, never auto-merges overlapping accounts without proof of control, migrates MFA carefully and plans a staged, reversible cutover.
+      good: Handles hash migration correctly but is vague on overlapping identities or cutover safety.
+      weak: Forces a global password reset by email or merges accounts on matching email automatically.
+    followups:
+      - Some legacy hashes are unsalted MD5. What do you do about them on day one?
+      - How do you communicate the change to users without training them to click phishing links?
+    common_errors:
+      - Keeping weak legacy hashes unwrapped until users happen to log in.
+
+  - external_key: system_design.security_architecture.relationship_based_access
+    competency_key: system_design
+    topic: Sharing permissions with inheritance at scale
+    difficulty: hard
+    text: >-
+      Design the permission system for a document collaboration product where documents live in nested folders,
+      can be shared with individuals, groups or link holders, and permissions inherit down the tree. It needs to
+      answer can this user read this document in a few milliseconds for billions of objects.
+    expected_concepts:
+      - relationship tuples between users, groups and objects
+      - permission rules defined as rewrites over relations, such as viewer includes editor
+      - graph traversal for inherited and group access with caching
+      - consistency tokens so new shares and revocations are respected
+      - listing what a user can access versus checking one object
+      - sharding and denormalising hot paths like large groups
+    rubric:
+      excellent: Models access as relationships with rewrite rules, explains how checks traverse inheritance and groups efficiently, handles consistency for revocations and addresses both check and list queries at scale.
+      good: Designs a workable inheritance model with caching but has no clear answer for consistency or list queries.
+      weak: Copies a full access list onto every document, making sharing a folder rewrite millions of rows, or ignores groups and inheritance.
+    followups:
+      - A user is removed from a group and then a sensitive file is added to the folder. How do you guarantee they can't see it?
+      - How would you build the list of documents a user can see for search results?
+    common_errors:
+      - Ignoring the cost of very large groups or very deep folder trees.
+
+  - external_key: system_design.security_architecture.cached_authorisation_consistency
+    competency_key: security
+    topic: Fast authorisation checks that still respect revocation
+    difficulty: hard
+    text: >-
+      To keep latency down, your services cache authorisation decisions for several minutes. Security now requires
+      that removing someone from a project takes effect almost immediately. How would you redesign this without
+      losing the performance benefit?
+    expected_concepts:
+      - event-driven invalidation of cached decisions
+      - versioned permissions so caches detect staleness
+      - shorter TTLs only for sensitive resources
+      - caching inputs such as memberships rather than final decisions
+      - behaviour when the invalidation channel fails
+      - measuring revocation lag as a metric
+    rubric:
+      excellent: Combines versioning or invalidation events with risk-based TTLs, chooses what to cache carefully, defines safe behaviour when invalidation is lost and measures revocation lag explicitly.
+      good: Adds invalidation events and shorter TTLs but does not consider lost events or how to verify the lag.
+      weak: Simply turns caching off or sets a short TTL everywhere without reasoning about load or correctness.
+    followups:
+      - If the invalidation stream lags for ten minutes, what should services do?
+      - How would you prove to an auditor that revocation lag stays under your target?
+    common_errors:
+      - Assuming invalidation messages are never lost.
+
+  - external_key: system_design.security_architecture.passkeys_migration
+    competency_key: security
+    topic: Moving customers to passkeys
+    difficulty: hard
+    text: >-
+      Leadership wants to move millions of consumer accounts from passwords toward passkeys over the next year.
+      Design the architecture and rollout, including how people recover access when they lose all their devices.
+    expected_concepts:
+      - WebAuthn registration and authentication endpoints
+      - multiple passkeys per account and synced versus device-bound credentials
+      - progressive enrolment while passwords still exist
+      - recovery paths that don't reintroduce a weak factor
+      - eventually removing the password for enrolled users
+      - metrics such as enrolment, success rate and support load
+    rubric:
+      excellent: Designs WebAuthn flows with multiple credentials per account, plans progressive enrolment and eventual password removal, builds recovery that preserves assurance and defines success metrics.
+      good: Describes passkey registration and login correctly but leaves passwords as a permanent fallback without addressing that risk.
+      weak: Treats passkeys as just another second factor and keeps every old path open.
+    followups:
+      - How does keeping a password fallback affect the security gain?
+      - What would you do for users on shared or managed devices?
+    common_errors:
+      - Allowing an SMS code to recover an account that was protected only by passkeys.
+
+  - external_key: system_design.security_architecture.delegated_partner_admin
+    competency_key: security
+    topic: Delegated administration across customer tenants
+    difficulty: hard
+    text: >-
+      Managed service partners administer dozens of your customers' tenants on their behalf. Design delegated
+      administration so partners can do their job without permanent, unlimited access to every customer.
+    expected_concepts:
+      - explicit partner-to-tenant relationships approved by the customer
+      - scoped delegated roles rather than full admin
+      - partner identities authenticated by the partner's own provider with MFA
+      - time-bound or just-in-time elevation
+      - audit visible to the customer
+      - customer ability to revoke the relationship instantly
+    rubric:
+      excellent: Models customer-approved partner relationships with scoped roles, strong partner authentication, time-bound elevation, customer-visible audit and instant revocation, and considers a compromised partner.
+      good: Gives partners scoped access per tenant with audit but has no time limits or compromise scenario.
+      weak: Creates admin accounts for partners inside every tenant with shared credentials.
+    followups:
+      - A partner's own environment is breached. How does your design limit the damage across customers?
+      - How do you show a customer exactly what a partner did last month?
+    common_errors:
+      - Giving partners standing global admin across all their customers.
+
+  - external_key: system_design.security_architecture.ai_agent_delegated_access
+    competency_key: security
+    topic: Credentials for AI agents acting for users
+    difficulty: hard
+    text: >-
+      Your company is adding AI agents that act on a user's behalf, reading their tickets, calling internal APIs
+      and sometimes making changes. Design how these agents are authenticated and authorised so their access is
+      limited, traceable and revocable.
+    expected_concepts:
+      - delegated tokens that carry both the user and the agent identity
+      - scopes narrower than the user's own permissions
+      - short-lived credentials per task
+      - human confirmation for high-impact actions
+      - audit logs attributing actions to agent and user
+      - preventing the agent from being steered into misusing its access
+    rubric:
+      excellent: Issues short-lived delegated credentials naming both user and agent, narrows scope to the task, requires confirmation for risky actions, logs attribution clearly and addresses manipulation through untrusted content.
+      good: Uses delegated scoped tokens and audit but misses confirmation for risky actions or manipulation risk.
+      weak: Gives the agent a shared service account with broad access, or reuses the user's full session.
+    followups:
+      - The agent reads an email that tells it to export all customer data. What stops it?
+      - How would a user see and revoke what an agent is allowed to do?
+    common_errors:
+      - Logging agent actions as if the user performed them directly.
+
+  - external_key: system_design.security_architecture.stolen_session_resilience
+    competency_key: security
+    topic: Limiting the value of stolen session tokens
+    difficulty: hard
+    text: >-
+      Infostealer malware is lifting session cookies from your customers' browsers, and attackers replay them to
+      skip MFA entirely. How would you redesign session handling to make stolen sessions much less useful?
+    expected_concepts:
+      - binding tokens to a key held by the client, such as DPoP or device-bound sessions
+      - short session lifetimes with frequent proof of possession
+      - detecting anomalies like sudden network or fingerprint changes
+      - re-authentication for sensitive actions
+      - fast server-side revocation when theft is detected
+      - trade-offs for usability and privacy
+    rubric:
+      excellent: Proposes cryptographic binding of sessions to client-held keys, layers anomaly detection and step-up for sensitive actions, revokes quickly and weighs usability, privacy and browser support.
+      good: Adds anomaly detection and shorter sessions but has no way to bind the token to the legitimate device.
+      weak: Relies on IP address pinning alone or on making cookies HttpOnly, which doesn't stop malware.
+    followups:
+      - What false positives would IP or fingerprint checks cause, and how would you handle them?
+      - How would you roll this out to clients that don't support token binding?
+    common_errors:
+      - Thinking HttpOnly cookies protect against malware on the user's machine.

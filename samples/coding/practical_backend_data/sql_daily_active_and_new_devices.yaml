@@ -1,0 +1,229 @@
+version: 1
+slug: sql_daily_active_and_new_devices
+title: "Rolling 7-Day Active and New Devices (SQL)"
+difficulty: hard
+competency_keys: [sql, databases]
+role_tags: [data, data_analyst, backend, product_manager]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Rolling 7-Day Active and New Devices
+
+  An IoT fleet dashboard tracks how many devices are reporting in. Every check-in a device sends is stored
+  as one row. To keep the query free of vendor-specific date functions, days are stored as **integer day
+  numbers** (day `19000` is followed by day `19001`).
+
+  Table `device_events`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | device_id | VARCHAR(40) | a device can check in many times, also several times on one day |
+  | day | INTEGER | day number of the check-in |
+
+  Produce one row for **every day from the first to the last day that appears in the table, inclusive**,
+  including days on which no device checked in. For each day `d` return:
+
+  - `day`: the day number `d`;
+  - `active_7d`: the number of **distinct** devices with at least one event on a day in `[d - 6, d]`
+    (the seven days ending on `d`, both ends included);
+  - `new_devices`: the number of devices whose **first-ever** event is on day `d`.
+
+  Order the rows by `day` ascending. If the table is empty, return no rows.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite (a recursive common table expression is
+  allowed; avoid date functions).
+
+  ### Example 1
+  ```
+  device_events
+  +----+-----------+-----+
+  | id | device_id | day |
+  +----+-----------+-----+
+  | 1  | thermo-a  | 1   |
+  | 2  | thermo-b  | 1   |
+  | 3  | thermo-a  | 2   |
+  | 4  | thermo-c  | 4   |
+  | 5  | thermo-a  | 4   |
+  | 6  | thermo-b  | 8   |
+  | 7  | thermo-d  | 9   |
+  +----+-----------+-----+
+
+  Output
+  +-----+-----------+-------------+
+  | day | active_7d | new_devices |
+  +-----+-----------+-------------+
+  | 1   | 2         | 2           |
+  | 2   | 2         | 0           |
+  | 3   | 2         | 0           |
+  | 4   | 3         | 1           |
+  | 5   | 3         | 0           |
+  | 6   | 3         | 0           |
+  | 7   | 3         | 0           |
+  | 8   | 3         | 0           |
+  | 9   | 4         | 1           |
+  +-----+-----------+-------------+
+  Day 3 has no events but still appears. On day 8 the window is [2, 8]: thermo-a (days 2 and 4),
+  thermo-c (day 4) and thermo-b (day 8); thermo-b is not new because it first appeared on day 1.
+  ```
+
+  ### Example 2
+  ```
+  device_events
+  +----+-----------+-----+
+  | id | device_id | day |
+  +----+-----------+-----+
+  | 1  | cam-1     | 20  |
+  | 2  | cam-1     | 20  |
+  | 3  | cam-2     | 22  |
+  | 4  | cam-1     | 21  |
+  +----+-----------+-----+
+
+  Output
+  +-----+-----------+-------------+
+  | day | active_7d | new_devices |
+  +-----+-----------+-------------+
+  | 20  | 1         | 1           |
+  | 21  | 1         | 0           |
+  | 22  | 2         | 1           |
+  +-----+-----------+-------------+
+  cam-1 checks in twice on day 20 but is one device.
+  ```
+
+  ### Constraints
+  - The table may be empty; `0 <= day <= 100000` and the last day minus the first day is at most `3650`.
+languages: [sql]
+starter_code:
+  sql: |
+    -- One row per day from the first to the last event day: day, active_7d, new_devices.
+    SELECT day, COUNT(DISTINCT device_id) AS active_7d, 0 AS new_devices
+    FROM device_events
+    GROUP BY day
+    ORDER BY day;
+reference_solutions:
+  sql: |
+    WITH RECURSIVE bounds AS (
+      SELECT MIN(day) AS first_day, MAX(day) AS last_day FROM device_events
+    ),
+    calendar (day) AS (
+      SELECT first_day FROM bounds WHERE first_day IS NOT NULL
+      UNION ALL
+      SELECT c.day + 1 FROM calendar c, bounds b WHERE c.day < b.last_day
+    ),
+    first_seen AS (
+      SELECT device_id, MIN(day) AS first_day FROM device_events GROUP BY device_id
+    )
+    SELECT c.day,
+           (SELECT COUNT(DISTINCT e.device_id)
+              FROM device_events e
+             WHERE e.day BETWEEN c.day - 6 AND c.day) AS active_7d,
+           (SELECT COUNT(*) FROM first_seen f WHERE f.first_day = c.day) AS new_devices
+    FROM calendar c
+    ORDER BY c.day;
+sql_setup: |
+  CREATE TABLE device_events (
+    id INTEGER PRIMARY KEY,
+    device_id VARCHAR(40) NOT NULL,
+    day INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - days without events (3, 5-7) still appear; a device returning on day 8 is not new"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, day) VALUES
+        (1, 'thermo-a', 1), (2, 'thermo-b', 1), (3, 'thermo-a', 2), (4, 'thermo-c', 4),
+        (5, 'thermo-a', 4), (6, 'thermo-b', 8), (7, 'thermo-d', 9);
+    expected_rows: [[1, 2, 2], [2, 2, 0], [3, 2, 0], [4, 3, 1], [5, 3, 0], [6, 3, 0], [7, 3, 0], [8, 3, 0], [9, 4, 1]]
+  - id: t2
+    description: "Example 2 - duplicate events on one day count a device once; events inserted out of day order"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, day) VALUES
+        (1, 'cam-1', 20), (2, 'cam-1', 20), (3, 'cam-2', 22), (4, 'cam-1', 21);
+    expected_rows: [[20, 1, 1], [21, 1, 0], [22, 2, 1]]
+  - id: t3
+    hidden: true
+    description: "Empty table - no rows (the calendar must not produce a NULL day)"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single event - one row"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, day) VALUES (1, 'solo', 500);
+    expected_rows: [[500, 1, 1]]
+  - id: t5
+    hidden: true
+    description: "Window boundary: day 10 still counts on day 16 but not on day 17; a returning device is not new again"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, day) VALUES
+        (1, 'a', 10), (2, 'b', 16), (3, 'a', 17), (4, 'c', 23);
+    expected_rows: [[10, 1, 1], [11, 1, 0], [12, 1, 0], [13, 1, 0], [14, 1, 0], [15, 1, 0], [16, 2, 1], [17, 2, 0], [18, 2, 0], [19, 2, 0], [20, 2, 0], [21, 2, 0], [22, 2, 0], [23, 2, 1]]
+  - id: t6
+    hidden: true
+    description: "Long gap of 29 empty days between two events (zero active days in the middle), day 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, day) VALUES
+        (1, 'x', 0), (2, 'y', 30);
+    expected_rows: [[0, 1, 1], [1, 1, 0], [2, 1, 0], [3, 1, 0], [4, 1, 0], [5, 1, 0], [6, 1, 0], [7, 0, 0], [8, 0, 0], [9, 0, 0], [10, 0, 0], [11, 0, 0], [12, 0, 0], [13, 0, 0], [14, 0, 0], [15, 0, 0], [16, 0, 0], [17, 0, 0], [18, 0, 0], [19, 0, 0], [20, 0, 0], [21, 0, 0], [22, 0, 0], [23, 0, 0], [24, 0, 0], [25, 0, 0], [26, 0, 0], [27, 0, 0], [28, 0, 0], [29, 0, 0], [30, 1, 1]]
+  - id: t7
+    hidden: true
+    description: "Many devices first seen on the same day; same-day repeats across devices"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, day) VALUES
+        (1, 'p', 7), (2, 'q', 7), (3, 'r', 7), (4, 'p', 8), (5, 'q', 9), (6, 's', 9), (7, 'p', 9);
+    expected_rows: [[7, 3, 3], [8, 3, 0], [9, 4, 1]]
+  - id: t8
+    hidden: true
+    description: "60 events from 18 devices skewed toward early days (days 19000-19024)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, day) VALUES
+        (1, 'dev-08', 19011), (2, 'dev-05', 19005), (3, 'dev-16', 19012), (4, 'dev-03', 19011), (5, 'dev-16', 19003), (6, 'dev-08', 19002),
+        (7, 'dev-16', 19009), (8, 'dev-18', 19008), (9, 'dev-05', 19002), (10, 'dev-05', 19020), (11, 'dev-17', 19006), (12, 'dev-01', 19013),
+        (13, 'dev-03', 19001), (14, 'dev-02', 19004), (15, 'dev-01', 19018), (16, 'dev-09', 19008), (17, 'dev-13', 19015), (18, 'dev-14', 19006),
+        (19, 'dev-15', 19023), (20, 'dev-05', 19020), (21, 'dev-04', 19000), (22, 'dev-16', 19002), (23, 'dev-14', 19017), (24, 'dev-10', 19006),
+        (25, 'dev-13', 19010), (26, 'dev-18', 19011), (27, 'dev-08', 19021), (28, 'dev-01', 19019), (29, 'dev-06', 19014), (30, 'dev-11', 19023),
+        (31, 'dev-04', 19015), (32, 'dev-07', 19012), (33, 'dev-09', 19003), (34, 'dev-03', 19008), (35, 'dev-16', 19000), (36, 'dev-03', 19006),
+        (37, 'dev-05', 19000), (38, 'dev-14', 19016), (39, 'dev-04', 19000), (40, 'dev-02', 19005), (41, 'dev-11', 19010), (42, 'dev-09', 19008),
+        (43, 'dev-02', 19004), (44, 'dev-03', 19000), (45, 'dev-18', 19000), (46, 'dev-07', 19023), (47, 'dev-10', 19011), (48, 'dev-05', 19014),
+        (49, 'dev-11', 19004), (50, 'dev-05', 19021), (51, 'dev-13', 19005), (52, 'dev-17', 19005), (53, 'dev-18', 19000), (54, 'dev-17', 19003),
+        (55, 'dev-08', 19022), (56, 'dev-14', 19024), (57, 'dev-17', 19004), (58, 'dev-11', 19000), (59, 'dev-14', 19024), (60, 'dev-11', 19000);
+    expected_rows: [[19000, 6, 6], [19001, 6, 0], [19002, 7, 1], [19003, 9, 2], [19004, 10, 1], [19005, 11, 1], [19006, 13, 2], [19007, 11, 0], [19008, 12, 0], [19009, 11, 0], [19010, 11, 0], [19011, 12, 0], [19012, 11, 1], [19013, 10, 1], [19014, 12, 1], [19015, 12, 0], [19016, 13, 0], [19017, 12, 0], [19018, 8, 0], [19019, 6, 0], [19020, 6, 0], [19021, 6, 0], [19022, 4, 0], [19023, 7, 1], [19024, 7, 0]]
+expected_concepts:
+  - "generating a dense calendar with WITH RECURSIVE between MIN and MAX day"
+  - "COUNT(DISTINCT ...) over a sliding range of days"
+  - "first-seen day per device with GROUP BY and MIN"
+  - "LEFT JOIN or correlated subqueries so empty days keep zero counts"
+  - "handling an empty table without producing a NULL row"
+  - "why a window frame cannot count distinct values directly"
+optimal_complexity: {time: "O(D * n) for the straightforward correlated form, O((D + n) log n) with pre-aggregated device-days", space: "O(D + n)"}
+rubric:
+  excellent: "Generates the calendar with a recursive CTE guarded against the empty table, computes first-seen days once, counts distinct devices in the inclusive seven-day range for every calendar day, explains why COUNT(DISTINCT) cannot be used as a window function in most databases and suggests de-duplicating to device-days first for performance."
+  good: "Correct query after a hint about missing days, the inclusive window bounds or duplicate events."
+  weak: "Groups only by days that have events so empty days disappear, counts events instead of distinct devices, or uses a seven-row window frame that counts rows rather than days."
+  criteria:
+    correctness: "All tests pass, including days without events, duplicate check-ins, returning devices and the empty table."
+    efficiency: "Avoids recomputing the first-seen day per row; mentions reducing events to distinct (device, day) pairs and indexing day."
+    code_quality: "Named CTEs for bounds, calendar and first-seen days; clear output column aliases."
+    edge_cases: "Empty table, single event, long gaps, the boundary day d - 6 and many new devices on one day."
+    communication: "Explains why a ROWS frame over days with events is not the same as a seven-day range."
+hints:
+  - "The output must contain days that have no events at all, so the rows cannot come from grouping the events table; you need a separate list of days."
+  - "Build that list of days with a recursive common table expression running from the minimum to the maximum day, then for each day count devices in the seven-day range and, separately, devices whose earliest day equals it."
+  - "Use one CTE for the min and max day (adding nothing when the table is empty), a recursive CTE that starts at the minimum and adds one until the maximum, and a CTE of each device's minimum day. For every calendar day, count distinct device ids among events whose day is between the calendar day minus six and the calendar day, count first-seen rows equal to the calendar day, and order by day."
+followups:
+  - "How would you change the query to report 30-day active devices as well, without scanning the table twice?"
+  - "Which index or pre-aggregated table would make this fast on billions of events?"
+  - "How would you compute the number of devices that churned (active in the previous seven days but not in the current seven)?"
+  - "How would the query change if days were real DATE values in PostgreSQL?"
+common_errors:
+  - "Grouping by the event day only, so days without events are missing."
+  - "Counting events rather than distinct devices in the window."
+  - "Using an off-by-one window such as [d - 7, d] or [d - 6, d) instead of seven days ending on d."
+  - "Using a ROWS BETWEEN 6 PRECEDING window over grouped days, which spans more than seven days when days are missing."
+  - "Seeding the recursive CTE with a NULL day when the table is empty."

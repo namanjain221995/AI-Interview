@@ -1,0 +1,130 @@
+version: 1
+slug: capped_exponential_backoff_schedule
+title: Retry Backoff Planner
+difficulty: easy
+competency_keys: [problem_solving, code_quality, debugging]
+role_tags: [backend, sre, devops, platform]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Retry Backoff Planner
+
+  A payments client retries a failing call to an upstream service. Before retry number `k`
+  (`k = 1, 2, ..., max_attempts`) it waits
+
+  ```
+  delay(k) = min(cap_ms, base_ms * multiplier^(k - 1))
+  ```
+
+  milliseconds. The client also has an overall time budget: the **sum of all delays it waits** may never
+  exceed `total_budget_ms`. Retries are planned in order, and as soon as waiting the next delay would
+  push the running total **above** `total_budget_ms`, the client gives up and plans no further retries
+  (it does not skip ahead to a later, smaller delay). Reaching the budget exactly is allowed.
+
+  Return the list of delays the client actually waits, in order. Return an empty list when no retry fits.
+
+  `multiplier^(k - 1)` grows very quickly: your solution must give the right answer for large
+  `max_attempts` without overflowing.
+
+  ### Example 1
+  ```
+  Input:  base_ms = 100, multiplier = 2, cap_ms = 1000, max_attempts = 6, total_budget_ms = 10000
+  Output: [100, 200, 400, 800, 1000, 1000]
+  Explanation: the fifth delay would be 1600 but is capped at 1000; the total 3500 stays within budget.
+  ```
+
+  ### Example 2
+  ```
+  Input:  base_ms = 100, multiplier = 3, cap_ms = 5000, max_attempts = 10, total_budget_ms = 1500
+  Output: [100, 300, 900]
+  Explanation: the running total is 1300 after three retries; the fourth delay 2700 would exceed 1500.
+  ```
+
+  ### Constraints
+  - `1 <= base_ms <= 10^12`
+  - `1 <= multiplier <= 10`
+  - `1 <= cap_ms <= 10^12`
+  - `0 <= max_attempts <= 10^5`
+  - `0 <= total_budget_ms <= 10^15`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: capped_exponential_backoff_schedule
+  params:
+    - {name: base_ms, type: long}
+    - {name: multiplier, type: int}
+    - {name: cap_ms, type: long}
+    - {name: max_attempts, type: int}
+    - {name: total_budget_ms, type: long}
+  return_type: "long[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def capped_exponential_backoff_schedule(
+        base_ms: int, multiplier: int, cap_ms: int, max_attempts: int, total_budget_ms: int
+    ) -> list[int]:
+        delays: list[int] = []
+        raw = base_ms  # uncapped delay, but never grown past the cap
+        total = 0
+        for _ in range(max_attempts):
+            delay = min(cap_ms, raw)
+            if total + delay > total_budget_ms:
+                break
+            delays.append(delay)
+            total += delay
+            if raw < cap_ms:
+                raw *= multiplier  # raw < cap <= 10^12 and multiplier <= 10, so this fits in 64 bits
+        return delays
+  javascript: |
+    function cappedExponentialBackoffSchedule(baseMs, multiplier, capMs, maxAttempts, totalBudgetMs) {
+      const delays = [];
+      let raw = baseMs;
+      let total = 0;
+      for (let k = 0; k < maxAttempts; k++) {
+        const delay = Math.min(capMs, raw);
+        if (total + delay > totalBudgetMs) break;
+        delays.push(delay);
+        total += delay;
+        if (raw < capMs) raw *= multiplier;
+      }
+      return delays;
+    }
+tests:
+  - {id: t1, args: [100, 2, 1000, 6, 10000], expected: [100, 200, 400, 800, 1000, 1000], description: "Example 1 - cap reached, budget not limiting"}
+  - {id: t2, args: [100, 3, 5000, 10, 1500], expected: [100, 300, 900], description: "Example 2 - budget stops the plan early"}
+  - {id: t3, hidden: true, args: [100, 2, 1000, 0, 10000], expected: [], description: "max_attempts 0 gives no retries"}
+  - {id: t4, hidden: true, args: [1, 2, 10, 5, 0], expected: [], description: "Zero budget: even the first delay does not fit"}
+  - {id: t5, hidden: true, args: [250, 1, 1000, 4, 1000], expected: [250, 250, 250, 250], description: "Multiplier 1 and the budget is met exactly"}
+  - {id: t6, hidden: true, args: [5000, 2, 3000, 3, 100000], expected: [3000, 3000, 3000], description: "Base above the cap: every delay is capped"}
+  - {id: t7, hidden: true, args: [1, 10, 1000000000000, 100, 5000000000000], expected: [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000, 10000000000, 100000000000, 1000000000000, 1000000000000, 1000000000000, 1000000000000], description: "Large k with multiplier 10: naive powers overflow 64 bits; cap then budget stop"}
+  - {id: t8, hidden: true, args: [1000000000000, 10, 1000000000000, 3, 1000000000000000], expected: [1000000000000, 1000000000000, 1000000000000], description: "Largest base and cap values"}
+  - {id: t9, hidden: true, args: [50, 2, 400, 8, 1000], expected: [50, 100, 200, 400], description: "Budget reached exactly after the cap kicks in"}
+  - {id: t10, hidden: true, args: [7, 3, 100000, 40, 999], expected: [7, 21, 63, 189, 567], description: "Budget stops growth before the cap matters"}
+expected_concepts:
+  - iterative growth of the delay instead of computing a power each time
+  - stopping growth once the cap is reached to avoid overflow
+  - running total checked before committing each delay
+  - early termination when the budget would be exceeded
+optimal_complexity: {time: "O(r) where r is the number of retries returned (at most max_attempts)", space: "O(r) for the output"}
+rubric:
+  excellent: "Grows the delay iteratively, stops multiplying once the cap is reached so nothing overflows, checks the budget before adding each delay, and explains the stop-not-skip rule and the multiplier 1 and zero-budget cases."
+  good: "Correct schedule and budget handling; overflow on large attempt counts is fixed after a hint."
+  weak: "Computes the power directly and overflows, adds a delay before checking the budget, or skips a delay that does not fit and keeps going."
+  criteria:
+    correctness: "All tests pass, including budgets met exactly, zero budgets and zero attempts."
+    efficiency: "Linear in the number of planned retries, with constant work per retry."
+    code_quality: "The loop has one clear stopping rule; names such as delay, total and budget match the statement."
+    edge_cases: "Multiplier 1, base above the cap, max_attempts 0, budget 0, budget equal to the total, and 60 or more attempts with large multipliers."
+    communication: "Explains why the multiplication is guarded and how the approach avoids floating-point powers."
+hints:
+  - "Rather than computing a power for each attempt, think about how each delay relates to the one before it."
+  - "Each uncapped delay is the previous one times the multiplier, but once it reaches the cap it never needs to grow again; before accepting a delay, check whether it still fits in the remaining budget."
+  - "Keep the current uncapped delay and the running total. For each attempt take the smaller of the cap and the current delay, stop the whole loop if adding it would exceed the budget, otherwise record it and add it, and multiply the current delay only while it is still below the cap so the value stays small enough for 64-bit integers."
+followups:
+  - "How would you add full jitter so that many clients do not retry in lockstep?"
+  - "How would you make the budget a wall-clock deadline that also includes the time spent on each attempt?"
+  - "Which errors should never be retried, and how would the planner know?"
+common_errors:
+  - "Using a floating-point or integer power for every attempt, which overflows for large k."
+  - "Adding the delay to the total before checking the budget, so the plan overshoots by one retry."
+  - "Skipping a delay that does not fit and continuing with later ones instead of stopping."
+  - "Treating a budget reached exactly as exceeded."
+  - "Multiplying an already capped delay forever until it overflows and wraps negative."

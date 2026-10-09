@@ -1,0 +1,259 @@
+version: 1
+slug: endpoint_p90_latency_sql
+title: P90 Latency per Endpoint
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, sre, backend]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## P90 Latency per Endpoint
+
+  An API gateway stores one row per sampled request in table `latency_sample`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | endpoint | VARCHAR(60) | endpoint name (lowercase letters only) |
+  | latency_ms | INTEGER | request latency in milliseconds, `>= 0` |
+
+  The SRE team reports the **p90 latency** of every endpoint using the **nearest-rank** definition, so
+  the reported value is always a latency that was actually observed:
+
+  1. Sort the endpoint's `n` samples by `latency_ms` ascending (duplicates are kept and each one counts).
+  2. The p90 rank is `ceil(0.9 * n)`, counting from 1. Compute it with **integer arithmetic**, for
+     example `(9 * n + 9) / 10` with integer division, not with floating-point functions.
+  3. The p90 is the latency at that rank.
+
+  Return one row per endpoint that has at least one sample, with columns `endpoint` and `p90_ms`,
+  ordered by `endpoint` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  latency_sample
+  +----+-----------+------------+
+  | id | endpoint  | latency_ms |
+  +----+-----------+------------+
+  | 1  | checkout  | 210        |
+  | 2  | search    | 18         |
+  | 3  | checkout  | 45         |
+  | 4  | checkout  | 130        |
+  | 5  | inventory | 12         |
+  | 6  | checkout  | 45         |
+  | 7  | search    | 7          |
+  | 8  | checkout  | 900        |
+  | 9  | checkout  | 160        |
+  | 10 | checkout  | 75         |
+  | 11 | search    | 30         |
+  | 12 | checkout  | 98         |
+  | 13 | checkout  | 140        |
+  | 14 | checkout  | 61         |
+  +----+-----------+------------+
+
+  Output
+  +-----------+--------+
+  | endpoint  | p90_ms |
+  +-----------+--------+
+  | checkout  | 210    |
+  | inventory | 12     |
+  | search    | 30     |
+  +-----------+--------+
+  checkout has 10 samples, rank ceil(9.0) = 9 in [45, 45, 61, 75, 98, 130, 140, 160, 210, 900] -> 210.
+  search has 3 samples, rank ceil(2.7) = 3 -> 30. A single sample is its own p90.
+  ```
+
+  ### Example 2
+  ```
+  latency_sample
+  +----+----------+------------+
+  | id | endpoint | latency_ms |
+  +----+----------+------------+
+  | 1  | profile  | 40         |
+  | 2  | login    | 7          |
+  | 3  | login    | 3          |
+  | 4  | profile  | 40         |
+  | 5  | login    | 11         |
+  | 6  | login    | 1          |
+  | 7  | profile  | 90         |
+  | 8  | login    | 9          |
+  | 9  | login    | 5          |
+  | 10 | profile  | 40         |
+  | 11 | login    | 10         |
+  | 12 | login    | 2          |
+  | 13 | login    | 8          |
+  | 14 | profile  | 40         |
+  | 15 | login    | 4          |
+  | 16 | login    | 6          |
+  +----+----------+------------+
+
+  Output
+  +----------+--------+
+  | endpoint | p90_ms |
+  +----------+--------+
+  | login    | 10     |
+  | profile  | 90     |
+  +----------+--------+
+  login has 11 samples 1..11, rank ceil(9.9) = 10 -> 10. profile has 5 samples, rank ceil(4.5) = 5 -> 90.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `0 <= latency_ms <= 10^9`
+  - `endpoint` contains only lowercase letters `a-z`
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return endpoint and its nearest-rank p90 latency (p90_ms), ordered by endpoint.
+    SELECT endpoint, MAX(latency_ms) AS p90_ms
+    FROM latency_sample
+    GROUP BY endpoint
+    ORDER BY endpoint;
+reference_solutions:
+  sql: |
+    WITH ranked AS (
+      SELECT
+        endpoint,
+        latency_ms,
+        ROW_NUMBER() OVER (PARTITION BY endpoint ORDER BY latency_ms, id) AS rn,
+        COUNT(*) OVER (PARTITION BY endpoint) AS n
+      FROM latency_sample
+    )
+    SELECT endpoint, latency_ms AS p90_ms
+    FROM ranked
+    WHERE rn = (9 * n + 9) / 10
+    ORDER BY endpoint;
+sql_setup: |
+  CREATE TABLE latency_sample (
+    id INTEGER PRIMARY KEY,
+    endpoint VARCHAR(60) NOT NULL,
+    latency_ms INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - ten, three and one samples"
+    ordered: true
+    setup_sql: |
+      INSERT INTO latency_sample (id, endpoint, latency_ms) VALUES
+        (1, 'checkout', 210), (2, 'search', 18), (3, 'checkout', 45), (4, 'checkout', 130),
+        (5, 'inventory', 12), (6, 'checkout', 45), (7, 'search', 7), (8, 'checkout', 900),
+        (9, 'checkout', 160), (10, 'checkout', 75), (11, 'search', 30), (12, 'checkout', 98),
+        (13, 'checkout', 140), (14, 'checkout', 61);
+    expected_rows: [["checkout", 210], ["inventory", 12], ["search", 30]]
+  - id: t2
+    description: "Example 2 - rank 10 of 11, and duplicates below a single slow sample"
+    ordered: true
+    setup_sql: |
+      INSERT INTO latency_sample (id, endpoint, latency_ms) VALUES
+        (1, 'profile', 40), (2, 'login', 7), (3, 'login', 3), (4, 'profile', 40), (5, 'login', 11),
+        (6, 'login', 1), (7, 'profile', 90), (8, 'login', 9), (9, 'login', 5), (10, 'profile', 40),
+        (11, 'login', 10), (12, 'login', 2), (13, 'login', 8), (14, 'profile', 40), (15, 'login', 4),
+        (16, 'login', 6);
+    expected_rows: [["login", 10], ["profile", 90]]
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Two samples - nearest rank is the larger one, not an interpolated value"
+    ordered: true
+    setup_sql: |
+      INSERT INTO latency_sample (id, endpoint, latency_ms) VALUES
+        (1, 'cart', 100), (2, 'cart', 200);
+    expected_rows: [["cart", 200]]
+  - id: t5
+    hidden: true
+    description: "Every sample identical"
+    ordered: true
+    setup_sql: |
+      INSERT INTO latency_sample (id, endpoint, latency_ms) VALUES
+        (1, 'auth', 25), (2, 'auth', 25), (3, 'auth', 25), (4, 'auth', 25), (5, 'auth', 25),
+        (6, 'auth', 25);
+    expected_rows: [["auth", 25]]
+  - id: t6
+    hidden: true
+    description: "Nineteen samples - rank 18, floor-based rank gives 17"
+    ordered: true
+    setup_sql: |
+      INSERT INTO latency_sample (id, endpoint, latency_ms) VALUES
+        (1, 'billing', 19), (8, 'billing', 3), (15, 'billing', 17), (3, 'billing', 1),
+        (10, 'billing', 15), (17, 'billing', 5), (5, 'billing', 13), (12, 'billing', 7),
+        (19, 'billing', 11), (7, 'billing', 9), (14, 'billing', 2), (2, 'billing', 18),
+        (9, 'billing', 4), (16, 'billing', 16), (4, 'billing', 6), (11, 'billing', 14),
+        (18, 'billing', 8), (6, 'billing', 12), (13, 'billing', 10);
+    expected_rows: [["billing", 18]]
+  - id: t7
+    hidden: true
+    description: "Twenty samples with the two largest equal - rank 18"
+    ordered: true
+    setup_sql: |
+      INSERT INTO latency_sample (id, endpoint, latency_ms) VALUES
+        (1, 'reports', 5), (8, 'reports', 500), (15, 'reports', 40), (2, 'reports', 35),
+        (9, 'reports', 30), (16, 'reports', 25), (3, 'reports', 20), (10, 'reports', 15),
+        (17, 'reports', 10), (4, 'reports', 45), (11, 'reports', 50), (18, 'reports', 55),
+        (5, 'reports', 60), (12, 'reports', 65), (19, 'reports', 70), (6, 'reports', 75),
+        (13, 'reports', 80), (20, 'reports', 85), (7, 'reports', 500), (14, 'reports', 90);
+    expected_rows: [["reports", 90]]
+  - id: t8
+    hidden: true
+    description: "Large latencies and ids inserted out of order across endpoints"
+    ordered: true
+    setup_sql: |
+      INSERT INTO latency_sample (id, endpoint, latency_ms) VALUES
+        (7, 'upload', 1000000000), (6, 'export', 999999999), (5, 'upload', 1), (4, 'export', 2),
+        (3, 'upload', 750000000), (2, 'export', 3), (1, 'upload', 2000000);
+    expected_rows: [["export", 999999999], ["upload", 1000000000]]
+  - id: t9
+    hidden: true
+    description: "60 pseudo-random samples spread over five endpoints"
+    ordered: true
+    setup_sql: |
+      INSERT INTO latency_sample (id, endpoint, latency_ms) VALUES
+        (1, 'orders', 827), (8, 'catalog', 40), (15, 'alerts', 733), (22, 'alerts', 548),
+        (29, 'alerts', 502), (36, 'alerts', 725), (43, 'catalog', 50), (50, 'shipping', 583),
+        (57, 'orders', 252), (4, 'catalog', 581), (11, 'catalog', 257), (18, 'orders', 476),
+        (25, 'alerts', 429), (32, 'billing', 600), (39, 'catalog', 556), (46, 'orders', 708),
+        (53, 'orders', 617), (60, 'catalog', 366), (7, 'billing', 657), (14, 'shipping', 352),
+        (21, 'alerts', 656), (28, 'alerts', 871), (35, 'alerts', 146), (42, 'shipping', 142),
+        (49, 'orders', 898), (56, 'billing', 546), (3, 'shipping', 270), (10, 'orders', 815),
+        (17, 'billing', 416), (24, 'alerts', 129), (31, 'catalog', 356), (38, 'orders', 804),
+        (45, 'shipping', 72), (52, 'catalog', 99), (59, 'alerts', 118), (6, 'alerts', 75),
+        (13, 'billing', 91), (20, 'alerts', 168), (27, 'shipping', 546), (34, 'orders', 646),
+        (41, 'shipping', 825), (48, 'alerts', 304), (55, 'shipping', 330), (2, 'orders', 435),
+        (9, 'alerts', 834), (16, 'billing', 731), (23, 'catalog', 333), (30, 'alerts', 691),
+        (37, 'shipping', 726), (44, 'billing', 8), (51, 'alerts', 394), (58, 'billing', 615),
+        (5, 'shipping', 597), (12, 'shipping', 409), (19, 'billing', 739), (26, 'orders', 173),
+        (33, 'shipping', 543), (40, 'alerts', 365), (47, 'billing', 438), (54, 'alerts', 486);
+    expected_rows: [["alerts", 834], ["billing", 731], ["catalog", 581], ["orders", 827], ["shipping", 726]]
+expected_concepts:
+  - ROW_NUMBER over a partition ordered by latency
+  - COUNT(*) as a window function for the partition size
+  - nearest-rank percentile with an integer ceiling
+  - integer division semantics across databases
+  - deterministic tie-breaking among equal latencies
+optimal_complexity: {time: "O(n log n) for the per-endpoint sort", space: O(n)}
+rubric:
+  excellent: Numbers each endpoint's samples with ROW_NUMBER, gets the partition size with COUNT(*) OVER, keeps the row whose number equals (9 * n + 9) / 10, explains why that is ceil(0.9 * n) in integer arithmetic and why ties do not affect the value, and orders the result by endpoint.
+  good: Correct query after a hint about the rank formula or window functions, perhaps with a correlated subquery instead of a window count.
+  weak: Uses MAX, AVG or an interpolating percentile, rounds the rank with floating-point functions that differ between databases, or forgets the ordering.
+  criteria:
+    correctness: All tests pass, including two-sample endpoints, n = 19 and 11 where floor and ceiling differ, and duplicates.
+    efficiency: One window pass per endpoint; no correlated subquery per row.
+    code_quality: A named CTE for the ranked rows and clear output column names.
+    edge_cases: Empty table, single-sample endpoints, all-equal latencies and very large latencies.
+    communication: Explains the nearest-rank definition and why integer arithmetic is portable and exact.
+hints:
+  - The p90 of one endpoint only needs that endpoint's samples in sorted order and how many there are.
+  - Window functions can give each row its position inside its endpoint (sorted by latency) and the endpoint's total count in the same pass.
+  - In a CTE compute ROW_NUMBER() OVER (PARTITION BY endpoint ORDER BY latency_ms, id) and COUNT(*) OVER (PARTITION BY endpoint), then keep rows where the row number equals (9 * count + 9) / 10 and order by endpoint.
+followups:
+  - How would you report p50, p90 and p99 in one query?
+  - How does nearest rank differ from PERCENTILE_CONT, and when would you prefer each?
+  - Which index helps this query on a table with billions of samples, and when would you switch to pre-aggregated histograms?
+common_errors:
+  - Using floor(0.9 * n) instead of the ceiling, which picks the wrong rank when 0.9 * n is not an integer.
+  - Relying on CEIL or ROUND of floating-point values, which behave differently between SQLite and PostgreSQL.
+  - Using an interpolating percentile that returns a value that was never observed.
+  - Forgetting ORDER BY endpoint when the order of the result matters.

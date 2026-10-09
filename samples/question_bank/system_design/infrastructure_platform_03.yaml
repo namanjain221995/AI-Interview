@@ -1,0 +1,611 @@
+# System design: infrastructure and platforms (3 of 4) — secrets, configuration, keys and identity services.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [devops, platform, sre]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.infrastructure_platform.app_config_per_environment
+    competency_key: system_design
+    topic: Configuration per environment
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A service needs different database hosts, feature settings and limits in development, staging and
+      production. How would you design the way it gets its configuration, so the same build runs everywhere?
+    expected_concepts:
+      - configuration separated from the build artifact
+      - layered defaults with per-environment overrides
+      - configuration stored and reviewed as code
+      - secrets kept apart from ordinary configuration
+      - validation at startup with clear failures
+    rubric:
+      excellent: Keeps one artifact with externalised, layered configuration reviewed as code, separates secrets, and validates configuration at startup so a bad value fails fast and clearly.
+      good: Uses environment-specific config files or variables outside the build with some separation of secrets.
+      weak: Builds a different artifact per environment or hardcodes values in the code.
+    followups:
+      - How would you see the difference between staging and production configuration?
+      - What should the service do if a required setting is missing?
+    common_errors:
+      - Mixing secrets into ordinary configuration files that many people can read.
+
+  - external_key: system_design.infrastructure_platform.secrets_small_team
+    competency_key: security
+    topic: Secrets for a small team on Kubernetes
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A small team runs a handful of services on one Kubernetes cluster and keeps passwords in a shared
+      document. Design a simple but sound way for them to store secrets and get them to their services.
+    expected_concepts:
+      - a managed secrets store or encrypted secrets in Git
+      - access limited per service and per person
+      - delivery to pods as mounted files or synced Kubernetes secrets
+      - encryption at rest in the cluster
+      - audit of access and a plan for rotation
+    rubric:
+      excellent: Picks a proportionate store, limits access per service, delivers secrets to pods without baking them into images, enables encryption at rest and plans for audit and rotation.
+      good: Moves secrets into a proper store or encrypted form with per-service access.
+      weak: Puts secrets in plain Kubernetes manifests in Git or in container images.
+    followups:
+      - How would you rotate the database password once this is in place?
+      - Who should be able to read production secrets?
+    common_errors:
+      - Assuming base64 in a Kubernetes secret is encryption.
+
+  - external_key: system_design.infrastructure_platform.certificate_automation_basics
+    competency_key: security
+    topic: Automating TLS certificates
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Last quarter two outages were caused by expired TLS certificates. How would you design certificate
+      management so that expiry stops being something people have to remember?
+    expected_concepts:
+      - automated issuance and renewal (for example ACME)
+      - short-lived certificates renewed well before expiry
+      - inventory of all certificates in use
+      - monitoring and alerting on time to expiry
+      - reloading services without downtime
+    rubric:
+      excellent: Automates issuance and renewal with short lifetimes, keeps an inventory that includes certificates outside the automation, monitors time to expiry as a backstop, and makes sure services pick up new certificates.
+      good: Proposes automated renewal plus monitoring of expiry.
+      weak: Proposes a calendar reminder or spreadsheet of expiry dates.
+    followups:
+      - How would you find certificates you don't know about?
+      - What happens if renewal succeeds but the service keeps serving the old certificate?
+    common_errors:
+      - Renewing the certificate file without the service reloading it.
+
+  - external_key: system_design.infrastructure_platform.kill_switch_service
+    competency_key: system_design
+    topic: Emergency switches for features
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      During incidents, teams want to turn off an expensive feature in seconds without a deploy. Design a
+      simple kill switch service for that.
+    expected_concepts:
+      - central store of switches with owners
+      - clients cache values and poll or subscribe for changes
+      - safe default when the service is unreachable
+      - access control and audit of who flipped what
+      - cleaning up switches that are no longer needed
+    rubric:
+      excellent: Designs a central store with owned switches, client-side caching with fast propagation, a deliberate default when the service is unavailable, and audited, access-controlled changes.
+      good: Describes a central flag store that services read with caching.
+      weak: Requires a config change and redeploy, or has every request call the service synchronously.
+    followups:
+      - What should a service do if it can't reach the switch service at startup?
+      - How fast does a change reach every instance in your design?
+    common_errors:
+      - Making the hot path depend on a live call to the switch service.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.infrastructure_platform.dynamic_config_service
+    competency_key: distributed_systems
+    topic: Dynamic configuration service
+    difficulty: medium
+    text: >-
+      Design a dynamic configuration service that lets teams change settings for running services without
+      redeploying. Cover how changes are stored, validated, delivered and rolled back.
+    expected_concepts:
+      - versioned configuration with history
+      - schema validation and review before publish
+      - push or long-poll delivery with client caching
+      - staged rollout of changes
+      - instant rollback to a previous version
+      - clients keep last known good if the service is unreachable
+    rubric:
+      excellent: Stores versioned, schema-validated configuration, delivers it with caching and last known good fallback, rolls out changes in stages and supports immediate rollback, all with audit.
+      good: Describes a versioned store with delivery and rollback.
+      weak: Lets anyone edit values that take effect everywhere immediately with no validation or history.
+    followups:
+      - How would you roll a config change out to ten percent of instances first?
+      - What if the config service itself is down when a new instance boots?
+    common_errors:
+      - Treating config changes as safe and skipping the staged rollout used for code.
+
+  - external_key: system_design.infrastructure_platform.secrets_manager_architecture
+    competency_key: security
+    topic: Architecture of a secrets manager
+    difficulty: medium
+    text: >-
+      Suppose your company decides to run its own secrets manager instead of buying one. Design its
+      architecture: how secrets are stored, encrypted, accessed and audited, and how it stays available.
+    expected_concepts:
+      - envelope encryption with a root key in an HSM or KMS
+      - authentication via workload and human identity
+      - fine-grained policy per path or secret
+      - append-only audit log of every access
+      - replicated storage and highly available servers
+      - unseal or key recovery procedure
+    rubric:
+      excellent: Uses envelope encryption anchored in a hardware or managed key, authenticates by identity with fine-grained policy, logs every access immutably, replicates for availability and plans key recovery.
+      good: Covers encryption at rest, access policies, audit and some availability.
+      weak: Stores secrets in a database table with one shared encryption key in the app config.
+    followups:
+      - How do you recover if the root key is lost?
+      - Why might you still want to buy rather than build this?
+    common_errors:
+      - Storing the encryption key alongside the encrypted data.
+
+  - external_key: system_design.infrastructure_platform.secret_rotation_orchestrator
+    competency_key: security
+    topic: Orchestrating credential rotation
+    difficulty: medium
+    text: >-
+      Policy now says every database and third-party API credential must rotate every thirty days. Design a
+      rotation system that does this automatically across hundreds of services without causing outages.
+    expected_concepts:
+      - dual credentials with overlap periods
+      - per-credential-type rotation plugins
+      - consumers reload credentials without restart
+      - verification that the new credential works before revoking the old
+      - tracking which consumers still use the old credential
+      - alerting and manual fallback on failure
+    rubric:
+      excellent: Uses overlapping dual credentials, rotation plugins per system, live reload in consumers, verification before revocation, usage tracking of old credentials, and clear failure handling.
+      good: Automates rotation with an overlap window and verification.
+      weak: Changes the password and restarts every service at the same time.
+    followups:
+      - A third-party API only allows one active key — how do you rotate that?
+      - How do you know every consumer has switched before revoking the old credential?
+    common_errors:
+      - Revoking the old credential before confirming all consumers picked up the new one.
+
+  - external_key: system_design.infrastructure_platform.internal_pki_service
+    competency_key: security
+    topic: Internal certificate authority for service identity
+    difficulty: medium
+    text: >-
+      Design an internal certificate authority service that issues certificates for mutual TLS between all
+      your services. Cover the CA hierarchy, issuance, lifetimes and what happens when the CA is unavailable.
+    expected_concepts:
+      - offline root and online intermediates
+      - authenticating workloads before issuance
+      - short certificate lifetimes with automatic renewal
+      - renewal well before expiry so CA outages are survivable
+      - revocation versus relying on short lifetimes
+      - audit of every issued certificate
+    rubric:
+      excellent: Keeps the root offline with online intermediates, authenticates workloads before issuing, uses short lifetimes with early renewal to ride out CA outages, chooses a revocation approach and audits issuance.
+      good: Describes a hierarchy, automatic issuance and renewal.
+      weak: Uses one long-lived self-signed CA key on a shared server and multi-year certificates.
+    followups:
+      - How long should certificates live, and what drives that choice?
+      - The issuing CA is down for an hour — what breaks?
+    common_errors:
+      - Long-lived certificates that make revocation the only defence.
+
+  - external_key: system_design.infrastructure_platform.encryption_service_api
+    competency_key: security
+    topic: Encryption as a platform service
+    difficulty: medium
+    text: >-
+      Many teams need to encrypt sensitive fields in their databases, and each is doing it differently. Design
+      a platform encryption service with an API they can all use, including how keys are rotated.
+    expected_concepts:
+      - envelope encryption with data keys and key-encryption keys
+      - key versioning stored with ciphertext
+      - per-tenant or per-domain keys
+      - local caching of data keys to limit latency
+      - re-encryption or lazy migration on rotation
+      - access control and audit per key
+    rubric:
+      excellent: Uses envelope encryption with versioned keys recorded alongside ciphertext, scopes keys per domain, caches data keys carefully for latency, rotates without bulk downtime and audits key use.
+      good: Designs a shared API with managed keys and some rotation plan.
+      weak: Gives every team the same static key to use in their own code.
+    followups:
+      - What does rotation mean for data that was encrypted two years ago?
+      - How would you keep this service from adding latency to every request?
+    common_errors:
+      - Not storing key version with the ciphertext, which makes rotation impossible.
+
+  - external_key: system_design.infrastructure_platform.config_client_library
+    competency_key: distributed_systems
+    topic: Client behaviour for configuration and secrets
+    difficulty: medium
+    text: >-
+      You're writing the client library every service uses to fetch configuration and secrets from the
+      platform. Design how it behaves at startup, during normal running and when the backend is slow or down.
+    expected_concepts:
+      - bounded startup wait with clear failure
+      - local cache and last known good persisted
+      - background refresh with jitter
+      - change notifications to the application
+      - metrics for staleness and fetch errors
+      - avoiding thundering herd on backend recovery
+    rubric:
+      excellent: Defines startup behaviour, persists last known good, refreshes in the background with jitter and backoff, notifies the app of changes, exposes staleness metrics and protects the backend from synchronised retries.
+      good: Includes caching, retries and fallback to last known values.
+      weak: Fetches on every read or crashes when the backend is unreachable.
+    followups:
+      - Should a service start if it can only load stale configuration?
+      - How would you know a fleet is running on stale values?
+    common_errors:
+      - Retrying without jitter so every client hammers the backend at the same moment it recovers.
+
+  - external_key: system_design.infrastructure_platform.secret_zero_bootstrap
+    competency_key: security
+    topic: Bootstrapping the first credential
+    difficulty: medium
+    text: >-
+      Every secrets system has a chicken-and-egg problem: a workload needs some credential to fetch its other
+      credentials. Design how a new virtual machine or pod proves who it is and gets its first secret.
+    expected_concepts:
+      - platform-attested identity (cloud instance identity, Kubernetes service account tokens)
+      - exchanging attested identity for a short-lived token
+      - no long-lived bootstrap secret baked into images
+      - binding policies to identity attributes
+      - limiting replay with audience and expiry
+    rubric:
+      excellent: Uses platform attestation such as instance identity documents or projected service account tokens, exchanges them for short-lived scoped tokens, binds policy to identity attributes and limits replay.
+      good: Relies on cloud or Kubernetes identity rather than baked-in secrets.
+      weak: Bakes a shared bootstrap secret into images or environment variables.
+    followups:
+      - What stops a compromised pod from requesting another workload's secrets?
+      - How does this work on bare-metal machines with no cloud identity?
+    common_errors:
+      - A shared bootstrap token that, once leaked, unlocks everything.
+
+  - external_key: system_design.infrastructure_platform.tamper_evident_audit_log
+    competency_key: security
+    topic: Tamper-evident audit trail for platform actions
+    difficulty: medium
+    text: >-
+      Auditors want proof that nobody, including platform administrators, can quietly alter the record of who
+      accessed secrets or changed production infrastructure. Design that audit trail.
+    expected_concepts:
+      - structured events from every control point
+      - append-only storage in a separate account with restricted access
+      - hash chaining or signed batches to detect tampering
+      - retention and legal hold
+      - alerting on gaps in the event stream
+      - search for investigations
+    rubric:
+      excellent: Collects structured events from every control point, stores them append-only in a separately controlled account, makes tampering detectable with chaining or signing, monitors for gaps and supports investigation queries.
+      good: Ships logs to immutable storage with restricted access and retention.
+      weak: Keeps audit logs in the same system administrators can edit.
+    followups:
+      - How would you notice that events stopped arriving from one system?
+      - Who should have delete rights on this storage, if anyone?
+    common_errors:
+      - Ignoring that an administrator could simply turn audit logging off.
+
+  - external_key: system_design.infrastructure_platform.secret_sprawl_migration
+    competency_key: security
+    topic: Finding and migrating scattered secrets
+    difficulty: medium
+    text: >-
+      Secrets are scattered across repositories, CI variables, config files on servers and wiki pages. Design a
+      programme and supporting tooling to find them and move everything into your secrets manager.
+    expected_concepts:
+      - scanning repositories, history, CI settings and hosts
+      - triage by risk and validity
+      - rotating rather than just moving exposed secrets
+      - migration tooling and client libraries for teams
+      - preventing new sprawl with pre-commit and CI scanning
+      - tracking progress per team
+    rubric:
+      excellent: Discovers secrets across code, history, CI and hosts, prioritises by risk, rotates anything exposed, gives teams easy migration paths and blocks new leaks, while tracking progress.
+      good: Scans for secrets, migrates them and adds prevention.
+      weak: Only searches the current branch of repositories and copies secrets into the new store unchanged.
+    followups:
+      - Why isn't deleting a secret from the repository enough?
+      - How would you get teams to prioritise this work?
+    common_errors:
+      - Moving secrets into the vault without rotating ones that were already exposed.
+
+  - external_key: system_design.infrastructure_platform.internal_authz_service
+    competency_key: security
+    topic: Central authorisation for internal services
+    difficulty: medium
+    text: >-
+      Each internal service has its own ad hoc rules about which other services may call which endpoints.
+      Design a central authorisation system for service-to-service calls.
+    expected_concepts:
+      - authenticated service identity as the input
+      - policies defined as code and reviewed
+      - local policy evaluation via sidecar or library to avoid latency
+      - policy distribution and versioning
+      - default-deny with gradual rollout in audit mode
+      - decision logs
+    rubric:
+      excellent: Bases decisions on authenticated identity, keeps policies in reviewed code, evaluates locally with distributed, versioned policy, rolls out in audit mode before enforcing and logs decisions.
+      good: Proposes central policies with local enforcement and identity-based rules.
+      weak: Relies on network location or shared API keys to decide who can call what.
+    followups:
+      - How would you introduce default-deny without breaking existing traffic?
+      - What should happen if a sidecar can't get the latest policy?
+    common_errors:
+      - Calling a central decision service synchronously on every request.
+
+  - external_key: system_design.infrastructure_platform.ssh_certificate_access
+    competency_key: security
+    topic: Engineer access to servers
+    difficulty: medium
+    text: >-
+      Engineers reach production servers with personal SSH keys that are copied onto hosts and never removed.
+      Design an access system that replaces this.
+    expected_concepts:
+      - single sign-on to obtain short-lived SSH certificates
+      - host trust in a certificate authority instead of authorised key files
+      - access tied to role and requiring justification for production
+      - session recording or audit
+      - bastion or identity-aware proxy
+      - break-glass access
+    rubric:
+      excellent: Issues short-lived certificates through single sign-on, has hosts trust the CA, scopes access by role with justification for production, records sessions and provides break-glass.
+      good: Moves to centrally managed, short-lived credentials with auditing.
+      weak: Centralises the list of public keys but keeps them long-lived.
+    followups:
+      - Someone leaves the company — how quickly does their access end?
+      - How do engineers get in when single sign-on is down?
+    common_errors:
+      - Keeping long-lived keys and only adding a bastion in front.
+
+  - external_key: system_design.infrastructure_platform.tenant_config_overrides
+    competency_key: system_design
+    topic: Layered configuration with tenant overrides
+    difficulty: medium
+    text: >-
+      Your product's behaviour is configured globally, per region, per customer plan and per individual
+      customer, and nobody can tell which value actually applies. Design a configuration system that handles
+      these layers cleanly.
+    expected_concepts:
+      - explicit precedence order of layers
+      - typed schema with defaults
+      - explaining the effective value and where it came from
+      - validation of overrides against allowed ranges
+      - audit and ownership of each layer
+      - efficient resolution at runtime with caching
+    rubric:
+      excellent: Defines clear precedence and typed schemas, can show the effective value with its source, validates overrides, assigns ownership per layer and resolves efficiently at runtime.
+      good: Describes layered overrides with a clear precedence order.
+      weak: Lets overrides live in several unrelated places with no defined precedence.
+    followups:
+      - How would support staff find out why one customer behaves differently?
+      - How do you clean up overrides that no longer matter?
+    common_errors:
+      - No way to see which layer supplied the effective value.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.infrastructure_platform.multi_region_secrets_replication
+    competency_key: distributed_systems
+    topic: Secrets service across regions
+    difficulty: hard
+    text: >-
+      Your secrets service runs in one region and every other region depends on it. Design a multi-region
+      version where each region can keep reading and rotating secrets even if it's cut off from the others.
+    expected_concepts:
+      - read replicas or full copies per region
+      - write topology and conflict handling
+      - consistency of rotations across regions
+      - regional encryption keys and key availability
+      - behaviour during partition for reads and writes
+      - failover of the write primary
+    rubric:
+      excellent: Chooses a write model and explains its consistency during partitions, keeps regional reads independent, addresses key availability per region, defines how rotations propagate safely and how write leadership fails over.
+      good: Replicates secrets to each region with a primary for writes and some partition reasoning.
+      weak: Puts a load balancer in front of the single-region service.
+    followups:
+      - A rotation happens in one region during a partition — what do other regions see?
+      - What does each region need locally to decrypt secrets?
+    common_errors:
+      - Replicating encrypted data but keeping the decryption key available only in one region.
+
+  - external_key: system_design.infrastructure_platform.cross_cloud_workload_identity
+    competency_key: security
+    topic: One workload identity across clouds
+    difficulty: hard
+    text: >-
+      Workloads run in two public clouds and on-premises, and they need to call each other and each cloud's
+      APIs without long-lived keys. Design a unified workload identity system.
+    expected_concepts:
+      - single identity format and trust domain (for example SPIFFE-style)
+      - node and workload attestation per environment
+      - federation with each cloud's identity provider via OIDC
+      - short-lived credentials with automatic renewal
+      - mapping identities to cloud roles and policies
+      - issuer availability and trust bundle distribution
+    rubric:
+      excellent: Defines one identity scheme with environment-specific attestation, federates with each cloud through OIDC, issues short-lived credentials, maps identities to permissions consistently and keeps issuers and trust bundles highly available.
+      good: Uses federation and short-lived credentials with a common naming scheme.
+      weak: Creates static service account keys in each cloud and distributes them as secrets.
+    followups:
+      - How does an on-premises machine prove its identity without a cloud metadata service?
+      - What happens to calls when the identity issuer is unreachable?
+    common_errors:
+      - Weak attestation that lets any workload on a node claim any identity.
+
+  - external_key: system_design.infrastructure_platform.global_config_push
+    competency_key: distributed_systems
+    topic: Pushing configuration to a huge fleet
+    difficulty: hard
+    text: >-
+      Design a system that pushes configuration changes to a hundred thousand hosts worldwide within thirty
+      seconds, while making it very hard for a bad change to take everything down at once.
+    expected_concepts:
+      - fan-out tree or regional distribution layers
+      - versioned, content-addressed config snapshots
+      - staged propagation with automatic health checks
+      - an emergency fast path with tighter controls
+      - hosts validate before applying and keep last known good
+      - monitoring convergence across the fleet
+    rubric:
+      excellent: Distributes through regional fan-out with versioned snapshots, stages normal changes with health-based halting, provides a controlled fast path, validates on host with last known good fallback and measures convergence.
+      good: Achieves fast distribution with staging and rollback.
+      weak: Has every host poll one central server, or pushes to all hosts simultaneously.
+    followups:
+      - How do you reconcile the thirty-second goal with staged rollout?
+      - How would you know which hosts haven't converged?
+    common_errors:
+      - Validating config only for syntax, not for its effect on running services.
+
+  - external_key: system_design.infrastructure_platform.customer_managed_keys
+    competency_key: security
+    topic: Customer-managed encryption keys
+    difficulty: hard
+    text: >-
+      Enterprise customers want their data on your platform encrypted with keys they control in their own key
+      management service, with the ability to revoke your access. Design how the platform supports this.
+    expected_concepts:
+      - per-customer key-encryption keys in the customer's KMS
+      - envelope encryption with cached data keys
+      - cross-account grants and their audit
+      - behaviour when the customer revokes or the KMS is unavailable
+      - key rotation without re-encrypting all data at once
+      - operational impact on backups, search indexes and logs
+    rubric:
+      excellent: Wraps per-customer data keys with the customer's key, caches carefully with bounded lifetimes, defines exactly what happens on revocation or outage, handles rotation, and covers derived copies like backups and indexes.
+      good: Describes envelope encryption with customer keys and revocation behaviour.
+      weak: Stores a copy of the customer's key on the platform.
+    followups:
+      - The customer's KMS has an outage — does their service go down?
+      - What about data in logs, caches and search indexes?
+    common_errors:
+      - Forgetting derived copies of data that remain readable after revocation.
+
+  - external_key: system_design.infrastructure_platform.ca_rotation_fleet
+    competency_key: security
+    topic: Rotating a certificate authority across the fleet
+    difficulty: hard
+    text: >-
+      The intermediate certificate authority behind all of your internal mutual TLS needs to be replaced, and
+      every service trusts it today. Design the rotation so nothing loses connectivity.
+    expected_concepts:
+      - distributing a trust bundle containing old and new CAs first
+      - verifying trust propagation before issuing from the new CA
+      - reissuing leaf certificates gradually
+      - removing the old CA only after all leaves are replaced
+      - discovering clients with pinned or hardcoded trust
+      - rollback plan at each phase
+    rubric:
+      excellent: Sequences the rotation as add new trust, verify, reissue leaves, then remove old trust, with verification and rollback at each step, and plans for clients with pinned or hardcoded trust.
+      good: Describes dual trust during transition and gradual reissue.
+      weak: Swaps the CA and reissues all certificates at once.
+    followups:
+      - How would you know every client trusts the new CA before switching issuance?
+      - What if the rotation is an emergency because the old CA key leaked?
+    common_errors:
+      - Issuing from the new CA before every client trusts it.
+
+  - external_key: system_design.infrastructure_platform.airgapped_secrets_distribution
+    competency_key: security
+    topic: Secrets for disconnected sites
+    difficulty: hard
+    text: >-
+      Your software runs at dozens of customer sites that have no network connection back to you, and those
+      deployments still need certificates, credentials and licences that expire and rotate. Design how secrets
+      reach and are managed at those sites.
+    expected_concepts:
+      - a local secrets authority at each site
+      - signed and encrypted offline update bundles
+      - longer validity windows balanced against risk
+      - site-specific keys so one site's compromise doesn't affect others
+      - local audit with periodic export
+      - recovery when a site misses an update
+    rubric:
+      excellent: Runs a local authority per site, delivers signed and encrypted bundles, isolates keys per site, chooses validity windows deliberately, keeps local audit and plans recovery from missed updates.
+      good: Uses offline bundles with signing and a local store.
+      weak: Ships the same long-lived credentials to every site.
+    followups:
+      - A site misses two update cycles — what stops working, and how do you recover?
+      - How would you revoke a credential at a site you can't reach?
+    common_errors:
+      - Sharing keys across sites so one compromise exposes every customer.
+
+  - external_key: system_design.infrastructure_platform.kms_provider_migration
+    competency_key: security
+    topic: Migrating every secret to a new key provider
+    difficulty: hard
+    text: >-
+      You need to move from one key management provider to another, and the old one encrypts every secret,
+      database field and backup you have. Design the migration so that nothing becomes unreadable along the way.
+    expected_concepts:
+      - inventory of everything encrypted under old keys
+      - dual-provider support with key version metadata
+      - re-wrapping data keys rather than re-encrypting all data
+      - backups and archives with long retention
+      - verification of decryption after migration
+      - keeping old keys available until proven unnecessary
+    rubric:
+      excellent: Inventories all encrypted data including backups, supports both providers during transition, re-wraps data keys where possible, verifies decryptability and keeps old keys retrievable until every dependency is proven gone.
+      good: Plans a phased re-encryption with both providers available.
+      weak: Re-encrypts live data and deletes the old keys, ignoring backups.
+    followups:
+      - What about backups that must be retained for seven years?
+      - How would you prove nothing still depends on the old keys?
+    common_errors:
+      - Destroying old keys while long-retention backups still need them.
+
+  - external_key: system_design.infrastructure_platform.emergency_revocation
+    competency_key: security
+    topic: Revoking a compromised identity everywhere
+    difficulty: hard
+    text: >-
+      A service's credentials and certificate have been stolen. Design the platform capability to revoke that
+      identity everywhere within minutes, across clusters, clouds and caches.
+    expected_concepts:
+      - short-lived credentials as the baseline
+      - revocation lists or deny lists pushed to enforcement points
+      - invalidating cached tokens and sessions
+      - re-issuing to the legitimate workload under new identity
+      - inventory of everywhere the identity is trusted
+      - rehearsal and measured time to revoke
+    rubric:
+      excellent: Combines short lifetimes with pushed deny lists to every enforcement point, invalidates caches, reissues safely to the real workload, knows where the identity is trusted and rehearses revocation with measured timing.
+      good: Revokes credentials and certificates and rotates the workload's identity.
+      weak: Deletes the credential at the source and assumes caches and tokens stop working on their own.
+    followups:
+      - Which systems would keep accepting the stolen token, and for how long?
+      - How do you restore the legitimate service quickly afterwards?
+    common_errors:
+      - Forgetting tokens that remain valid until expiry after the source credential is deleted.
+
+  - external_key: system_design.infrastructure_platform.secret_fetch_thundering_herd
+    competency_key: distributed_systems
+    topic: Secrets service under mass restart
+    difficulty: hard
+    text: >-
+      After a region-wide restart, fifty thousand pods start at once and all request their secrets within the
+      same minute, and the secrets service falls over. Design the system so this load is handled gracefully.
+    expected_concepts:
+      - capacity planning for peak restart load
+      - client jitter and exponential backoff
+      - node-level caching agents
+      - read replicas and horizontal scaling of the read path
+      - admission control and prioritisation
+      - startup behaviour while waiting
+    rubric:
+      excellent: Plans for the restart peak, spreads load with jitter and backoff, adds node-level caching, scales reads horizontally, sheds or prioritises load and defines what pods do while waiting.
+      good: Adds caching, backoff and more read capacity.
+      weak: Only proposes making the secrets service bigger.
+    followups:
+      - Which workloads should get their secrets first?
+      - How would you test this before the next real mass restart?
+    common_errors:
+      - Retries without jitter that keep the service overloaded after the first failure.

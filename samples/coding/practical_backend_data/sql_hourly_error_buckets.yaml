@@ -1,0 +1,210 @@
+version: 1
+slug: sql_hourly_error_buckets
+title: Hourly Request and Error Counts (SQL)
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [backend, sre, data_analyst, data]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Hourly Request and Error Counts
+
+  An API gateway writes one row per request to table `request_log`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | ts | INTEGER | request time as Unix epoch seconds (UTC), `ts >= 0` |
+  | status | INTEGER | HTTP status code returned to the client |
+
+  For an error-rate panel, return one row per **hour that has at least one request** with:
+
+  - `hour_start`: the start of the hour, i.e. `ts` rounded **down** to a multiple of `3600`. Compute it
+    with integer arithmetic on `ts`; do not use date or time functions.
+  - `total_requests`: the number of requests in that hour.
+  - `error_requests`: how many of them have `status >= 500` (`0` when there are none, never NULL).
+
+  Order the rows by `hour_start` ascending. Hours without requests do not appear.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example
+  ```
+  request_log
+  +----+------------+--------+
+  | id | ts         | status |
+  +----+------------+--------+
+  | 1  | 1700000000 | 200    |
+  | 2  | 1700001000 | 503    |
+  | 3  | 1700002000 | 200    |
+  | 4  | 1700003000 | 404    |
+  | 5  | 1700003599 | 500    |
+  | 6  | 1700010000 | 502    |
+  +----+------------+--------+
+
+  Output
+  +------------+----------------+----------------+
+  | hour_start | total_requests | error_requests |
+  +------------+----------------+----------------+
+  | 1699999200 | 3              | 1              |
+  | 1700002800 | 2              | 1              |
+  | 1700010000 | 1              | 1              |
+  +------------+----------------+----------------+
+  1700003599 is the last second of the hour that starts at 1700002800; 404 is not an error;
+  1700010000 is itself a multiple of 3600.
+  ```
+
+  ### Example 2
+  ```
+  request_log
+  +----+-------+--------+
+  | id | ts    | status |
+  +----+-------+--------+
+  | 1  | 7200  | 200    |
+  | 2  | 7300  | 301    |
+  | 3  | 10799 | 404    |
+  +----+-------+--------+
+
+  Output
+  +------------+----------------+----------------+
+  | hour_start | total_requests | error_requests |
+  +------------+----------------+----------------+
+  | 7200       | 3              | 0              |
+  +------------+----------------+----------------+
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return hour_start, total_requests and error_requests per hour, ordered by hour_start.
+    SELECT ts AS hour_start, 1 AS total_requests, 0 AS error_requests
+    FROM request_log;
+reference_solutions:
+  sql: |
+    SELECT (ts / 3600) * 3600 AS hour_start,
+           COUNT(*) AS total_requests,
+           SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS error_requests
+    FROM request_log
+    GROUP BY (ts / 3600) * 3600
+    ORDER BY hour_start;
+sql_setup: |
+  CREATE TABLE request_log (
+    id INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL,
+    status INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example - two hours, the boundary row at ...599 stays in the earlier hour, empty hours omitted"
+    setup_sql: |
+      INSERT INTO request_log (id, ts, status) VALUES
+        (1, 1700000000, 200), (2, 1700001000, 503), (3, 1700002000, 200), (4, 1700003000, 404), (5, 1700003599, 500),
+        (6, 1700010000, 502);
+    expected_rows: [[1699999200, 3, 1], [1700002800, 2, 1], [1700010000, 1, 1]]
+  - id: t2
+    ordered: true
+    description: "Only successful requests - error_requests must be 0, not NULL"
+    setup_sql: |
+      INSERT INTO request_log (id, ts, status) VALUES (1, 7200, 200), (2, 7300, 301), (3, 10799, 404);
+    expected_rows: [[7200, 3, 0]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Status 499 is not an error and 500 is; 599 is an error"
+    setup_sql: |
+      INSERT INTO request_log (id, ts, status) VALUES
+        (1, 3600, 499), (2, 3601, 500), (3, 3602, 599), (4, 3603, 200);
+    expected_rows: [[3600, 4, 2]]
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Timestamps exactly on hour boundaries and one second before"
+    setup_sql: |
+      INSERT INTO request_log (id, ts, status) VALUES
+        (1, 0, 500), (2, 3599, 200), (3, 3600, 503), (4, 7199, 200), (5, 7200, 200);
+    expected_rows: [[0, 2, 1], [3600, 2, 1], [7200, 1, 0]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Rows inserted out of time order; output must still be ordered by hour_start"
+    setup_sql: |
+      INSERT INTO request_log (id, ts, status) VALUES
+        (1, 1700020000, 500), (2, 1700000500, 200), (3, 1700010000, 502), (4, 1700000001, 504);
+    expected_rows: [[1699999200, 2, 1], [1700010000, 1, 1], [1700017200, 1, 1]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Single hour where every request failed"
+    setup_sql: |
+      INSERT INTO request_log (id, ts, status) VALUES
+        (1, 1699999200, 500), (2, 1699999300, 502), (3, 1700002799, 503);
+    expected_rows: [[1699999200, 3, 3]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Hours far apart with gaps in between are not filled"
+    setup_sql: |
+      INSERT INTO request_log (id, ts, status) VALUES (1, 0, 200), (2, 86400, 500), (3, 2000000000, 200);
+    expected_rows: [[0, 1, 0], [86400, 1, 1], [1999998000, 1, 0]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Stress - about 100 requests over six hours with one empty hour"
+    setup_sql: |
+      INSERT INTO request_log (id, ts, status) VALUES
+        (1, 1704075481, 301), (2, 1704073665, 201), (3, 1704073528, 504), (4, 1704070970, 204), (5, 1704082805, 429),
+        (6, 1704087232, 201), (7, 1704071966, 429), (8, 1704087865, 500), (9, 1704083604, 200), (10, 1704076373, 200),
+        (11, 1704083490, 200), (12, 1704073466, 429), (15, 1704071043, 200), (16, 1704085254, 503), (17, 1704075731, 429),
+        (18, 1704082589, 201), (19, 1704074592, 201), (20, 1704069555, 200), (21, 1704073757, 502), (22, 1704085553, 404),
+        (23, 1704086707, 502), (24, 1704084853, 200), (25, 1704070471, 504), (26, 1704074148, 502), (27, 1704077976, 504),
+        (28, 1704070075, 200), (29, 1704086103, 404), (30, 1704069799, 503), (31, 1704084828, 200), (32, 1704076110, 404),
+        (33, 1704087747, 503), (34, 1704085289, 200), (36, 1704069047, 504), (38, 1704086287, 499), (39, 1704084598, 201),
+        (40, 1704074381, 499), (41, 1704082675, 400), (42, 1704071733, 503), (44, 1704068350, 200), (45, 1704083446, 500),
+        (46, 1704068492, 502), (49, 1704075589, 429), (50, 1704085642, 502), (51, 1704083219, 200), (52, 1704088520, 404),
+        (53, 1704088647, 200), (54, 1704072030, 204), (55, 1704084605, 200), (56, 1704067762, 504), (57, 1704083109, 301),
+        (59, 1704067223, 200), (60, 1704082975, 200), (61, 1704068075, 502), (62, 1704067468, 201), (63, 1704070089, 500),
+        (64, 1704082478, 200), (66, 1704070578, 504), (67, 1704071644, 201), (68, 1704075769, 201), (69, 1704070016, 200),
+        (70, 1704072582, 200), (71, 1704068022, 200), (72, 1704074846, 500), (73, 1704083633, 503), (75, 1704086897, 400),
+        (76, 1704083240, 429), (77, 1704075975, 499), (78, 1704070576, 404), (79, 1704087574, 400), (80, 1704076867, 429),
+        (81, 1704076252, 204), (82, 1704082068, 504), (83, 1704073396, 200), (84, 1704086593, 404), (85, 1704069518, 200),
+        (86, 1704067816, 502), (87, 1704071830, 200), (88, 1704070147, 500), (89, 1704070781, 429), (90, 1704073885, 500),
+        (91, 1704069922, 503), (93, 1704070754, 500), (95, 1704082281, 404), (96, 1704084649, 502), (98, 1704088497, 400),
+        (99, 1704075425, 204), (100, 1704070022, 504), (101, 1704084357, 301), (102, 1704077522, 201), (103, 1704076409, 301),
+        (104, 1704082865, 502), (105, 1704088678, 429), (107, 1704084714, 400), (108, 1704075552, 400), (109, 1704085610, 504),
+        (110, 1704088785, 204), (111, 1704069785, 204), (112, 1704070578, 200), (113, 1704071707, 301), (114, 1704068805, 201),
+        (115, 1704086495, 499), (116, 1704085583, 499), (117, 1704086197, 200), (118, 1704084491, 200), (119, 1704086419, 200),
+        (120, 1704088153, 502);
+    expected_rows: [[1704067200, 26, 13], [1704070800, 17, 5], [1704074400, 16, 2], [1704081600, 23, 5], [1704085200, 24, 7]]
+expected_concepts:
+  - integer division to bucket timestamps
+  - GROUP BY on a computed expression
+  - conditional aggregation with SUM(CASE ...) or COUNT(CASE ...)
+  - deterministic ORDER BY
+optimal_complexity: {time: O(n log n) for grouping and sorting, space: O(h) where h is the number of non-empty hours}
+rubric:
+  excellent: Buckets with (ts / 3600) * 3600, groups by that expression, counts errors with SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END), orders by hour_start and explains why integer division floors only for non-negative timestamps.
+  good: Correct query after a hint about NULL from a CASE without ELSE or about the >= 500 boundary.
+  weak: Uses vendor-specific date functions, groups by the raw ts, filters errors in WHERE (losing hours or totals) or omits ORDER BY.
+  criteria:
+    correctness: All tests pass, including hour boundaries, hours with no errors and status 499 versus 500.
+    efficiency: One grouped scan; mentions an index on ts for time-range filtering.
+    code_quality: Clear output aliases and the bucket expression written once or referenced consistently.
+    edge_cases: Empty table, rows exactly on the hour, all-error hours and out-of-order inserts.
+    communication: Explains why a WHERE status >= 500 filter would break total_requests.
+hints:
+  - Every request in the same hour shares the same value once its timestamp is rounded down to the hour; group on that value.
+  - Integer division by 3600 followed by multiplication by 3600 rounds down for non-negative timestamps. Counting errors needs a condition inside the aggregate, not in WHERE.
+  - Select (ts / 3600) * 3600 as hour_start with COUNT(*) and SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END), group by the same bucket expression and order by hour_start.
+followups:
+  - How would you also return hours with zero requests in a given range?
+  - How would you compute the error rate as a percentage with two decimals portably?
+  - Which index helps when the panel only shows the last 24 hours?
+common_errors:
+  - Putting status >= 500 in the WHERE clause, which drops successful requests from total_requests and hides hours without errors.
+  - Writing CASE WHEN status >= 500 THEN 1 END inside SUM, which returns NULL for hours without errors.
+  - Using status > 500, which misses 500 Internal Server Error.
+  - Relying on GROUP BY order instead of an explicit ORDER BY.

@@ -1,0 +1,155 @@
+version: 1
+slug: region_load_rectangle_queries
+title: "Region Load After Traffic Shifts"
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [data, data_analyst, backend, sre]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Region Load After Traffic Shifts
+
+  A capacity planner models a fleet of edge sites as a `rows x cols` grid. Every site starts with a
+  load of `0` requests per second. The planner then replays a batch of **traffic shifts**: a shift
+  `[r1, c1, r2, c2, delta]` adds `delta` to the load of **every** site in the rectangle from `(r1, c1)`
+  to `(r2, c2)`, both corners inclusive. `delta` may be negative (traffic drained away), so a site's load
+  can end up negative.
+
+  After **all** shifts have been applied, a dashboard sends rectangle queries `[r1, c1, r2, c2]`
+  (inclusive corners). Return the total load inside each query rectangle, in the **same order as the
+  queries**. Return an empty list when there are no queries.
+
+  Both lists can be long and the rectangles can be large, so applying each shift cell by cell or summing
+  each query cell by cell is too slow; aim for a solution that is linear in the grid size plus the number
+  of shifts and queries.
+
+  ### Example 1
+  ```
+  Input:  rows = 3, cols = 4, shifts = [[0, 0, 1, 1, 5], [1, 1, 2, 3, -2]], queries = [[0, 0, 2, 3], [1, 1, 1, 1], [2, 0, 2, 3]]
+  Output: [8, 3, -6]
+  Explanation: After both shifts the loads are
+    row 0:  5   5   0   0
+    row 1:  5   3  -2  -2
+    row 2:  0  -2  -2  -2
+  The whole grid sums to 8, site (1, 1) holds 3 and row 2 sums to -6.
+  ```
+
+  ### Example 2
+  ```
+  Input:  rows = 1, cols = 5, shifts = [[0, 1, 0, 3, 4], [0, 2, 0, 4, 1]], queries = [[0, 0, 0, 4], [0, 2, 0, 2]]
+  Output: [15, 5]
+  Explanation: The loads are 0, 4, 5, 5, 1.
+  ```
+
+  ### Constraints
+  - `1 <= rows, cols <= 300`
+  - `0 <= shifts.length <= 10^4`, each shift is `[r1, c1, r2, c2, delta]` with `-10^6 <= delta <= 10^6`
+  - `0 <= queries.length <= 10^4`, each query is `[r1, c1, r2, c2]`
+  - For shifts and queries: `0 <= r1 <= r2 < rows` and `0 <= c1 <= c2 < cols`
+  - Totals can exceed the 32-bit range; return them as 64-bit integers.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: region_load_sums
+  params:
+    - {name: rows, type: "int"}
+    - {name: cols, type: "int"}
+    - {name: shifts, type: "int[][]"}
+    - {name: queries, type: "int[][]"}
+  return_type: "long[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def region_load_sums(rows: int, cols: int, shifts: list[list[int]], queries: list[list[int]]) -> list[int]:
+        # 2D difference array: mark the four corners of every shift.
+        diff = [[0] * (cols + 1) for _ in range(rows + 1)]
+        for r1, c1, r2, c2, delta in shifts:
+            diff[r1][c1] += delta
+            diff[r1][c2 + 1] -= delta
+            diff[r2 + 1][c1] -= delta
+            diff[r2 + 1][c2 + 1] += delta
+
+        # First prefix pass turns the differences into per-site loads,
+        # the second builds inclusive prefix sums with a zero border.
+        load = [[0] * cols for _ in range(rows)]
+        prefix = [[0] * (cols + 1) for _ in range(rows + 1)]
+        for r in range(rows):
+            for c in range(cols):
+                value = diff[r][c]
+                if r > 0:
+                    value += load[r - 1][c]
+                if c > 0:
+                    value += load[r][c - 1]
+                if r > 0 and c > 0:
+                    value -= load[r - 1][c - 1]
+                load[r][c] = value
+                prefix[r + 1][c + 1] = value + prefix[r][c + 1] + prefix[r + 1][c] - prefix[r][c]
+
+        return [
+            prefix[r2 + 1][c2 + 1] - prefix[r1][c2 + 1] - prefix[r2 + 1][c1] + prefix[r1][c1]
+            for r1, c1, r2, c2 in queries
+        ]
+  javascript: |
+    function regionLoadSums(rows, cols, shifts, queries) {
+      const diff = Array.from({ length: rows + 1 }, () => new Array(cols + 1).fill(0));
+      for (const [r1, c1, r2, c2, delta] of shifts) {
+        diff[r1][c1] += delta;
+        diff[r1][c2 + 1] -= delta;
+        diff[r2 + 1][c1] -= delta;
+        diff[r2 + 1][c2 + 1] += delta;
+      }
+      const load = Array.from({ length: rows }, () => new Array(cols).fill(0));
+      const prefix = Array.from({ length: rows + 1 }, () => new Array(cols + 1).fill(0));
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          let value = diff[r][c];
+          if (r > 0) value += load[r - 1][c];
+          if (c > 0) value += load[r][c - 1];
+          if (r > 0 && c > 0) value -= load[r - 1][c - 1];
+          load[r][c] = value;
+          prefix[r + 1][c + 1] = value + prefix[r][c + 1] + prefix[r + 1][c] - prefix[r][c];
+        }
+      }
+      return queries.map(([r1, c1, r2, c2]) =>
+        prefix[r2 + 1][c2 + 1] - prefix[r1][c2 + 1] - prefix[r2 + 1][c1] + prefix[r1][c1]);
+    }
+tests:
+  - {id: t1, args: [3, 4, [[0, 0, 1, 1, 5], [1, 1, 2, 3, -2]], [[0, 0, 2, 3], [1, 1, 1, 1], [2, 0, 2, 3]]], expected: [8, 3, -6], description: "Example 1 - overlapping shifts with a negative delta"}
+  - {id: t2, args: [1, 5, [[0, 1, 0, 3, 4], [0, 2, 0, 4, 1]], [[0, 0, 0, 4], [0, 2, 0, 2]]], expected: [15, 5], description: "Example 2 - single row, shifts touching the last column"}
+  - {id: t3, hidden: true, args: [2, 3, [], [[0, 0, 1, 2], [1, 2, 1, 2]]], expected: [0, 0], description: "No shifts - every total is zero"}
+  - {id: t4, hidden: true, args: [4, 4, [[0, 0, 3, 3, 9]], []], expected: [], description: "No queries - empty result"}
+  - {id: t5, hidden: true, args: [1, 1, [[0, 0, 0, 0, 7], [0, 0, 0, 0, -7], [0, 0, 0, 0, 3]], [[0, 0, 0, 0], [0, 0, 0, 0]]], expected: [3, 3], description: "1 x 1 grid, shifts cancel out, repeated query"}
+  - {id: t6, hidden: true, args: [5, 1, [[0, 0, 4, 0, 2], [3, 0, 4, 0, -5], [2, 0, 2, 0, 10]], [[0, 0, 4, 0], [3, 0, 4, 0], [0, 0, 2, 0]]], expected: [10, -6, 16], description: "Single column, shifts reaching the last row"}
+  - {id: t7, hidden: true, args: [300, 300, [[0, 0, 299, 299, 1000000], [0, 0, 299, 299, 1000000], [0, 0, 299, 299, 1000000], [150, 150, 299, 299, -1000000]], [[0, 0, 299, 299], [150, 150, 299, 299], [0, 0, 0, 0]]], expected: [247500000000, 45000000000, 3000000], description: "300 x 300 grid with maximal deltas - totals exceed 32 bits"}
+  - {id: t8, hidden: true, args: [300, 300, [[0, 0, 299, 299, -1000000], [0, 0, 299, 299, -1000000]], [[0, 0, 299, 299], [299, 0, 299, 299]]], expected: [-180000000000, -600000000], description: "Large negative totals beyond the 32-bit range"}
+  - {id: t9, hidden: true, args: [8, 9, [[2, 5, 3, 7, 30], [0, 4, 1, 7, 20], [3, 7, 3, 8, 20], [6, 2, 7, 3, 31], [2, 0, 6, 1, -30], [0, 0, 4, 4, 10], [6, 6, 6, 7, -33], [1, 0, 5, 2, 13], [3, 4, 4, 6, 3], [5, 6, 6, 8, 24], [3, 0, 5, 4, 27], [2, 1, 5, 8, 41], [3, 1, 4, 4, -42], [7, 1, 7, 5, -42], [2, 0, 6, 4, 4], [1, 0, 6, 0, -2], [4, 3, 5, 8, -46], [0, 1, 4, 1, 26], [0, 4, 3, 6, 28], [2, 0, 4, 5, -10], [2, 6, 5, 6, 8], [1, 4, 6, 8, 5], [3, 4, 4, 6, 16], [4, 0, 5, 6, 24], [0, 2, 5, 6, -43], [5, 5, 7, 5, 27], [4, 0, 7, 0, 36], [0, 4, 5, 7, -12], [2, 2, 5, 5, -10], [4, 4, 5, 6, -37]], [[0, 4, 2, 8], [3, 3, 4, 5], [2, 1, 6, 1], [5, 3, 5, 7], [1, 3, 2, 5], [4, 1, 7, 3], [0, 2, 3, 5], [4, 1, 5, 5], [2, 4, 6, 8], [4, 5, 7, 6], [4, 0, 6, 6], [2, 0, 6, 3], [6, 3, 7, 8], [0, 4, 7, 8], [3, 1, 5, 4], [1, 0, 3, 0], [3, 0, 6, 0], [1, 2, 7, 8], [3, 0, 4, 8], [0, 1, 6, 5]]], expected: [228, -142, 209, -125, 7, 144, -46, -73, 272, -184, 83, 414, 29, 234, 70, 18, 164, 218, 221, 144], description: "Random 8 x 9 grid with 30 overlapping shifts and 20 queries"}
+  - {id: t10, hidden: true, args: [50, 60, [[26, 19, 33, 51, -233232], [11, 45, 18, 49, 476856], [34, 7, 42, 17, 924122], [1, 24, 15, 52, 565304], [16, 32, 26, 55, 682700], [20, 43, 40, 54, 982215], [25, 8, 46, 35, -869573], [8, 9, 12, 56, 479684], [34, 43, 35, 51, -559578], [21, 7, 34, 56, 500699], [4, 19, 40, 26, -828320], [30, 38, 32, 40, -703029], [26, 32, 43, 52, 929327], [1, 23, 21, 27, 198947], [3, 22, 48, 47, -894523], [23, 37, 30, 49, -989184], [15, 7, 25, 35, -551539], [15, 3, 33, 23, -439641], [4, 12, 17, 47, 266462], [34, 35, 35, 57, -728449], [16, 19, 42, 58, -270566], [10, 6, 20, 21, 906396], [36, 17, 37, 50, -297221], [0, 22, 3, 48, -959703], [29, 17, 47, 30, 327711], [3, 12, 46, 19, -458775], [4, 45, 47, 58, 16921], [1, 33, 39, 36, 438642], [8, 31, 25, 46, 995302], [25, 11, 37, 12, -472738], [9, 7, 43, 58, -554587], [3, 19, 34, 51, 865865], [20, 3, 20, 10, 941876], [5, 44, 26, 49, -346035], [16, 25, 42, 30, -842678], [5, 34, 34, 40, -493110], [14, 16, 34, 36, -657307], [3, 46, 18, 56, 20922], [25, 31, 37, 52, -533439], [26, 33, 35, 40, -66644], [4, 13, 29, 48, -519624], [20, 12, 30, 52, -236444], [1, 36, 38, 47, 190949], [27, 3, 33, 57, 745410], [21, 10, 37, 59, 165722], [14, 20, 39, 23, -638949], [13, 19, 48, 27, -254430], [28, 5, 37, 33, -778726], [0, 12, 33, 36, 884552], [35, 11, 45, 48, -57582], [28, 32, 29, 54, -712351], [34, 28, 35, 30, -974625], [16, 0, 18, 11, 732919], [21, 21, 29, 48, -556979], [3, 6, 17, 33, 399095], [0, 1, 44, 7, -10748], [19, 13, 45, 39, 635800], [6, 52, 49, 58, 756150], [1, 34, 29, 52, 592324], [14, 1, 41, 54, -161183], [7, 3, 27, 47, 130725], [3, 16, 12, 34, -434954], [22, 34, 22, 37, 718795], [25, 0, 26, 58, 102586], [21, 5, 48, 48, 571811], [2, 46, 40, 55, -402671], [20, 7, 20, 21, -733131], [15, 31, 34, 59, 723514], [18, 7, 28, 16, -475761], [4, 19, 43, 26, 436281], [12, 8, 30, 23, -551987], [32, 9, 36, 50, -383826], [5, 28, 27, 33, 882105], [24, 33, 49, 38, 594105], [9, 9, 42, 35, -655086], [34, 20, 37, 59, 34263], [18, 4, 26, 39, -504734], [10, 9, 45, 49, -505852], [27, 20, 35, 34, 589785], [28, 32, 48, 51, -730505], [15, 16, 18, 31, 53553], [12, 0, 23, 40, -743257], [21, 4, 31, 27, -818436], [24, 10, 32, 15, -851971], [4, 18, 18, 21, 901998], [29, 9, 48, 20, -686484], [17, 19, 47, 24, 810742], [20, 32, 36, 40, -698956], [6, 48, 27, 52, 862188], [40, 49, 41, 57, 664422], [15, 13, 16, 13, 142109], [23, 24, 46, 27, -433269], [5, 25, 19, 58, 355970], [13, 0, 20, 2, 822387], [36, 3, 37, 22, 415358], [31, 25, 41, 27, 279349], [16, 19, 44, 28, 872809], [10, 26, 49, 48, -553354], [12, 23, 13, 54, 545915], [12, 14, 45, 48, 328370]], [[4, 29, 24, 42], [12, 32, 22, 46], [8, 30, 37, 47], [28, 5, 41, 8], [15, 25, 27, 49], [14, 24, 43, 25], [21, 54, 31, 55], [15, 20, 44, 24], [11, 0, 13, 31], [6, 26, 30, 55], [30, 6, 41, 11], [1, 16, 31, 30], [8, 10, 12, 16], [2, 7, 9, 54], [18, 3, 28, 5], [18, 16, 39, 41], [19, 24, 34, 41], [16, 36, 33, 51], [2, 1, 49, 41], [34, 18, 45, 34], [4, 3, 39, 45], [17, 22, 18, 39], [13, 32, 30, 49], [2, 23, 6, 23], [28, 21, 30, 51], [31, 14, 48, 23], [0, 50, 38, 51], [7, 33, 22, 50], [9, 7, 24, 39], [5, 2, 35, 45], [7, 43, 25, 47], [9, 12, 29, 41], [28, 3, 35, 43], [1, 6, 17, 37], [6, 8, 49, 30], [14, 41, 19, 50], [19, 21, 19, 38], [1, 5, 35, 27], [0, 29, 24, 40], [6, 34, 20, 48], [20, 29, 47, 59], [3, 31, 49, 55], [5, 29, 34, 41], [19, 7, 38, 59], [37, 42, 46, 53], [9, 4, 48, 43], [20, 2, 43, 54], [9, 12, 36, 43], [18, 26, 47, 50], [5, 48, 6, 52], [3, 31, 24, 32], [26, 48, 26, 51], [16, 15, 43, 36], [32, 25, 36, 47], [8, 47, 38, 49], [14, 14, 21, 53], [20, 20, 42, 30], [13, 6, 39, 53], [13, 29, 48, 33], [13, 23, 28, 27], [27, 3, 39, 12], [7, 0, 15, 16], [3, 45, 16, 55], [23, 24, 27, 45], [2, 33, 34, 35], [0, 1, 49, 40], [34, 20, 48, 44], [20, 50, 37, 51], [11, 22, 42, 50], [37, 20, 38, 42], [15, 17, 38, 52], [28, 28, 36, 59], [7, 1, 8, 57], [8, 9, 29, 32], [28, 37, 45, 58], [0, 11, 0, 24], [24, 25, 42, 44], [6, 12, 17, 12], [9, 1, 45, 38], [20, 9, 29, 30], [14, 23, 27, 44], [16, 46, 45, 57], [28, 5, 30, 11], [6, 15, 15, 31], [6, 16, 19, 33], [37, 16, 46, 20], [16, 25, 28, 32], [0, 51, 28, 57], [17, 10, 47, 32], [13, 2, 13, 6], [7, 2, 22, 45], [12, 20, 22, 49], [13, 11, 14, 32], [10, 38, 36, 39], [0, 54, 31, 59], [2, 48, 45, 52], [29, 26, 41, 26], [21, 29, 33, 34], [3, 1, 37, 5], [4, 10, 39, 18]]], expected: [199734933, 123892664, -29735937, -19553147, -136747353, -134063795, 44237498, -259549521, -6757555, 458243572, -112220215, -600922300, 6530347, 463386761, -37910817, -1146532358, -422545378, 205216343, -1949616344, -407415816, -1552347724, -59758712, 93872207, 1304418, -127002254, -187399830, 167432910, 374972123, -718950300, -1265114684, 122650110, -895064186, -603011315, 181337288, -1779909844, 90081038, -30572071, -1226096357, 158344403, 260734582, -300050544, 332066276, 113135, -1297037590, -99199963, -2213063231, -1687557264, -1256419920, -819433395, 21058322, 38127408, 11715838, -1311222107, -214399403, 71503667, -203622031, -630334502, -1635587834, -321971728, -253054372, -209331772, -32656365, 229485137, -116758494, 34534294, -1924462424, -634419748, 73995380, -810337383, -107148760, -854455047, -149578023, 185563436, -1074314668, -127670063, 8620067, -657589467, -2140038, -2092538200, -793646956, -303349858, 333318548, -58941696, 49560754, -70474558, -51158908, -278814768, 291507245, -1701903153, -1119247, -311542977, -106839756, -34562783, -29881021, 166747682, 342503718, -40490890, -104774504, -61650196, -745778496], description: "Stress 50 x 60 grid, 100 shifts and 100 queries with large deltas"}
+expected_concepts:
+  - "2D difference array marking four corners per shift"
+  - "2D prefix sums with inclusion-exclusion for O(1) rectangle queries"
+  - "zero-padded border row and column to avoid bounds checks"
+  - "64-bit accumulation of totals"
+  - "O(rows * cols + shifts + queries) overall"
+optimal_complexity: {time: "O(rows * cols + shifts + queries)", space: "O(rows * cols)"}
+rubric:
+  excellent: "Combines a 2D difference array for the shifts with 2D prefix sums for the queries, gets every inclusion-exclusion sign right, uses 64-bit totals and states the linear overall complexity."
+  good: "Uses prefix sums for the queries but applies shifts row by row with 1D differences or needs help with the corner signs; the result is correct."
+  weak: "Applies every shift cell by cell and sums every query cell by cell, or gets the inclusion-exclusion corners wrong."
+  criteria:
+    correctness: "All tests pass, including empty shift or query lists, negative deltas and the last row and column."
+    efficiency: "Each shift and each query costs O(1) after O(rows * cols) preprocessing."
+    code_quality: "Difference and prefix grids are clearly named, with a padded border instead of scattered bounds checks."
+    edge_cases: "1 x 1 grids, shifts that cancel, shifts touching the far edges and totals beyond 32 bits."
+    communication: "Explains why four corner updates describe a rectangle increment and why the prefix pass recovers it."
+hints:
+  - "Treat the two halves separately: first find each site's final load, then answer the rectangle totals; neither half needs to visit a whole rectangle per shift or per query."
+  - "A rectangle increment can be recorded by marking only its corners in a slightly larger grid, and a running two-dimensional sum over those marks recovers the per-site loads; the same kind of running sum answers any rectangle total from four corner values."
+  - "Add delta at the top-left corner, subtract it just right of the top-right and just below the bottom-left, add it back diagonally past the bottom-right; take a 2D prefix sum to get loads, take a second 2D prefix sum with a zero border, then each query is the bottom-right value minus the two outside strips plus the doubly removed corner."
+followups:
+  - "How would you support shifts and queries arriving interleaved, where a query must see only earlier shifts?"
+  - "Could you reuse a single grid for the difference marks, the loads and the prefix sums to save memory?"
+  - "How would the approach extend to a three-dimensional grid of sites over time?"
+  - "What changes if the grid is huge but only a few thousand shifts touch it?"
+common_errors:
+  - "Forgetting the extra row and column so the corner marks past the edge go out of bounds."
+  - "Swapping a sign in the four-corner update or in the query inclusion-exclusion."
+  - "Answering queries from the difference grid instead of from the recovered loads."
+  - "Accumulating totals in 32-bit integers in Java, Go or C++."

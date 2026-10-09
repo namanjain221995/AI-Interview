@@ -1,0 +1,316 @@
+version: 1
+slug: price_at_time_of_order
+title: Price at Time of Order
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [backend, data, business_analyst]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Price at Time of Order
+
+  The catalogue service never edits a price in place. Every change is appended to a change log with
+  the moment it takes effect, and a price stays in force until the **next change of the same product**
+  takes effect. Billing is re-running last quarter's invoices and needs each order valued at the price
+  that applied when it was placed, not at today's price.
+
+  Table `price_changes`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | product_id | INTEGER | product the change applies to |
+  | effective_at | TEXT | `'YYYY-MM-DD HH:MM:SS'` (UTC) the new price starts to apply |
+  | price_cents | INTEGER | new unit price in cents, `>= 0` |
+
+  `(product_id, effective_at)` is the primary key. Rows are stored in no particular order, and a price
+  can go up or down.
+
+  Table `orders`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | product_id | INTEGER | product ordered |
+  | ordered_at | TEXT | `'YYYY-MM-DD HH:MM:SS'` (UTC) |
+  | qty | INTEGER | units, at least 1 |
+
+  All timestamps use the same fixed-width format, so comparing them as text compares them in time.
+
+  For **every order**, return `order_id`, `unit_price_cents` and `line_total_cents`
+  (`unit_price_cents * qty`). The unit price is the `price_cents` of the product's change with the
+  **latest `effective_at` that is at or before `ordered_at`**; a change that takes effect at exactly
+  the order time already applies. When the product had no change effective yet (or none at all), keep
+  the order and return **NULL** in both price columns. Sort by `order_id` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  price_changes
+  +------------+---------------------+-------------+
+  | product_id | effective_at        | price_cents |
+  +------------+---------------------+-------------+
+  | 10         | 2026-03-01 00:00:00 | 1500        |
+  | 10         | 2026-03-10 09:00:00 | 1350        |
+  | 20         | 2026-03-05 12:00:00 | 800         |
+  +------------+---------------------+-------------+
+
+  orders
+  +----+------------+---------------------+-----+
+  | id | product_id | ordered_at          | qty |
+  +----+------------+---------------------+-----+
+  | 1  | 10         | 2026-03-02 14:30:00 | 2   |
+  | 2  | 10         | 2026-03-10 09:00:00 | 1   |
+  | 3  | 20         | 2026-03-05 11:59:59 | 4   |
+  | 4  | 20         | 2026-03-20 08:00:00 | 3   |
+  +----+------------+---------------------+-----+
+
+  Output
+  +----------+------------------+------------------+
+  | order_id | unit_price_cents | line_total_cents |
+  +----------+------------------+------------------+
+  | 1        | 1500             | 3000             |
+  | 2        | 1350             | 1350             |
+  | 3        | NULL             | NULL             |
+  | 4        | 800              | 2400             |
+  +----------+------------------+------------------+
+  Order 2 is placed at the exact second the 1350 price starts, so it already pays 1350.
+  Order 3 comes one second before product 20 has any price, so both price columns are NULL.
+  ```
+
+  ### Example 2
+  ```
+  price_changes
+  +------------+---------------------+-------------+
+  | product_id | effective_at        | price_cents |
+  +------------+---------------------+-------------+
+  | 7          | 2026-01-01 00:00:00 | 400         |
+  | 7          | 2026-02-01 00:00:00 | 650         |
+  | 7          | 2026-02-15 00:00:00 | 500         |
+  +------------+---------------------+-------------+
+
+  orders
+  +----+------------+---------------------+-----+
+  | id | product_id | ordered_at          | qty |
+  +----+------------+---------------------+-----+
+  | 12 | 7          | 2026-02-20 10:00:00 | 3   |
+  | 5  | 9          | 2026-02-20 10:00:00 | 1   |
+  | 8  | 7          | 2026-02-14 23:59:59 | 2   |
+  +----+------------+---------------------+-----+
+
+  Output
+  +----------+------------------+------------------+
+  | order_id | unit_price_cents | line_total_cents |
+  +----------+------------------+------------------+
+  | 5        | NULL             | NULL             |
+  | 8        | 650              | 1300             |
+  | 12       | 500              | 1500             |
+  +----------+------------------+------------------+
+  Order 12 pays 500: the change of 2026-02-15 is the latest one at or before its time, even though
+  650 was charged earlier. Product 9 has never had a price.
+  ```
+
+  ### Constraints
+  - `0 <= rows in price_changes, orders <= 10^5`
+  - `0 <= price_cents <= 10^6`, `1 <= qty <= 1000`, so every line total fits in a 32-bit integer
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return order_id, unit_price_cents and line_total_cents for every order, ordered by order_id.
+    SELECT o.id AS order_id,
+           NULL AS unit_price_cents,
+           NULL AS line_total_cents
+    FROM orders o
+    ORDER BY o.id;
+reference_solutions:
+  sql: |
+    SELECT o.id AS order_id,
+           p.price_cents AS unit_price_cents,
+           p.price_cents * o.qty AS line_total_cents
+    FROM orders o
+    LEFT JOIN price_changes p
+      ON p.product_id = o.product_id
+     AND p.effective_at = (
+           SELECT MAX(p2.effective_at)
+           FROM price_changes p2
+           WHERE p2.product_id = o.product_id
+             AND p2.effective_at <= o.ordered_at
+         )
+    ORDER BY o.id;
+sql_setup: |
+  CREATE TABLE price_changes (
+    product_id INTEGER NOT NULL,
+    effective_at TEXT NOT NULL,
+    price_cents INTEGER NOT NULL,
+    PRIMARY KEY (product_id, effective_at)
+  );
+  CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    product_id INTEGER NOT NULL,
+    ordered_at TEXT NOT NULL,
+    qty INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - price in force, change exactly at the order time, order before the first change, later change"
+    setup_sql: |
+      INSERT INTO price_changes (product_id, effective_at, price_cents) VALUES
+        (10, '2026-03-01 00:00:00', 1500), (10, '2026-03-10 09:00:00', 1350), (20, '2026-03-05 12:00:00', 800);
+      INSERT INTO orders (id, product_id, ordered_at, qty) VALUES
+        (1, 10, '2026-03-02 14:30:00', 2), (2, 10, '2026-03-10 09:00:00', 1), (3, 20, '2026-03-05 11:59:59', 4), (4, 20, '2026-03-20 08:00:00', 3);
+    expected_rows:
+      - [1, 1500, 3000]
+      - [2, 1350, 1350]
+      - [3, null, null]
+      - [4, 800, 2400]
+    ordered: true
+  - id: t2
+    description: "Example 2 - latest change wins even after a price drop; product without history; ids out of order"
+    setup_sql: |
+      INSERT INTO price_changes (product_id, effective_at, price_cents) VALUES
+        (7, '2026-01-01 00:00:00', 400), (7, '2026-02-01 00:00:00', 650), (7, '2026-02-15 00:00:00', 500);
+      INSERT INTO orders (id, product_id, ordered_at, qty) VALUES
+        (12, 7, '2026-02-20 10:00:00', 3), (5, 9, '2026-02-20 10:00:00', 1), (8, 7, '2026-02-14 23:59:59', 2);
+    expected_rows: [[5, null, null], [8, 650, 1300], [12, 500, 1500]]
+    ordered: true
+  - id: t3
+    hidden: true
+    description: "Empty tables"
+    expected_rows: []
+    ordered: true
+  - id: t4
+    hidden: true
+    description: "No price history at all - every order kept with NULL prices (inner join or WHERE filter drops them)"
+    setup_sql: |
+      INSERT INTO orders (id, product_id, ordered_at, qty) VALUES
+        (1, 3, '2026-01-05 10:00:00', 2), (2, 4, '2026-01-06 10:00:00', 1);
+    expected_rows: [[1, null, null], [2, null, null]]
+    ordered: true
+  - id: t5
+    hidden: true
+    description: "Changes inserted out of time order, including a future change - neither the last inserted, the highest nor the lowest price is the answer"
+    setup_sql: |
+      INSERT INTO price_changes (product_id, effective_at, price_cents) VALUES
+        (1, '2026-03-01 00:00:00', 300), (1, '2026-01-01 00:00:00', 100), (1, '2026-04-01 00:00:00', 900), (1, '2026-02-01 00:00:00', 200);
+      INSERT INTO orders (id, product_id, ordered_at, qty) VALUES
+        (1, 1, '2026-03-15 12:00:00', 1), (2, 1, '2025-12-31 23:59:59', 1), (3, 1, '2026-04-02 00:00:00', 2), (4, 1, '2026-02-01 00:00:00', 3),
+        (5, 1, '2026-01-31 23:59:59', 4);
+    expected_rows:
+      - [1, 300, 300]
+      - [2, null, null]
+      - [3, 900, 1800]
+      - [4, 200, 600]
+      - [5, 100, 400]
+    ordered: true
+  - id: t6
+    hidden: true
+    description: "Interleaved products - the latest-change lookup must be per product (a change of another product must not hide this one's price)"
+    setup_sql: |
+      INSERT INTO price_changes (product_id, effective_at, price_cents) VALUES
+        (1, '2026-01-01 00:00:00', 100), (2, '2026-01-10 00:00:00', 900), (2, '2026-01-20 00:00:00', 950), (1, '2026-01-25 00:00:00', 120);
+      INSERT INTO orders (id, product_id, ordered_at, qty) VALUES
+        (1, 1, '2026-01-15 00:00:00', 2), (2, 2, '2026-01-15 00:00:00', 1), (3, 1, '2026-01-30 00:00:00', 1), (4, 2, '2026-01-05 00:00:00', 1),
+        (5, 2, '2026-01-21 00:00:00', 3);
+    expected_rows:
+      - [1, 100, 200]
+      - [2, 900, 900]
+      - [3, 120, 120]
+      - [4, null, null]
+      - [5, 950, 2850]
+    ordered: true
+  - id: t7
+    hidden: true
+    description: "Price changed to 0 (free promotion) - a zero price is a real price, not NULL; several orders at the same instant"
+    setup_sql: |
+      INSERT INTO price_changes (product_id, effective_at, price_cents) VALUES
+        (5, '2026-05-01 00:00:00', 2500), (5, '2026-05-10 00:00:00', 0), (5, '2026-05-12 00:00:00', 2500);
+      INSERT INTO orders (id, product_id, ordered_at, qty) VALUES
+        (1, 5, '2026-05-11 08:00:00', 3), (2, 5, '2026-05-11 08:00:00', 1), (3, 5, '2026-05-12 00:00:00', 2), (4, 5, '2026-05-09 23:59:59', 1);
+    expected_rows:
+      - [1, 0, 0]
+      - [2, 0, 0]
+      - [3, 2500, 5000]
+      - [4, 2500, 2500]
+    ordered: true
+  - id: t8
+    hidden: true
+    description: "Largest allowed totals (10^6 cents x 1000 units) and boundary seconds around a change"
+    setup_sql: |
+      INSERT INTO price_changes (product_id, effective_at, price_cents) VALUES
+        (8, '2026-06-01 12:00:00', 1000000), (8, '2026-06-01 12:00:01', 999999);
+      INSERT INTO orders (id, product_id, ordered_at, qty) VALUES
+        (1, 8, '2026-06-01 12:00:00', 1000), (2, 8, '2026-06-01 12:00:01', 1000), (3, 8, '2026-06-01 11:59:59', 1000);
+    expected_rows: [[1, 1000000, 1000000000], [2, 999999, 999999000], [3, null, null]]
+    ordered: true
+  - id: t9
+    hidden: true
+    description: "Stress: one product with 40 daily changes and 20 orders spread across them (each order matches exactly one change)"
+    setup_sql: |
+      INSERT INTO price_changes (product_id, effective_at, price_cents) VALUES
+        (3, '2026-07-01 00:00:00', 1037), (3, '2026-07-02 00:00:00', 1074), (3, '2026-07-03 00:00:00', 1111), (3, '2026-07-04 00:00:00', 1148),
+        (3, '2026-07-05 00:00:00', 1185), (3, '2026-07-06 00:00:00', 1011), (3, '2026-07-07 00:00:00', 1048), (3, '2026-07-08 00:00:00', 1085),
+        (3, '2026-07-09 00:00:00', 1122), (3, '2026-07-10 00:00:00', 1159), (3, '2026-07-11 00:00:00', 1196), (3, '2026-07-12 00:00:00', 1022),
+        (3, '2026-07-13 00:00:00', 1059), (3, '2026-07-14 00:00:00', 1096), (3, '2026-07-15 00:00:00', 1133), (3, '2026-07-16 00:00:00', 1170),
+        (3, '2026-07-17 00:00:00', 1207), (3, '2026-07-18 00:00:00', 1033), (3, '2026-07-19 00:00:00', 1070), (3, '2026-07-20 00:00:00', 1107),
+        (3, '2026-07-21 00:00:00', 1144), (3, '2026-07-22 00:00:00', 1181), (3, '2026-07-23 00:00:00', 1007), (3, '2026-07-24 00:00:00', 1044),
+        (3, '2026-07-25 00:00:00', 1081), (3, '2026-07-26 00:00:00', 1118), (3, '2026-07-27 00:00:00', 1155), (3, '2026-07-28 00:00:00', 1192),
+        (3, '2026-07-29 00:00:00', 1018), (3, '2026-07-30 00:00:00', 1055), (3, '2026-07-31 00:00:00', 1092), (3, '2026-08-01 00:00:00', 1129),
+        (3, '2026-08-02 00:00:00', 1166), (3, '2026-08-03 00:00:00', 1203), (3, '2026-08-04 00:00:00', 1029), (3, '2026-08-05 00:00:00', 1066),
+        (3, '2026-08-06 00:00:00', 1103), (3, '2026-08-07 00:00:00', 1140), (3, '2026-08-08 00:00:00', 1177), (3, '2026-08-09 00:00:00', 1003);
+      INSERT INTO orders (id, product_id, ordered_at, qty) VALUES
+        (1, 3, '2026-07-02 06:00:00', 1), (2, 3, '2026-07-04 06:00:00', 2), (3, 3, '2026-07-06 06:00:00', 3), (4, 3, '2026-07-08 06:00:00', 4),
+        (5, 3, '2026-07-10 06:00:00', 5), (6, 3, '2026-07-12 06:00:00', 6), (7, 3, '2026-07-14 06:00:00', 7), (8, 3, '2026-07-16 06:00:00', 8),
+        (9, 3, '2026-07-18 06:00:00', 9), (10, 3, '2026-07-20 06:00:00', 10), (11, 3, '2026-07-22 06:00:00', 11), (12, 3, '2026-07-24 06:00:00', 12),
+        (13, 3, '2026-07-26 06:00:00', 13), (14, 3, '2026-07-28 06:00:00', 14), (15, 3, '2026-07-30 06:00:00', 15), (16, 3, '2026-08-01 06:00:00', 16),
+        (17, 3, '2026-08-03 06:00:00', 17), (18, 3, '2026-08-05 06:00:00', 18), (19, 3, '2026-08-07 06:00:00', 19), (20, 3, '2026-08-09 06:00:00', 20);
+    expected_rows:
+      - [1, 1074, 1074]
+      - [2, 1148, 2296]
+      - [3, 1011, 3033]
+      - [4, 1085, 4340]
+      - [5, 1159, 5795]
+      - [6, 1022, 6132]
+      - [7, 1096, 7672]
+      - [8, 1170, 9360]
+      - [9, 1033, 9297]
+      - [10, 1107, 11070]
+      - [11, 1181, 12991]
+      - [12, 1044, 12528]
+      - [13, 1118, 14534]
+      - [14, 1192, 16688]
+      - [15, 1055, 15825]
+      - [16, 1129, 18064]
+      - [17, 1203, 20451]
+      - [18, 1066, 19188]
+      - [19, 1140, 21660]
+      - [20, 1003, 20060]
+    ordered: true
+expected_concepts:
+  - point-in-time (as-of) lookup of the latest row at or before a timestamp
+  - correlated subquery with MAX, or ROW_NUMBER over a range join
+  - LEFT JOIN that keeps unmatched orders with NULLs
+  - inclusive boundary at the change time
+  - deterministic ORDER BY
+optimal_complexity: {time: "O(n log m) with an index on price_changes(product_id, effective_at)", space: O(n)}
+rubric:
+  excellent: Finds the latest change at or before the order time per product (correlated MAX, ROW_NUMBER over the range join or a LATERAL/TOP-1 lookup), keeps unpriced orders with NULLs, treats a change at the order time as applying, and explains how an index on (product_id, effective_at) turns each lookup into a seek.
+  good: Correct query after a hint about duplicated rows from the range join, the inclusive boundary or orders without a price.
+  weak: Joins every earlier change (duplicating orders), uses the current or maximum price, compares only by product, or drops orders without a price.
+  criteria:
+    correctness: All tests pass, including changes at the exact order time, price drops, zero prices and unpriced products.
+    efficiency: One lookup per order backed by an index; avoids sorting the whole history per order.
+    code_quality: Readable aliases, clear subquery or window naming, explicit output column names.
+    edge_cases: Orders before the first change, future changes, empty history and several orders at the same instant.
+    communication: Explains why a plain range join returns several rows per order and how the query keeps only the latest.
+hints:
+  - Each change is valid from its effective time until the next change of the same product, so the price for an order is decided by one specific earlier change. Which one?
+  - Among the product's changes whose effective time is at or before the order time, you need the most recent one, and orders with no such change must still appear.
+  - Left join orders to price_changes on the product and on effective_at being equal to the largest effective_at of that product that is not after ordered_at (a correlated subquery); select the price and the price times qty, then sort by the order id.
+followups:
+  - How would you write this with ROW_NUMBER, and how does its cost compare with the correlated subquery?
+  - Which index makes the lookup fast, and would you change the table to store a valid_to column instead?
+  - How would you handle two changes recorded for the same product and the same second?
+common_errors:
+  - Joining on effective_at <= ordered_at without picking the latest change, which repeats each order once per earlier change.
+  - Using MAX(price_cents) or the current price instead of the most recent change.
+  - Forgetting the product filter inside the correlated subquery, so another product's change decides the time.
+  - Using an inner join or a WHERE filter that drops orders placed before the first change.

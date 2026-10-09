@@ -1,0 +1,188 @@
+version: 1
+slug: order_book_backlog
+title: Order Book Backlog
+difficulty: medium
+competency_keys: [data_structures, algorithms, problem_solving]
+role_tags: [backend, data, fullstack]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Order Book Backlog
+
+  An internal marketplace lets teams trade spare GPU-hours with each other. Every order is a triple
+  `[price, amount, side]`:
+
+  - `side = 0` is a **buy** order: the team wants `amount` units and pays at most `price` per unit;
+  - `side = 1` is a **sell** order: the team offers `amount` units and accepts at least `price` per unit.
+
+  The exchange processes the orders one at a time, in the given order, against the **book** of orders
+  that are still waiting (initially empty):
+
+  - An incoming **buy** looks at the resting sell orders, **cheapest first**. While it still needs units
+    and the cheapest resting sell has a price `<=` the buy price, the two orders trade
+    `min(remaining buy amount, remaining sell amount)` units and both amounts shrink by that number. A
+    sell order whose amount reaches 0 leaves the book.
+  - An incoming **sell** does the same against the resting buy orders, **highest price first**, while
+    the highest resting buy has a price `>=` the sell price.
+  - When the incoming order is completely filled, or no resting order on the other side qualifies,
+    matching stops and any unfilled remainder of the incoming order joins the book at its own price.
+
+  Return the **total number of units** (buy and sell sides together) still resting in the book after
+  every order has been processed. When several resting orders on one side share a price, the order in
+  which they trade does not change this total.
+
+  ### Example 1
+  ```
+  Input:  orders = [[10, 5, 0], [15, 2, 1], [25, 1, 1], [30, 4, 0]]
+  Output: 6
+  Explanation: the buy of 5 at 10 and the sells of 2 at 15 and 1 at 25 cannot trade, so they rest.
+  The buy of 4 at 30 takes 2 units at 15, then 1 unit at 25, and its last unit rests.
+  The book holds 5 + 1 = 6 units.
+  ```
+
+  ### Example 2
+  ```
+  Input:  orders = [[7, 1000000000, 0], [7, 999999999, 1], [5, 3, 1], [6, 8, 0]]
+  Output: 6
+  Explanation: equal prices trade, so the sell at 7 leaves 1 unit of the buy at 7; the sell of 3 at 5
+  takes that unit and rests with 2; the buy of 8 at 6 takes those 2 and rests with 6.
+  ```
+
+  ### Constraints
+  - `0 <= orders.length <= 10^5`
+  - `orders[i].length == 3`
+  - `1 <= price, amount <= 10^9`
+  - `side` is `0` or `1`
+  - The answer can exceed the 32-bit integer range; return it as a 64-bit integer.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: resting_amount
+  params:
+    - {name: orders, type: "int[][]"}
+  return_type: long
+  comparison: exact
+reference_solutions:
+  python: |
+    import heapq
+
+
+    def resting_amount(orders: list[list[int]]) -> int:
+        # Each heap entry is [key, sequence, remaining amount]; the key is the price for sells
+        # (cheapest first) and the negated price for buys (highest first).
+        buys: list[list[int]] = []
+        sells: list[list[int]] = []
+        for seq, (price, amount, side) in enumerate(orders):
+            if side == 0:
+                book, own, crosses, own_key = sells, buys, (lambda top: top[0] <= price), -price
+            else:
+                book, own, crosses, own_key = buys, sells, (lambda top: -top[0] >= price), price
+            while amount > 0 and book and crosses(book[0]):
+                traded = min(amount, book[0][2])
+                amount -= traded
+                book[0][2] -= traded
+                if book[0][2] == 0:
+                    heapq.heappop(book)
+            if amount > 0:
+                heapq.heappush(own, [own_key, seq, amount])
+        return sum(entry[2] for entry in buys) + sum(entry[2] for entry in sells)
+  javascript: |
+    class MinHeap {
+      constructor() { this.items = []; }
+      get size() { return this.items.length; }
+      peek() { return this.items[0]; }
+      static less(a, b) { return a[0] !== b[0] ? a[0] < b[0] : a[1] < b[1]; }
+      push(item) {
+        const h = this.items;
+        h.push(item);
+        let i = h.length - 1;
+        while (i > 0) {
+          const p = (i - 1) >> 1;
+          if (!MinHeap.less(h[i], h[p])) break;
+          [h[i], h[p]] = [h[p], h[i]];
+          i = p;
+        }
+      }
+      pop() {
+        const h = this.items;
+        const top = h[0];
+        const last = h.pop();
+        if (h.length > 0) {
+          h[0] = last;
+          let i = 0;
+          for (;;) {
+            const l = 2 * i + 1, r = l + 1;
+            let m = i;
+            if (l < h.length && MinHeap.less(h[l], h[m])) m = l;
+            if (r < h.length && MinHeap.less(h[r], h[m])) m = r;
+            if (m === i) break;
+            [h[i], h[m]] = [h[m], h[i]];
+            i = m;
+          }
+        }
+        return top;
+      }
+    }
+
+    function restingAmount(orders) {
+      // Entries are [key, sequence, remaining]; key = price for sells, -price for buys.
+      const buys = new MinHeap();
+      const sells = new MinHeap();
+      orders.forEach(([price, amount, side], seq) => {
+        const book = side === 0 ? sells : buys;
+        const own = side === 0 ? buys : sells;
+        const crosses = side === 0 ? (top) => top[0] <= price : (top) => -top[0] >= price;
+        let left = amount;
+        while (left > 0 && book.size > 0 && crosses(book.peek())) {
+          const top = book.peek();
+          const traded = Math.min(left, top[2]);
+          left -= traded;
+          top[2] -= traded;
+          if (top[2] === 0) book.pop();
+        }
+        if (left > 0) own.push([side === 0 ? -price : price, seq, left]);
+      });
+      let total = 0;
+      for (const entry of buys.items) total += entry[2];
+      for (const entry of sells.items) total += entry[2];
+      return total;
+    }
+tests:
+  - {id: t1, args: [[[10, 5, 0], [15, 2, 1], [25, 1, 1], [30, 4, 0]]], expected: 6, description: "Example 1"}
+  - {id: t2, args: [[[7, 1000000000, 0], [7, 999999999, 1], [5, 3, 1], [6, 8, 0]]], expected: 6, description: "Example 2 - equal prices trade, remainder flips sides"}
+  - {id: t3, hidden: true, args: [[]], expected: 0, description: "No orders - empty book"}
+  - {id: t4, hidden: true, args: [[[42, 17, 1]]], expected: 17, description: "Single sell order rests untouched"}
+  - {id: t5, hidden: true, args: [[[1, 1000000000, 0], [2, 1000000000, 0], [3, 1000000000, 0]]], expected: 3000000000, description: "Only buys - total 3e9 overflows 32-bit"}
+  - {id: t6, hidden: true, args: [[[10, 3, 0], [20, 3, 0], [30, 3, 0], [15, 5, 1]]], expected: 4, description: "Sell must take the highest buys first and stop below its price (answer 4)"}
+  - {id: t7, hidden: true, args: [[[5, 2, 1], [8, 2, 1], [12, 2, 1], [9, 3, 0]]], expected: 3, description: "Buy takes the cheapest sells first; wrong order gives 9 instead of 3"}
+  - {id: t8, hidden: true, args: [[[100, 4, 1], [100, 1, 0], [100, 3, 0], [50, 2, 0], [40, 2, 1]]], expected: 0, description: "Exact fills empty the book completely"}
+  - {id: t9, hidden: true, args: [[[10, 1, 0], [11, 1, 1], [10, 1, 0], [11, 1, 1], [9, 1, 0], [12, 1, 1]]], expected: 6, description: "Spread never closes - nothing trades"}
+  - {id: t10, hidden: true, args: [[[76, 556968, 1], [84, 333341, 1], [88, 103406, 0], [80, 925509, 1], [64, 398327, 1], [65, 715676, 0], [59, 247016, 1], [75, 8623, 0], [87, 736769, 0], [74, 449369, 0], [69, 345664, 0], [78, 667937, 0], [67, 531899, 0], [53, 558041, 1], [70, 272329, 1], [76, 98304, 0], [62, 583193, 0], [67, 188064, 1], [73, 919128, 0], [77, 257200, 1], [68, 719119, 1], [60, 606834, 0], [50, 838337, 1], [67, 163220, 1], [58, 643216, 0], [81, 176914, 0], [57, 927768, 0], [73, 979922, 0], [87, 438033, 0], [64, 345413, 0], [86, 328816, 1], [70, 324684, 1], [83, 233542, 1], [69, 550607, 1], [58, 459295, 0], [53, 773286, 0], [54, 989027, 0], [73, 639604, 1], [61, 799991, 1], [74, 284678, 0], [85, 506459, 0], [74, 864887, 0], [66, 186188, 1], [63, 288782, 0], [78, 230691, 1], [82, 390237, 0], [85, 668660, 0], [61, 493475, 0], [52, 964591, 1], [63, 539690, 0], [56, 140929, 0], [56, 661161, 1], [58, 987378, 0], [52, 994722, 0], [71, 351752, 1], [62, 737667, 1], [73, 97954, 1], [63, 64456, 0], [82, 54045, 0], [55, 697815, 0], [66, 465137, 1], [59, 291041, 0], [71, 634515, 1], [90, 44807, 0], [66, 910420, 0], [54, 401073, 0], [69, 141055, 0], [90, 327800, 1], [81, 619070, 0], [75, 144956, 1], [67, 658485, 0], [63, 174285, 1], [67, 905189, 0], [76, 200901, 0], [77, 234505, 0], [63, 694059, 0], [88, 249339, 0], [76, 74065, 1], [86, 358350, 1], [67, 202038, 0], [54, 514100, 1], [79, 778916, 1], [90, 416794, 0], [87, 282514, 1], [54, 48582, 1], [89, 126466, 1], [89, 518590, 0], [89, 582627, 1], [79, 151779, 1], [80, 399406, 1], [78, 55057, 1], [84, 362700, 1], [58, 600768, 0], [69, 19054, 0], [87, 170150, 0], [84, 911474, 0], [73, 381969, 1], [72, 541571, 0], [87, 559632, 0], [71, 574137, 1], [61, 720074, 0], [68, 141812, 0], [69, 938532, 1], [67, 780932, 0], [74, 40350, 1], [64, 533635, 0], [64, 710389, 0], [73, 881208, 0], [81, 798146, 1], [76, 542006, 0], [79, 120537, 0], [65, 833977, 0], [80, 749290, 0], [79, 52942, 0], [87, 95266, 1], [51, 450987, 0], [86, 988874, 0], [57, 665490, 1], [77, 489637, 0], [77, 854770, 1], [69, 440981, 0], [88, 108485, 1], [80, 116662, 0], [75, 733745, 0], [84, 681280, 1], [51, 243754, 0], [84, 166696, 1], [76, 4941, 0], [72, 888959, 0], [79, 221062, 1], [66, 446736, 1], [71, 798058, 1], [55, 587141, 0], [84, 881116, 0], [52, 271234, 1], [81, 760043, 0], [60, 77128, 0], [86, 85874, 0], [84, 377170, 0], [73, 759734, 1], [64, 893946, 1], [88, 124362, 0], [79, 472212, 1], [74, 882861, 1], [64, 22736, 0], [70, 712489, 1], [59, 68443, 0], [75, 185588, 0], [75, 89533, 1], [72, 118610, 1], [90, 599100, 0], [51, 428529, 0], [64, 436855, 0], [58, 933323, 1], [86, 191050, 1], [51, 36614, 1], [72, 349552, 1], [63, 300054, 0], [75, 427163, 0], [81, 232088, 1], [52, 895772, 1], [54, 57848, 1], [72, 243457, 0], [50, 751819, 1], [66, 933297, 1], [71, 68596, 0], [84, 25553, 0], [72, 205058, 1], [88, 792929, 0], [73, 895312, 1], [77, 541727, 1], [55, 94243, 0], [75, 639841, 0], [86, 549262, 1], [77, 279614, 0], [51, 725840, 1], [79, 522021, 0], [72, 477619, 0], [67, 383363, 1], [77, 194605, 0], [89, 883937, 0], [56, 722114, 0], [61, 862082, 1], [76, 61920, 1], [55, 445704, 0], [73, 207681, 1], [74, 939791, 0], [55, 409035, 0], [88, 111951, 1], [79, 86514, 0], [69, 658237, 1], [60, 828947, 0], [67, 535978, 1], [60, 96538, 0], [61, 991394, 1], [83, 488348, 1], [54, 500877, 1], [76, 139452, 0], [62, 919696, 1], [56, 704394, 1], [60, 800171, 1], [57, 980382, 0], [83, 54491, 1], [83, 172800, 0], [69, 722681, 0], [55, 719874, 0], [81, 535449, 0], [56, 623651, 1], [65, 103915, 0], [55, 660525, 0], [53, 407836, 1], [56, 264215, 1], [63, 157557, 0], [85, 944290, 0], [63, 865721, 1], [81, 785151, 1], [68, 608842, 1], [75, 634663, 0], [52, 179396, 0], [71, 455232, 1], [58, 892767, 0], [57, 122302, 0], [50, 138640, 0], [76, 303742, 0], [62, 943976, 0], [83, 139692, 1], [59, 607346, 1], [65, 138461, 0], [85, 507096, 0], [67, 149493, 1], [86, 798334, 0], [68, 564225, 1], [78, 380453, 1], [66, 951644, 1], [60, 475272, 0], [75, 749965, 0], [65, 526977, 0], [68, 714406, 0], [52, 970275, 0], [83, 554790, 0], [78, 14625, 0], [72, 776919, 1], [87, 664613, 0], [85, 481264, 0], [62, 113784, 0], [71, 817075, 0], [79, 935008, 0], [73, 346190, 1], [67, 291195, 1], [74, 120893, 0], [57, 47144, 0], [67, 691493, 1], [70, 868383, 1], [81, 878842, 0], [60, 273555, 1], [56, 271066, 0], [58, 311957, 1], [90, 970606, 0], [74, 385843, 1], [67, 133646, 0], [59, 752916, 1], [75, 718173, 1], [55, 243997, 0], [90, 140136, 1], [83, 204814, 1], [70, 789002, 1], [60, 741605, 0], [75, 269578, 0], [73, 409592, 0], [59, 620282, 1], [55, 663902, 1], [88, 158553, 0], [54, 169542, 1], [50, 100465, 0], [71, 997213, 1], [61, 10489, 0], [84, 208108, 0], [76, 770227, 0], [53, 521398, 1], [76, 542413, 0], [85, 526877, 0], [52, 942339, 0], [90, 835261, 1], [84, 100603, 1], [88, 855886, 1], [61, 225382, 0], [60, 594629, 0], [80, 6309, 0], [70, 667123, 0], [87, 187488, 1], [58, 942180, 1], [52, 983279, 0], [57, 736960, 0], [58, 85557, 1], [89, 188460, 0], [66, 505471, 0], [74, 836264, 0], [73, 898664, 0], [74, 277617, 1], [69, 864759, 0], [86, 425056, 1], [79, 699966, 0], [85, 211209, 0], [72, 346428, 1], [63, 707676, 1], [78, 719739, 1], [85, 792710, 1], [84, 705906, 0], [86, 925327, 0], [90, 19939, 0], [77, 814205, 1], [75, 277564, 1], [81, 962223, 0], [71, 189881, 0], [68, 156738, 0], [82, 966016, 0], [84, 90286, 1], [87, 40386, 1], [69, 982760, 0], [72, 891232, 1], [59, 871681, 1], [62, 146498, 0], [69, 435204, 0], [50, 274625, 1], [81, 152987, 1], [83, 443965, 1], [87, 689962, 0], [77, 394374, 1], [88, 227250, 1], [76, 222006, 0], [57, 107950, 1], [75, 357908, 1], [60, 823032, 1], [74, 225138, 1], [55, 556323, 1], [72, 359055, 1], [55, 825825, 1], [70, 704053, 1], [90, 981727, 0], [66, 499419, 1], [78, 390947, 0], [56, 957443, 0], [78, 740595, 1], [84, 950364, 1], [61, 78576, 1], [73, 712351, 0], [57, 779510, 1], [74, 37685, 1], [83, 58685, 0], [80, 543183, 1], [66, 445307, 0], [73, 579787, 1], [54, 234238, 1], [87, 630100, 1], [55, 567317, 1], [78, 118402, 0], [78, 335463, 1], [54, 994933, 1], [56, 933209, 1], [72, 258749, 1], [66, 388011, 0], [53, 126708, 1], [51, 132442, 1], [62, 260705, 1], [51, 716671, 0], [75, 419735, 1], [67, 604014, 0], [65, 97874, 0], [73, 333015, 1], [62, 492063, 0], [78, 427047, 1], [74, 846388, 1], [88, 759783, 1], [71, 983187, 0], [76, 965594, 0], [55, 843115, 0], [90, 26466, 0], [61, 562102, 0], [57, 403675, 0], [88, 977626, 0], [87, 277501, 1], [68, 796491, 1], [56, 338877, 1], [56, 832294, 0], [79, 675628, 0], [83, 567319, 0], [58, 750293, 0], [53, 869043, 0], [66, 870946, 0], [67, 115037, 0], [69, 674935, 0], [52, 599908, 1], [58, 775189, 1], [74, 349795, 1], [62, 628663, 0], [65, 551327, 1], [80, 637047, 1], [61, 905515, 0], [85, 939945, 1], [52, 959302, 1]]], expected: 35523652, description: "400 pseudo-random orders around one price band with amounts up to 10^6"}
+expected_concepts:
+  - two priority queues (max-heap of bids, min-heap of asks)
+  - greedy matching against the best price on the other side
+  - partial fills that leave the resting order in place
+  - 64-bit accumulation of the remaining amounts
+optimal_complexity: {time: O(n log n), space: O(n)}
+rubric:
+  excellent: Uses a max-heap for buys and a min-heap for sells, matches the incoming order against the best opposite price in a loop with partial fills, explains why each order is pushed and popped at most once for O(n log n) total, and sums the remainder in 64 bits.
+  good: Correct heap-based simulation with a minor slip (for example a missed equal-price trade or 32-bit sum) fixed after a test or a hint.
+  weak: Scans or re-sorts the whole book for every order, matches against the wrong end of the book, or simulates one unit at a time.
+  criteria:
+    correctness: All tests pass, including equal prices, partial fills across several levels and an empty input.
+    efficiency: O(log n) per heap operation and amortised O(1) heap operations per order; no per-unit loops.
+    code_quality: Symmetric buy and sell handling without duplicated, diverging branches; clear names for book sides.
+    edge_cases: Equal prices trade, orders that never cross, totals beyond 32 bits and an empty order list.
+    communication: Explains why the best opposite price is always the right one to trade against first.
+hints:
+  - For an incoming order, only one resting order on the other side matters at any moment - the one with the best price for it.
+  - Keep each side of the book in a structure that gives you the cheapest sell or the highest buy quickly, and let an incoming order trade against it repeatedly while prices cross.
+  - Use a min-heap of sells and a max-heap of buys storing remaining amounts; trade the minimum of the two amounts, pop the resting order when it reaches zero, push any remainder of the incoming order, and finally add up every remaining amount in a 64-bit total.
+followups:
+  - How would you also report the total traded volume, or the price of each trade?
+  - What changes if orders can be cancelled by id after they rest in the book?
+  - How would you enforce first-come-first-served among resting orders that share a price?
+  - What if the answer had to be reported modulo a large prime because amounts were even larger?
+common_errors:
+  - Matching an incoming buy against the most expensive sell instead of the cheapest one.
+  - Using strict comparisons so that orders at exactly the same price never trade.
+  - Simulating the trade one unit at a time, which is far too slow for amounts up to 10^9.
+  - Summing the remaining amounts in a 32-bit integer.

@@ -1,0 +1,201 @@
+version: 1
+slug: ticket_status_pivot_by_team
+title: "Ticket Status Board by Team"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [support_engineer, data_analyst, business_analyst]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Ticket Status Board by Team
+
+  Support leads start each morning with a status board: one line per team showing how many of its
+  tickets are waiting, being worked on and finished. The helpdesk stores one row per ticket.
+
+  Table `tickets`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | team | VARCHAR(40) | owning team, lower-case letters only |
+  | status | VARCHAR(20) | workflow status in lower case, never NULL |
+
+  The board tracks exactly three statuses: `'open'`, `'in_progress'` and `'closed'`. The helpdesk also
+  uses other statuses (for example `'on_hold'`, `'reopened'` or `'spam'`); those tickets are not counted
+  in any column.
+
+  Return one row per team that owns at least one ticket (in any status), with the columns `team`,
+  `open_count`, `in_progress_count` and `closed_count`. A count is `0` when the team has no ticket in
+  that status, so a team whose tickets all have other statuses still appears with three zeros. Order
+  the result by `team` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  tickets
+  +----+----------+-------------+
+  | id | team     | status      |
+  +----+----------+-------------+
+  | 1  | billing  | open        |
+  | 2  | billing  | closed      |
+  | 3  | identity | in_progress |
+  | 4  | billing  | open        |
+  | 5  | identity | on_hold     |
+  | 6  | payments | closed      |
+  | 7  | billing  | in_progress |
+  | 8  | payments | closed      |
+  +----+----------+-------------+
+
+  Output
+  +----------+------------+-------------------+--------------+
+  | team     | open_count | in_progress_count | closed_count |
+  +----------+------------+-------------------+--------------+
+  | billing  | 2          | 1                 | 1            |
+  | identity | 0          | 1                 | 0            |
+  | payments | 0          | 0                 | 2            |
+  +----------+------------+-------------------+--------------+
+  Ticket 5 is on_hold, which is not one of the three tracked statuses.
+  ```
+
+  ### Example 2
+  ```
+  tickets
+  +----+--------+--------+
+  | id | team   | status |
+  +----+--------+--------+
+  | 1  | search | closed |
+  | 2  | search | closed |
+  | 3  | mobile | spam   |
+  +----+--------+--------+
+
+  Output
+  +--------+------------+-------------------+--------------+
+  | team   | open_count | in_progress_count | closed_count |
+  +--------+------------+-------------------+--------------+
+  | mobile | 0          | 0                 | 0            |
+  | search | 0          | 0                 | 2            |
+  +--------+------------+-------------------+--------------+
+  ```
+
+  ### Constraints
+  - At most `10^6` tickets; the table may be empty.
+  - Status values match exactly (no surrounding spaces, always lower case).
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return team, open_count, in_progress_count and closed_count per team, ordered by team.
+    SELECT team, status, COUNT(*) AS ticket_count
+    FROM tickets
+    GROUP BY team, status
+    ORDER BY team;
+reference_solutions:
+  sql: |
+    SELECT team,
+           SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_count,
+           SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
+           SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) AS closed_count
+    FROM tickets
+    GROUP BY team
+    ORDER BY team;
+sql_setup: |
+  CREATE TABLE tickets (
+    id INTEGER PRIMARY KEY,
+    team VARCHAR(40) NOT NULL,
+    status VARCHAR(20) NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - three teams, on_hold ticket ignored"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, team, status) VALUES
+        (1, 'billing', 'open'), (2, 'billing', 'closed'), (3, 'identity', 'in_progress'), (4, 'billing', 'open'),
+        (5, 'identity', 'on_hold'), (6, 'payments', 'closed'), (7, 'billing', 'in_progress'), (8, 'payments', 'closed');
+    expected_rows: [["billing", 2, 1, 1], ["identity", 0, 1, 0], ["payments", 0, 0, 2]]
+  - id: t2
+    description: "Example 2 - team with only untracked statuses still gets a row of zeros"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, team, status) VALUES
+        (1, 'search', 'closed'), (2, 'search', 'closed'), (3, 'mobile', 'spam');
+    expected_rows: [["mobile", 0, 0, 0], ["search", 0, 0, 2]]
+  - id: t3
+    hidden: true
+    description: "Empty table - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Look-alike statuses (reopened, closed_duplicate, open_question) are not counted"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, team, status) VALUES
+        (1, 'infra', 'reopened'), (2, 'infra', 'open'), (3, 'infra', 'closed_duplicate'), (4, 'infra', 'open_question'),
+        (5, 'infra', 'closed');
+    expected_rows: [["infra", 1, 0, 1]]
+  - id: t5
+    hidden: true
+    description: "Single team with only open tickets"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, team, status) VALUES
+        (1, 'growth', 'open'), (2, 'growth', 'open'), (3, 'growth', 'open');
+    expected_rows: [["growth", 3, 0, 0]]
+  - id: t6
+    hidden: true
+    description: "Many teams inserted out of order - ordered by team name"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, team, status) VALUES
+        (1, 'web', 'open'), (2, 'api', 'closed'), (3, 'data', 'in_progress'), (4, 'ops', 'open'), (5, 'api', 'open'),
+        (6, 'web', 'closed'), (7, 'devices', 'on_hold'), (8, 'data', 'in_progress'), (9, 'ops', 'closed');
+    expected_rows: [["api", 1, 0, 1], ["data", 0, 2, 0], ["devices", 0, 0, 0], ["ops", 1, 0, 1], ["web", 1, 0, 1]]
+  - id: t7
+    hidden: true
+    description: "All tickets have untracked statuses - every team gets zeros"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, team, status) VALUES
+        (1, 'legal', 'on_hold'), (2, 'audit', 'spam'), (3, 'legal', 'reopened');
+    expected_rows: [["audit", 0, 0, 0], ["legal", 0, 0, 0]]
+  - id: t8
+    hidden: true
+    description: "Larger team with every status several times"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, team, status) VALUES
+        (1, 'platform', 'in_progress'), (2, 'platform', 'closed'), (3, 'platform', 'closed'), (4, 'platform', 'on_hold'),
+        (5, 'platform', 'open'), (6, 'platform', 'in_progress'), (7, 'platform', 'closed'), (8, 'platform', 'closed'),
+        (9, 'platform', 'on_hold'), (10, 'platform', 'open'), (11, 'platform', 'in_progress'), (12, 'platform', 'closed'),
+        (13, 'platform', 'closed'), (14, 'platform', 'on_hold'), (15, 'platform', 'open'), (16, 'platform', 'in_progress'),
+        (17, 'platform', 'closed'), (18, 'platform', 'closed'), (19, 'platform', 'on_hold'), (20, 'platform', 'open'),
+        (21, 'platform', 'in_progress'), (22, 'platform', 'closed'), (23, 'platform', 'closed'), (24, 'edge', 'in_progress');
+    expected_rows: [["edge", 0, 1, 0], ["platform", 4, 5, 10]]
+expected_concepts:
+  - "conditional aggregation (SUM or COUNT over CASE)"
+  - "pivoting rows into columns"
+  - "exact equality instead of pattern matching"
+  - "GROUP BY with deterministic ORDER BY"
+optimal_complexity: {time: "O(n) aggregation pass plus O(t log t) to sort t teams", space: "O(t) for the grouped result"}
+rubric:
+  excellent: "Pivots in a single grouped pass with one conditional aggregate per status, returns 0 rather than NULL, keeps teams whose tickets are all untracked and orders by team."
+  good: "Correct query after a hint about turning status rows into columns or about teams with only untracked statuses."
+  weak: "Returns one row per team and status, filters untracked statuses in WHERE so such teams disappear, or matches statuses with LIKE."
+  criteria:
+    correctness: "All tests pass, including look-alike statuses and teams with only untracked statuses."
+    efficiency: "One scan with three conditional aggregates instead of three joined subqueries."
+    code_quality: "Consistent, readable CASE expressions and the exact column names."
+    edge_cases: "Empty table, teams with a single status, look-alike status names and untracked-only teams."
+    communication: "Explains the trade-off between this fixed pivot and a long-format GROUP BY team, status."
+hints:
+  - "Each output row is one team, and each count column is the number of that team's tickets in one particular status."
+  - "Grouping by team and status gives one row per pair; to get one row per team, group by team only and make each column count conditionally. Filtering statuses in WHERE would drop teams that only have other statuses."
+  - "Group by team and, for each of the three statuses, add up a CASE expression that gives one when the status equals that exact value and zero otherwise; then order by team."
+followups:
+  - "How would you add a column for tickets in any other status?"
+  - "How would this change if the set of statuses were configurable per team?"
+  - "When would you prefer returning one row per team and status and pivoting in the application?"
+common_errors:
+  - "Grouping by team and status, which returns several rows per team."
+  - "Filtering to the three statuses in WHERE, which removes teams whose tickets all have other statuses."
+  - "Matching with LIKE '%open%', which also counts reopened tickets."

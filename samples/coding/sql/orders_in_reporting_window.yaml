@@ -1,0 +1,183 @@
+version: 1
+slug: orders_in_reporting_window
+title: Orders in the Reporting Window
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, backend, business_analyst]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Orders in the Reporting Window
+
+  Finance closes the books for the first quarter of 2026 and needs two numbers: how many orders were
+  placed in **Q1 2026** and how much they were worth. Q1 2026 runs from **2026-01-01 00:00:00** up to and
+  including **every second of 2026-03-31**; an order placed at 2026-04-01 00:00:00 belongs to Q2.
+
+  Table `orders`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | placed_at | TEXT | UTC timestamp, always formatted `YYYY-MM-DD HH:MM:SS` (zero-padded) |
+  | amount_cents | INTEGER | order value in cents, `>= 0` |
+
+  Return **exactly one row** with two columns: `order_count` (the number of Q1 2026 orders) and
+  `total_cents` (the sum of their `amount_cents`). When no order falls in the quarter, return
+  `order_count = 0` and `total_cents = 0` (not NULL).
+
+  Write standard SQL that runs on both PostgreSQL and SQLite; compare `placed_at` as text rather than with
+  vendor-specific date functions.
+
+  ### Example 1
+  ```
+  orders
+  +----+---------------------+--------------+
+  | id | placed_at           | amount_cents |
+  +----+---------------------+--------------+
+  | 1  | 2025-12-31 23:59:59 | 1500         |
+  | 2  | 2026-01-01 00:00:00 | 2000         |
+  | 3  | 2026-02-14 12:30:00 | 3500         |
+  | 4  | 2026-03-31 18:45:10 | 1200         |
+  | 5  | 2026-04-01 00:00:00 | 9900         |
+  +----+---------------------+--------------+
+
+  Output
+  +-------------+-------------+
+  | order_count | total_cents |
+  +-------------+-------------+
+  | 3           | 6700        |
+  +-------------+-------------+
+  Orders 2, 3 and 4 are in Q1 2026; order 4 counts even though it was placed late on March 31.
+  ```
+
+  ### Example 2
+  ```
+  orders
+  +----+---------------------+--------------+
+  | id | placed_at           | amount_cents |
+  +----+---------------------+--------------+
+  | 1  | 2026-04-02 09:00:00 | 4000         |
+  +----+---------------------+--------------+
+
+  Output
+  +-------------+-------------+
+  | order_count | total_cents |
+  +-------------+-------------+
+  | 0           | 0           |
+  +-------------+-------------+
+  ```
+
+  ### Constraints
+  - `placed_at` is never NULL and always uses the exact format above.
+  - Amounts are non-negative and the quarterly sum fits in a 64-bit integer.
+  - The table may be empty.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return one row: order_count and total_cents for orders placed in Q1 2026.
+    SELECT COUNT(*) AS order_count, SUM(amount_cents) AS total_cents
+    FROM orders;
+reference_solutions:
+  sql: |
+    SELECT COUNT(*) AS order_count,
+           COALESCE(SUM(amount_cents), 0) AS total_cents
+    FROM orders
+    WHERE placed_at >= '2026-01-01 00:00:00'
+      AND placed_at < '2026-04-01 00:00:00';
+sql_setup: |
+  CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    placed_at TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - boundary seconds on both sides, late March 31 included"
+    setup_sql: |
+      INSERT INTO orders (id, placed_at, amount_cents) VALUES
+        (1, '2025-12-31 23:59:59', 1500), (2, '2026-01-01 00:00:00', 2000), (3, '2026-02-14 12:30:00', 3500),
+        (4, '2026-03-31 18:45:10', 1200), (5, '2026-04-01 00:00:00', 9900);
+    expected_rows: [[3, 6700]]
+  - id: t2
+    description: "Example 2 - nothing in the quarter gives 0 and 0"
+    setup_sql: |
+      INSERT INTO orders (id, placed_at, amount_cents) VALUES (1, '2026-04-02 09:00:00', 4000);
+    expected_rows: [[0, 0]]
+  - id: t3
+    hidden: true
+    description: "Empty table - still one row of zeros, total must not be NULL"
+    expected_rows: [[0, 0]]
+  - id: t4
+    hidden: true
+    description: "Last second of March 31 included (catches BETWEEN '2026-01-01' AND '2026-03-31')"
+    setup_sql: |
+      INSERT INTO orders (id, placed_at, amount_cents) VALUES
+        (1, '2026-03-31 23:59:59', 700), (2, '2026-03-31 00:00:00', 300), (3, '2026-03-31 00:00:01', 50);
+    expected_rows: [[3, 1050]]
+  - id: t5
+    hidden: true
+    description: "Same dates in other years are excluded (2025 and 2027 Q1)"
+    setup_sql: |
+      INSERT INTO orders (id, placed_at, amount_cents) VALUES
+        (1, '2025-02-10 10:00:00', 100), (2, '2027-01-15 08:00:00', 200), (3, '2026-01-15 08:00:00', 400),
+        (4, '2025-03-31 23:59:59', 800);
+    expected_rows: [[1, 400]]
+  - id: t6
+    hidden: true
+    description: "Midnight on April 1 is excluded while midnight on January 1 is included"
+    setup_sql: |
+      INSERT INTO orders (id, placed_at, amount_cents) VALUES
+        (1, '2026-04-01 00:00:00', 5000), (2, '2026-01-01 00:00:00', 10), (3, '2026-04-01 00:00:01', 6000);
+    expected_rows: [[1, 10]]
+  - id: t7
+    hidden: true
+    description: "Zero-value orders still count toward order_count"
+    setup_sql: |
+      INSERT INTO orders (id, placed_at, amount_cents) VALUES
+        (1, '2026-02-01 12:00:00', 0), (2, '2026-02-02 12:00:00', 0), (3, '2026-05-01 12:00:00', 0);
+    expected_rows: [[2, 0]]
+  - id: t8
+    hidden: true
+    description: "Large amounts - sum exceeds 32-bit range"
+    setup_sql: |
+      INSERT INTO orders (id, placed_at, amount_cents) VALUES
+        (1, '2026-01-10 10:00:00', 2000000000), (2, '2026-02-10 10:00:00', 2000000000), (3, '2026-03-10 10:00:00', 1500000000),
+        (4, '2026-06-10 10:00:00', 2000000000);
+    expected_rows: [[3, 5500000000]]
+  - id: t9
+    hidden: true
+    description: "Mixed year with orders in every month - only January to March are summed"
+    setup_sql: |
+      INSERT INTO orders (id, placed_at, amount_cents) VALUES
+        (1, '2026-01-05 09:15:00', 1100), (2, '2026-01-28 17:40:00', 2200), (3, '2026-02-03 08:05:00', 3300),
+        (4, '2026-02-28 23:59:59', 4400), (5, '2026-03-01 00:00:00', 5500), (6, '2026-03-17 13:13:13', 6600),
+        (7, '2026-04-15 10:00:00', 7700), (8, '2026-05-20 10:00:00', 8800), (9, '2026-07-04 10:00:00', 9900),
+        (10, '2026-10-01 00:00:00', 1000), (11, '2026-12-31 23:59:59', 1200), (12, '2025-12-01 12:00:00', 1300);
+    expected_rows: [[6, 23100]]
+expected_concepts:
+  - "half-open date ranges (>= start and < next period start)"
+  - "why BETWEEN with a bare end date drops the last day's timestamps"
+  - "COALESCE around SUM for an empty set"
+  - "an aggregate without GROUP BY always returns one row"
+optimal_complexity: {time: "O(log n + k) with an index on placed_at (k orders in range)", space: "O(1)"}
+rubric:
+  excellent: "Uses a half-open range (placed_at >= '2026-01-01 00:00:00' AND placed_at < '2026-04-01 00:00:00'), wraps SUM in COALESCE, explains why BETWEEN '2026-01-01' AND '2026-03-31' misses timestamps on March 31, and notes that text comparison only works because the format is fixed-width and zero-padded."
+  good: "Correct query after a hint about the March 31 boundary or the NULL sum."
+  weak: "Uses BETWEEN with bare dates, returns NULL for an empty quarter, or filters with vendor-specific date functions that do not run on both databases."
+  criteria:
+    correctness: "All tests pass, including the last second of March 31, midnight April 1 and the empty case."
+    efficiency: "A single sargable range predicate that can use an index on placed_at."
+    code_quality: "Clear column aliases and boundary literals that state their intent."
+    edge_cases: "Empty table, zero-value orders, other years and large totals."
+    communication: "Explains the half-open interval convention and why it composes for consecutive periods."
+hints:
+  - "Write out the very last timestamp that belongs to the quarter and check whether your filter really includes it."
+  - "Comparing the text '2026-03-31 18:45:10' with '2026-03-31' treats the longer string as greater, so an inclusive end date drops most of that day; bound the range by the first moment of the next quarter instead."
+  - "Filter with placed_at >= '2026-01-01 00:00:00' AND placed_at < '2026-04-01 00:00:00', select COUNT(*) and the sum of amount_cents, and wrap the sum in COALESCE(..., 0) so an empty quarter returns zero."
+followups:
+  - "How would you produce the same totals for every quarter of the year in one query?"
+  - "What changes if placed_at were stored with a time zone offset?"
+  - "Why is a half-open interval easier to reuse for consecutive reporting periods?"
+common_errors:
+  - "Using BETWEEN '2026-01-01' AND '2026-03-31', which excludes everything after midnight on March 31."
+  - "Returning NULL instead of 0 for total_cents when no order matches."
+  - "Using <= '2026-04-01', which pulls in orders placed at midnight on April 1."

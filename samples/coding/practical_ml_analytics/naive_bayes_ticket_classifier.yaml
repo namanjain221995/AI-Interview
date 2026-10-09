@@ -1,0 +1,175 @@
+version: 1
+slug: naive_bayes_ticket_classifier
+title: Naive Bayes Ticket Classifier
+difficulty: medium
+competency_keys: [machine_learning, algorithms, data_structures]
+role_tags: [ml, data_scientist, llm, support_engineer]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Naive Bayes Ticket Classifier
+
+  The help desk wants a tiny, explainable baseline that routes a new support ticket to a queue before a
+  larger model is trusted. Implement a **multinomial naive Bayes** classifier trained on past tickets.
+
+  **Tokens.** Lowercase the text, then every maximal run of letters `a`-`z` is one token; everything else
+  (digits, spaces, punctuation, underscores) separates tokens. `"ERROR-500 on Checkout!"` gives
+  `error`, `on`, `checkout`.
+
+  **Training** on `train_texts[i]` with label `train_labels[i]`:
+  - `V` is the set of distinct tokens across **all** training texts (the vocabulary).
+  - For each label `c`: `docs(c)` is the number of training tickets with label `c`, `count(w, c)` is how
+    many times token `w` occurs in those tickets, and `total(c)` is the number of tokens in them.
+
+  **Scoring** a `query`: tokenise it and **drop tokens that are not in `V`**; keep repeats. For every label
+  `c` seen in training,
+
+  `score(c) = ln(docs(c) / N) + sum over kept query tokens w of ln((count(w, c) + 1) / (total(c) + |V|))`
+
+  where `N` is the number of training tickets. Return the label with the **highest** score. Labels whose
+  scores differ by at most `10^-9` count as tied; ties go to the **lexicographically smallest** label.
+
+  ### Example 1
+  ```
+  Input:  train_texts = ["Refund my order please", "I want a refund", "Cannot login to my account", "Login page error"], train_labels = ["billing", "billing", "access", "access"], query = "refund for my order"
+  Output: "billing"
+  Explanation: "for" is not in the vocabulary and is dropped; refund and order only occur in billing tickets, my occurs once in each label
+  ```
+
+  ### Example 2
+  ```
+  Input:  train_texts = ["Package arrived damaged", "Where is my package", "Charged twice for one order", "Invoice shows wrong amount"], train_labels = ["shipping", "shipping", "billing", "billing"], query = "Hello, anyone there?"
+  Output: "billing"
+  Explanation: no query token is in the vocabulary, so only the equal priors remain; the tie goes to "billing"
+  ```
+
+  ### Example 3
+  ```
+  Input:  train_texts = ["password reset link expired", "reset my password", "app crashes on start", "crash after update", "crash when uploading photo"], train_labels = ["access", "access", "bug", "bug", "bug"], query = "password crash"
+  Output: "bug"
+  Explanation: the words alone favour access (its tickets are shorter, and "crashes" is a different token from "crash"), but bug's prior of 3/5 against 2/5 outweighs that
+  ```
+
+  ### Constraints
+  - `1 <= train_texts.length == train_labels.length <= 2000`
+  - `0 <= train_texts[i].length, query.length <= 500`; texts are printable ASCII
+  - Labels are non-empty strings of lowercase letters and underscores
+  - Compare labels with plain character order (ASCII) for tie-breaking
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: naive_bayes_predict
+  params:
+    - {name: train_texts, type: "string[]"}
+    - {name: train_labels, type: "string[]"}
+    - {name: query, type: string}
+  return_type: "string"
+  comparison: exact
+reference_solutions:
+  python: |
+    import math
+    import re
+    from collections import Counter
+
+    TOKEN = re.compile(r"[a-z]+")
+
+
+    def naive_bayes_predict(train_texts: list[str], train_labels: list[str], query: str) -> str:
+        docs: Counter[str] = Counter(train_labels)
+        word_counts: dict[str, Counter[str]] = {label: Counter() for label in docs}
+        vocabulary: set[str] = set()
+        for text, label in zip(train_texts, train_labels):
+            tokens = TOKEN.findall(text.lower())
+            word_counts[label].update(tokens)
+            vocabulary.update(tokens)
+        query_tokens = [t for t in TOKEN.findall(query.lower()) if t in vocabulary]
+        best_label, best_score = "", -math.inf
+        for label in sorted(docs):
+            denominator = sum(word_counts[label].values()) + len(vocabulary)
+            score = math.log(docs[label] / len(train_labels))
+            for token in query_tokens:
+                score += math.log((word_counts[label][token] + 1) / denominator)
+            if score > best_score + 1e-9:
+                best_label, best_score = label, score
+        return best_label
+  javascript: |
+    function naiveBayesPredict(trainTexts, trainLabels, query) {
+      const tokenize = (text) => text.toLowerCase().match(/[a-z]+/g) || [];
+      const docs = new Map();
+      const counts = new Map();
+      const totals = new Map();
+      const vocabulary = new Set();
+      for (let i = 0; i < trainTexts.length; i++) {
+        const label = trainLabels[i];
+        docs.set(label, (docs.get(label) || 0) + 1);
+        if (!counts.has(label)) {
+          counts.set(label, new Map());
+          totals.set(label, 0);
+        }
+        const wordCounts = counts.get(label);
+        for (const token of tokenize(trainTexts[i])) {
+          wordCounts.set(token, (wordCounts.get(token) || 0) + 1);
+          totals.set(label, totals.get(label) + 1);
+          vocabulary.add(token);
+        }
+      }
+      const queryTokens = tokenize(query).filter((t) => vocabulary.has(t));
+      const labels = [...docs.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      let bestLabel = "";
+      let bestScore = -Infinity;
+      for (const label of labels) {
+        const denominator = totals.get(label) + vocabulary.size;
+        const wordCounts = counts.get(label);
+        let score = Math.log(docs.get(label) / trainLabels.length);
+        for (const token of queryTokens) {
+          score += Math.log(((wordCounts.get(token) || 0) + 1) / denominator);
+        }
+        if (score > bestScore + 1e-9) {
+          bestLabel = label;
+          bestScore = score;
+        }
+      }
+      return bestLabel;
+    }
+tests:
+  - {id: t1, args: [["Refund my order please", "I want a refund", "Cannot login to my account", "Login page error"], ["billing", "billing", "access", "access"], "refund for my order"], expected: "billing", description: "Example 1"}
+  - {id: t2, args: [["Package arrived damaged", "Where is my package", "Charged twice for one order", "Invoice shows wrong amount"], ["shipping", "shipping", "billing", "billing"], "Hello, anyone there?"], expected: "billing", description: "Example 2 - only unknown words, equal priors, tie to the smaller label (smoothing unknown words would pick shipping)"}
+  - {id: t3, args: [["password reset link expired", "reset my password", "app crashes on start", "crash after update", "crash when uploading photo"], ["access", "access", "bug", "bug", "bug"], "password crash"], expected: "bug", description: "Example 3 - the prior tips a close call"}
+  - {id: t4, hidden: true, args: [["disk full on node"], ["infra"], "disk pressure"], expected: "infra", description: "Single class"}
+  - {id: t5, hidden: true, args: [["charged twice", "parcel lost", "parcel late"], ["billing", "shipping", "shipping"], ""], expected: "shipping", description: "Empty query - the larger prior wins"}
+  - {id: t6, hidden: true, args: [["CHECKOUT_ERROR 500 on payment", "Payment-page timeout (504)", "dark mode request", "please add dark-mode"], ["payments", "payments", "feature", "feature"], "ERROR-500 on CHECKOUT!!"], expected: "payments", description: "Tokenisation - case, digits, underscores and punctuation split words"}
+  - {id: t7, hidden: true, args: [["refund refund refund invoice", "refund status", "login reset password", "reset login", "login help"], ["billing", "billing", "access", "access", "access"], "refund refund refund login reset"], expected: "billing", description: "Repeated query words count every time (a set of query words picks access)"}
+  - {id: t8, hidden: true, args: [["timeout while connecting", "timeout while connecting"], ["network", "database"], "Timeout!"], expected: "database", description: "Two classes with identical evidence - tie to the smaller label"}
+  - {id: t9, hidden: true, args: [["export fails", "export fails again", "export is slow", "export broken", "report export", "sso token invalid"], ["data", "data", "data", "data", "data", "auth"], "export token"], expected: "data", description: "Laplace smoothing - a word unseen in the winning class must not zero it out"}
+  - {id: t10, hidden: true, args: [["vpn drops every hour", "vpn client disconnects", "vpn tunnel down", "printer jam"], ["network", "network", "network", "hardware"], "vpn printer printer"], expected: "hardware", description: "Repeated rare word outweighs the larger class (set of query words picks network)"}
+  - {id: t11, hidden: true, args: [["invoice amount wrong", "charged twice this month", "refund not received", "billing address update", "cannot reset password", "two factor code not arriving", "account locked after login attempts", "parcel stuck in transit", "tracking number invalid", "delivery to wrong address", "app freezes on checkout", "crash when opening settings", "search results empty after update"], ["billing", "billing", "billing", "billing", "access", "access", "access", "shipping", "shipping", "shipping", "bug", "bug", "bug"], "Locked out, the password reset code is not arriving"], expected: "access", description: "Four classes, thirteen tickets"}
+expected_concepts:
+  - "multinomial naive Bayes with class priors"
+  - "Laplace (add-one) smoothing over a shared vocabulary"
+  - "working in log space to avoid underflow"
+  - "tokenisation rules and out-of-vocabulary handling"
+  - "deterministic tie-breaking with a float tolerance"
+optimal_complexity: {time: "O(T + C * q) for T training tokens, C labels and q query tokens", space: "O(C * |V|) for the per-label counts"}
+rubric:
+  excellent: "Builds per-label token counts and the shared vocabulary in one pass, scores in log space with add-one smoothing and |V| in the denominator, drops unknown words, keeps repeated query words, breaks ties with a tolerance and the smallest label, and explains why logs prevent underflow."
+  good: "Correct classifier after a hint about unknown words, repeated query tokens or the smoothing denominator."
+  weak: "Multiplies raw probabilities, forgets the prior, gives unseen words zero probability, uses per-label vocabularies or de-duplicates query words."
+  criteria:
+    correctness: "All tests pass, including empty or unknown-only queries, repeated words and exact ties."
+    efficiency: "Training is linear in the number of tokens; scoring touches only the query tokens per label."
+    code_quality: "Separate tokenise, train and score steps with clear count structures."
+    edge_cases: "Single label, empty query, punctuation and digits, and labels with identical evidence."
+    communication: "Explains what each term of the score means and why smoothing is needed."
+hints:
+  - "Split the work into training (counting) and scoring; the score of a label is its prior times the probability of each query word, which is easier to handle as a sum of logarithms."
+  - "During training you need, per label, the number of tickets, each token's count and the total token count, plus one vocabulary shared by all labels. Smoothing adds one to every count and |V| to every denominator, so a word never seen with a label still has a small probability."
+  - "Tokenise the query, keep only vocabulary tokens (repeats included), and for each label add ln(docs/N) and ln((count + 1) / (total + |V|)) per kept token; iterate labels in sorted order and replace the best only when a score is more than 10^-9 higher."
+followups:
+  - "Why does naive Bayes work reasonably well even though words in a ticket are clearly not independent?"
+  - "How would you turn the scores into calibrated probabilities, and why are naive Bayes probabilities often overconfident?"
+  - "How would you update the model incrementally as new labelled tickets arrive?"
+  - "Which stop-word or n-gram changes would you try, and how would you measure whether they help?"
+common_errors:
+  - "Multiplying probabilities directly, which underflows to zero on long tickets."
+  - "Giving tokens unseen with a label a probability of zero instead of smoothing."
+  - "Smoothing unknown query words too, which favours labels with fewer training tokens."
+  - "Counting each distinct query word once instead of every occurrence."
+  - "Leaving out the class prior, so a rare queue wins too often."

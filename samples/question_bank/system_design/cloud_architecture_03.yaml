@@ -1,0 +1,614 @@
+# System design: cloud architecture (3 of 4) — disaster recovery, backups and multi-region resilience.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [cloud, devops]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.cloud_architecture.recovery_for_internal_app
+    competency_key: system_design
+    topic: Meeting a four-hour recovery target
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      An internal application needs to be back within four hours of a disaster, and the business can lose at most
+      one hour of data. Design a recovery approach that meets that without overspending.
+    expected_concepts:
+      - recovery time and recovery point objectives driving the design
+      - backups or snapshots at least hourly, copied to another region
+      - infrastructure as code to rebuild the environment
+      - documented restore steps with an owner
+      - a timed test to prove four hours is realistic
+    rubric:
+      excellent: Translates the targets into backup frequency and rebuild approach, keeps cost proportionate with backup and restore rather than a standby, and proves the timing through a test.
+      good: Proposes hourly cross-region backups and a rebuild plan, but does not show how the four-hour target would be verified.
+      weak: Proposes a full active standby for a modest internal app, or daily backups that miss the one-hour data target.
+    followups:
+      - The restore test takes six hours. Where would you look to shorten it?
+      - What would change if the data loss tolerance dropped to five minutes?
+    common_errors:
+      - Keeping backups only in the same region as the application.
+
+  - external_key: system_design.cloud_architecture.backup_scope_design
+    competency_key: system_design
+    topic: Deciding what to back up for an application
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      For a typical web application with a relational database, file uploads in object storage, and configuration
+      and secrets, how would you design the backups so the whole application could actually be restored?
+    expected_concepts:
+      - database point-in-time recovery plus periodic snapshots
+      - object storage versioning and replication
+      - configuration and infrastructure kept in version control
+      - secrets and encryption keys recoverable alongside the data
+      - backups stored in a separate account or region
+      - restore order and consistency between data stores
+    rubric:
+      excellent: Covers every state-bearing component including keys and configuration, isolates backups from the primary account and explains restore order and consistency between the database and files.
+      good: Backs up the database and files sensibly, but forgets keys, configuration or isolation of the backups.
+      weak: Backs up only the database and assumes everything else can be recreated from memory.
+    followups:
+      - If the encryption key were lost, what would your backups be worth?
+      - How would you restore the database and files so they match each other?
+    common_errors:
+      - Encrypting backups with a key that would be lost together with the primary account.
+
+  - external_key: system_design.cloud_architecture.failover_runbook_design
+    competency_key: incident_response
+    topic: Designing a regional failover runbook
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your service has a standby in a second region. Design the failover runbook: who decides to fail over, what
+      the steps are, and how people know it worked.
+    expected_concepts:
+      - clear decision criteria and an accountable decision maker
+      - ordered steps for data promotion, traffic switch and dependencies
+      - automation of the mechanical steps
+      - verification checks after each step
+      - communication to stakeholders
+      - criteria and steps for failing back
+    rubric:
+      excellent: Defines who decides and on what evidence, orders and automates the technical steps with verification, and includes communication and failback.
+      good: Lists sensible steps and verification, but is vague on decision authority or failback.
+      weak: Writes a list of commands with no decision criteria, verification or owner.
+    followups:
+      - The primary region is degraded but not fully down. How does the runbook help someone decide?
+      - How would you keep this runbook from going stale?
+    common_errors:
+      - Leaving the decision to fail over undefined so the team debates for an hour during the outage.
+
+  - external_key: system_design.cloud_architecture.automated_restore_testing
+    competency_key: incident_response
+    topic: Proving backups can be restored
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Everyone says the backups are fine, but nobody has restored one in a year. Design an automated way to prove,
+      on a regular schedule, that your backups really restore.
+    expected_concepts:
+      - scheduled restores into an isolated account or environment
+      - automated data integrity and application-level checks after restore
+      - measuring restore duration against recovery targets
+      - alerting when a restore test fails or is skipped
+      - cleaning up restored environments to control cost
+    rubric:
+      excellent: Designs scheduled isolated restores with meaningful validation, tracks restore time against targets, alerts on failures and controls the cost of the test environments.
+      good: Schedules restores and checks they complete, with limited validation of the data itself.
+      weak: Checks only that backup jobs report success without restoring anything.
+    followups:
+      - What check would convince you the restored data is actually usable?
+      - Restored data contains customer information. How do you handle that in the test environment?
+    common_errors:
+      - Treating a successful backup job status as proof that a restore will work.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.cloud_architecture.pilot_light_ecommerce
+    competency_key: system_design
+    topic: Pilot light recovery for an online store
+    difficulty: medium
+    text: >-
+      Design a pilot light disaster recovery setup in a second region for an online store. What runs there all the
+      time, what gets replicated, and what happens in the first hour after you declare a disaster?
+    expected_concepts:
+      - continuously replicated data stores in the recovery region
+      - core infrastructure defined as code but scaled to zero or minimal
+      - images and artifacts already replicated
+      - scale-out procedure with pre-raised quotas
+      - DNS or global routing switch
+      - verification before taking traffic
+    rubric:
+      excellent: Clearly distinguishes always-on from on-demand components, keeps data and artifacts replicated, plans quotas and capacity for scale-out, and walks through a believable first hour.
+      good: Replicates data and scales up infrastructure on failover, but misses artifacts, quotas or verification.
+      weak: Describes cold backups restored on demand while calling it pilot light, or a full standby.
+    followups:
+      - The recovery region doesn't have enough capacity of your instance type when you need it. What then?
+      - How long do you expect the scale-out to take, and how would you measure it?
+    common_errors:
+      - Forgetting that container images and other artifacts must also exist in the recovery region.
+
+  - external_key: system_design.cloud_architecture.payments_dr_option_choice
+    competency_key: system_design
+    topic: Choosing a regional recovery model for a payments API
+    difficulty: medium
+    text: >-
+      A payments API needs to recover from a regional outage within fifteen minutes with almost no data loss. The
+      options on the table are warm standby and active-active. How would you choose, and what would you build?
+    expected_concepts:
+      - mapping recovery targets to each option
+      - data replication approach and its effect on data loss
+      - cost of running capacity in two regions
+      - complexity of multi-region writes and idempotency for payments
+      - failover automation versus human decision
+      - testing frequency for each option
+    rubric:
+      excellent: Compares the options against the targets, cost and data consistency needs specific to payments, makes a reasoned recommendation and explains how idempotency protects against duplicate charges during failover.
+      good: Makes a reasonable choice with cost and complexity trade-offs, but treats payment-specific consistency lightly.
+      weak: Picks active-active by default without considering write consistency or the cost involved.
+    followups:
+      - A payment was submitted just as the region failed. How do you make sure it's neither lost nor charged twice?
+      - What would make you revisit your choice in a year?
+    common_errors:
+      - Assuming asynchronous replication gives zero data loss.
+
+  - external_key: system_design.cloud_architecture.ransomware_resilient_backups
+    competency_key: security
+    topic: Backups that survive a ransomware attack
+    difficulty: medium
+    text: >-
+      Assume an attacker gains administrator access in your production account and tries to encrypt or delete
+      everything, including backups. Design a backup architecture that survives that.
+    expected_concepts:
+      - backups copied to a separate account with independent access
+      - immutability through object lock or vault lock in compliance mode
+      - separate encryption keys not controllable from production
+      - deletion protection and minimum retention
+      - monitoring for mass deletion or encryption activity
+      - tested restore into a clean environment
+    rubric:
+      excellent: Separates backups by account, credentials and keys, makes them immutable with retention locks, adds detection of destructive activity and plans restore into a clean environment.
+      good: Copies backups to another account with some immutability, but misses key separation or detection.
+      weak: Relies on snapshots inside the same account that the attacker controls.
+    followups:
+      - How would you know the backup you restore was taken before the attacker got in?
+      - What does compliance-mode immutability cost you in flexibility?
+    common_errors:
+      - Using the same administrator role to manage both production and the backup vault.
+
+  - external_key: system_design.cloud_architecture.relational_db_regional_failover
+    competency_key: databases
+    topic: Cross-region failover for a relational database
+    difficulty: medium
+    text: >-
+      Your main relational database replicates asynchronously to a second region. Design how failover to that
+      replica works, including how you avoid two databases both accepting writes.
+    expected_concepts:
+      - replication lag monitoring and its effect on data loss
+      - promotion procedure for the replica
+      - fencing the old primary so it cannot accept writes
+      - updating connection endpoints for applications
+      - recording the last replicated position to reconcile later
+      - rebuilding replication in the reverse direction
+    rubric:
+      excellent: Explains promotion with explicit fencing to prevent split brain, quantifies data loss from lag, handles endpoint changes and plans reverse replication and reconciliation.
+      good: Describes promotion and switching applications over, but fencing or reconciliation is unclear.
+      weak: Promotes the replica without considering that the old primary might come back and keep accepting writes.
+    followups:
+      - The old primary comes back after twenty minutes with writes that never replicated. What happens to them?
+      - How would applications find the new primary without a redeploy?
+    common_errors:
+      - Not fencing the old primary, which leads to split-brain writes when it recovers.
+
+  - external_key: system_design.cloud_architecture.failback_design
+    competency_key: system_design
+    topic: Failing back to the primary region
+    difficulty: medium
+    text: >-
+      You failed over to your recovery region and ran there for two days. The primary region is fine again. Design
+      how you get back, and explain why failback is often harder than failover.
+    expected_concepts:
+      - re-establishing replication from recovery back to primary
+      - reconciling data written only in the primary before the outage
+      - planned, low-traffic cutover window
+      - validating the primary environment before switching
+      - optionally staying in the recovery region and swapping roles
+      - updating runbooks with lessons learned
+    rubric:
+      excellent: Plans reverse replication, reconciliation of stranded writes and a controlled cutover, considers simply swapping region roles and explains why failback carries its own risks.
+      good: Describes reverse replication and a cutover, but misses stranded data or validation.
+      weak: Assumes switching traffic back is enough with no data movement.
+    followups:
+      - Would you ever choose not to fail back? When?
+      - How long would you wait before failing back, and what decides it?
+    common_errors:
+      - Switching traffic back before data written in the recovery region has replicated to the primary.
+
+  - external_key: system_design.cloud_architecture.dr_dependency_mapping
+    competency_key: system_design
+    topic: Finding dependencies that break disaster recovery
+    difficulty: medium
+    text: >-
+      During a DR test, your application failed over correctly but still didn't work, because it depended on things
+      that only existed in the primary region. Design how you'd discover and track those dependencies across the
+      estate.
+    expected_concepts:
+      - tracing and flow data to discover runtime dependencies
+      - reviewing configuration for hard-coded regional endpoints
+      - third-party SaaS and identity provider dependencies
+      - a dependency catalogue with recovery tiers
+      - checks that a service's dependencies are at least as resilient as it is
+      - regional isolation tests that block access to the primary
+    rubric:
+      excellent: Uses runtime evidence plus configuration review to build a dependency map, includes external and shared-platform dependencies, and validates by actually isolating the primary during tests.
+      good: Builds a dependency list from documentation and some tooling, without validating by isolation.
+      weak: Relies on teams remembering their dependencies.
+    followups:
+      - A critical tier-one service depends on a tier-three service. How do you resolve that?
+      - How would you simulate the primary region being unreachable without a real outage?
+    common_errors:
+      - Testing failover while the primary region is still reachable, which hides hidden dependencies.
+
+  - external_key: system_design.cloud_architecture.dr_game_day_programme
+    competency_key: incident_response
+    topic: A disaster recovery testing programme
+    difficulty: medium
+    text: >-
+      Leadership wants confidence that disaster recovery actually works, not just a document. Design a testing
+      programme that exercises real failovers without causing the outages it's meant to prevent.
+    expected_concepts:
+      - progression from tabletop to component tests to full regional exercises
+      - blast radius control and abort criteria
+      - testing in production with prepared rollback
+      - measuring actual recovery time and data loss against targets
+      - tracking findings to closure
+      - unannounced tests once maturity allows
+    rubric:
+      excellent: Designs a graduated programme with safety controls and abort criteria, measures real recovery numbers, feeds findings back into fixes, and moves toward realistic production exercises.
+      good: Plans regular failover tests and records results, but safety controls or follow-up are thin.
+      weak: Proposes an annual document review or a test only in a non-production copy that does not resemble production.
+    followups:
+      - The first full test reveals a two-hour gap against the target. What happens next?
+      - A product owner worries a production test will hurt customers. How would you make the case for it?
+    common_errors:
+      - Running every test with the same experts present, so nobody learns whether others can follow the runbook.
+
+  - external_key: system_design.cloud_architecture.rebuild_from_code
+    competency_key: terraform
+    topic: Everything needed to rebuild in another region
+    difficulty: medium
+    text: >-
+      Imagine you have to rebuild your whole platform in another region from scratch. Beyond application data,
+      what else must already exist or be recoverable there, and how would you design for that?
+    expected_concepts:
+      - infrastructure code and its state reachable outside the failed region
+      - container images and artifacts replicated
+      - CI and deployment tooling available outside the failed region
+      - secrets, keys and certificates recoverable
+      - DNS and identity provider configuration
+      - regional parameters rather than hard-coded region values
+    rubric:
+      excellent: Inventories the full rebuild chain from code, state and pipelines to artifacts, secrets and DNS, and designs each so it does not depend on the failed region.
+      good: Covers infrastructure code and images but misses where pipelines, state or secrets would live.
+      weak: Assumes the code repository means everything can be rebuilt, ignoring tooling and credentials.
+    followups:
+      - Your deployment pipeline runs only in the failed region. What do you do?
+      - How would you prove a clean rebuild actually works?
+    common_errors:
+      - Keeping infrastructure state files only in the region the plan is meant to replace.
+
+  - external_key: system_design.cloud_architecture.object_storage_replication_design
+    competency_key: system_design
+    topic: Replicating user uploads across regions
+    difficulty: medium
+    text: >-
+      Users upload documents that must survive a regional outage, and must stay deletable when a customer asks.
+      Design the cross-region replication for that object storage.
+    expected_concepts:
+      - cross-region replication with versioning enabled
+      - replication time and monitoring of replication lag
+      - handling deletes and delete markers consistently in both regions
+      - lifecycle rules for old versions
+      - encryption keys available in both regions
+      - storage and transfer cost of a second copy
+    rubric:
+      excellent: Designs replication with versioning and lag monitoring, handles deletion requests across both copies and old versions, ensures keys exist in both regions and accounts for cost.
+      good: Enables replication and versioning, but deletion handling or key availability is vague.
+      weak: Relies on a single region's durability claims, or replicates without considering deletion.
+    followups:
+      - A customer's deletion request arrives during a regional outage. What happens?
+      - How would you know objects are replicating late?
+    common_errors:
+      - Assuming replication covers objects written before it was enabled.
+
+  - external_key: system_design.cloud_architecture.messaging_dr
+    competency_key: distributed_systems
+    topic: Disaster recovery for queues and event streams
+    difficulty: medium
+    text: >-
+      Your order processing relies on managed queues and an event stream in one region. Design how messaging keeps
+      working after a regional failover, and what happens to the messages that were in flight.
+    expected_concepts:
+      - queues and topics pre-created in the recovery region
+      - replication or dual publishing of events
+      - messages in flight at failover can be lost or duplicated
+      - idempotent consumers and deduplication keys
+      - replay from a durable source of truth
+      - reconciliation after failover
+    rubric:
+      excellent: Prepares messaging in both regions, is explicit that in-flight messages may be lost or duplicated, designs idempotent consumers and replay, and plans reconciliation.
+      good: Recreates queues in the recovery region and mentions duplicates, but has no plan for lost messages.
+      weak: Assumes managed messaging fails over transparently with no loss or duplication.
+    followups:
+      - How would you find orders that were accepted but never processed?
+      - What makes a consumer safely idempotent for something like sending an email?
+    common_errors:
+      - Designing consumers that are not idempotent and then replaying messages after failover.
+
+  - external_key: system_design.cloud_architecture.failover_trigger_design
+    competency_key: distributed_systems
+    topic: Deciding when failover happens automatically
+    difficulty: medium
+    text: >-
+      Should regional failover happen automatically or only when a person decides? Design the triggering logic
+      you'd use for a customer-facing service, including how you'd avoid flapping between regions.
+    expected_concepts:
+      - signals from multiple independent vantage points
+      - thresholds based on user-facing error rates and latency
+      - hysteresis, minimum dwell time and manual failback
+      - automation for well-understood failures, humans for ambiguous ones
+      - checks that the target region has capacity and current data
+      - avoiding failover triggered by the monitoring system failing
+    rubric:
+      excellent: Designs triggering from independent user-facing signals, combines automation with human judgement by failure type, adds hysteresis to prevent flapping and checks the target is ready.
+      good: Picks a reasonable mix of automatic and manual failover with some thresholds, but misses flapping or monitoring failures.
+      weak: Fails over automatically on a single probe or always waits for a human regardless of the situation.
+    followups:
+      - The monitoring itself runs in the primary region and goes down. What should happen?
+      - What is the cost of a false failover for this service?
+    common_errors:
+      - Triggering failover from a single synthetic check that can fail for reasons unrelated to the service.
+
+  - external_key: system_design.cloud_architecture.gray_zone_failure
+    competency_key: distributed_systems
+    topic: Detecting and evacuating a partially failing zone
+    difficulty: medium
+    text: >-
+      One availability zone isn't down, but it's dropping a few percent of packets and adding latency. Your load
+      balancer checks still pass. Design how your system would notice that and move traffic away.
+    expected_concepts:
+      - per-zone metrics for error rate and latency
+      - outlier detection comparing zones against each other
+      - zonal shift or weighting traffic away from a zone
+      - capacity headroom in the remaining zones
+      - zone-aware routing to limit cross-zone calls
+      - procedure to restore traffic after recovery
+    rubric:
+      excellent: Detects gray failure by comparing per-zone signals, explains why simple checks miss it, designs a zonal shift with capacity headroom and describes a careful return of traffic.
+      good: Proposes per-zone monitoring and draining a zone, but misses capacity planning or why checks pass.
+      weak: Relies on load balancer checks, which by definition are passing in this scenario.
+    followups:
+      - How much spare capacity do you need to evacuate one of three zones?
+      - Could automated evacuation make things worse? How?
+    common_errors:
+      - Aggregating metrics across zones so a single bad zone is hidden in the average.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.cloud_architecture.region_evacuation_at_scale
+    competency_key: system_design
+    topic: Evacuating hundreds of services from a degraded region
+    difficulty: hard
+    text: >-
+      A region hosting two hundred services is badly degraded, and you need everything critical serving from other
+      regions within an hour. Design the capability that makes that possible, including capacity and ordering.
+    expected_concepts:
+      - tiering services and evacuation order by dependency
+      - pre-reserved or guaranteed capacity in target regions
+      - quota headroom planned in advance
+      - central orchestration with per-service automation
+      - data layer readiness per service
+      - regular partial evacuation drills
+    rubric:
+      excellent: Plans capacity and quotas ahead of time, orders evacuation by tier and dependency, orchestrates centrally with per-service automation and proves it with regular drills.
+      good: Tiers services and automates failover, but assumes capacity will be available on demand.
+      weak: Expects each team to fail over on its own during the incident.
+    followups:
+      - Everyone else in that region is evacuating to the same neighbouring region. How does that affect you?
+      - How would you reduce the cost of keeping that capacity ready?
+    common_errors:
+      - Assuming on-demand capacity will be available in the target region when everyone is moving at once.
+
+  - external_key: system_design.cloud_architecture.cross_provider_dr
+    competency_key: system_design
+    topic: Disaster recovery onto a different cloud provider
+    difficulty: hard
+    text: >-
+      A regulator requires that a critical service can recover even if your primary cloud provider becomes
+      unavailable. Design recovery onto a second provider and be honest about what it costs.
+    expected_concepts:
+      - scope limited to the critical service and its minimum viable function
+      - portable building blocks such as containers and standard databases
+      - continuous data replication to the second provider
+      - identity, DNS and secrets independent of the primary provider
+      - regular full exercises on the second provider
+      - ongoing cost and engineering effort of two skill sets
+    rubric:
+      excellent: Narrows the scope, chooses portable components deliberately, replicates data and decouples identity and DNS, plans real exercises and quantifies the ongoing cost and effort.
+      good: Designs a workable second-provider setup with data replication, but misses independence of identity or DNS, or understates the cost.
+      weak: Proposes running everything identically on both providers or assumes the tooling makes the move trivial.
+    followups:
+      - Which managed services would you have to replace with portable alternatives, and what do you lose?
+      - How do you keep the secondary environment from drifting out of date?
+    common_errors:
+      - Keeping DNS or identity hosted only on the primary provider, which defeats the whole design.
+
+  - external_key: system_design.cloud_architecture.consistent_multi_service_recovery
+    competency_key: distributed_systems
+    topic: Restoring many services to a consistent point
+    difficulty: hard
+    text: >-
+      Thirty microservices each own their own database. A bad data migration corrupted several of them over a few
+      hours. Design how you'd restore the system to a consistent point without simply rolling back everything.
+    expected_concepts:
+      - point-in-time recovery per data store
+      - identifying the corruption window and affected entities
+      - restoring to side-by-side copies rather than overwriting
+      - repair by replaying events or applying corrections rather than full rollback
+      - cross-service references and ordering consistency
+      - preserving legitimate writes made after the corruption
+    rubric:
+      excellent: Scopes the damage, restores side-by-side and repairs selectively while preserving later valid writes, and addresses consistency between services that reference each other.
+      good: Uses point-in-time restore for affected services and some repair, but loses valid later writes or ignores cross-service consistency.
+      weak: Restores every database to the same timestamp and discards hours of legitimate activity.
+    followups:
+      - How would you have designed the system up front to make this repair easier?
+      - Customers took real actions after the corruption. How do you protect those?
+    common_errors:
+      - Overwriting production databases with restores before understanding the extent of the damage.
+
+  - external_key: system_design.cloud_architecture.logical_corruption_containment
+    competency_key: databases
+    topic: Containing corruption that replication spreads
+    difficulty: hard
+    text: >-
+      Replication copies bad data to every region within seconds, so your multi-region setup doesn't help against a
+      buggy release that corrupts records. Design protections specifically for that kind of failure.
+    expected_concepts:
+      - delayed replicas lagging by a fixed window
+      - point-in-time recovery and change history
+      - soft deletes and append-only audit or event logs
+      - data validation and anomaly detection on writes
+      - progressive rollout of data-changing releases
+      - ability to pause replication quickly
+    rubric:
+      excellent: Distinguishes availability failures from logical corruption, combines delayed copies, history, validation and progressive rollout, and plans how to detect and stop the spread quickly.
+      good: Proposes point-in-time recovery and some validation, but has no way to slow or stop propagation.
+      weak: Treats more replicas or more regions as the answer to logical corruption.
+    followups:
+      - What delay would you pick for a delayed replica, and what is the trade-off?
+      - Which signals would tell you a release is corrupting data?
+    common_errors:
+      - Believing multi-region replication protects against bad writes.
+
+  - external_key: system_design.cloud_architecture.dr_cost_reduction
+    competency_key: cloud_cost_optimization
+    topic: Cutting the cost of disaster recovery
+    difficulty: hard
+    text: >-
+      Your disaster recovery environment now costs about forty percent of production, and finance wants it halved
+      without weakening the commitments made to customers. How would you redesign it?
+    expected_concepts:
+      - revisiting recovery tiers per service against real requirements
+      - moving lower tiers from warm standby to pilot light or backup and restore
+      - scaling standby compute down and relying on reserved capacity only where needed
+      - storage tiering and retention for replicas and backups
+      - reducing cross-region transfer by replicating less or compressing
+      - re-measuring recovery times after changes
+    rubric:
+      excellent: Starts from service-by-service requirements, moves components to cheaper strategies where targets allow, cuts standby and storage costs and proves the targets still hold through tests.
+      good: Finds several cost cuts, such as scaling down standby, with some regard for recovery targets.
+      weak: Cuts across the board without checking which commitments each service carries.
+    followups:
+      - Which costs in a DR environment are easiest to overlook?
+      - How do you present the remaining risk to finance and product owners?
+    common_errors:
+      - Reducing standby capacity without re-testing whether scale-out still meets the recovery time.
+
+  - external_key: system_design.cloud_architecture.streaming_platform_dr
+    competency_key: distributed_systems
+    topic: Regional recovery for a streaming platform
+    difficulty: hard
+    text: >-
+      Many teams consume from a large Kafka-style event streaming platform in one region. Design disaster recovery
+      for it, including how consumers pick up in the other region without losing or reprocessing too much.
+    expected_concepts:
+      - cross-region topic replication
+      - offset translation or timestamp-based consumer repositioning
+      - duplicate tolerance and idempotent consumers
+      - topic naming and producer routing after failover
+      - schema registry and configuration available in both regions
+      - replication lag monitoring and its effect on data loss
+    rubric:
+      excellent: Designs replication with explicit handling of offsets, consumer repositioning and duplicates, keeps schemas and configuration available and quantifies loss from replication lag.
+      good: Replicates topics and plans consumer failover, but glosses over offset translation or duplicates.
+      weak: Assumes consumers can resume at the same offsets in a different cluster.
+    followups:
+      - Producers in other regions keep writing to the old cluster after failover. How do you stop that?
+      - How would you test this without disrupting consumers?
+    common_errors:
+      - Assuming offsets are identical between the source and the replicated cluster.
+
+  - external_key: system_design.cloud_architecture.dr_evidence_automation
+    competency_key: incident_response
+    topic: Producing DR evidence for regulators at scale
+    difficulty: hard
+    text: >-
+      A regulator now wants evidence that each of your three hundred applications meets its recovery targets,
+      refreshed every year. Design a system that produces that evidence without turning into a manual
+      spreadsheet exercise.
+    expected_concepts:
+      - application registry with tier and recovery targets
+      - automated, scheduled recovery tests per application
+      - capture of measured recovery time and data loss as evidence
+      - exception tracking with remediation deadlines
+      - immutable records of test results
+      - dashboards for application owners and auditors
+    rubric:
+      excellent: Ties targets to a registry, automates tests that produce measured, tamper-evident evidence, tracks failures to remediation and gives owners and auditors clear views.
+      good: Automates many tests and stores results, but evidence integrity or exception tracking is thin.
+      weak: Collects self-reported attestations from teams once a year.
+    followups:
+      - Some legacy applications can't be tested automatically. What evidence do you accept?
+      - An application missed its target. What happens in your system?
+    common_errors:
+      - Accepting a successful test without recording the measured recovery time and data loss.
+
+  - external_key: system_design.cloud_architecture.zero_data_loss_across_regions
+    competency_key: distributed_systems
+    topic: Zero data loss across regions
+    difficulty: hard
+    text: >-
+      The business says a ledger service must lose no committed transactions even if an entire region is lost.
+      Design the data layer to deliver that, and explain what it does to write latency.
+    expected_concepts:
+      - synchronous replication or consensus across regions before acknowledging writes
+      - quorum across three regions to survive one loss
+      - latency added by inter-region round trips
+      - choosing region distances to balance latency and independence
+      - distributed SQL or consensus-based stores versus traditional replication
+      - limiting the synchronous path to the data that truly needs it
+    rubric:
+      excellent: Explains synchronous or quorum writes across regions, quantifies the latency cost from round-trip times, places regions deliberately and narrows the strict guarantee to the data that needs it.
+      good: Recognises synchronous replication is needed and that it adds latency, without quantifying it or considering quorum placement.
+      weak: Claims asynchronous replication or frequent backups achieve zero data loss.
+    followups:
+      - If the round trip between regions is forty milliseconds, what write latency should product expect?
+      - Two of the three regions lose contact with each other. What happens to writes?
+    common_errors:
+      - Using two regions with synchronous replication, which stops writes whenever either one is unreachable.
+
+  - external_key: system_design.cloud_architecture.clean_room_recovery
+    competency_key: security
+    topic: Clean-room recovery after a full compromise
+    difficulty: hard
+    text: >-
+      An attacker held administrator access across your production cloud organisation for weeks before being found,
+      and you can't trust anything running there. Design how you'd recover into a clean environment.
+    expected_concepts:
+      - isolated recovery environment with new identity and credentials
+      - rebuilding from trusted source code and verified images rather than copying running systems
+      - choosing backups from before the compromise and scanning them
+      - rotating every secret, key and certificate
+      - forensic preservation of the compromised environment
+      - staged reintroduction of services with monitoring
+    rubric:
+      excellent: Builds a separate trusted environment, rebuilds from verified sources, selects and checks backups from before the intrusion, rotates all credentials and preserves evidence while restoring services in stages.
+      good: Rebuilds in a new account with rotated credentials and older backups, but misses verification of artifacts or forensic preservation.
+      weak: Removes the attacker's access and continues running the existing environment.
+    followups:
+      - How would you know whether your container images or pipelines were tampered with?
+      - What would you set up in advance to make this recovery faster?
+    common_errors:
+      - Restoring from the most recent backups, which may already contain the attacker's persistence.

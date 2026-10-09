@@ -1,0 +1,656 @@
+# Curated questions: backend API design (retries, async delivery, evolution, rate limiting and resilience).
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend]
+questions:
+  - external_key: technical.backend_apis.why_idempotency_matters
+    competency_key: distributed_systems
+    topic: Idempotency and client retries
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Why does it matter whether an API operation is idempotent when clients retry after a timeout? Use an
+      example from something you've built.
+    expected_concepts:
+      - a timeout leaves the client unsure whether the operation happened
+      - networks and clients deliver requests at least once
+      - naturally idempotent operations such as PUT and DELETE
+      - duplicate side effects from retried POSTs
+      - idempotency keys or natural unique constraints
+    rubric:
+      excellent: Explains the ambiguity of a timeout, gives a concrete duplicate-side-effect example from their work, and describes how they made the operation safe to retry.
+      good: Explains that retries can duplicate effects and names a way to prevent it.
+      weak: Thinks retries are always safe or never considers duplicates.
+    followups:
+      - Is DELETE still idempotent if the second call returns 404?
+      - Which operations in your last system were not safe to retry?
+    common_errors:
+      - Confusing idempotent with returning the same response every time.
+
+  - external_key: technical.backend_apis.idempotency_middleware
+    competency_key: api_design
+    topic: Idempotency as shared infrastructure
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Suppose you want idempotency keys on every write endpoint of a multi-tenant API, implemented once as
+      shared middleware rather than per endpoint. How would you build it, and where does a generic
+      approach break down?
+    expected_concepts:
+      - key scoped by tenant and endpoint
+      - request fingerprint to reject a reused key with a different body
+      - storing status and response for replay
+      - recording the key in the same transaction as the business write
+      - side effects outside the database such as emails or third-party calls
+      - retention window and which outcomes to store
+    rubric:
+      excellent: Designs scoping, fingerprinting, transactional recording and replay, and clearly explains the limits of a generic layer for external side effects and transient failures.
+      good: Builds a key-and-response store with scoping and expiry.
+      weak: Stores keys in memory per instance or ignores how the key relates to the business transaction.
+    followups:
+      - Should a 503 response be stored and replayed for the same key?
+      - How long would you keep idempotency records, and who decides?
+    common_errors:
+      - Committing the business change and the idempotency record in separate transactions.
+
+  - external_key: technical.backend_apis.client_retry_policy
+    competency_key: distributed_systems
+    topic: Client retry policy
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      If you were writing the official client library for your API, what retry policy would you build in,
+      and which errors should never be retried?
+    expected_concepts:
+      - retry connection errors, timeouts, 429 and 503
+      - never retry most 4xx such as 400, 401, 403, 404 and 422
+      - only retry non-idempotent calls when an idempotency key is attached
+      - exponential backoff with jitter
+      - respecting Retry-After
+      - attempt limits and an overall deadline
+    rubric:
+      excellent: Classifies errors precisely, ties retries to idempotency, uses jittered backoff capped by attempts and deadline, and honours server hints.
+      good: Retries transient errors with exponential backoff and avoids retrying client errors.
+      weak: Retries everything immediately in a loop.
+    followups:
+      - Why does jitter matter when thousands of clients fail at once?
+      - Would you retry a 500, and under what conditions?
+    common_errors:
+      - Retrying POST requests without any idempotency protection.
+
+  - external_key: technical.backend_apis.retry_amplification_outage
+    competency_key: distributed_systems
+    topic: Retry storms and cascading failure
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A downstream dependency slows down for a few minutes. Your API then falls over completely and stays
+      down even after the dependency recovers. What do you think happened, and how would you design
+      against it?
+    expected_concepts:
+      - retry amplification across several layers
+      - thread or connection pool exhaustion from slow calls
+      - timeouts that are too long
+      - circuit breakers
+      - load shedding and admission control
+      - retry budgets, backoff with jitter and bulkheads
+    rubric:
+      excellent: Explains the feedback loop of retries and resource exhaustion, why the system stays down after recovery, and proposes layered defences with how to verify them under load.
+      good: Identifies retries and timeouts as the cause and adds circuit breakers or backoff.
+      weak: Suggests only scaling up or restarting the service.
+    followups:
+      - Why might the service stay down after the dependency has recovered?
+      - Which layer should own retries when there are several?
+    common_errors:
+      - Retrying at every layer, multiplying load on the struggling dependency.
+
+  - external_key: technical.backend_apis.webhook_delivery_design
+    competency_key: api_design
+    topic: Reliable webhook delivery
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You're adding webhooks so customers are notified when an order ships. How would you design the
+      delivery side so it's reliable?
+    expected_concepts:
+      - persisting events before sending, for example an outbox
+      - retries with backoff and an eventual give-up or disable
+      - at-least-once delivery with event ids for deduplication
+      - short timeouts on the receiver call
+      - delivery logs and manual replay
+      - "ordering not guaranteed: timestamps, versions or thin events"
+    rubric:
+      excellent: Covers durable event capture, retries with backoff, deduplication ids, timeouts, observability and replay, and makes the ordering contract explicit.
+      good: Sends webhooks asynchronously with retries and event ids.
+      weak: Calls the customer's URL inline in the request that changes the order, with no retry.
+    followups:
+      - A customer's endpoint has been down for two days — what happens to their events?
+      - Would you send the full order in the payload or just an id?
+    common_errors:
+      - Promising exactly-once or ordered delivery without the mechanisms to back it.
+
+  - external_key: technical.backend_apis.webhook_signing
+    competency_key: security
+    topic: Authenticating webhooks
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do webhook receivers know a request really came from you and hasn't been replayed? Describe what
+      you'd put in place on both the sending and receiving side.
+    expected_concepts:
+      - HMAC signature over the raw request body
+      - timestamp included in the signed content with a tolerance window
+      - constant-time signature comparison
+      - secret rotation with overlapping valid secrets
+      - HTTPS only
+      - deduplication by event id
+    rubric:
+      excellent: Designs signing over the raw body with a timestamp, explains replay protection and constant-time comparison, and supports rotation without downtime.
+      good: Uses an HMAC signature with a shared secret and HTTPS.
+      weak: Relies on IP allow-lists or a static token in the URL alone.
+    followups:
+      - Why must the receiver verify the raw body rather than parsed JSON?
+      - How would you rotate a customer's signing secret without dropping events?
+    common_errors:
+      - Verifying the signature after re-serialising the JSON.
+
+  - external_key: technical.backend_apis.slow_webhook_consumer
+    competency_key: api_design
+    topic: Consuming webhooks safely
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Your service receives webhooks from a payment provider, and the handler sometimes takes thirty
+      seconds because it does a lot of work inline. The provider keeps retrying, and you see duplicate
+      processing. How would you restructure it?
+    expected_concepts:
+      - verify the signature first
+      - persist the event and acknowledge quickly with a 2xx
+      - process asynchronously from a queue
+      - deduplicate by the provider's event id
+      - handle out-of-order events by checking current state
+    rubric:
+      excellent: Separates acknowledgement from processing, deduplicates by event id with a unique constraint, and handles out-of-order events by reconciling with the provider's current state.
+      good: Acknowledges quickly, queues the work and deduplicates events.
+      weak: Only raises the provider's timeout or makes the handler faster.
+    followups:
+      - What if the refund event arrives before the payment event?
+      - How would you recover events you missed during an outage?
+    common_errors:
+      - Returning 200 before the event is safely stored.
+
+  - external_key: technical.backend_apis.catching_breaking_changes
+    competency_key: api_design
+    topic: Detecting breaking changes before release
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you catch accidental breaking changes in an API before they reach production? Which kinds of
+      change count as breaking in your experience?
+    expected_concepts:
+      - removing or renaming fields
+      - changing a field's type or format
+      - adding a required request parameter or tightening validation
+      - changing defaults or error codes
+      - automated spec diffing in CI, such as OpenAPI diff or buf breaking
+      - canary releases watching client error rates
+    rubric:
+      excellent: Lists subtle breaking changes beyond removals (validation, defaults, error codes, behaviour), automates detection in CI, and backs it with canaries and real client signals.
+      good: Knows the obvious breaking changes and uses a spec diff or tests to catch them.
+      weak: Relies on manual review or client complaints.
+    followups:
+      - Is making a previously optional field required in a response breaking?
+      - Which breaking changes can a spec diff not catch?
+    common_errors:
+      - Treating behaviour changes as safe because the schema didn't change.
+
+  - external_key: technical.backend_apis.retiring_old_endpoint
+    competency_key: api_design
+    topic: Retiring an endpoint
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You need to switch off an old endpoint, but logs show a handful of clients still call it every day.
+      Walk me through how you'd get it retired.
+    expected_concepts:
+      - identifying callers by API key or client id
+      - direct outreach and a migration guide
+      - Deprecation and Sunset headers
+      - scheduled brownouts before final removal
+      - a firm cutoff date and returning 410 Gone
+      - monitoring traffic through the process
+    rubric:
+      excellent: "Runs a data-driven process: identifies each caller, communicates with a guide and dates, signals deprecation in responses, uses brownouts to flush out stragglers, and confirms traffic reaches zero."
+      good: Contacts the clients, announces a date and monitors usage.
+      weak: Removes the endpoint and waits for complaints.
+    followups:
+      - What if one of those clients is a large customer who refuses to migrate?
+      - What does a brownout achieve that an email doesn't?
+    common_errors:
+      - Announcing deprecation without knowing who the callers are.
+
+  - external_key: technical.backend_apis.internal_vs_public_api
+    competency_key: api_design
+    topic: Internal versus public APIs
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How does your approach to designing an internal API, used only by your own teams, differ from a
+      public API used by external customers?
+    expected_concepts:
+      - strength of compatibility guarantees
+      - documentation and onboarding depth
+      - versioning and deprecation strictness
+      - authentication model and rate limits
+      - error detail exposed to callers
+      - internal consumers still deploy independently
+    rubric:
+      excellent: Explains which practices can relax internally and which cannot, noting that internal consumers still deploy independently so compatibility still matters, with examples.
+      good: Names sensible differences in versioning, documentation and security.
+      weak: Says internal APIs need no design discipline at all.
+    followups:
+      - What happens when an internal API later becomes public?
+      - How do you coordinate a breaking change with five internal consumers?
+    common_errors:
+      - Assuming all internal clients can be changed in the same deploy.
+
+  - external_key: technical.backend_apis.rate_limit_response_contract
+    competency_key: api_design
+    topic: Communicating rate limits to clients
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When your API rate-limits a client, what should the response look like, and what information helps
+      the client back off properly?
+    expected_concepts:
+      - 429 Too Many Requests
+      - Retry-After header
+      - limit, remaining and reset headers
+      - clear error code and message
+      - documented limits per plan
+      - distinguishing short-term limits from quota exhaustion
+    rubric:
+      excellent: Returns 429 with Retry-After and limit headers, uses a distinct error code, documents limits, and separates per-second throttling from longer-term quotas.
+      good: Returns 429 with Retry-After and a clear message.
+      weak: Returns 500 or 403, or drops requests silently.
+    followups:
+      - How should a client use the remaining and reset headers proactively?
+      - Would you rate-limit requests that fail authentication?
+    common_errors:
+      - Returning 503 for a client that exceeded its own limit.
+
+  - external_key: technical.backend_apis.rate_limit_dimensions
+    competency_key: api_design
+    topic: What to rate-limit on
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What do you rate-limit on — IP address, API key, user, tenant or endpoint — and how do you choose
+      the actual limits?
+    expected_concepts:
+      - identity-based limits over IP limits
+      - shared IPs behind NAT and rotating addresses
+      - "layered limits: global, per tenant and per endpoint"
+      - weighting expensive operations
+      - deriving limits from capacity and real usage percentiles
+      - plan tiers and exceptions
+    rubric:
+      excellent: Chooses dimensions per threat and fairness goal, layers them, weights costly endpoints, and derives numbers from capacity and observed usage rather than guessing.
+      good: Prefers per-key limits with some per-endpoint tuning.
+      weak: Limits only by IP or picks numbers arbitrarily.
+    followups:
+      - How would you limit an unauthenticated endpoint such as sign-up?
+      - How would you roll out a stricter limit without surprising existing customers?
+    common_errors:
+      - One global per-IP limit that blocks whole offices behind a NAT.
+
+  - external_key: technical.backend_apis.noisy_tenant
+    competency_key: api_design
+    topic: Noisy neighbours in a multi-tenant API
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      One large customer's nightly batch job hammers your multi-tenant API and slows it down for everyone
+      else. What would you do in the short term and in the long term?
+    expected_concepts:
+      - per-tenant rate limits and concurrency limits
+      - fair queuing between tenants
+      - bulk or export endpoints for batch workloads
+      - isolating capacity with bulkheads or dedicated pools
+      - talking with the customer about their workload
+      - per-tenant usage metrics
+    rubric:
+      excellent: Contains the impact quickly with per-tenant limits, works with the customer, and builds lasting fairness through concurrency limits, bulk endpoints or isolated capacity, informed by per-tenant metrics.
+      good: Adds per-tenant limits and contacts the customer.
+      weak: Blocks the customer outright or only scales the whole fleet.
+    followups:
+      - How would you even notice which tenant is responsible?
+      - When does a customer deserve dedicated capacity?
+    common_errors:
+      - Applying a limit that also throttles small tenants unfairly.
+
+  - external_key: technical.backend_apis.credential_stuffing_login
+    competency_key: security
+    topic: Protecting the login endpoint
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your login endpoint is seeing credential-stuffing attempts from thousands of IP addresses. How would
+      you protect it without locking out legitimate users?
+    expected_concepts:
+      - limits per account and per source
+      - progressive delays instead of hard lockouts
+      - lockouts themselves can be abused for denial of service
+      - checking passwords against breached-password lists
+      - MFA or step-up challenges on risky attempts
+      - uniform error responses and alerting
+    rubric:
+      excellent: Combines several signals (per-account, per-source, device and risk), avoids lockout-based denial of service, adds challenges and breached-password checks, and monitors attack patterns.
+      good: Adds rate limiting and MFA or challenges.
+      weak: Locks accounts after a few failures with no further thought.
+    followups:
+      - How would you tell an attack apart from a busy office sharing one IP?
+      - What would you show a user whose account is being targeted?
+    common_errors:
+      - Error messages that reveal whether the account exists.
+
+  - external_key: technical.backend_apis.gateway_responsibilities
+    competency_key: api_design
+    topic: API gateway responsibilities
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What belongs in an API gateway and what should stay in the services behind it? Tell me where you've
+      drawn that line.
+    expected_concepts:
+      - TLS termination and routing
+      - token validation and coarse authentication
+      - rate limiting and request size limits
+      - correlation ids and access logging
+      - business rules and object-level authorization stay in services
+      - services still verify identity rather than trusting any caller
+    rubric:
+      excellent: Draws a clear line between cross-cutting edge concerns and domain logic, explains the risk of business logic creeping into the gateway, and keeps defence in depth in services.
+      good: Puts auth, rate limiting and routing in the gateway and business logic in services.
+      weak: Puts everything in the gateway or doesn't see a reason to have one.
+    followups:
+      - What goes wrong when the gateway starts transforming payloads per client?
+      - How do services know the request really came through the gateway?
+    common_errors:
+      - Services that trust identity headers from any caller on the network.
+
+  - external_key: technical.backend_apis.deadline_propagation
+    competency_key: distributed_systems
+    topic: Timeouts and deadline propagation
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your API calls three other services to build each response. At peak load, your service keeps doing
+      work for requests the caller has already given up on. How would you set timeouts and make sure that
+      work stops?
+    expected_concepts:
+      - per-call timeouts shorter than the caller's
+      - an overall deadline budget for the request
+      - propagating deadlines downstream, for example gRPC deadlines or a header
+      - cancellation through the request context
+      - parallelising independent calls
+      - fallbacks or partial responses instead of retries past the deadline
+    rubric:
+      excellent: Designs a deadline budget that shrinks hop by hop, propagates and honours cancellation, parallelises calls, and decides when to degrade rather than wait.
+      good: Sets per-call timeouts below the caller's and cancels on client disconnect.
+      weak: Uses one large timeout everywhere or leaves library defaults.
+    followups:
+      - How do you pick a timeout for a dependency whose p99 is 800 milliseconds?
+      - What happens to a database query when the request is cancelled?
+    common_errors:
+      - Timeouts that are longer downstream than upstream.
+
+  - external_key: technical.backend_apis.degraded_responses
+    competency_key: distributed_systems
+    topic: Graceful degradation in responses
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your product page API depends on a recommendations service that's currently down. How would you
+      design the API so the page still works, and how would clients know something is missing?
+    expected_concepts:
+      - separating critical from optional dependencies
+      - timeouts and circuit breakers on optional calls
+      - fallbacks such as cached or default content
+      - explicit signal of partial data in the response
+      - keeping the response schema stable when data is missing
+      - metrics on how often responses are degraded
+    rubric:
+      excellent: Classifies dependencies, fails fast on optional ones, serves fallbacks, signals degradation explicitly in the contract, and measures how often it happens.
+      good: Returns the page without recommendations using a timeout and a fallback.
+      weak: Fails the whole request, or hides missing data so clients can't tell.
+    followups:
+      - How would a client distinguish 'no recommendations' from 'recommendations unavailable'?
+      - When would you rather fail the whole request?
+    common_errors:
+      - Waiting the full timeout on every request while the dependency is down.
+
+  - external_key: technical.backend_apis.tracing_single_request
+    competency_key: debugging
+    topic: Tracing one failed request
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When a client reports that one specific API call failed, how do you find out what happened to that
+      request across your services?
+    expected_concepts:
+      - request or correlation id returned in a response header
+      - propagating the id downstream, for example the traceparent header
+      - structured logs that include the id
+      - distributed tracing
+      - including the id in error bodies so clients can quote it
+    rubric:
+      excellent: "Describes an end-to-end practice: ids generated at the edge, returned to clients, propagated and logged everywhere, and tied to traces, with an example of using it."
+      good: Uses a correlation id in logs to follow the request.
+      weak: Searches logs by timestamp and hopes to find it.
+    followups:
+      - What would you do if the client never received a response and has no id?
+      - How do you propagate the id through a message queue?
+    common_errors:
+      - Generating a new id in every service instead of propagating one.
+
+  - external_key: technical.backend_apis.api_reliability_metrics
+    competency_key: observability
+    topic: Measuring API reliability
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you define and measure reliability for a public API — which numbers would you track per
+      endpoint, and what would you alert on?
+    expected_concepts:
+      - success rate that excludes legitimate client errors
+      - latency percentiles such as p95 and p99
+      - SLOs and error budgets
+      - breakdowns by endpoint and by tenant
+      - synthetic checks from outside
+      - burn-rate alerting rather than raw thresholds
+    rubric:
+      excellent: Defines SLIs carefully (what counts as an error, which latency percentile), sets SLOs per endpoint class, alerts on error-budget burn, and adds external and per-tenant views.
+      good: Tracks error rates and latency percentiles per endpoint with alerts.
+      weak: Monitors only averages or CPU usage.
+    followups:
+      - Should a 429 count against your availability?
+      - Why is average latency misleading?
+    common_errors:
+      - Counting every 4xx as a server failure, or none of them.
+
+  - external_key: technical.backend_apis.request_input_limits
+    competency_key: security
+    topic: Validating requests at the edge
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What limits and validation do you put on incoming requests before your business logic runs, and why
+      does each one matter?
+    expected_concepts:
+      - body size limits with 413
+      - schema validation of types and required fields
+      - caps on string lengths and array sizes
+      - nesting depth limits
+      - content-type checks
+      - policy for unknown fields
+    rubric:
+      excellent: Lists concrete limits and connects each to a risk (memory exhaustion, abuse, injection, confusing errors), rejecting early with precise errors.
+      good: Validates schemas and limits body size.
+      weak: Validates only inside business logic, or not at all.
+    followups:
+      - Would you reject unknown fields or ignore them, and why?
+      - Where in the stack should the body size limit live?
+    common_errors:
+      - Reading the entire body into memory before checking its size.
+
+  - external_key: technical.backend_apis.error_spike_after_deploy
+    competency_key: debugging
+    topic: Error spike after a deploy
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Right after a deploy, the error rate on one API endpoint jumps from almost nothing to five percent,
+      but only for some clients. How would you investigate?
+    expected_concepts:
+      - rolling back or disabling the change first if impact is real
+      - segmenting errors by client, version, region and user agent
+      - finding the request shapes that fail
+      - reviewing the diff for serialisation or validation changes
+      - reproducing with a failing payload
+      - adding tests or contract checks for the gap
+    rubric:
+      excellent: Mitigates first, then segments errors to find what failing clients have in common, ties it to a specific change, reproduces it, and closes the testing gap.
+      good: Checks logs and the deploy diff and considers rolling back.
+      weak: Waits to see whether it settles, or debugs at length while users keep failing.
+    followups:
+      - How would you decide between rollback and a forward fix?
+      - What would you add to CI so this can't recur?
+    common_errors:
+      - Assuming the failing clients are sending bad data without checking the change.
+
+  - external_key: technical.backend_apis.overload_shedding
+    competency_key: distributed_systems
+    topic: Overload responses and load shedding
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      When your API is overloaded, should it return 429 or 503, and how should it decide which requests to
+      reject first?
+    expected_concepts:
+      - 429 means this client exceeded its limit; 503 means the server is overloaded
+      - Retry-After on both
+      - shedding load early, before expensive work
+      - prioritising critical traffic over batch or background requests
+      - adaptive concurrency limits based on latency
+      - protecting login and payment flows
+    rubric:
+      excellent: Distinguishes the two codes precisely, sheds early with priorities, uses adaptive concurrency limits, and protects the most important flows.
+      good: Explains the difference between the codes and suggests rejecting low-priority traffic.
+      weak: Lets requests queue until they time out.
+    followups:
+      - How would you tell priority from a request before doing any work on it?
+      - What does queueing do to latency during overload?
+    common_errors:
+      - Unbounded request queues that make every request slow instead of some failing fast.
+
+  - external_key: technical.backend_apis.client_sdk_design
+    competency_key: api_design
+    topic: Designing official client SDKs
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      If you were shipping official client SDKs for your API, what would you want them to handle for
+      developers, and how would you keep them in sync with the API?
+    expected_concepts:
+      - generation from an OpenAPI or protobuf definition
+      - authentication and token refresh
+      - retries, backoff and idempotency keys
+      - pagination helpers
+      - typed errors
+      - SDK versioning and a user-agent for telemetry
+    rubric:
+      excellent: Explains which concerns belong in the SDK, how generation plus hand-written ergonomics stay in sync with the spec, and how SDK releases are versioned and tracked.
+      good: Generates SDKs from the spec and adds retries and auth helpers.
+      weak: Hand-writes SDKs with no plan for keeping them current.
+    followups:
+      - What do you do when an old SDK version has a bug that hammers your API?
+      - Which parts would you never auto-generate?
+    common_errors:
+      - SDK retries that ignore idempotency.
+
+  - external_key: technical.backend_apis.multi_region_api
+    competency_key: distributed_systems
+    topic: API design for active-active regions
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your company is launching a second region, with live traffic in both. What changes in the API itself
+      — identifiers, writes, consistency and routing?
+    expected_concepts:
+      - globally unique ids rather than sequences
+      - home region per tenant or entity for writes
+      - conflict handling or single-writer ownership
+      - idempotency keys that work across regions
+      - documented consistency guarantees
+      - routing clients to the right region
+    rubric:
+      excellent: Identifies API-visible effects of multi-region (ids, consistency, write ownership, idempotency, routing), chooses an ownership model, and documents what clients can rely on.
+      good: Addresses unique ids and replication with a reasonable write strategy.
+      weak: Assumes the database replication handles everything and nothing in the API changes.
+    followups:
+      - A client writes in one region and reads in the other a second later — what do they see?
+      - How do you move a tenant's home region?
+    common_errors:
+      - Using auto-increment ids that collide across regions.
+
+  - external_key: technical.backend_apis.enumeration_scraping
+    competency_key: security
+    topic: Systematic scraping of an API
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You notice someone systematically scraping your public listings API by walking through ids and
+      rotating API keys from throwaway accounts. How would you respond?
+    expected_concepts:
+      - non-sequential identifiers
+      - limits tied to account trust and sign-up verification
+      - detecting abnormal access patterns
+      - limits that span related accounts
+      - terms of service enforcement
+      - avoiding collateral damage to legitimate integrations
+    rubric:
+      excellent: Combines short-term blocking with structural fixes (unguessable ids, verified sign-up, trust-based limits, anomaly detection) and weighs the cost of each against legitimate users.
+      good: Adds stronger rate limits and blocks the accounts.
+      weak: Blocks a few IP addresses and considers it solved.
+    followups:
+      - How would you link keys that belong to the same actor?
+      - Which data in the listings really needs to be public?
+    common_errors:
+      - Measures that break legitimate partners without slowing the scraper.

@@ -1,0 +1,129 @@
+version: 1
+slug: ip_allowed_by_cidr_allowlist
+title: Ingress Allowlist Check
+difficulty: easy
+competency_keys: [problem_solving, algorithms, code_quality]
+role_tags: [network, security, devops, cloud, backend]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Ingress Allowlist Check
+
+  An internal admin service sits behind an ingress proxy that only admits clients from approved
+  networks. Operators maintain the `allowlist` by hand, and each entry is one of:
+
+  - a CIDR block `a.b.c.d/p` with prefix length `0 <= p <= 32`: it covers every IPv4 address whose first
+    `p` bits equal the first `p` bits of `a.b.c.d`. Operators sometimes leave host bits set, so
+    `10.1.2.3/16` simply means the network `10.1.0.0/16`; `/0` covers every address.
+  - a bare address `a.b.c.d` with no slash: it covers exactly that one address (the same as `/32`).
+
+  Given the client address `ip` (dotted quad) and the `allowlist`, return `true` if at least one entry
+  covers `ip`, and `false` otherwise. An empty allowlist admits nobody.
+
+  ### Example 1
+  ```
+  Input:  ip = "10.1.200.7", allowlist = ["192.168.0.0/16", "10.1.2.3/16"]
+  Output: true
+  Explanation: "10.1.2.3/16" is the network 10.1.0.0 to 10.1.255.255, which contains 10.1.200.7.
+  ```
+
+  ### Example 2
+  ```
+  Input:  ip = "203.0.113.12", allowlist = ["203.0.113.8/30", "203.0.113.13"]
+  Output: false
+  Explanation: the /30 block covers 203.0.113.8 to 203.0.113.11 and the bare entry covers only 203.0.113.13.
+  ```
+
+  ### Example 3
+  ```
+  Input:  ip = "198.51.100.255", allowlist = ["198.51.100.128/25"]
+  Output: true
+  ```
+
+  ### Constraints
+  - Every address is a well-formed dotted quad with four octets from `0` to `255`.
+  - Every allowlist entry is a well-formed address, optionally followed by `/p` with `0 <= p <= 32`.
+  - `0 <= allowlist.length <= 10^4`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: ip_allowed_by_cidr_allowlist
+  params:
+    - {name: ip, type: string}
+    - {name: allowlist, type: "string[]"}
+  return_type: bool
+  comparison: exact
+reference_solutions:
+  python: |
+    def ip_allowed_by_cidr_allowlist(ip: str, allowlist: list[str]) -> bool:
+        def to_int(dotted: str) -> int:
+            value = 0
+            for octet in dotted.split("."):
+                value = value * 256 + int(octet)
+            return value
+
+        client = to_int(ip)
+        for entry in allowlist:
+            address, slash, prefix_text = entry.partition("/")
+            prefix = int(prefix_text) if slash else 32
+            shift = 32 - prefix
+            if (to_int(address) >> shift) == (client >> shift):
+                return True
+        return False
+  javascript: |
+    function ipAllowedByCidrAllowlist(ip, allowlist) {
+      // Plain arithmetic instead of bitwise operators: JS bit ops are signed 32-bit
+      // and a shift by 32 is a no-op, which would break /0 and high addresses.
+      const toInt = (dotted) => dotted.split(".").reduce((acc, octet) => acc * 256 + Number(octet), 0);
+      const client = toInt(ip);
+      for (const entry of allowlist) {
+        const slash = entry.indexOf("/");
+        const address = slash === -1 ? entry : entry.slice(0, slash);
+        const prefix = slash === -1 ? 32 : Number(entry.slice(slash + 1));
+        const size = Math.pow(2, 32 - prefix);
+        if (Math.floor(toInt(address) / size) === Math.floor(client / size)) return true;
+      }
+      return false;
+    }
+tests:
+  - {id: t1, args: ["10.1.200.7", ["192.168.0.0/16", "10.1.2.3/16"]], expected: true, description: "Example 1 - host bits set in the entry are ignored"}
+  - {id: t2, args: ["203.0.113.12", ["203.0.113.8/30", "203.0.113.13"]], expected: false, description: "Example 2 - just outside a /30 and a neighbouring bare address"}
+  - {id: t3, args: ["198.51.100.255", ["198.51.100.128/25"]], expected: true, description: "Example 3 - last address of the block"}
+  - {id: t4, hidden: true, args: ["8.8.8.8", []], expected: false, description: "Empty allowlist admits nobody"}
+  - {id: t5, hidden: true, args: ["255.255.255.255", ["1.2.3.4/0"]], expected: true, description: "/0 covers everything, including the top address (shift by 32 pitfall)"}
+  - {id: t6, hidden: true, args: ["172.16.5.4", ["172.16.5.40", "172.16.5.4"]], expected: true, description: "Bare address entry matches exactly (implied /32)"}
+  - {id: t7, hidden: true, args: ["172.16.5.5", ["172.16.5.4/32", "172.16.5.6"]], expected: false, description: "Neighbouring /32 and bare entries do not cover the address"}
+  - {id: t8, hidden: true, args: ["200.100.50.25", ["200.100.50.0/31", "200.100.48.0/22", "10.0.0.0/8"]], expected: true, description: "Address above 128.0.0.0 matched by a /22 (signed integer pitfall)"}
+  - {id: t9, hidden: true, args: ["128.0.0.0", ["127.255.255.255/1"]], expected: false, description: "Prefix /1 boundary: entry is the lower half, address is the first of the upper half"}
+  - {id: t10, hidden: true, args: ["10.0.0.7", ["10.0.0.5/29"]], expected: true, description: "Non-octet prefix /29 with host bits set"}
+  - {id: t11, hidden: true, args: ["192.0.2.64", ["192.0.2.0/26", "192.0.3.0/24", "192.0.2.65/32"]], expected: false, description: "First address after a /26 block"}
+expected_concepts:
+  - converting a dotted quad to a 32-bit unsigned integer
+  - comparing only the first p bits with a shift or mask
+  - ignoring host bits in the network address
+  - treating a bare address as a /32 block
+  - signed versus unsigned bit operations and the /0 shift edge case
+optimal_complexity: {time: "O(n) for n allowlist entries", space: "O(1)"}
+rubric:
+  excellent: "Converts addresses to unsigned 32-bit integers, compares the top p bits so host bits are ignored, handles /0, /32 and bare entries, and calls out the signed-shift and shift-by-32 pitfalls in their language."
+  good: "Correct integer conversion and prefix comparison; one edge case such as /0 or a high address like 255.x needs a nudge."
+  weak: "Compares octets as text, only supports /8, /16 and /24, or requires the network address to have zero host bits."
+  criteria:
+    correctness: "All tests pass, including /0, /32, bare entries, host bits set and addresses above 128.0.0.0."
+    efficiency: "One linear scan with constant work per entry; the client address is parsed once."
+    code_quality: "Address parsing is a small helper; the coverage test is one clear comparison."
+    edge_cases: "Empty allowlist, /0, /32, bare address, first and last address of a block and 255.255.255.255."
+    communication: "Explains why shifting by 32 or using signed 32-bit integers can give wrong answers."
+hints:
+  - "Think of an IPv4 address as a single 32-bit number rather than four separate pieces of text."
+  - "A block with prefix length p covers an address exactly when the two numbers agree in their top p bits; the remaining bits, including any host bits typed into the entry, do not matter."
+  - "Convert the client and each entry address to unsigned numbers, treat a missing prefix as 32, then drop the lowest 32 minus p bits from both, by shifting or by integer division by a power of two, and compare. Be careful with prefix 0 and with signed 32-bit arithmetic in your language."
+followups:
+  - "How would you answer millions of checks per second against an allowlist of 100,000 entries?"
+  - "How would you add deny entries that take priority over allow entries?"
+  - "What changes to support IPv6 addresses?"
+  - "How would you detect allowlist entries that are fully covered by another entry?"
+common_errors:
+  - "Building the mask with a shift by 32 for /0, which is a no-op in several languages."
+  - "Using signed 32-bit integers so addresses at or above 128.0.0.0 become negative and compare wrongly."
+  - "Comparing whole octets, which only works for prefixes that are multiples of 8."
+  - "Requiring host bits in the entry to be zero instead of ignoring them."
+  - "Rejecting or crashing on entries without a slash."

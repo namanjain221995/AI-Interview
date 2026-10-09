@@ -1,0 +1,182 @@
+version: 1
+slug: merged_sharded_feed_page
+title: "One Page from a Sharded Timeline"
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [backend, fullstack, platform, general]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## One Page from a Sharded Timeline
+
+  An activity timeline is stored across several database shards. Post ids are positive and grow
+  with time, so newer posts have larger ids. Each shard returns its posts as a list of ids in
+  **strictly descending** order (newest first). Posts are replicated for availability, so the same
+  id can appear in **more than one** shard (never twice in the same shard).
+
+  The API serves the timeline page by page with a cursor:
+
+  - `before` is the cursor. `before = 0` means "first page"; otherwise only ids **strictly less than**
+    `before` may be returned (the client passes the last id of the previous page).
+  - `page_size` is the maximum number of ids to return.
+
+  Implement `merged_feed_page(shards, before, page_size)`, which returns the next page: the
+  `page_size` largest **distinct** ids that satisfy the cursor, in **descending** order. Return fewer
+  ids when fewer are available, and an empty list when none are.
+
+  Shards can be long while pages are short, so aim for a solution whose work depends on the page
+  size and the number of shards rather than on the total number of posts.
+
+  ### Example 1
+  ```
+  Input:  shards = [[90, 70, 40, 10], [85, 70, 30], [95, 60, 40, 5]], before = 0, page_size = 4
+  Output: [95, 90, 85, 70]
+  Explanation: 70 is stored on two shards but appears once.
+  ```
+
+  ### Example 2
+  ```
+  Input:  shards = [[90, 70, 40, 10], [85, 70, 30], [95, 60, 40, 5]], before = 70, page_size = 4
+  Output: [60, 40, 30, 10]
+  Explanation: the cursor 70 is exclusive, so the page starts at 60.
+  ```
+
+  ### Constraints
+  - `0 <= shards.length <= 100`
+  - `0 <= shards[i].length <= 10^5`, each shard strictly descending
+  - `1 <= shards[i][j] <= 10^9`
+  - `before == 0` or `1 <= before <= 10^9`
+  - `1 <= page_size <= 1000`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: merged_feed_page
+  params:
+    - {name: shards, type: "int[][]"}
+    - {name: before, type: "int"}
+    - {name: page_size, type: "int"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import heapq
+
+
+    def merged_feed_page(shards: list[list[int]], before: int, page_size: int) -> list[int]:
+        heap: list[tuple[int, int, int]] = []
+        for s, shard in enumerate(shards):
+            # First position whose id is below the cursor (binary search on a descending list).
+            lo, hi = 0, len(shard)
+            if before > 0:
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if shard[mid] >= before:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+            if lo < len(shard):
+                heap.append((-shard[lo], s, lo))
+        heapq.heapify(heap)
+        page: list[int] = []
+        while heap and len(page) < page_size:
+            neg_id, s, i = heapq.heappop(heap)
+            post_id = -neg_id
+            if not page or page[-1] != post_id:
+                page.append(post_id)
+            if i + 1 < len(shards[s]):
+                heapq.heappush(heap, (-shards[s][i + 1], s, i + 1))
+        return page
+  javascript: |
+    function mergedFeedPage(shards, before, pageSize) {
+      // Max-heap of [id, shard, index].
+      const heap = [];
+      const less = (a, b) => a[0] > b[0];
+      const push = (item) => {
+        heap.push(item);
+        let i = heap.length - 1;
+        while (i > 0) {
+          const p = (i - 1) >> 1;
+          if (!less(heap[i], heap[p])) break;
+          [heap[i], heap[p]] = [heap[p], heap[i]];
+          i = p;
+        }
+      };
+      const pop = () => {
+        const top = heap[0];
+        const last = heap.pop();
+        if (heap.length > 0) {
+          heap[0] = last;
+          let i = 0;
+          for (;;) {
+            const l = 2 * i + 1;
+            const r = l + 1;
+            let m = i;
+            if (l < heap.length && less(heap[l], heap[m])) m = l;
+            if (r < heap.length && less(heap[r], heap[m])) m = r;
+            if (m === i) break;
+            [heap[i], heap[m]] = [heap[m], heap[i]];
+            i = m;
+          }
+        }
+        return top;
+      };
+      shards.forEach((shard, s) => {
+        let lo = 0;
+        let hi = shard.length;
+        if (before > 0) {
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (shard[mid] >= before) lo = mid + 1;
+            else hi = mid;
+          }
+        }
+        if (lo < shard.length) push([shard[lo], s, lo]);
+      });
+      const page = [];
+      while (heap.length > 0 && page.length < pageSize) {
+        const [id, s, i] = pop();
+        if (page.length === 0 || page[page.length - 1] !== id) page.push(id);
+        if (i + 1 < shards[s].length) push([shards[s][i + 1], s, i + 1]);
+      }
+      return page;
+    }
+tests:
+  - {id: t1, args: [[[90, 70, 40, 10], [85, 70, 30], [95, 60, 40, 5]], 0, 4], expected: [95, 90, 85, 70], description: "Example 1 - first page with a replicated id"}
+  - {id: t2, args: [[[90, 70, 40, 10], [85, 70, 30], [95, 60, 40, 5]], 70, 4], expected: [60, 40, 30, 10], description: "Example 2 - exclusive cursor and a duplicate inside the page"}
+  - {id: t3, hidden: true, args: [[], 0, 5], expected: [], description: "No shards at all"}
+  - {id: t4, hidden: true, args: [[[], [], []], 100, 3], expected: [], description: "Every shard is empty"}
+  - {id: t5, hidden: true, args: [[[50, 40], [45, 30]], 30, 10], expected: [], description: "Cursor at or below every id - empty page"}
+  - {id: t6, hidden: true, args: [[[9, 7, 5, 3, 1], [9, 7, 5, 3, 1], [9, 7, 5, 3, 1]], 0, 3], expected: [9, 7, 5], description: "Fully replicated shards - duplicates must not count toward page_size"}
+  - {id: t7, hidden: true, args: [[[30, 20, 10], [25, 15]], 0, 100], expected: [30, 25, 20, 15, 10], description: "page_size larger than all available posts"}
+  - {id: t8, hidden: true, args: [[[100, 80, 60, 40, 20]], 81, 2], expected: [80, 60], description: "Single shard with a cursor that is not an existing id"}
+  - {id: t9, hidden: true, args: [[[1000000000, 999999999, 1], [999999999, 2], [3]], 1000000000, 4], expected: [999999999, 3, 2, 1], description: "Ids near 10^9; cursor equals the largest id"}
+  - {id: t10, hidden: true, args: [[[12, 11], [], [10, 9, 8], [12, 8, 1]], 12, 1], expected: [11], description: "page_size 1 with duplicates sitting just after the cursor"}
+  - {id: t11, hidden: true, args: [[[971577539, 954568304, 921773491, 901908544, 881836554, 879695031, 878678310, 862564800, 856709737, 839991325, 836503817, 824883889, 814242497, 814049803, 776452730, 769473237, 764623113, 748443218, 743090302, 740954426, 732294822, 717491317, 709298447, 704222375, 698935573, 681063235, 656671868, 653864768, 638199796, 632566552, 628720318, 625763864, 619659572, 601613400, 597511160, 583226947, 575398923, 571042710, 567212063, 555810351, 554409969, 544854974, 539766819, 533021002, 531627138, 525020129, 520724768, 518066485, 513283749, 507063908, 497314844, 478503133, 473119501, 472580524, 465799331, 465623511, 462269101, 452795163, 448955963, 425028352, 421313641, 419779048, 372594064, 368804212, 357037631, 331229839, 302720816, 298327496, 297337445, 289845089, 262096639, 257040554, 247767552, 243573856, 237384805, 230530420, 207924674, 193023079, 179360018, 177126710, 167409692, 156418836, 154744983, 138878004, 132931337, 126772165, 108946536, 93146945, 83344354, 75006692, 72313952, 66423869, 63996270, 31117198, 27381375, 24798845, 24226754, 22974509, 4395479, 4222469], [976865763, 976245201, 975235190, 971577539, 948358643, 940037142, 939001381, 937167878, 927696259, 911539082, 901908544, 888134465, 887825708, 887077446, 871353561, 868190856, 865520293, 856709737, 847327720, 833749899, 814242497, 794432602, 794337825, 792811642, 779933912, 764623113, 758487695, 741411916, 717960392, 711326933, 705736455, 698935573, 697582866, 694849313, 690558912, 686028114, 683374320, 682730386, 677129423, 659351560, 653430574, 645025987, 626365976, 619659572, 613013911, 567053194, 555810351, 553504710, 549683696, 529120475, 519513507, 508409166, 489846747, 481932047, 478503133, 465623511, 450047121, 449840380, 445921236, 425932422, 425028352, 399858817, 369668830, 362642860, 350028353, 342106686, 320071362, 305582124, 284280551, 280370307, 266746014, 250542715, 239701015, 220347934, 196610600, 194053475, 174271722, 160849194, 159504872, 157413275, 154744983, 142995372, 140405984, 118034623, 110350655, 109690403, 93146945, 78598836, 75006692, 72313952, 66838091, 65143299, 61012774, 57974426, 29997208, 29580355, 27381375, 24798845, 12952616, 4222469], [991537634, 985395509, 984423925, 976245201, 966698718, 948526167, 939671730, 938807246, 935682221, 935207118, 902410779, 888134465, 887825708, 887077446, 882535018, 847327720, 837485861, 836503817, 824883889, 820951720, 814049803, 792811642, 785076356, 775053407, 769473237, 746567716, 743589770, 732294822, 730761952, 713128007, 711326933, 707076899, 703264881, 694849313, 690558912, 686028114, 677129423, 670086185, 658448789, 655263988, 653864768, 649763083, 646692356, 628742261, 625988157, 622657735, 615281917, 613013911, 601613400, 597714384, 584494332, 574012673, 570930265, 567053194, 539766819, 538641454, 529120475, 517031192, 508409166, 489846747, 480207059, 478503133, 473119501, 449911298, 428400258, 427424009, 388428750, 388246103, 379872701, 376247205, 353975089, 350020666, 337312956, 309170819, 308627687, 298952340, 289845089, 266746014, 262096639, 243573856, 237384805, 223287496, 211211640, 204665440, 177126710, 167409692, 147023328, 132931337, 131900843, 129210456, 126772165, 100497934, 92217960, 91181348, 86523514, 73833653, 67419150, 22974509, 20084196, 2049038], [985395509, 975235190, 971577539, 952452259, 939671730, 939001381, 938807246, 937167878, 915503203, 907792446, 896197332, 895710062, 887825708, 881836554, 871353561, 846537261, 837485861, 834543047, 833749899, 758487695, 732294822, 731472845, 730573910, 711326933, 704222375, 690558912, 664754894, 663135166, 628720318, 600513459, 589119240, 584494332, 576189933, 544854974, 520724768, 518245038, 517031192, 509059211, 504744542, 495741541, 490317464, 489846747, 480207059, 478503133, 465799331, 451646167, 450047121, 449008935, 445921236, 423183148, 403973203, 388428750, 367279628, 365203601, 353975089, 350028353, 347712783, 336883828, 331229839, 320071362, 305582124, 278286357, 270859704, 270405571, 266818751, 262096639, 250542715, 239489169, 237384805, 234298815, 228470564, 223287496, 220347934, 214660301, 214017577, 209170750, 205413399, 201724978, 195789172, 189212349, 185055880, 161973070, 157413275, 154892714, 154744983, 151997789, 140405984, 138878004, 131900843, 110655225, 86477159, 83344354, 78598836, 72313952, 67419150, 65143299, 56452632, 42098470, 29997208, 24798845], [991537634, 985395509, 976787302, 975235190, 965866212, 922561069, 896197332, 895710062, 887825708, 882535018, 878678310, 862564800, 858303051, 858102738, 847283416, 846537261, 837335689, 833767141, 819994921, 776452730, 775053407, 769473237, 750539558, 743589770, 731472845, 704222375, 703264881, 694849313, 686028114, 673701294, 664656493, 659351560, 654781118, 653864768, 645025987, 638199796, 628720318, 625763864, 619659572, 613326043, 600513459, 597714384, 590793752, 589119240, 580557052, 574012673, 571042710, 567053194, 555810351, 524059082, 518066485, 514830671, 513916393, 509059211, 500352374, 499669928, 495741541, 491946612, 486603021, 473119501, 472580524, 462269101, 451646167, 427239381, 408495731, 391017515, 376001183, 375293876, 362642860, 347712783, 314570549, 284280551, 282122034, 278286357, 262096639, 247767552, 243459674, 239221898, 224157763, 214017577, 209536450, 207924674, 204665440, 185055880, 154892714, 142995372, 97721833, 91181348, 87891152, 86477159, 83344354, 77777869, 65143299, 61012774, 42098470, 40260663, 29997208, 24226754, 12952616, 2049038], [954568304, 938350340, 937167878, 936026847, 915503203, 896197332, 895710062, 889976687, 882535018, 875150086, 858102738, 848378594, 839991325, 837485861, 833749899, 814242497, 805457189, 804765446, 794946074, 779933912, 778670348, 763959773, 753221326, 743090302, 717960392, 713128007, 707076899, 703264881, 697582866, 690326953, 681192098, 673701294, 670086185, 664656493, 655969871, 654781118, 638199796, 624488421, 615281917, 600513459, 589956613, 576189933, 574012673, 570930265, 567053194, 562110919, 556572694, 548195687, 544854974, 533300499, 524059082, 520724768, 509116261, 499936197, 499669928, 486603021, 481932047, 465923500, 427424009, 427239381, 425028352, 423183148, 385227601, 367902432, 347712783, 337312956, 331229839, 310965606, 309170819, 302720816, 297337445, 234298815, 221146488, 214017577, 201724978, 196610600, 194053475, 193023079, 179360018, 167409692, 154744983, 131900843, 118034623, 110655225, 110350655, 104615285, 100497934, 93146945, 91030203, 86523514, 77777869, 75006692, 67419150, 66423869, 63301825, 51847157, 45310713, 24226754, 4395479, 2049038], [991537634, 970981267, 966698718, 949394818, 942926548, 940037142, 922561069, 901908544, 887825708, 882535018, 881836554, 865974910, 852958474, 848378594, 833265494, 824883889, 764623113, 750539558, 746567716, 740954426, 730761952, 717960392, 707076899, 705736455, 698935573, 683374320, 677129423, 653864768, 645025987, 632566552, 619659572, 600513459, 596401169, 589119240, 583226947, 575398923, 570930265, 556624391, 549683696, 538641454, 529120475, 525020129, 518066485, 513283749, 509059211, 495741541, 482311297, 480207059, 452795163, 451646167, 449911298, 425932422, 423938500, 403973203, 393740902, 388246103, 353975089, 350020666, 337312956, 322390038, 321872364, 270859704, 266818751, 250542715, 239701015, 237384805, 230530420, 209170750, 205413399, 201724978, 189212349, 177126710, 170570389, 162455408, 157413275, 154892714, 151997789, 140405984, 126772165, 126478449, 118034623, 113934119, 111172108, 109929257, 109690403, 101071365, 100497934, 97721833, 93146945, 87891152, 86477159, 77777869, 75500776, 69793197, 66309235, 63996270, 51847157, 30058037, 29997208, 22974509], [991537634, 981556561, 976865763, 966698718, 965866212, 954568304, 948526167, 935682221, 935207118, 911539082, 902410779, 889976687, 878678310, 865974910, 862564800, 837335689, 834543047, 784909566, 778670348, 778246641, 775053407, 769473237, 758487695, 747535602, 741411916, 740954426, 732647725, 731472845, 730573910, 713128007, 709298447, 701129839, 697582866, 690558912, 677129423, 658995369, 656671868, 655263988, 654781118, 649763083, 645025987, 638199796, 619659572, 599229279, 591682484, 580557052, 574012673, 571866730, 562110919, 555810351, 554409969, 549683696, 533300499, 517031192, 513916393, 508409166, 499669928, 490317464, 489846747, 482311297, 478503133, 451646167, 450047121, 431262238, 427424009, 390423180, 381676683, 379872701, 376001183, 369374596, 357037631, 322390038, 321872364, 320071362, 298952340, 298327496, 282122034, 270859704, 258277204, 257040554, 247767552, 236719617, 214017577, 193023079, 189212349, 185055880, 162455408, 161973070, 142995372, 128745539, 125730655, 91030203, 89104139, 86523514, 75500776, 73833653, 62275870, 61012774, 40260663, 29997208]], 730573910, 25], expected: [717960392, 717491317, 713128007, 711326933, 709298447, 707076899, 705736455, 704222375, 703264881, 701129839, 698935573, 697582866, 694849313, 690558912, 690326953, 686028114, 683374320, 682730386, 681192098, 681063235, 677129423, 673701294, 670086185, 664754894, 664656493], description: "Stress - 8 shards x 100 ids with heavy replication and a mid-timeline cursor"}
+expected_concepts:
+  - "k-way merge with a max-heap keyed by the head of each shard"
+  - "binary search to position each shard at the cursor"
+  - "deduplicating adjacent equal ids in merged order"
+  - "keyset (cursor) pagination with an exclusive bound"
+optimal_complexity: {time: "O(k log n + p log k) for k shards, shard length n and page size p", space: "O(k + p)"}
+rubric:
+  excellent: "Positions each shard at the cursor with binary search, merges with a heap of k shard heads, skips duplicates without letting them consume page slots, stops after page_size ids and states O(k log n + p log k)."
+  good: "Correct heap-based merge with a linear scan to the cursor or a small fix for duplicates after testing."
+  weak: "Concatenates all shards, sorts and slices, ignores duplicates, or treats the cursor as inclusive."
+  criteria:
+    correctness: "All tests pass, including replicated ids, empty shards and an exclusive cursor."
+    efficiency: "Work bounded by the page size and the number of shards, not by the total number of posts."
+    code_quality: "Clear heap entries (id, shard, position) and a single loop with an explicit stop condition."
+    edge_cases: "No shards, empty shards, cursor below everything, page_size larger than the data and fully replicated shards."
+    communication: "Explains why equal ids always pop consecutively from the heap, making deduplication a comparison with the last emitted id."
+hints:
+  - "Each shard is already sorted, so the next id on the page must be the head of one of the shards; you never need to look deeper into a shard than its current position."
+  - "Keep the current head of every shard in a priority queue ordered by id, largest first, and advance only the shard whose head you just took; skip each shard's leading ids that are not below the cursor first."
+  - "Binary search each shard for the first id below before, push those heads into a max-heap, then pop repeatedly: append the id only if it differs from the last appended id, push that shard's next id, and stop when the page is full or the heap is empty."
+followups:
+  - "How would you make the cursor stable if two posts could share the same id or timestamp?"
+  - "What changes if each shard is a remote call that returns at most 50 ids at a time?"
+  - "How would you merge the shards lazily so the next page can reuse the heap from this one?"
+  - "What is the cost of the concatenate-and-sort approach for a 20-item page over 100 shards of 10^5 posts?"
+common_errors:
+  - "Concatenating every shard and sorting, which does work proportional to all posts for a small page."
+  - "Counting a replicated id more than once or letting duplicates use up page slots."
+  - "Treating the cursor as inclusive, which repeats the last post of the previous page."
+  - "Using a min-heap without negating ids, which returns the oldest posts first."

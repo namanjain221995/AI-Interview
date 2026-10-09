@@ -1,0 +1,184 @@
+version: 1
+slug: patch_rollout_spread
+title: "Patch Rollout Spread"
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [devops, sre, security, platform]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Patch Rollout Spread
+
+  A security patch is spreading through a server room by peer-to-peer update agents. The room is
+  given as `rack_map`, a list of equal-length strings, one per row of rack slots:
+
+  - `'P'` a server that already runs the patch at minute `0`,
+  - `'o'` a standard server still on the old build,
+  - `'H'` a hardened server still on the old build,
+  - `'.'` an empty slot (it never relays anything).
+
+  The rollout advances in whole minutes. Within a minute every change happens **at the same time**,
+  based only on which servers were patched at the end of the previous minute:
+
+  - a standard server gets the patch if **at least one** of its neighbours directly above, below, left
+    or right of it is patched;
+  - a hardened server only accepts the patch when **at least two different** neighbours in those four
+    directions are patched. Diagonal slots never count.
+
+  Once a server is patched it stays patched. Return `[minutes, outdated]`:
+
+  - `minutes` is the number of the last minute in which at least one server was patched (`0` if no
+    server ever changes);
+  - `outdated` is how many standard and hardened servers are still on the old build when the rollout
+    can make no further progress.
+
+  ### Example 1
+  ```
+  Input:  rack_map = ["Poo.", "o.oo", "o..P"]
+  Output: [2, 0]
+  Explanation: Using (row, column) positions, minute 1 patches (0,1), (1,0) and (1,3); minute 2 patches (0,2), (1,2) and (2,0).
+  ```
+
+  ### Example 2
+  ```
+  Input:  rack_map = ["PoH", "oHo", "..P"]
+  Output: [2, 0]
+  Explanation: Minute 1 patches the standard servers (0,1), (1,0) and (1,2). Both hardened servers then have two patched neighbours, so they join in minute 2.
+  ```
+
+  ### Example 3
+  ```
+  Input:  rack_map = ["P.o", "...", "o.o"]
+  Output: [0, 3]
+  Explanation: Empty slots surround the seed, so nothing ever changes and all three standard servers stay outdated.
+  ```
+
+  ### Constraints
+  - `1 <= m, n <= 60`, where `m = rack_map.length` and `n = rack_map[i].length`
+  - Every row has the same length and contains only `'P'`, `'o'`, `'H'` and `'.'`.
+  - There may be zero, one or many patched servers at the start.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: patch_rollout
+  params:
+    - {name: rack_map, type: "string[]"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def patch_rollout(rack_map: list[str]) -> list[int]:
+        rows, cols = len(rack_map), len(rack_map[0])
+        patched = [[cell == "P" for cell in row] for row in rack_map]
+        hits = [[0] * cols for _ in range(rows)]
+        frontier = []
+        outdated = 0
+        for r in range(rows):
+            for c in range(cols):
+                cell = rack_map[r][c]
+                if cell == "P":
+                    frontier.append((r, c))
+                elif cell in "oH":
+                    outdated += 1
+        minutes = 0
+        while frontier:
+            next_frontier = []
+            for r, c in frontier:
+                for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+                    if not (0 <= nr < rows and 0 <= nc < cols) or patched[nr][nc]:
+                        continue
+                    cell = rack_map[nr][nc]
+                    if cell not in "oH":
+                        continue
+                    hits[nr][nc] += 1
+                    if hits[nr][nc] >= (1 if cell == "o" else 2):
+                        patched[nr][nc] = True
+                        next_frontier.append((nr, nc))
+            if next_frontier:
+                minutes += 1
+                outdated -= len(next_frontier)
+            frontier = next_frontier
+        return [minutes, outdated]
+  javascript: |
+    function patchRollout(rackMap) {
+      const rows = rackMap.length;
+      const cols = rackMap[0].length;
+      const patched = rackMap.map((row) => Array.from(row, (cell) => cell === "P"));
+      const hits = rackMap.map(() => new Array(cols).fill(0));
+      let frontier = [];
+      let outdated = 0;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const cell = rackMap[r][c];
+          if (cell === "P") frontier.push([r, c]);
+          else if (cell === "o" || cell === "H") outdated++;
+        }
+      }
+      const moves = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+      let minutes = 0;
+      while (frontier.length > 0) {
+        const next = [];
+        for (const [r, c] of frontier) {
+          for (const [dr, dc] of moves) {
+            const nr = r + dr;
+            const nc = c + dc;
+            if (nr < 0 || nr >= rows || nc < 0 || nc >= cols || patched[nr][nc]) continue;
+            const cell = rackMap[nr][nc];
+            if (cell !== "o" && cell !== "H") continue;
+            hits[nr][nc]++;
+            if (hits[nr][nc] >= (cell === "o" ? 1 : 2)) {
+              patched[nr][nc] = true;
+              next.push([nr, nc]);
+            }
+          }
+        }
+        if (next.length > 0) {
+          minutes++;
+          outdated -= next.length;
+        }
+        frontier = next;
+      }
+      return [minutes, outdated];
+    }
+tests:
+  - {id: t1, args: [["Poo.", "o.oo", "o..P"]], expected: [2, 0], description: "Example 1 - standard servers only, two seeds"}
+  - {id: t2, args: [["PoH", "oHo", "..P"]], expected: [2, 0], description: "Example 2 - hardened servers wait for two patched neighbours"}
+  - {id: t3, args: [["P.o", "...", "o.o"]], expected: [0, 3], description: "Example 3 - nothing can spread, outdated servers stay outdated"}
+  - {id: t4, hidden: true, args: [["oooo", "oHoo"]], expected: [0, 8], description: "No patched server at all - minutes 0, every server outdated"}
+  - {id: t5, hidden: true, args: [["P"]], expected: [0, 0], description: "Single patched slot, nothing to do"}
+  - {id: t6, hidden: true, args: [["P.P", "...", "P.P"]], expected: [0, 0], description: "Only patched servers and empty slots - zero minutes, zero outdated"}
+  - {id: t7, hidden: true, args: [["PoHo"]], expected: [1, 2], description: "Single row - a hardened server with only one possible patched neighbour blocks the line forever"}
+  - {id: t8, hidden: true, args: [["PoooooooooooooooooooH"]], expected: [19, 1], description: "Long single-row chain ending at a hardened server that can never collect two neighbours"}
+  - {id: t9, hidden: true, args: [["Poo", "oHo", "ooo"]], expected: [4, 0], description: "Hardened centre gets patched once two neighbours flip in the same minute"}
+  - {id: t10, hidden: true, args: [["oHoHo", "HPHPH", "oHoHo"]], expected: [5, 0], description: "Room dominated by hardened servers between two seeds - each one eventually collects two patched neighbours"}
+  - {id: t11, hidden: true, args: [["Ho.oH", "o.P.o", "Ho.oH"]], expected: [0, 10], description: "Seed boxed in by empty slots; all corner hardened servers isolated"}
+  - {id: t12, hidden: true, args: [["Poo.ooooHoHHHooooHoHoooo..H.oo", "oooo.oooooooooooHoo.oo.ooooooo", ".ooooo.ooo..ooooHoo.ooooooooo.", "oooHHo.Ho.ooHoo..HoooooHooooo.", "oHooH.oooooH.oHooo..ooo.H.ooHo", "ooo.oooHoooooo.oHooooooooo.ooH", "oHoo.ooHo.oHooooooooHoooooHHHH", "o..ooHHo.ooooooHoooooooo.ooHHo", "oooHooooo.Hooooooo.oHooo.ooo..", "o.o.o.oHoooo.HoHo.oooHoooooooo", "ooooooooo.ooooooooo.oHoo.oooHo", "oo.o.o...o..oHooooooHoooo..HHo", "HoooHoH.ooHoo.o.oooooHooooHooo", "o.oHooooH...ooooo.o.oooooooo.o", ".Hoooo.ooHooooHoooHoooo.H.ooHo", "ooHoHooHoooHoHoooo.ooooooHooo.", ".H.ooooo.HooooooHo.ooooHoooooo", "oooooooooooooooooooH...ooooo.H", "oooHoHooHoooooHooHooooooooo..o", "o..ooooooooooHo.ooHo.ooooo.HoH", "ooooH.oooooooooooooooooHooHooo", "ooHoHooHooHoo.oo.ooHo.oo.oo.Ho", "oHooooo..o.o.Hoooo.HooHo.ooo.o", "oooooHooooooo.ooooooo.ooooo.Ho", "oo..Hooo.oooHooooHoooo.ooooooo", "oHooo.oooooooo.ooooHo.oo.oHHo.", "oo..oHo....o.ooooooo.ooooooooo", "oooooooooooooooooHo..HHooooooo", "o.oooooHooooooooooo.oHHooo.ooo", "oooooooooooooHooooHHHoHooooooP"]], expected: [41, 2], description: "30 x 30 stress room with mixed standard/hardened servers and two corner seeds"}
+expected_concepts:
+  - "multi-source breadth-first search started from every patched server"
+  - "processing the frontier minute by minute so changes are simultaneous"
+  - "per-server counter of patched neighbours with a threshold of one or two"
+  - "counting remaining outdated servers after the frontier empties"
+  - "O(m * n) time because each cell is relaxed at most four times"
+optimal_complexity: {time: "O(m * n)", space: "O(m * n)"}
+rubric:
+  excellent: "Models the rollout as a level-by-level multi-source BFS, keeps a patched-neighbour counter per hardened server so it joins the frontier exactly when the second neighbour flips, reports the last productive minute and the remaining outdated count, and argues O(m * n) time."
+  good: "Correct answer using repeated full-grid simulation (one sweep per minute with a copy of the state) or a BFS that needs a nudge on the hardened-server rule or on the minute counting."
+  weak: "Updates the grid in place so the patch races across several servers in one minute, ignores the two-neighbour rule, counts minutes off by one, or never terminates when nothing can spread."
+  criteria:
+    correctness: "All tests pass, including rooms with no seed, isolated hardened servers and rooms that need no work."
+    efficiency: "Each cell enters the frontier at most once and each neighbour check is constant work, giving O(m * n)."
+    code_quality: "Clear separation of the current and next frontier, a neighbour-direction list and named thresholds."
+    edge_cases: "Zero seeds, only empty slots, hardened servers in corners or single rows, servers that are never reachable."
+    communication: "Explains why simultaneous updates require a level-by-level frontier and how the counter enforces the two-neighbour rule."
+hints:
+  - "All the seed servers start spreading at once, so think of a search that begins from every patched server together and moves outward one minute at a time."
+  - "Process the rollout as a breadth-first search in levels: the servers patched at minute t are the frontier that decides who is patched at minute t plus one. A hardened server needs to know how many of its neighbours are already patched."
+  - "Put every 'P' in the first frontier and count the outdated servers. For each frontier server, look at its four neighbours; increase a counter on each still-outdated neighbour and add it to the next frontier as soon as the counter reaches one for a standard server or two for a hardened one, marking it patched. Count a minute only when the next frontier is non-empty, subtract its size from the outdated total and stop when it is empty."
+followups:
+  - "How would you return the minute at which each individual server gets patched?"
+  - "What changes if some servers need three patched neighbours, or the threshold differs per server?"
+  - "How would you find the single extra seed position that minimises the total rollout time?"
+  - "How would you run this on a room too large to fit in memory, streamed row by row?"
+common_errors:
+  - "Updating servers in place during a sweep so one minute patches a whole chain of servers."
+  - "Treating hardened servers like standard ones, or counting the same patched neighbour twice."
+  - "Incrementing the minute counter for a final empty frontier, which reports one minute too many."
+  - "Forgetting to count servers that can never be reached when there are no seeds at all."

@@ -1,0 +1,648 @@
+# Platform engineering (4/4): platform interfaces and tooling, operators, fleet changes and upgrades,
+# adoption and migration, self-service identity and secrets, and platform recoverability.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [platform]
+questions:
+  # ------------------------------------------------------------ platform interfaces and tooling
+  - external_key: technical.platform.platform_cli_design
+    competency_key: go
+    topic: Designing a platform command-line tool
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Many platforms ship a command-line tool that developers use to create services, deploy or fetch
+      logs. What makes a tool like that pleasant and safe to use, in your experience?
+    expected_concepts:
+      - consistent, discoverable commands with good help text
+      - machine-readable output (JSON) for scripting
+      - idempotent operations and dry-run options
+      - clear errors with suggested fixes
+      - authentication through the company identity provider
+      - self-update and version compatibility with the platform API
+    rubric:
+      excellent: Covers discoverability, scriptable output, idempotency and dry runs, actionable errors, identity integration and version compatibility, drawing on a tool they built or used.
+      good: Names several usability and safety qualities with an example.
+      weak: Focuses only on the language or framework used to build it.
+    followups:
+      - How would you handle an old CLI version talking to a newer platform API?
+      - Would you build a CLI at all if you already have a portal? Why?
+    common_errors:
+      - Putting business logic in the CLI instead of the platform API, so other clients diverge.
+
+  - external_key: technical.platform.api_versus_pull_request_interface
+    competency_key: api_design
+    topic: API calls versus pull requests as the interface
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Self-service can be offered as an API that provisions things immediately, or as pull requests to a
+      configuration repository that automation applies. How would you choose between those for a given
+      capability?
+    expected_concepts:
+      - review, audit history and rollback of the pull request model
+      - speed and programmatic use of the API model
+      - risk and reversibility of the operation
+      - the API can write to Git underneath, combining both
+      - drift between API state and declared configuration
+    rubric:
+      excellent: Weighs auditability, review and rollback against speed and automation, chooses per capability by risk and frequency, and describes hybrid designs where an API or portal commits to Git.
+      good: Explains the main trade-off and gives a sensible example for each.
+      weak: Picks one interface for everything without considering the operation's risk.
+    followups:
+      - Which capability on your last platform would you move from one model to the other?
+      - How do you prevent drift if both interfaces can change the same resource?
+    common_errors:
+      - Two writable sources of truth for the same resource.
+
+  - external_key: technical.platform.long_running_provisioning_api
+    competency_key: api_design
+    topic: Long-running provisioning operations
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Creating a database or a cluster through your platform API can take twenty minutes and sometimes fails
+      halfway. How would you design the API so clients can handle that reliably?
+    expected_concepts:
+      - asynchronous operations returning an operation or resource id
+      - status polling, webhooks or events
+      - idempotency keys so retries do not create duplicates
+      - well-defined intermediate and failure states
+      - cleanup or retry of partially created resources
+    rubric:
+      excellent: Designs asynchronous operations with idempotent submission, explicit state machines with failure reasons, status and notification options, and a clear story for retrying or cleaning up partial work.
+      good: Uses async operations with status polling and idempotent requests.
+      weak: Holds a synchronous request open for twenty minutes or ignores partial failure.
+    followups:
+      - A client times out and retries. How do you avoid creating two databases?
+      - Who cleans up a half-created resource, and when?
+    common_errors:
+      - Returning success before the resource is actually usable.
+
+  - external_key: technical.platform.platform_api_abusive_client
+    competency_key: api_design
+    topic: One tenant overloading the platform API
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A team's automation started calling your platform API thousands of times a minute to poll for status,
+      and other teams' deploys are now timing out. How would you handle it now and prevent it next time?
+    expected_concepts:
+      - identifying the client by identity and request patterns
+      - per-tenant rate limits with clear 429 responses and retry hints
+      - working with the team to fix the polling behaviour
+      - offering watch, webhook or event alternatives to polling
+      - fair queuing or priority for critical operations
+    rubric:
+      excellent: Contains the impact quickly with per-client limits, works with the team on the cause, offers push-based alternatives to polling and adds per-tenant fairness so one client cannot starve others.
+      good: Adds rate limiting and contacts the team.
+      weak: Scales the API up without addressing the client or fairness.
+    followups:
+      - How would you choose sensible rate limit values?
+      - How should well-behaved clients react to being throttled?
+    common_errors:
+      - A single global rate limit that throttles everyone because of one client.
+
+  - external_key: technical.platform.platform_api_authorization
+    competency_key: security
+    topic: Authorisation model for a platform API
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your platform API lets teams create and change environments, databases and deployments. How would you
+      design its authorisation so the right people can act on the right resources, across hundreds of teams?
+    expected_concepts:
+      - identities from the corporate identity provider and service accounts for automation
+      - resources owned by teams or projects, with roles scoped to them
+      - role-based access with attribute conditions such as environment
+      - stricter controls for production operations
+      - group membership as the source of truth and audit logging
+      - authorisation enforced in the API, not just the UI
+    rubric:
+      excellent: Designs ownership-scoped roles driven by identity-provider groups, adds attribute conditions for environment and risk, treats automation identities separately, enforces centrally in the API and logs every decision.
+      good: Proposes team-scoped RBAC tied to identity groups.
+      weak: Relies on the portal hiding buttons, or gives every engineer the same broad permissions.
+    followups:
+      - How would you model a contractor who needs access to one service for a month?
+      - Where would you use a policy engine instead of hard-coded checks?
+    common_errors:
+      - Enforcing permissions only in the user interface.
+
+  - external_key: technical.platform.retiring_old_endpoint
+    competency_key: api_design
+    topic: Retiring a platform endpoint with unknown callers
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You need to retire an old deploy endpoint on your platform, but nobody knows exactly which scripts and
+      pipelines still call it. How would you find the callers and get them migrated?
+    expected_concepts:
+      - access logs and caller identity to find clients
+      - deprecation headers or warnings returned to callers
+      - direct outreach to owners and migration guides
+      - brownouts (scheduled temporary failures) to surface hidden callers
+      - final removal date and monitoring after removal
+    rubric:
+      excellent: Identifies callers from logs and identities, signals deprecation in responses, contacts owners with a migration path, uses planned brownouts to flush out unknown callers and removes on a published date.
+      good: Uses logs to find callers and announces a deadline.
+      weak: Announces a date and turns the endpoint off.
+    followups:
+      - Some calls come from a shared service account. How do you find the real owner?
+      - What would you do if a critical caller cannot migrate in time?
+    common_errors:
+      - Anonymous or shared credentials that make callers impossible to trace.
+
+  # ------------------------------------------------------------ operators and controllers
+  - external_key: technical.platform.operator_or_helm
+    competency_key: kubernetes
+    topic: When to write an operator
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When would you write a Kubernetes operator for something on your platform, and when is a Helm chart or
+      plain manifests the better choice?
+    expected_concepts:
+      - charts for install-time templating, operators for ongoing operational logic
+      - day-two tasks like failover, backups, upgrades and scaling
+      - continuous reconciliation of desired state
+      - cost of building and maintaining controller code
+      - using existing community operators where they exist
+    rubric:
+      excellent: Distinguishes install-time templating from ongoing operational automation, gives examples where reconciliation logic is needed, and weighs the maintenance cost of owning controller code.
+      good: Explains that operators handle ongoing operations and charts handle templating.
+      weak: Believes every component needs its own operator, or cannot say what operators add.
+    followups:
+      - Which operator have you relied on, and what did it automate for you?
+      - What would make you replace an operator with something simpler?
+    common_errors:
+      - Writing an operator for something that never changes after install.
+
+  - external_key: technical.platform.reconcile_loop_design
+    competency_key: go
+    topic: Designing a controller reconcile loop
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Imagine you're writing a controller for a custom resource that provisions a managed database in the
+      cloud. Walk me through how you'd structure its reconcile logic so it's safe when things fail halfway.
+    expected_concepts:
+      - level-triggered, idempotent reconciliation from observed state
+      - storing external ids in status to find existing resources
+      - status conditions and observedGeneration
+      - finalizers for cleanup of external resources on delete
+      - requeue with backoff and handling of rate limits
+      - avoiding conflicting writes (resource versions, server-side apply)
+    rubric:
+      excellent: Describes idempotent, level-triggered reconciliation that looks up external state, records ids and conditions in status, uses finalizers for deletion, requeues with backoff and avoids update conflicts.
+      good: Covers idempotency, status and finalizers at a reasonable level.
+      weak: Describes a one-shot create call triggered by an event with no handling of retries or deletion.
+    followups:
+      - The controller crashes right after the cloud API call succeeded. What happens on restart?
+      - How would you test this controller without creating real databases?
+    common_errors:
+      - Creating a duplicate external resource because the id was never recorded before a crash.
+
+  - external_key: technical.platform.operator_bug_mass_recreate
+    competency_key: kubernetes
+    topic: Controller bug affecting all tenants
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A new release of your platform's in-house operator had a bug that caused it to delete and recreate
+      load balancers for every tenant, causing a wave of brief outages. How would you respond in the moment,
+      and what would you change about how the operator is built and released?
+    expected_concepts:
+      - stopping the controller or rolling back immediately
+      - assessing and restoring affected tenants
+      - staged release of controllers across clusters or tenants
+      - guardrails such as rate limits on destructive actions and deletion protection
+      - tests against real or recorded state before release
+      - postmortem shared with tenants
+    rubric:
+      excellent: Stops the damage first by scaling down or rolling back, restores tenants, and then adds staged releases, limits on destructive operations, deletion protection and better pre-release testing, sharing the review openly.
+      good: Rolls back quickly and adds staged releases and tests.
+      weak: Patches the bug forward while the controller keeps recreating resources.
+    followups:
+      - How could the controller itself have limited the blast radius?
+      - How would you communicate with the affected tenants?
+    common_errors:
+      - Letting a controller perform unlimited destructive actions in a single reconcile cycle.
+
+  # ------------------------------------------------------------ fleet changes and upgrades
+  - external_key: technical.platform.fleet_kubernetes_upgrade
+    competency_key: kubernetes
+    topic: Upgrading a cluster fleet
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You run thirty clusters on a Kubernetes version that's about to go out of support, and the next
+      version removes some APIs that tenant manifests still use. How would you plan the upgrade across the
+      fleet?
+    expected_concepts:
+      - detecting removed API usage (tools like pluto or kubent, API server metrics)
+      - giving tenants reports and deadlines to migrate manifests and charts
+      - upgrading platform add-ons for compatibility first
+      - ordering clusters from least to most critical
+      - surge capacity, PodDisruptionBudgets and rollback options
+    rubric:
+      excellent: Finds deprecated API usage in both manifests and live clusters, coordinates tenant fixes with deadlines, upgrades add-ons first, rolls through clusters by criticality and protects workloads during node replacement.
+      good: Checks for deprecated APIs and upgrades clusters gradually.
+      weak: Upgrades all clusters at once and fixes failures afterwards.
+    followups:
+      - How would you catch deprecated APIs in Helm charts that are not deployed yet?
+      - How would you make the next upgrade less painful?
+    common_errors:
+      - Checking only live objects and missing manifests stored in Git or charts.
+
+  - external_key: technical.platform.shared_component_rollout_rings
+    competency_key: kubernetes
+    topic: Safe changes to shared platform components
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Components like the ingress controller, the CNI plugin or the certificate manager are shared by every
+      tenant. How do you roll out changes to components like those safely?
+    expected_concepts:
+      - rings of clusters from internal to critical
+      - canary instances or a subset of traffic before full rollout
+      - automated health checks gating promotion
+      - quick rollback with pinned versions in GitOps
+      - change windows and tenant notification for risky changes
+    rubric:
+      excellent: Uses rings of clusters, canary instances, automated health gates and fast rollback through versioned GitOps config, with tenant communication for risky changes.
+      good: Tests in staging and rolls out gradually with rollback.
+      weak: Applies changes to all clusters at once after staging tests.
+    followups:
+      - What health signals would gate an ingress controller rollout?
+      - What makes a staging cluster a poor predictor of production behaviour?
+    common_errors:
+      - Staging clusters with little real traffic giving false assurance.
+
+  - external_key: technical.platform.shared_ingress_config_outage
+    competency_key: kubernetes
+    topic: Shared ingress configuration outage
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      One tenant applied an ingress annotation that generated invalid configuration in the shared ingress
+      controller, and the controller stopped serving traffic for every tenant in the cluster. How would you
+      restore service, and how would you stop one tenant's config from doing that again?
+    expected_concepts:
+      - identifying and removing the offending resource to restore traffic
+      - controller configuration validation before reload
+      - admission policies restricting dangerous annotations or snippets
+      - per-tenant or tiered ingress controllers to reduce blast radius
+      - alerting on controller reload failures
+    rubric:
+      excellent: Restores service by finding and removing the bad resource, then adds validation before reload, admission restrictions on risky annotations and partitioning of ingress so tenants cannot take each other down.
+      good: Removes the resource and adds admission checks on annotations.
+      weak: Restarts the controller repeatedly without finding the cause.
+    followups:
+      - Which ingress features would you not let tenants use at all?
+      - How would you find the offending resource quickly?
+    common_errors:
+      - Allowing raw configuration snippets from tenants into a shared proxy.
+
+  # ------------------------------------------------------------ adoption, migration and support
+  - external_key: technical.platform.low_platform_adoption
+    competency_key: product_sense
+    topic: Low adoption of the platform
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Your team built a new deployment platform, but six months after launch only three of twenty product
+      teams use it. How would you work out why?
+    expected_concepts:
+      - talking to teams that did not adopt and those that did
+      - identifying missing features, migration cost or trust issues
+      - checking the onboarding experience end to end
+      - looking at drop-off points in usage data
+      - adjusting the roadmap and migration support
+    rubric:
+      excellent: Investigates with non-adopting and adopting teams, separates missing capability, migration effort and trust concerns, tries the onboarding personally, and turns findings into concrete changes.
+      good: Interviews teams and identifies a few likely blockers.
+      weak: Proposes making the platform mandatory or doing more internal marketing.
+    followups:
+      - What would you do if teams say their current setup already works fine?
+      - How would you lower the cost of migrating?
+    common_errors:
+      - Assuming the problem is awareness when it is migration cost.
+
+  - external_key: technical.platform.vm_to_platform_migration
+    competency_key: system_design
+    topic: Migrating services onto the platform
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Fifty services still run on hand-managed virtual machines, and the goal is to move them onto your
+      container platform within a year. How would you plan and run that migration?
+    expected_concepts:
+      - inventory and categorisation by complexity and risk
+      - starting with simple, low-risk services to build the playbook
+      - migration tooling and paired support from the platform team
+      - running old and new side by side with gradual traffic shift
+      - tracking progress and handling services that should stay on VMs
+      - decommissioning the old infrastructure
+    rubric:
+      excellent: Inventories and sequences services by risk, builds a playbook on easy wins, provides tooling and hands-on support, migrates with parallel running and traffic shifting, tracks progress and accepts that some services may justifiably stay.
+      good: Sequences services by difficulty and migrates gradually with rollback.
+      weak: Plans a big-bang migration or leaves each team to figure it out alone.
+    followups:
+      - What kinds of service would you migrate last, and why?
+      - How would you keep the old VMs from lingering after migration?
+    common_errors:
+      - Forgetting to decommission old infrastructure, so costs double.
+
+  - external_key: technical.platform.platform_docs_as_code
+    competency_key: communication
+    topic: Keeping platform documentation current
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Platform documentation tends to go stale quickly. What kinds of docs should ship with a platform
+      capability, and how do you keep them accurate as the platform changes?
+    expected_concepts:
+      - tutorials, how-to guides, reference and explanations as separate types
+      - docs stored next to the code and reviewed with changes
+      - examples tested in CI
+      - feedback and search analytics to find gaps
+      - ownership for each page
+    rubric:
+      excellent: Distinguishes doc types by purpose, keeps docs in the same review flow as code, tests examples automatically, uses feedback and search data to find gaps and assigns ownership.
+      good: Keeps docs in the repository and updates them with changes.
+      weak: Relies on a wiki updated when someone remembers.
+    followups:
+      - How would you find out which docs are confusing people?
+      - What would you do with docs for a deprecated feature?
+    common_errors:
+      - Copy-paste examples that silently break when the platform changes.
+
+  - external_key: technical.platform.support_request_overload
+    competency_key: communication
+    topic: Platform team overwhelmed by support
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Your platform team spends half its time answering questions in chat, and roadmap work keeps slipping.
+      How would you change the way the team handles support?
+    expected_concepts:
+      - categorising requests to find repeat questions
+      - fixing root causes through docs, better errors or automation
+      - a rotating support role to protect focus time
+      - a clear intake channel with expectations on response times
+      - measuring support load over time
+    rubric:
+      excellent: Analyses request types, removes the most common causes through docs, better errors and self-service, sets up a rotation and a clear intake path, and tracks whether the load drops.
+      good: Introduces a support rotation and writes docs for common questions.
+      weak: Tells developers to stop asking or simply adds people.
+    followups:
+      - Which signal would show your fixes are working?
+      - How would you handle urgent production issues versus how-to questions?
+    common_errors:
+      - Treating support as interruption only, not as product feedback.
+
+  - external_key: technical.platform.self_service_cloud_permissions
+    competency_key: security
+    topic: Self-service permissions for workloads
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Every time a service needs access to a new cloud resource, the team files a ticket and waits for the
+      platform team to edit IAM policies. How would you make that self-service without ending up with
+      wildcard permissions everywhere?
+    expected_concepts:
+      - per-service identities bound to workloads
+      - permissions declared alongside the service and reviewed in pull requests
+      - generated least-privilege policies from resource references
+      - permission boundaries or guardrail policies capping what can be granted
+      - automated checks rejecting wildcards and analysis of unused permissions
+    rubric:
+      excellent: Gives each service its own workload identity, lets teams declare access as code with automated least-privilege checks, caps grants with boundaries and trims unused permissions over time.
+      good: Moves permission requests into code review with some automated checks.
+      weak: Grants broad roles to speed things up or keeps the ticket process.
+    followups:
+      - How would you detect permissions that were granted but never used?
+      - Who should approve a request for access to another team's data?
+    common_errors:
+      - Sharing one identity across services so permissions only ever grow.
+
+  - external_key: technical.platform.shared_helm_chart_bloat
+    competency_key: kubernetes
+    topic: An overgrown shared Helm chart
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Every service on your platform deploys with one shared Helm chart, which has grown to thousands of
+      lines of conditionals as teams added options. Changes to it now break someone almost every time. How
+      would you get out of that situation?
+    expected_concepts:
+      - analysing which values are actually used across services
+      - removing unused options and splitting into composable library charts
+      - a higher-level application spec instead of exposing everything
+      - chart tests with rendered output comparisons (snapshot tests)
+      - versioned releases and gradual migration
+    rubric:
+      excellent: Uses real usage data to prune options, restructures into composable pieces or a higher-level spec, adds rendered-output tests, and migrates services through versioned releases.
+      good: Proposes splitting the chart and adding tests.
+      weak: Keeps adding conditionals or tells each team to write their own chart.
+    followups:
+      - How would you prove a refactored chart renders the same manifests?
+      - When is a single shared chart still the right approach?
+    common_errors:
+      - Refactoring without snapshot tests, so differences are discovered in production.
+
+  - external_key: technical.platform.tooling_language_choice
+    competency_key: python
+    topic: Choosing a language for platform tooling
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Platform teams write a lot of glue: CLIs, controllers, automation scripts. How do you decide whether
+      something should be written in Go, Python or a shell script?
+    expected_concepts:
+      - shell for short, simple glue with few branches
+      - Python for scripting, data handling and fast iteration
+      - Go for distributed binaries, controllers and the Kubernetes ecosystem
+      - testing, maintenance and team familiarity
+      - distribution and dependency management
+    rubric:
+      excellent: Gives clear criteria (size, distribution, ecosystem, testing, maintainers' skills) with examples, and knows when a shell script has outgrown itself.
+      good: Gives sensible uses for each language.
+      weak: Uses a single language for everything regardless of the problem.
+    followups:
+      - What signs tell you a shell script should be rewritten?
+      - How would you distribute a Python tool to hundreds of developers?
+    common_errors:
+      - Long shell scripts with no error handling or tests running critical automation.
+
+  - external_key: technical.platform.developer_config_validation
+    competency_key: api_design
+    topic: Validating developer-facing configuration
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Developers describe their services to your platform in a configuration file in their repository. How
+      would you make sure mistakes in that file are caught early and explained clearly?
+    expected_concepts:
+      - a published schema (JSON Schema, CUE or similar) with versioning
+      - editor integration for autocomplete and inline errors
+      - validation in pre-commit and CI before deploy
+      - semantic checks beyond the schema (references, quotas)
+      - error messages pointing at the exact field and fix
+    rubric:
+      excellent: Defines a versioned schema, surfaces errors in the editor, pre-commit and CI, adds semantic checks the schema cannot express, and makes messages point to the field and fix.
+      good: Uses a schema validated in CI with readable errors.
+      weak: Lets mistakes surface as failed deploys.
+    followups:
+      - How would you change the schema without breaking existing files?
+      - Which errors can only be caught at deploy time, and how do you report them?
+    common_errors:
+      - Schema only checked at deploy, giving feedback far too late.
+
+  - external_key: technical.platform.resource_dependency_graph
+    competency_key: system_design
+    topic: Knowing what depends on what
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Someone wants to delete a shared message queue and asks you what will break. How would you design the
+      platform so it can answer questions like that about any resource?
+    expected_concepts:
+      - recording relationships between services and resources in the catalog
+      - deriving dependencies from declared config, IaC state and runtime telemetry (traces, network flows)
+      - reconciling declared and observed dependencies
+      - a queryable graph with ownership
+      - using it for deletion protection, impact analysis and incidents
+    rubric:
+      excellent: Builds a queryable graph from declared configuration, infrastructure state and runtime telemetry, reconciles differences, attaches ownership and uses it for safe deletion and impact analysis.
+      good: Proposes tracking dependencies in the catalog plus some runtime data.
+      weak: Proposes asking in a chat channel before deleting.
+    followups:
+      - How would you handle dependencies that are only visible at runtime?
+      - How would this graph help during an incident?
+    common_errors:
+      - Trusting declared dependencies alone, which miss undocumented consumers.
+
+  - external_key: technical.platform.credential_rotation_daily
+    competency_key: security
+    topic: Frequent credential rotation without downtime
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Security now requires database credentials to rotate every twenty-four hours, but many applications
+      only read their credentials at startup. How would the platform make this work without outages?
+    expected_concepts:
+      - dynamic, short-lived credentials from a secrets manager
+      - overlapping validity so old and new credentials work during rollover
+      - applications reloading credentials or reconnecting on auth failure
+      - platform-provided sidecar, agent or library to handle refresh
+      - rolling restarts as a fallback for applications that cannot reload
+    rubric:
+      excellent: Uses dynamic or overlapping credentials, gives teams a platform-supported refresh mechanism, falls back to coordinated rolling restarts, and tests rotation regularly.
+      good: Uses a secrets manager with overlapping credentials and restarts.
+      weak: Rotates the password in place and restarts everything at once.
+    followups:
+      - How would connection pools behave during rotation?
+      - How would you test rotation before turning it on in production?
+    common_errors:
+      - Invalidating the old credential before every client has the new one.
+
+  - external_key: technical.platform.platform_control_plane_recovery
+    competency_key: system_design
+    topic: Recovering the platform itself
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Suppose the cluster that hosts your platform's own control plane, with the GitOps controller, the
+      portal and the provisioning services, is lost completely. How would you rebuild it, and what would you
+      design differently so that recovery is routine?
+    expected_concepts:
+      - running workloads continuing to run without the control plane
+      - bootstrap from code with no circular dependencies
+      - backups of state that is not in Git (databases, Terraform state, secrets)
+      - documented, rehearsed recovery runbooks
+      - recovery time objectives for platform services
+    rubric:
+      excellent: Confirms tenants keep running, rebuilds from code with a bootstrap that avoids circular dependencies, restores non-Git state from backups, and makes recovery routine through rehearsals and stated recovery objectives.
+      good: Rebuilds from infrastructure as code and restores backups.
+      weak: Has no plan beyond rebuilding by hand.
+    followups:
+      - Which circular dependencies are common in platform bootstraps?
+      - How often would you rehearse this, and how?
+    common_errors:
+      - The tooling needed to rebuild the platform runs on the platform that was lost.
+
+  - external_key: technical.platform.terraform_at_org_scale
+    competency_key: terraform
+    topic: Running Terraform for hundreds of teams
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Hundreds of teams now manage their own infrastructure with Terraform through your platform. How would
+      you structure state, execution and permissions so it stays fast, safe and auditable?
+    expected_concepts:
+      - small, scoped state files per team, environment and component
+      - centralised execution (Atlantis, Terraform Cloud, or CI runners) with locking
+      - per-workspace credentials scoped to what that state manages
+      - plan in pull requests, apply after review
+      - policy checks and drift detection across workspaces
+      - shared module registry with versioning
+    rubric:
+      excellent: Splits state into small scoped units, runs plans and applies centrally with locking, gives each workspace narrowly scoped credentials, gates applies on reviewed plans and policy, and detects drift fleet-wide.
+      good: Uses scoped state with centralised plan and apply in pull requests.
+      weak: Lets teams apply from laptops against a few large shared states.
+    followups:
+      - How would you handle dependencies between states owned by different teams?
+      - What is your approach to drift found in a workspace nobody has touched for months?
+    common_errors:
+      - One powerful credential used by every workspace.
+
+  - external_key: technical.platform.beta_release_channels
+    competency_key: system_design
+    topic: Letting early teams try new capabilities
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How would you let a handful of teams try a new platform capability before it becomes generally
+      available, without exposing everyone else to the risk?
+    expected_concepts:
+      - opt-in flags or beta channels per tenant
+      - clear labelling of maturity level and support expectations
+      - collecting feedback and usage from early teams
+      - criteria for promotion to general availability
+      - ability to roll back or turn off for participants
+    rubric:
+      excellent: Uses per-tenant opt-in, labels maturity and support expectations clearly, gathers structured feedback and defines promotion criteria and a way to turn the feature off.
+      good: Proposes a beta flag with a few volunteer teams.
+      weak: Releases to everyone and fixes issues as they appear.
+    followups:
+      - What would make you pull a capability back out of beta?
+      - How would you pick the early teams?
+    common_errors:
+      - Betas that never graduate, leaving teams on an unsupported version.

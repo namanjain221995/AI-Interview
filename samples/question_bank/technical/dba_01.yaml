@@ -1,0 +1,628 @@
+# Curated questions: Database engineer / DBA (part 1 of 4).
+# Indexing, query tuning and execution plans.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [dba]
+questions:
+  # ------------------------------------------------------------- indexing basics
+  - external_key: technical.dba.index_request_review
+    competency_key: database_administration
+    topic: Reviewing a request to add an index
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When a developer asks you to add an index to fix a slow query, what do you look at before you agree
+      to create it?
+    expected_concepts:
+      - the actual query text and its execution plan
+      - selectivity of the filtered columns
+      - whether an existing index could be extended or reused
+      - write volume on the table and the cost of another index
+      - column order for equality versus range predicates
+    rubric:
+      excellent: Checks the plan and the predicates first, considers selectivity, existing indexes and write cost, and proposes a specific index definition with a reason for its column order.
+      good: Looks at the query and plan and considers whether a similar index already exists.
+      weak: Adds the requested index without looking at the plan or the table's write load.
+    followups:
+      - How would you prove afterwards that the new index is actually being used?
+      - What would make you push back and suggest rewriting the query instead?
+    common_errors:
+      - Creating near-duplicate indexes that differ only in trailing columns.
+      - Ignoring the extra write and storage cost on busy tables.
+
+  - external_key: technical.dba.scan_types_in_plans
+    competency_key: database_administration
+    topic: Sequential, index and index-only scans
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      In an execution plan, what's the practical difference between a full table scan, an index scan and an
+      index-only scan, and when is a full scan actually the better choice?
+    expected_concepts:
+      - full scan reads every page sequentially
+      - index scan follows the index then fetches table rows
+      - index-only scan answers from the index alone
+      - random versus sequential I/O cost
+      - low selectivity or small tables favour a full scan
+    rubric:
+      excellent: Explains how each scan reads data, ties the choice to selectivity and I/O patterns, and gives a concrete case where a full scan beats an index.
+      good: Describes the three scans correctly and knows full scans are fine for small tables.
+      weak: Believes a full table scan is always a problem to be fixed with an index.
+    followups:
+      - What can stop an index-only scan from being truly index-only?
+      - Roughly what fraction of rows would make you expect a full scan?
+    common_errors:
+      - Treating every sequential scan in a plan as a bug.
+
+  - external_key: technical.dba.estimated_vs_actual_plan
+    competency_key: database_administration
+    topic: Estimated versus actual execution plans
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What does an estimated execution plan tell you that an actual one doesn't, and the other way around?
+      When do you reach for each one?
+    expected_concepts:
+      - estimated plan shows planner choices without running the query
+      - actual plan includes real row counts, timings and loops
+      - comparing estimated and actual rows reveals bad estimates
+      - actual plans execute the query, including writes
+      - buffer or I/O statistics in actual plans
+    rubric:
+      excellent: Contrasts the two clearly, uses the gap between estimated and actual rows as a diagnostic, and warns that collecting an actual plan runs the statement, so writes need a transaction or a copy.
+      good: Knows actual plans include real rows and timings and uses them to tune.
+      weak: Cannot distinguish them or reads only total cost numbers.
+    followups:
+      - How would you safely get an actual plan for a slow DELETE statement?
+      - Which part of an actual plan do you look at first?
+    common_errors:
+      - Running an actual plan on a data-modifying statement in production without a rollback.
+
+  - external_key: technical.dba.orders_report_index
+    competency_key: database_administration
+    topic: Confirming whether an index would help
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A reporting page keeps timing out, and you find its query filters a large orders table by customer and
+      a date range, newest first. Walk me through how you'd confirm an index would help and which one you'd
+      create.
+    expected_concepts:
+      - capture the plan and confirm a large scan or sort
+      - composite index with the equality column first and the date second
+      - index order matching the sort to avoid a separate sort step
+      - checking row counts per customer for selectivity
+      - re-running the plan to verify the improvement
+    rubric:
+      excellent: Verifies the bottleneck with a plan, proposes a composite index on customer then date that also serves the ordering, and confirms the result with a before and after measurement.
+      good: Suggests a sensible composite index and checks the plan.
+      weak: Suggests separate single-column indexes on each column without reasoning about order or sorting.
+    followups:
+      - Would your answer change if the page also filtered by order status?
+      - How would you build that index on a live table?
+    common_errors:
+      - Putting the range column before the equality column in the composite index.
+
+  - external_key: technical.dba.covering_index_use
+    competency_key: database_administration
+    topic: Covering indexes
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What makes an index a covering index for a query, and can you describe a case where you used one, or
+      would use one, and what it bought you?
+    expected_concepts:
+      - all columns the query needs are in the index
+      - included non-key columns versus extra key columns
+      - avoids lookups back to the table
+      - larger index size and higher write cost
+      - visibility information or heap fetches can still occur in some engines
+    rubric:
+      excellent: Defines covering precisely, distinguishes key from included columns, gives a realistic example with measured benefit, and notes the size and write trade-off.
+      good: Explains that the index holds every needed column and avoids table lookups.
+      weak: Confuses covering indexes with clustered indexes or indexing every column.
+    followups:
+      - When does widening an index to cover a query stop being worth it?
+    common_errors:
+      - Adding wide text columns to an index just to make it covering.
+
+  - external_key: technical.dba.function_on_indexed_column
+    competency_key: sql
+    topic: Functions and expressions defeating indexes
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A developer says their index on the email column is being ignored by a query that compares the
+      lower-cased email to a value. Why does that happen, and what options would you give them?
+    expected_concepts:
+      - predicate on an expression is not sargable for a plain index
+      - expression or function-based index
+      - computed or generated column with an index
+      - case-insensitive collation or column type
+      - storing normalised values at write time
+    rubric:
+      excellent: Explains why the expression prevents a seek, offers several fixes such as an expression index, a generated column or a case-insensitive collation, and notes each fix must match the query exactly.
+      good: Explains the cause and suggests an expression index.
+      weak: Suggests forcing the index with a hint or cannot explain why it is ignored.
+    followups:
+      - What other everyday query patterns cause the same problem?
+    common_errors:
+      - Creating an expression index that does not match the exact expression used in the query.
+
+  - external_key: technical.dba.inherited_untuned_database
+    competency_key: database_administration
+    topic: Finding the queries worth tuning
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You've just taken over a busy database that nobody has tuned in years. How would you work out which
+      queries deserve your attention first?
+    expected_concepts:
+      - aggregated query statistics such as pg_stat_statements or Query Store
+      - ranking by total time rather than single slowest execution
+      - frequency and resource use such as CPU and I/O
+      - slow query logs with sensible thresholds
+      - wait or lock analysis
+    rubric:
+      excellent: Uses aggregated statistics to rank queries by total time and resource use, explains why a fast but frequent query can matter more than one slow query, and checks waits as well as CPU.
+      good: Turns on slow query logging or query statistics and starts with the slowest queries.
+      weak: Starts adding indexes based on guesses or on table size.
+    followups:
+      - Why might the single slowest query be the wrong place to start?
+      - How would you track whether your changes helped over the following weeks?
+    common_errors:
+      - Optimising rare report queries while a frequent cheap query dominates total load.
+
+  - external_key: technical.dba.unused_index_cleanup
+    competency_key: database_administration
+    topic: Finding and removing unused indexes
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you find indexes that cost more than they're worth, and how would you go about removing them
+      safely?
+    expected_concepts:
+      - index usage statistics and how long they have been collected
+      - duplicate and overlapping indexes
+      - indexes backing unique or primary key constraints
+      - indexes used only by monthly or rare jobs
+      - making an index invisible or disabled before dropping, or saving its definition
+    rubric:
+      excellent: Uses usage statistics over a long enough window, checks for constraint-backing and rarely used indexes, and removes in a reversible way such as invisible indexes or a saved definition with monitoring.
+      good: Checks usage statistics and looks for duplicates before dropping.
+      weak: Drops indexes that look unused based on a short window or on name alone.
+    followups:
+      - What resets usage statistics, and why does that matter here?
+    common_errors:
+      - Dropping an index that a quarterly report or a replica-only workload depends on.
+      - Trusting usage counters that were reset by a restart last week.
+
+  # ------------------------------------------------------------ execution plans
+  - external_key: technical.dba.join_algorithm_choice
+    competency_key: database_administration
+    topic: Nested loop, hash and merge joins
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Walk me through nested loop, hash and merge joins. Under what conditions does the optimizer pick each
+      one, and when have you seen it pick the wrong one?
+    expected_concepts:
+      - nested loop suits a small outer input with an indexed inner side
+      - hash join suits large unsorted inputs and needs memory
+      - merge join needs sorted inputs and suits large ordered sets
+      - row estimates drive the choice
+      - underestimated outer rows causing slow nested loops
+    rubric:
+      excellent: Explains each algorithm's cost profile and memory needs, links the choice to cardinality estimates, and describes a real case such as a nested loop over far more rows than estimated.
+      good: Describes the three join types and when each is typical.
+      weak: Knows only the names or thinks the join type is decided by the SQL syntax.
+    followups:
+      - What would you look at if a hash join spilled to disk?
+      - How would you fix a nested loop that runs a million inner lookups?
+    common_errors:
+      - Forcing a join type with hints instead of fixing the estimate that caused the choice.
+
+  - external_key: technical.dba.row_estimate_errors
+    competency_key: database_administration
+    topic: Bad cardinality estimates
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When the planner's estimated row count is wildly off from what the query really returns, what are the
+      usual causes, and how do you correct them?
+    expected_concepts:
+      - stale or missing statistics
+      - too small a statistics sample or histogram
+      - skewed data distributions
+      - correlated predicates assumed independent
+      - functions, casts or variables hiding values from the planner
+      - refreshing or extending statistics
+    rubric:
+      excellent: Lists several distinct causes, explains how each misleads the estimate, and matches each to a fix such as analyzing, raising the statistics target, extended statistics or rewriting the predicate.
+      good: Identifies stale statistics and skew and knows to refresh statistics.
+      weak: Only suggests rebuilding indexes or restarting the server.
+    followups:
+      - How would you tell stale statistics apart from correlated columns as the cause?
+    common_errors:
+      - Assuming automatic statistics updates always keep up after large bulk loads.
+
+  - external_key: technical.dba.parameter_sensitive_plan
+    competency_key: database_administration
+    topic: Parameter-sensitive plans
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A stored procedure is quick for almost every customer but takes minutes for one very large customer,
+      and occasionally it becomes slow for everyone after a restart. What do you think is going on, and how
+      would you deal with it?
+    expected_concepts:
+      - cached plan built for the first parameter values
+      - data skew between customers
+      - recompiling or custom plans per execution
+      - optimizing for a typical value or using plan guides
+      - separate code paths for very large tenants
+    rubric:
+      excellent: Identifies plan caching with skewed parameters, explains why a restart changes behaviour, and compares fixes such as recompilation, plan forcing or branching with their costs.
+      good: Recognises the cached plan problem and suggests recompiling.
+      weak: Blames hardware or suggests adding more indexes without explaining the plan behaviour.
+    followups:
+      - What does recompiling on every call cost you on a busy system?
+      - How would you prove the cached plan is the culprit?
+    common_errors:
+      - Clearing the entire plan cache in production as a routine fix.
+
+  - external_key: technical.dba.partial_index_use
+    competency_key: database_administration
+    topic: Partial and filtered indexes
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When would you choose a partial or filtered index over a regular one? Describe a workload where it
+      really pays off.
+    expected_concepts:
+      - index only the rows that queries target, such as open or pending items
+      - smaller index and lower write cost
+      - query predicate must match or imply the index condition
+      - partial unique indexes for conditional uniqueness
+      - parameterised queries may not match the filter
+    rubric:
+      excellent: Gives a realistic case such as a small set of active rows in a huge table, explains size and write benefits, conditional uniqueness and the need for the query predicate to imply the filter.
+      good: Explains that a partial index covers a subset of rows and saves space.
+      weak: Cannot give a use case or confuses partial indexes with partitioning.
+    followups:
+      - Why might a prepared statement fail to use your partial index?
+    common_errors:
+      - Writing the query predicate in a form the optimizer cannot match to the index condition.
+
+  - external_key: technical.dba.deep_offset_pagination
+    competency_key: sql
+    topic: Deep pagination performance
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      An API pages through a big table with offset and limit, and the deeper pages keep getting slower. How
+      would you fix that at the database level, and what would you need from the application team?
+    expected_concepts:
+      - offset still reads and discards all skipped rows
+      - keyset or seek pagination using the last seen key
+      - a unique, indexed sort key with tie-breaker
+      - limits on total page depth
+      - consistency of results while data changes
+    rubric:
+      excellent: Explains why offset cost grows linearly, proposes keyset pagination on an indexed unique ordering with a tie-breaker, and covers the API changes and trade-offs such as no random page jumps.
+      good: Proposes keyset pagination with an index.
+      weak: Suggests caching pages or adding hardware without addressing the offset cost.
+    followups:
+      - How do you handle sorting by a non-unique column with keyset pagination?
+    common_errors:
+      - Using a non-unique sort key so rows are skipped or repeated between pages.
+
+  - external_key: technical.dba.correlated_column_statistics
+    competency_key: database_administration
+    topic: Correlated columns and extended statistics
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How can correlated columns, like city and postal code, mislead the optimizer, and what tools do you
+      have to help it get better estimates?
+    expected_concepts:
+      - independence assumption multiplies selectivities
+      - severe underestimates for combined predicates
+      - multi-column or extended statistics
+      - statistics on composite indexes
+      - effect on join order and join algorithm
+    rubric:
+      excellent: Explains the independence assumption with a numeric example, shows how the underestimate cascades into bad join choices, and names concrete fixes such as multi-column statistics.
+      good: Understands that correlated filters cause underestimates and knows extended statistics exist.
+      weak: Unaware that the optimizer treats predicates as independent.
+    followups:
+      - How would you spot this pattern in an actual execution plan?
+    common_errors:
+      - Fixing the symptom with a join hint instead of giving the planner better statistics.
+
+  - external_key: technical.dba.orm_implicit_conversion
+    competency_key: database_administration
+    topic: Implicit type conversion after a release
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      After an application release, database CPU jumps and a hot lookup query starts scanning the whole
+      table, even though its index still exists. The only change was an ORM upgrade. How would you track
+      this down?
+    expected_concepts:
+      - compare the query text and parameter types before and after
+      - implicit conversion such as Unicode versus non-Unicode strings or numeric versus text
+      - conversion on the column side preventing an index seek
+      - plan warnings about conversions
+      - fixing the parameter type in the ORM mapping
+    rubric:
+      excellent: Captures the new query and plan, spots a parameter type mismatch causing a conversion on the column, and fixes it at the mapping layer while explaining why the index became unusable.
+      good: Compares plans before and after and suspects a change in the generated SQL.
+      weak: Rebuilds the index or updates statistics without looking at what changed in the query.
+    followups:
+      - Where in the plan would you see evidence of the conversion?
+      - How would you stop this from reaching production next time?
+    common_errors:
+      - Assuming an index that exists will always be usable regardless of parameter types.
+
+  - external_key: technical.dba.index_bloat_rebuild
+    competency_key: database_administration
+    topic: Index bloat and rebuild decisions
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How does index bloat or fragmentation build up over time, how do you measure it, and how do you decide
+      whether rebuilding an index on a busy system is worth it?
+    expected_concepts:
+      - page splits and dead entries from updates and deletes
+      - measuring size versus expected size or fragmentation statistics
+      - impact on range scans versus point lookups
+      - online or concurrent rebuild options
+      - cost of a rebuild in I/O, log volume and replication lag
+    rubric:
+      excellent: Explains how bloat forms, measures it with real statistics, ties the decision to measured query impact rather than a fixed percentage, and rebuilds online while watching log volume and replicas.
+      good: Knows how to measure fragmentation and rebuild online.
+      weak: Rebuilds every index on a schedule regardless of impact.
+    followups:
+      - How does a rebuild affect your replicas and log shipping?
+    common_errors:
+      - Running nightly rebuilds of all indexes that generate huge log volume for little gain.
+
+  - external_key: technical.dba.or_predicate_across_columns
+    competency_key: sql
+    topic: OR predicates across different columns
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A query filters with an OR across two different indexed columns and ends up scanning the whole table.
+      What options do you have to make it efficient?
+    expected_concepts:
+      - optimizer may not combine two indexes for an OR
+      - bitmap or index-merge combinations
+      - rewriting as UNION or UNION ALL with deduplication
+      - checking each branch uses its own index
+      - effect of ORDER BY and LIMIT on the rewrite
+    rubric:
+      excellent: Explains why the OR blocks a single index path, describes index merge or bitmap combining where available, and rewrites as a union while handling duplicates and ordering correctly.
+      good: Suggests a UNION rewrite with indexes on both columns.
+      weak: Suggests a single composite index on both columns, which does not serve the OR.
+    followups:
+      - When would UNION ALL give wrong results here?
+    common_errors:
+      - Believing a composite index on both columns serves an OR of the two.
+
+  - external_key: technical.dba.plan_regression_after_upgrade
+    competency_key: database_administration
+    topic: Plan regressions after an upgrade
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Right after a database version upgrade, a handful of critical queries got much slower while
+      everything else is fine. How would you diagnose and stabilise them?
+    expected_concepts:
+      - compare old and new plans for the affected queries
+      - refreshed statistics after the upgrade
+      - optimizer changes and compatibility levels
+      - plan baselines, Query Store or plan forcing as a short-term fix
+      - capturing plans before upgrades for comparison
+    rubric:
+      excellent: Compares plans from before and after, refreshes statistics, uses compatibility settings or plan forcing to stabilise quickly, and then fixes root causes while noting that plans should be captured before the next upgrade.
+      good: Updates statistics and compares plans.
+      weak: Rolls back the whole upgrade immediately without investigating.
+    followups:
+      - What would you capture before the next upgrade so this is easier?
+    common_errors:
+      - Not refreshing statistics after an upgrade that does not carry them over.
+
+  - external_key: technical.dba.index_write_cost
+    competency_key: database_administration
+    topic: Index cost on write-heavy tables
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you weigh the cost of one more index on a write-heavy table, and how would you actually measure
+      the impact before and after adding it?
+    expected_concepts:
+      - every insert, update and delete must maintain the index
+      - more log volume and replication traffic
+      - lost optimisations such as heap-only tuple updates
+      - benchmarking with a production-like write mix
+      - monitoring write latency and log generation after rollout
+    rubric:
+      excellent: Names concrete costs including log volume and lost update optimisations, measures with a realistic workload or by comparing write latency and log rate before and after, and compares the gain on reads.
+      good: Knows indexes slow writes and suggests testing the write load.
+      weak: Treats indexes as free or measures only the read query.
+    followups:
+      - How would updating an indexed column change your answer?
+    common_errors:
+      - Measuring only the target query and never the write path.
+
+  - external_key: technical.dba.sequential_key_contention
+    competency_key: database_administration
+    topic: Primary key choice under heavy inserts
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      For a table taking tens of thousands of inserts a second, how do you think about the primary key: a
+      sequential integer, a random UUID or a time-ordered identifier? What happens inside the index with
+      each?
+    expected_concepts:
+      - sequential keys concentrate inserts on the last page
+      - latch or buffer contention on the hot page
+      - random keys cause page splits, cache misses and bloat
+      - time-ordered identifiers balance locality and distribution
+      - clustered index implications for the table layout
+    rubric:
+      excellent: Explains last-page contention and random-key page splits at the storage level, ties each to cache and I/O behaviour, and recommends a choice for a stated workload with its trade-offs.
+      good: Knows random UUIDs fragment indexes and sequential keys can create hot spots.
+      weak: Picks a key type by habit without discussing index behaviour.
+    followups:
+      - How does this change if the table is clustered on the primary key?
+      - What would you do if a sequence becomes a contention point across shards?
+    common_errors:
+      - Using random UUIDs as a clustered key without considering page splits.
+
+  - external_key: technical.dba.emergency_plan_flip
+    competency_key: database_administration
+    topic: Emergency response to a bad plan
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      At two in the morning a core query flips to a terrible plan and the database is saturated. Walk me
+      through stabilising production right now, and then what you'd do in the following days so it doesn't
+      happen again.
+    expected_concepts:
+      - confirm the offending query and plan from live activity
+      - short-term fixes such as plan forcing, a hint or targeted statistics refresh
+      - shedding load or killing runaway sessions
+      - root cause of the plan change such as stale statistics or skew
+      - durable prevention such as plan baselines, monitoring plan changes and regression tests
+    rubric:
+      excellent: Separates mitigation from root cause, uses a precise short-term lever with low risk, explains why the plan changed, and adds monitoring or baselines that would catch a repeat.
+      good: Identifies the query, applies a reasonable fix and mentions follow-up analysis.
+      weak: Restarts the database or flushes all caches without identifying the query.
+    followups:
+      - Which short-term lever would you avoid and why?
+      - How would you know if the forced plan becomes wrong later as data changes?
+    common_errors:
+      - Leaving an emergency hint in place indefinitely without revisiting it.
+
+  - external_key: technical.dba.cost_based_optimizer
+    competency_key: database_administration
+    topic: Influencing the cost-based optimizer
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How does a cost-based optimizer decide between candidate plans, and which settings or statistics have
+      you changed to influence it? What were the results?
+    expected_concepts:
+      - plan enumeration and cost estimation from statistics
+      - cost parameters such as random versus sequential page cost
+      - effective cache size and memory settings
+      - join order search limits for many-table queries
+      - risk of global changes versus targeted fixes
+    rubric:
+      excellent: Explains how costs are computed from statistics and cost constants, describes a specific setting they changed with measured before and after results, and discusses the risk of global changes.
+      good: Explains the general idea of estimated cost and names a setting or two that affect it.
+      weak: Treats the optimizer as a black box and relies only on hints.
+    followups:
+      - Why might lowering the random page cost help on SSD storage, and what could it break?
+    common_errors:
+      - Changing a global cost setting to fix one query and regressing others.
+
+  - external_key: technical.dba.long_report_query
+    competency_key: sql
+    topic: Tuning a long multi-table report query
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A finance report joins five large tables and runs for twenty minutes, and the business wants it under
+      thirty seconds. How would you approach that?
+    expected_concepts:
+      - actual plan to find where time and rows go
+      - reducing rows early with filters and pre-aggregation
+      - join order and estimate problems
+      - indexes supporting joins and filters
+      - summary tables, materialized views or a separate reporting store
+      - checking whether the requirement can be met with fresher-but-precomputed data
+    rubric:
+      excellent: Profiles the plan step by step, reduces data early, fixes estimates and indexes, and weighs query fixes against precomputation or moving the workload, agreeing data freshness with the business.
+      good: Uses the plan to find the slowest step and proposes indexes and a materialized view.
+      weak: Tries random indexes or asks for a bigger server without profiling.
+    followups:
+      - How would you keep a summary table correct as data changes?
+    common_errors:
+      - Precomputing everything without checking how fresh the report needs to be.
+
+  - external_key: technical.dba.online_index_build
+    competency_key: database_administration
+    topic: Building indexes on live tables
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How do you build an index on a very large table in production without blocking writes, and what can
+      go wrong during or after the build?
+    expected_concepts:
+      - concurrent or online index build options
+      - longer build time and extra passes over the table
+      - failed builds leaving invalid indexes behind
+      - waits on long-running transactions
+      - log volume, I/O pressure and replica lag
+      - running at a quiet time and monitoring progress
+    rubric:
+      excellent: Uses the online build option, explains its locking and multiple passes, plans for failures leaving invalid indexes, long transactions blocking completion and replica lag, and monitors progress.
+      good: Knows the concurrent or online option and runs it off-peak.
+      weak: Runs a plain create index on a hot table during business hours.
+    followups:
+      - How would you detect and clean up an index left invalid by a failed build?
+    common_errors:
+      - Not checking for long-running transactions that stall the online build.
+
+  - external_key: technical.dba.sort_hash_spills
+    competency_key: database_administration
+    topic: Sort and hash spills to disk
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Sorts and hash operations in execution plans sometimes spill to disk. How do you spot that, and how do
+      you decide between changing memory settings and changing the query?
+    expected_concepts:
+      - spill warnings or external sort indicators in actual plans
+      - per-operation memory grants or work memory settings
+      - memory multiplied by concurrent operations and sessions
+      - underestimated rows causing small memory grants
+      - reducing rows or using an index to avoid the sort
+    rubric:
+      excellent: Finds spills in actual plans and temp file statistics, explains that memory is allocated per operation and per session, and prefers fixing estimates or the query before raising memory, possibly per session only.
+      good: Recognises spills and suggests raising the memory setting carefully.
+      weak: Raises the global memory setting dramatically without considering concurrency.
+    followups:
+      - How could raising per-operation memory cause the server to run out of memory?
+    common_errors:
+      - Setting a large global per-operation memory value that multiplies across hundreds of sessions.

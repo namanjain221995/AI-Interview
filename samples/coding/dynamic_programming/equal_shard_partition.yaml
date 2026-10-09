@@ -1,0 +1,132 @@
+version: 1
+slug: equal_shard_partition
+title: Equal Shard Partition
+difficulty: medium
+competency_keys: [algorithms, problem_solving]
+role_tags: [general, backend, dba, platform]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Equal Shard Partition
+
+  A database team is moving a set of tables onto `k` new shards. `sizes[i]` is the size of table `i` in
+  gigabytes. Tables cannot be split: every table must be placed on **exactly one** shard, and every one of
+  the `k` shards must end up holding **exactly the same total size**.
+
+  Return `true` if such a placement exists and `false` otherwise.
+
+  ### Example 1
+  ```
+  Input:  sizes = [5, 1, 4, 3, 2, 3], k = 3
+  Output: true
+  Explanation: The total is 18, so each shard needs 6: {5, 1}, {4, 2} and {3, 3}.
+  ```
+
+  ### Example 2
+  ```
+  Input:  sizes = [3, 3, 3, 4, 5], k = 3
+  Output: false
+  Explanation: Each shard would need 6, but the tables of size 4 and 5 cannot be topped up to 6.
+  ```
+
+  ### Constraints
+  - `1 <= sizes.length <= 16`
+  - `1 <= k <= sizes.length`
+  - `1 <= sizes[i] <= 10^4`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: can_split_into_equal_shards
+  params:
+    - {name: sizes, type: "int[]"}
+    - {name: k, type: "int"}
+  return_type: "bool"
+  comparison: exact
+reference_solutions:
+  python: |
+    def can_split_into_equal_shards(sizes: list[int], k: int) -> bool:
+        total = sum(sizes)
+        if total % k != 0:
+            return False
+        target = total // k
+        if max(sizes) > target:
+            return False
+        n = len(sizes)
+        full = (1 << n) - 1
+        # load[mask] = fill level of the shard currently being filled after
+        # placing exactly the tables in mask (shards are filled one at a time);
+        # -1 means that set of tables cannot be placed this way.
+        load = [-1] * (1 << n)
+        load[0] = 0
+        for mask in range(1 << n):
+            if load[mask] < 0:
+                continue
+            for i in range(n):
+                if mask >> i & 1:
+                    continue
+                nxt = mask | (1 << i)
+                if load[nxt] >= 0 or load[mask] + sizes[i] > target:
+                    continue
+                load[nxt] = (load[mask] + sizes[i]) % target
+        return load[full] == 0
+  javascript: |
+    function canSplitIntoEqualShards(sizes, k) {
+      let total = 0;
+      for (const s of sizes) total += s;
+      if (total % k !== 0) return false;
+      const target = total / k;
+      if (Math.max(...sizes) > target) return false;
+      const n = sizes.length;
+      const load = new Int32Array(1 << n).fill(-1);
+      load[0] = 0;
+      for (let mask = 0; mask < 1 << n; mask++) {
+        if (load[mask] < 0) continue;
+        for (let i = 0; i < n; i++) {
+          if ((mask >> i) & 1) continue;
+          const nxt = mask | (1 << i);
+          if (load[nxt] >= 0 || load[mask] + sizes[i] > target) continue;
+          load[nxt] = (load[mask] + sizes[i]) % target;
+        }
+      }
+      return load[(1 << n) - 1] === 0;
+    }
+tests:
+  - {id: t1, args: [[5, 1, 4, 3, 2, 3], 3], expected: true, description: "Example 1"}
+  - {id: t2, args: [[3, 3, 3, 4, 5], 3], expected: false, description: "Example 2 - total divides evenly but no valid grouping"}
+  - {id: t3, hidden: true, args: [[7], 1], expected: true, description: "Single table on a single shard is trivially balanced"}
+  - {id: t4, hidden: true, args: [[4, 4, 4, 5], 4], expected: false, description: "Total (17) not divisible by k"}
+  - {id: t5, hidden: true, args: [[9, 1, 1, 1, 1, 1, 1, 1], 2], expected: false, description: "Total divides evenly but one table exceeds the per-shard target"}
+  - {id: t6, hidden: true, args: [[6, 6, 6, 6, 6], 5], expected: true, description: "k equals the number of tables, all equal: true"}
+  - {id: t7, hidden: true, args: [[1, 1, 1, 1, 2, 2, 2, 2], 4], expected: true, description: "Many duplicates; every shard pairs a 1 with a 2"}
+  - {id: t8, hidden: true, args: [[9, 8, 4, 9, 3, 8, 7], 2], expected: true, description: "Greedy trap: first-fit largest-first (9+9, then 8+8+7) gets stuck, but {9, 8, 7} and {9, 8, 4, 3} works; true"}
+  - {id: t9, hidden: true, args: [[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4], 2], expected: false, description: "16 tables, even total but odd target (17): must exhaust the search and return false"}
+  - {id: t10, hidden: true, args: [[10000, 9999, 1, 5000, 5000, 7500, 2500, 6000, 4000, 3000, 7000, 8000, 2000, 1500, 8500, 10000], 9], expected: true, description: "16 tables with large sizes, target 10000, true"}
+expected_concepts:
+  - "pruning: total must divide by k and no table may exceed the target"
+  - "bitmask over which tables are already placed"
+  - "filling shards one at a time so only the current shard's load matters"
+  - "memoising or DP over subsets to avoid re-exploring equivalent states"
+  - "O(2^n * n) time"
+optimal_complexity: {time: "O(2^n * n)", space: "O(2^n)"}
+rubric:
+  excellent: "Applies the divisibility and largest-item checks, explains why filling one shard at a time makes the subset mask a complete state, implements subset DP or memoised backtracking in O(2^n * n), and discusses symmetry pruning."
+  good: "Correct backtracking with sensible pruning (sorting descending, skipping identical bin loads) or a subset DP with minor guidance."
+  weak: "Uses a greedy placement, only checks divisibility, or writes unpruned backtracking that times out on the 16-table false case."
+  criteria:
+    correctness: "All tests pass, including the greedy-trap and exhaustive false cases."
+    efficiency: "Exponential only in n via subsets (about 2^16 states), not in k^n placements."
+    code_quality: "Clear separation of the quick rejections and the search; state meaning documented."
+    edge_cases: "k = 1, k = n, indivisible totals and an oversized table."
+    communication: "Explains why the subset of placed tables determines the current shard's load."
+hints:
+  - "Before searching, think about what the total size tells you about each shard, and which quick checks can rule out an answer immediately."
+  - "Fill the shards one after another. If you know exactly which tables have already been placed, can you work out how full the current shard is?"
+  - "Use a bitmask of placed tables as the state. From each reachable mask, try adding one unplaced table that still fits in the current shard; the new load is the old load plus that size, wrapping to zero when a shard is exactly full. The answer is whether the mask with every table set is reachable."
+followups:
+  - "How would you return the actual groups, not just whether they exist?"
+  - "Why does sorting tables in descending order speed up backtracking so much?"
+  - "If the requirement relaxed to 'minimise the largest shard', what changes?"
+  - "How large can n get before this approach is impractical, and what would you do then?"
+common_errors:
+  - "Using a greedy largest-first placement, which fails on inputs that need backtracking."
+  - "Only checking that the total divides by k."
+  - "Backtracking over k shards without symmetry pruning, so equivalent empty shards are explored repeatedly."
+  - "Forgetting to reset the running load to zero when a shard fills exactly."

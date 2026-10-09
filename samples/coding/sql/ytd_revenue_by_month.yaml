@@ -1,0 +1,184 @@
+version: 1
+slug: ytd_revenue_by_month
+title: Year-to-Date Revenue
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, business_analyst]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Year-to-Date Revenue
+
+  Finance keeps one row per month of recognised revenue in table `monthly_sales`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | month | TEXT | primary key, formatted `YYYY-MM` |
+  | revenue_cents | BIGINT | net revenue; can be negative in a month dominated by refunds |
+
+  The table can span several calendar years and some months may be missing (no row).
+
+  For every row return `month`, `revenue_cents` and `ytd_cents`: the running total of
+  `revenue_cents` over all rows of the **same calendar year** up to and including that month. The
+  running total starts again from that month's own revenue at the first row of each new year.
+  Missing months simply add nothing. Order the result by `month` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite (avoid vendor-specific date
+  functions; the year is the first four characters of `month`).
+
+  ### Example 1
+  ```
+  monthly_sales
+  +---------+---------------+
+  | month   | revenue_cents |
+  +---------+---------------+
+  | 2025-11 | 400000        |
+  | 2025-12 | 650000        |
+  | 2026-01 | 300000        |
+  | 2026-02 | 250000        |
+  | 2026-03 | -20000        |
+  +---------+---------------+
+
+  Output
+  +---------+---------------+-----------+
+  | month   | revenue_cents | ytd_cents |
+  +---------+---------------+-----------+
+  | 2025-11 | 400000        | 400000    |
+  | 2025-12 | 650000        | 1050000   |
+  | 2026-01 | 300000        | 300000    |
+  | 2026-02 | 250000        | 550000    |
+  | 2026-03 | -20000        | 530000    |
+  +---------+---------------+-----------+
+  ```
+
+  ### Example 2
+  ```
+  monthly_sales
+  +---------+---------------+
+  | month   | revenue_cents |
+  +---------+---------------+
+  | 2026-05 | 1000          |
+  | 2026-02 | 500           |
+  | 2026-09 | 250           |
+  +---------+---------------+
+
+  Output
+  +---------+---------------+-----------+
+  | month   | revenue_cents | ytd_cents |
+  +---------+---------------+-----------+
+  | 2026-02 | 500           | 500       |
+  | 2026-05 | 1000          | 1500      |
+  | 2026-09 | 250           | 1750      |
+  +---------+---------------+-----------+
+  Months 2026-01, 03, 04, 06, 07 and 08 have no row.
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return month, revenue_cents and the running total that restarts every calendar year,
+    -- ordered by month.
+    SELECT month, revenue_cents, revenue_cents AS ytd_cents
+    FROM monthly_sales
+    ORDER BY month;
+reference_solutions:
+  sql: |
+    SELECT month,
+           revenue_cents,
+           SUM(revenue_cents) OVER (
+             PARTITION BY SUBSTR(month, 1, 4)
+             ORDER BY month
+             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+           ) AS ytd_cents
+    FROM monthly_sales
+    ORDER BY month;
+sql_setup: |
+  CREATE TABLE monthly_sales (
+    month TEXT PRIMARY KEY,
+    revenue_cents BIGINT NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - running total resets in January, negative month reduces it"
+    setup_sql: |
+      INSERT INTO monthly_sales (month, revenue_cents) VALUES
+        ('2025-11', 400000), ('2025-12', 650000), ('2026-01', 300000), ('2026-02', 250000), ('2026-03', -20000);
+    expected_rows: [["2025-11", 400000, 400000], ["2025-12", 650000, 1050000], ["2026-01", 300000, 300000], ["2026-02", 250000, 550000], ["2026-03", -20000, 530000]]
+    ordered: true
+  - id: t2
+    description: "Example 2 - missing months and rows inserted out of order"
+    setup_sql: |
+      INSERT INTO monthly_sales (month, revenue_cents) VALUES ('2026-05', 1000), ('2026-02', 500), ('2026-09', 250);
+    expected_rows: [["2026-02", 500, 500], ["2026-05", 1000, 1500], ["2026-09", 250, 1750]]
+    ordered: true
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    expected_rows: []
+    ordered: true
+  - id: t4
+    hidden: true
+    description: "Single month"
+    setup_sql: "INSERT INTO monthly_sales (month, revenue_cents) VALUES ('2024-07', 123);"
+    expected_rows: [["2024-07", 123, 123]]
+    ordered: true
+  - id: t5
+    hidden: true
+    description: "Three years, one month each - every row restarts (global running total trap)"
+    setup_sql: |
+      INSERT INTO monthly_sales (month, revenue_cents) VALUES ('2023-12', 10), ('2024-12', 20), ('2025-01', 30);
+    expected_rows: [["2023-12", 10, 10], ["2024-12", 20, 20], ["2025-01", 30, 30]]
+    ordered: true
+  - id: t6
+    hidden: true
+    description: "Values beyond 32-bit: running total exceeds 2^31 within a year"
+    setup_sql: |
+      INSERT INTO monthly_sales (month, revenue_cents) VALUES
+        ('2026-01', 1500000000), ('2026-02', 1500000000), ('2026-03', 1500000000), ('2027-01', 2500000000);
+    expected_rows: [["2026-01", 1500000000, 1500000000], ["2026-02", 1500000000, 3000000000], ["2026-03", 1500000000, 4500000000], ["2027-01", 2500000000, 2500000000]]
+    ordered: true
+  - id: t7
+    hidden: true
+    description: "Year that goes negative and back; zero-revenue month"
+    setup_sql: |
+      INSERT INTO monthly_sales (month, revenue_cents) VALUES
+        ('2025-01', -500), ('2025-02', 0), ('2025-03', 200), ('2025-04', 900), ('2025-05', -100);
+    expected_rows: [["2025-01", -500, -500], ["2025-02", 0, -500], ["2025-03", 200, -300], ["2025-04", 900, 600], ["2025-05", -100, 500]]
+    ordered: true
+  - id: t8
+    hidden: true
+    description: "Full two-year history (24 months) inserted newest first"
+    setup_sql: |
+      INSERT INTO monthly_sales (month, revenue_cents) VALUES
+        ('2025-12', 1200), ('2025-11', 1100), ('2025-10', 1000), ('2025-09', 900), ('2025-08', 800), ('2025-07', 700),
+        ('2025-06', 600), ('2025-05', 500), ('2025-04', 400), ('2025-03', 300), ('2025-02', 200), ('2025-01', 100),
+        ('2024-12', 12), ('2024-11', 11), ('2024-10', 10), ('2024-09', 9), ('2024-08', 8), ('2024-07', 7),
+        ('2024-06', 6), ('2024-05', 5), ('2024-04', 4), ('2024-03', 3), ('2024-02', 2), ('2024-01', 1);
+    expected_rows: [["2024-01", 1, 1], ["2024-02", 2, 3], ["2024-03", 3, 6], ["2024-04", 4, 10], ["2024-05", 5, 15], ["2024-06", 6, 21], ["2024-07", 7, 28], ["2024-08", 8, 36], ["2024-09", 9, 45], ["2024-10", 10, 55], ["2024-11", 11, 66], ["2024-12", 12, 78], ["2025-01", 100, 100], ["2025-02", 200, 300], ["2025-03", 300, 600], ["2025-04", 400, 1000], ["2025-05", 500, 1500], ["2025-06", 600, 2100], ["2025-07", 700, 2800], ["2025-08", 800, 3600], ["2025-09", 900, 4500], ["2025-10", 1000, 5500], ["2025-11", 1100, 6600], ["2025-12", 1200, 7800]]
+    ordered: true
+expected_concepts:
+  - running totals with SUM() OVER (... ORDER BY ...)
+  - PARTITION BY a derived expression (the year prefix)
+  - explicit window frame (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+  - 64-bit arithmetic for money totals
+optimal_complexity: {time: "O(n log n) for the window sort", space: O(n)}
+rubric:
+  excellent: Uses SUM(revenue_cents) OVER (PARTITION BY SUBSTR(month, 1, 4) ORDER BY month) with an explicit frame, explains the default RANGE frame and why it is safe here because month is unique, and mentions storing a real date or year column for indexing.
+  good: Correct running total after a hint to restart per year, or a correct correlated-subquery solution with a note on its cost.
+  weak: Produces a running total across all years, computes yearly totals instead of running totals, or relies on unordered rows.
+  criteria:
+    correctness: All tests pass, including year boundaries, missing months and negative revenue.
+    efficiency: A single window pass instead of a correlated subquery per row.
+    code_quality: Readable window clause and output names exactly as requested.
+    edge_cases: Empty table, single month, values beyond 32-bit and unsorted inserts.
+    communication: Explains partitioning, ordering and the window frame.
+hints:
+  - A year-to-date figure is a cumulative sum that must forget everything from the previous year.
+  - Window functions can accumulate in month order, and a partition makes them restart; the year is just the first four characters of the month text.
+  - Select SUM(revenue_cents) OVER (PARTITION BY SUBSTR(month, 1, 4) ORDER BY month ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) alongside month and revenue, ordered by month.
+followups:
+  - How would you also show the same month's year-to-date figure from the previous year?
+  - How would you fill missing months with zero revenue so every calendar month appears?
+  - What changes if the fiscal year starts in April?
+common_errors:
+  - Forgetting PARTITION BY, which carries the total across years.
+  - Using SUM(...) GROUP BY year, which returns one yearly total instead of a running value per month.
+  - Omitting ORDER BY inside the window, which makes every row show the full-year total.

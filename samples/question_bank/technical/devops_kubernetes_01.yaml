@@ -1,0 +1,638 @@
+# Kubernetes in depth (1/4): scheduling, resources, quality of service and autoscaling.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [devops]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: technical.devops_kubernetes.requests_vs_limits
+    competency_key: kubernetes
+    topic: Setting requests and limits
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you deploy a new service, how do you decide what CPU and memory requests and limits to give it,
+      and what does each of those settings actually do once the pod is running?
+    expected_concepts:
+      - requests are used by the scheduler to place pods
+      - limits are enforced at runtime through cgroups
+      - CPU over the limit is throttled, memory over the limit is OOM killed
+      - starting from load-test or production usage data
+      - revisiting values after observing real usage
+    rubric:
+      excellent: Clearly separates scheduling (requests) from runtime enforcement (limits), explains throttling versus OOM kills, and describes a data-driven way of picking and revising the numbers.
+      good: Knows requests affect scheduling and limits cap usage, and mentions looking at metrics to choose values.
+      weak: Treats requests and limits as the same thing or picks numbers arbitrarily with no plan to revisit them.
+    followups:
+      - What happens on a node where the sum of limits is far above its capacity?
+      - Would you ever leave the CPU limit off entirely? Why?
+    common_errors:
+      - Believing a pod is guaranteed its limit rather than its request.
+
+  - external_key: technical.devops_kubernetes.qos_classes_eviction
+    competency_key: kubernetes
+    topic: QoS classes and eviction order
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Kubernetes puts every pod into a quality of service class. Can you explain how a pod ends up as
+      Guaranteed, Burstable or BestEffort, and why that matters when a node runs short of memory?
+    expected_concepts:
+      - Guaranteed means requests equal limits for every container
+      - Burstable has some requests or limits set
+      - BestEffort has none set
+      - kubelet evicts BestEffort and over-request Burstable pods first under node pressure
+      - choosing Guaranteed for critical workloads
+    rubric:
+      excellent: Derives each class correctly from the resource settings, explains the eviction ordering under memory pressure, and connects it to how they'd configure critical versus batch workloads.
+      good: Names the three classes and roughly how each is assigned, and knows BestEffort pods go first.
+      weak: Cannot say how a class is assigned or does not connect it to eviction.
+    followups:
+      - Which class would you choose for a log shipping DaemonSet and why?
+      - How is a kubelet eviction different from the kernel OOM killer?
+    common_errors:
+      - Thinking QoS class is a field you set directly in the pod spec.
+
+  - external_key: technical.devops_kubernetes.taints_vs_affinity
+    competency_key: kubernetes
+    topic: Taints, tolerations and node affinity
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Say you've added a pool of expensive GPU nodes to a cluster. How would you make sure only the
+      machine learning workloads land there, and why do you need more than one mechanism to do it?
+    expected_concepts:
+      - taint the GPU nodes so ordinary pods are repelled
+      - tolerations on the ML pods allow them onto the nodes
+      - node affinity or a node selector to attract the ML pods
+      - a toleration alone does not force placement
+      - requesting the GPU resource through the device plugin
+    rubric:
+      excellent: Explains that taints repel and affinity attracts, so both are needed to dedicate the pool, and mentions requesting the GPU resource itself.
+      good: Uses taints and tolerations correctly and mentions node selectors or affinity.
+      weak: Relies on a single mechanism and cannot explain why other pods might still land on, or ML pods miss, the GPU nodes.
+    followups:
+      - What does the NoExecute effect add compared with NoSchedule?
+      - How would you stop DaemonSets from wasting space on those nodes?
+    common_errors:
+      - Assuming a toleration pulls a pod onto the tainted node.
+
+  - external_key: technical.devops_kubernetes.oomkilled_sizing
+    competency_key: kubernetes
+    topic: Repeated OOMKilled containers
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A service's pods keep getting OOMKilled a few hours after each deploy, and someone suggests simply
+      doubling the memory limit. How would you decide whether that's the right fix?
+    expected_concepts:
+      - confirm OOMKilled and exit code 137 in pod status
+      - look at the memory trend over time to tell a leak from steady growth under load
+      - check runtime settings such as heap size relative to the limit
+      - compare against requests and node capacity
+      - raise the limit only when usage is legitimately higher
+    rubric:
+      excellent: Gathers the memory curve and termination reason first, distinguishes a leak or misconfigured runtime from an undersized limit, and explains the cost of blindly raising it.
+      good: Checks the termination reason and memory metrics before changing the limit.
+      weak: Doubles the limit without looking at any evidence.
+    followups:
+      - The memory graph climbs steadily until the kill. What does that suggest?
+      - How would a JVM or Node.js heap setting interact with the container limit?
+    common_errors:
+      - Ignoring that the request should usually move along with the limit.
+
+  - external_key: technical.devops_kubernetes.quota_exceeded
+    competency_key: kubernetes
+    topic: ResourceQuota and LimitRange rejections
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A developer tells you their deployment applied fine but no new pods appear, and the ReplicaSet events
+      mention exceeded quota. Walk me through what's happening and how you'd help them.
+    expected_concepts:
+      - the namespace has a ResourceQuota on requests, limits or object counts
+      - the ReplicaSet controller cannot create pods so the error shows on the ReplicaSet, not the Deployment
+      - quotas on CPU or memory require every pod to declare those resources
+      - a LimitRange can supply default requests and limits
+      - deciding between reducing usage, right-sizing or raising the quota
+    rubric:
+      excellent: Explains where the error surfaces and why, reads the quota usage against the new pods, and weighs right-sizing against raising the quota with the owning team.
+      good: Identifies the quota as the cause and knows how to inspect current usage.
+      weak: Looks only at the Deployment, sees no error and cannot explain why pods are missing.
+    followups:
+      - Why might a pod with no resources set be rejected outright in a namespace with a quota?
+      - How would you prevent this surprise for teams in future?
+    common_errors:
+      - Raising the quota by default without checking whether the requests are oversized.
+
+  - external_key: technical.devops_kubernetes.pod_disruption_budgets
+    competency_key: kubernetes
+    topic: Pod disruption budgets
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What problem does a PodDisruptionBudget solve, and how would you set one for a three-replica API that
+      must stay available during node maintenance?
+    expected_concepts:
+      - limits voluntary disruptions such as drains and autoscaler scale-down
+      - does not protect against node crashes or involuntary failures
+      - minAvailable or maxUnavailable choice
+      - setting it so at least one disruption is always allowed
+      - interaction with kubectl drain and the eviction API
+    rubric:
+      excellent: Explains voluntary versus involuntary disruptions, picks a sensible value such as maxUnavailable of one, and warns about budgets that permit zero disruptions and block drains.
+      good: Knows a PDB keeps a minimum number of pods up during drains and sets a reasonable value.
+      weak: Thinks a PDB protects against crashes or sets minAvailable equal to the replica count without seeing the problem.
+    followups:
+      - What happens to a node drain if the PDB allows zero disruptions?
+      - Does a PDB help during a rolling update of the Deployment itself?
+    common_errors:
+      - Confusing PDBs with the Deployment's rolling update settings.
+
+  - external_key: technical.devops_kubernetes.rolling_update_tuning
+    competency_key: kubernetes
+    topic: Rolling update surge and unavailability
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How does a Deployment actually replace old pods with new ones during a rolling update, and how would
+      you choose the max surge and max unavailable settings for a service with tight capacity?
+    expected_concepts:
+      - a new ReplicaSet is scaled up while the old one scales down
+      - maxSurge allows extra pods above the desired count
+      - maxUnavailable allows pods below the desired count
+      - readiness gates the progress of the rollout
+      - surge needs spare cluster capacity, unavailability reduces serving capacity
+    rubric:
+      excellent: Describes the two ReplicaSets and readiness-driven progression, and reasons about the trade-off between needing spare capacity for surge and losing serving capacity with unavailability.
+      good: Explains both settings correctly and picks a defensible combination.
+      weak: Cannot explain how old and new pods are swapped or what the settings change.
+    followups:
+      - What would happen with max unavailable at zero and no spare node capacity?
+      - How do you roll back a Deployment, and what does it actually do?
+    common_errors:
+      - Forgetting that pods without readiness probes are counted as ready immediately.
+
+  - external_key: technical.devops_kubernetes.node_not_ready
+    competency_key: kubernetes
+    topic: Node goes NotReady
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You get an alert that one worker node has been NotReady for a few minutes. What happens to the pods
+      that were running on it, and what would you check first?
+    expected_concepts:
+      - the node controller marks it and taints it unreachable or not-ready
+      - pods are evicted after the toleration period, by default about five minutes
+      - Deployment pods are recreated elsewhere, StatefulSet pods wait
+      - check kubelet and container runtime status on the node
+      - check resource exhaustion, disk pressure or network partition
+    rubric:
+      excellent: Explains the timing of taint-based eviction, how different workload types react, and investigates kubelet, runtime, resources and network on the node.
+      good: Knows pods are moved after a delay and checks the kubelet and node conditions.
+      weak: Expects pods to move instantly or has no idea where to look on the node.
+    followups:
+      - Why does a StatefulSet pod not get rescheduled straight away?
+      - The node comes back after ten minutes. What happens to the old pods on it?
+    common_errors:
+      - Assuming the scheduler moves pods the moment a node goes NotReady.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: technical.devops_kubernetes.cpu_throttling_latency
+    competency_key: kubernetes
+    topic: CPU throttling and tail latency
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A latency-sensitive API shows bad p99 latency, yet its dashboards say average CPU usage is only forty
+      percent of the limit. What could be going on, and how would you prove it?
+    expected_concepts:
+      - CFS quota throttling within short scheduling periods
+      - container_cpu_cfs_throttled_periods metrics
+      - multi-threaded runtimes burning the quota in bursts
+      - averages hiding bursty usage
+      - raising or removing CPU limits, or tuning thread counts
+    rubric:
+      excellent: Explains how the CFS quota period causes throttling even at low average usage, proves it with throttling metrics, and proposes fixes with their trade-offs.
+      good: Suspects CPU throttling and knows there are metrics for it.
+      weak: Concludes CPU cannot be the problem because the average is low.
+    followups:
+      - What are the risks of removing CPU limits across the cluster?
+      - How does the number of threads the runtime sees affect this?
+    common_errors:
+      - Trusting average utilisation graphs over throttling counters.
+
+  - external_key: technical.devops_kubernetes.topology_spread
+    competency_key: kubernetes
+    topic: Spreading replicas across nodes and zones
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you make sure the replicas of a critical service are spread across nodes and zones, and how
+      do you choose between pod anti-affinity and topology spread constraints?
+    expected_concepts:
+      - required versus preferred anti-affinity
+      - topology spread constraints with maxSkew and topologyKey
+      - whenUnsatisfiable choice between DoNotSchedule and ScheduleAnyway
+      - hard rules can leave pods Pending
+      - scheduler cost of anti-affinity in large clusters
+    rubric:
+      excellent: Compares both mechanisms precisely, explains skew and the hard-versus-soft trade-off, and notes how strict rules can block scheduling or scale-up.
+      good: Uses one mechanism correctly and knows spreading across zones matters.
+      weak: Relies on luck or replica count alone for spreading.
+    followups:
+      - Why might spread constraints look violated after a scale-down?
+      - What happens when a zone has no capacity left and the rule is hard?
+    common_errors:
+      - Assuming the default scheduler already spreads across zones well enough for critical services.
+
+  - external_key: technical.devops_kubernetes.priority_preemption
+    competency_key: kubernetes
+    topic: Priority classes and preemption
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you use priority classes in a cluster that runs both customer-facing services and large
+      batch jobs, and what can go wrong with preemption?
+    expected_concepts:
+      - priority classes ordering the scheduling queue
+      - preemption evicting lower priority pods to make room
+      - system-critical classes for cluster add-ons
+      - preemption does not respect PDBs strictly
+      - risk of every team marking workloads high priority
+    rubric:
+      excellent: Designs a small set of priority tiers, explains how preemption works and its limits, and addresses governance so priorities aren't inflated.
+      good: Explains priority and preemption and assigns services above batch.
+      weak: Thinks priority only affects CPU share or ignores preemption.
+    followups:
+      - How would you stop a team from giving everything the top priority?
+      - What happens to a preempted batch job that has been running for hours?
+    common_errors:
+      - Confusing pod priority with QoS class.
+
+  - external_key: technical.devops_kubernetes.hpa_flapping
+    competency_key: kubernetes
+    topic: Horizontal autoscaler oscillation
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You notice a service's replica count bouncing between four and twenty every few minutes, even though
+      traffic is fairly steady. How would you work out why the autoscaler is flapping and calm it down?
+    expected_concepts:
+      - the target metric oscillating because new pods change it
+      - CPU spikes during startup or warm-up
+      - scale-down stabilization window and scaling policies in the behavior field
+      - requests set too low making utilisation percentages noisy
+      - choosing a better metric
+    rubric:
+      excellent: Connects the oscillation to how the metric reacts to scaling and startup, and tunes behavior, requests or the metric itself with a clear rationale.
+      good: Identifies stabilization windows or behavior policies as the fix.
+      weak: Just pins min and max replicas without understanding the cause.
+    followups:
+      - How does the readiness of new pods affect the CPU measurements the HPA uses?
+      - When is CPU simply the wrong metric to scale on?
+    common_errors:
+      - Ignoring that utilisation is computed against requests, not limits.
+
+  - external_key: technical.devops_kubernetes.custom_metric_scaling
+    competency_key: kubernetes
+    topic: Scaling on queue depth and custom metrics
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A worker deployment consumes jobs from a queue, and CPU-based autoscaling reacts far too late. How
+      would you scale it on something more meaningful, and how does that wiring work?
+    expected_concepts:
+      - scaling on queue depth or consumer lag
+      - external or custom metrics API
+      - KEDA or a Prometheus adapter
+      - target value per replica
+      - scaling to zero and the cold-start trade-off
+    rubric:
+      excellent: Picks a backlog-based metric, explains how it reaches the HPA through the metrics APIs or KEDA, and sets a per-replica target with thought about scale-to-zero and limits.
+      good: Proposes queue length scaling and names a tool that provides it.
+      weak: Only suggests raising the minimum replica count.
+    followups:
+      - How would you avoid scaling beyond what the downstream database can take?
+      - What happens if the metrics adapter itself is down?
+    common_errors:
+      - Not capping maximum replicas against downstream limits.
+
+  - external_key: technical.devops_kubernetes.vertical_pod_autoscaler
+    competency_key: kubernetes
+    topic: Vertical Pod Autoscaler
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Where does the Vertical Pod Autoscaler fit in your toolbox, and how would you use it alongside the
+      Horizontal Pod Autoscaler without the two fighting each other?
+    expected_concepts:
+      - VPA adjusts requests based on observed usage
+      - recommendation-only mode for right-sizing
+      - updates historically require pod restarts
+      - conflict when both act on the same CPU or memory signal
+      - HPA on a custom metric with VPA on resources
+    rubric:
+      excellent: Explains VPA modes, the restart implications, why both on CPU conflict, and a safe combined pattern such as recommendations only or HPA on a different metric.
+      good: Knows VPA right-sizes requests and that combining with HPA on CPU is a problem.
+      weak: Thinks VPA adds replicas or is unaware of any conflict.
+    followups:
+      - How would you roll out VPA recommendations across a hundred services safely?
+      - Which workloads would you never let VPA restart automatically?
+    common_errors:
+      - Running VPA in auto mode on a single-replica service and causing outages.
+
+  - external_key: technical.devops_kubernetes.ephemeral_storage_eviction
+    competency_key: kubernetes
+    topic: Disk pressure and ephemeral storage evictions
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Pods on several nodes are being evicted and the node conditions show DiskPressure. How would you track
+      down what's filling the disks and stop it from happening again?
+    expected_concepts:
+      - container logs, writable layers and emptyDir count as ephemeral storage
+      - image cache growth and image garbage collection thresholds
+      - finding the offending pods via kubelet stats or du on the node
+      - ephemeral-storage requests and limits
+      - log rotation settings
+    rubric:
+      excellent: Lists the sources of node disk usage, finds the culprit with evidence, and fixes both the immediate problem and the guardrails such as ephemeral-storage limits and image GC.
+      good: Identifies logs or images as likely causes and knows how to check node disk usage.
+      weak: Deletes evicted pods or adds disk without finding the cause.
+    followups:
+      - Why might an app writing temp files to its container filesystem cause this?
+      - How would you alert before evictions start?
+    common_errors:
+      - Not knowing that ephemeral storage can be requested and limited like CPU and memory.
+
+  - external_key: technical.devops_kubernetes.rightsizing_bin_packing
+    competency_key: cloud_cost_optimization
+    topic: Right-sizing requests and bin packing
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your cluster's nodes report sixty percent of CPU requested but only fifteen percent actually used.
+      How would you close that gap without putting reliability at risk?
+    expected_concepts:
+      - compare requests with real usage percentiles per workload
+      - right-size requests using VPA recommendations or usage data
+      - better bin packing with node sizes and autoscaler settings
+      - keeping headroom for spikes and critical services
+      - working with owning teams and tracking savings
+    rubric:
+      excellent: Uses per-workload usage data to drive request changes, adjusts node shapes and packing, keeps deliberate headroom for critical paths, and brings teams along with visibility.
+      good: Proposes lowering requests based on usage and consolidating nodes.
+      weak: Cuts requests across the board or just removes nodes.
+    followups:
+      - Which percentile of usage would you size requests against, and why?
+      - How would you show each team what their over-requesting costs?
+    common_errors:
+      - Sizing requests to average usage and causing contention at peak.
+
+  - external_key: technical.devops_kubernetes.autoscaler_no_scale_down
+    competency_key: kubernetes
+    topic: Node autoscaler refuses to scale down
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Overnight traffic drops to almost nothing, yet your node count stays at its daytime peak. What would
+      you look at to find out why the cluster isn't scaling down?
+    expected_concepts:
+      - pods with restrictive PDBs blocking eviction
+      - pods using local storage or not owned by a controller
+      - kube-system pods without disruption budgets
+      - safe-to-evict annotations
+      - scale-down utilisation thresholds and autoscaler logs or status
+    rubric:
+      excellent: Reads the autoscaler's own status or logs to see which pods block each node, and lists the common blockers with how to fix each safely.
+      good: Names a few blockers such as PDBs or local storage.
+      weak: Assumes the autoscaler is broken and suggests deleting nodes manually.
+    followups:
+      - How would you handle a single long-running batch pod pinning an otherwise empty node?
+      - What's the risk of marking pods safe to evict across the board?
+    common_errors:
+      - Not realising requests, not actual usage, drive scale-down decisions.
+
+  - external_key: technical.devops_kubernetes.node_pool_design
+    competency_key: kubernetes
+    topic: Designing node pools
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you design the node pools for a cluster that runs web services, memory-hungry caches,
+      nightly batch processing and cluster add-ons? Explain the reasoning behind your split.
+    expected_concepts:
+      - separate system pool for add-ons
+      - instance shapes matched to workload profiles
+      - taints and labels to steer workloads
+      - spot or preemptible capacity for interruptible batch
+      - avoiding too many small pools that hurt packing
+    rubric:
+      excellent: Proposes a clear pool layout tied to workload profiles and failure tolerance, explains the steering mechanisms, and balances isolation against fragmentation.
+      good: Separates system and workload pools and uses taints or labels sensibly.
+      weak: Puts everything on one instance type without considering the different needs.
+    followups:
+      - How would you migrate workloads when you change a pool's instance type?
+      - When is one big general pool actually the better choice?
+    common_errors:
+      - Creating a pool per team and ending up with poorly utilised nodes.
+
+  - external_key: technical.devops_kubernetes.cronjob_overlap
+    competency_key: kubernetes
+    topic: CronJobs running twice or overlapping
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A nightly billing CronJob occasionally runs twice, and once it didn't run at all after a control plane
+      upgrade. How would you investigate, and how would you make the job safe?
+    expected_concepts:
+      - concurrencyPolicy Forbid or Replace
+      - startingDeadlineSeconds and missed schedules
+      - Job retries through backoffLimit causing duplicate work
+      - making the job idempotent
+      - monitoring last successful run time
+    rubric:
+      excellent: Explains how CronJob scheduling, missed runs and Job retries can cause doubles or skips, fixes the spec, and insists on idempotency plus success monitoring.
+      good: Knows concurrencyPolicy and starting deadlines and suggests idempotency.
+      weak: Blames Kubernetes as unreliable without understanding the scheduling rules.
+    followups:
+      - How would you alert when the job silently stops running?
+      - What would you change if the job takes longer than its schedule interval?
+    common_errors:
+      - Assuming CronJobs give exactly-once execution.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: technical.devops_kubernetes.scheduler_internals
+    competency_key: kubernetes
+    topic: How the scheduler decides and how to extend it
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Walk me through how the Kubernetes scheduler picks a node for a pod, and tell me how you'd change its
+      behaviour if the default placement didn't suit your workloads.
+    expected_concepts:
+      - scheduling queue and the filter then score phases
+      - plugins in the scheduling framework
+      - binding and the scheduling cycle
+      - scheduler profiles and plugin weights
+      - running a secondary scheduler for special workloads
+      - percentage of nodes to score at large scale
+    rubric:
+      excellent: Describes queueing, filtering, scoring and binding through the framework, and offers graduated options from tuning weights and profiles to a secondary scheduler, with their operational costs.
+      good: Explains filter and score and knows profiles or a custom scheduler exist.
+      weak: Thinks the scheduler just picks the least loaded node by actual usage.
+    followups:
+      - Why does the scheduler not consider actual CPU usage by default?
+      - How would you approach gang scheduling for distributed training jobs?
+    common_errors:
+      - Writing a custom scheduler when affinity or spread constraints would do.
+
+  - external_key: technical.devops_kubernetes.burst_scale_out
+    competency_key: kubernetes
+    topic: Scaling to thousands of pods quickly
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A marketing event is expected to need three thousand extra pods within about five minutes, starting
+      from a cluster sized for normal traffic. What would get in the way, and how would you prepare?
+    expected_concepts:
+      - node provisioning time and cloud API rate limits
+      - image pull time and registry throughput
+      - pod IP and subnet capacity
+      - API server and controller throughput
+      - overprovisioning with low-priority placeholder pods or scheduled pre-scaling
+      - load testing the scale-out path in advance
+    rubric:
+      excellent: Identifies bottlenecks across nodes, images, IPs, quotas and the control plane, and combines pre-scaling, placeholder capacity and rehearsal into a concrete plan.
+      good: Plans to pre-scale nodes and mentions image pulls or quotas.
+      weak: Relies on the autoscaler reacting in time with no preparation.
+    followups:
+      - How would you size the placeholder capacity?
+      - What would you monitor during the event to know you were about to hit a limit?
+    common_errors:
+      - Forgetting cloud account quotas until the day of the event.
+
+  - external_key: technical.devops_kubernetes.memory_accounting
+    competency_key: kubernetes
+    topic: Container memory accounting
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your dashboards show a pod's working set close to its memory limit, but the application insists it's
+      only using half that. Explain how Kubernetes measures container memory and how you'd reconcile the two
+      numbers.
+    expected_concepts:
+      - working set equals usage minus inactive file cache
+      - RSS versus page cache versus kernel memory
+      - cgroup v1 versus v2 accounting differences
+      - which metric the kubelet uses for eviction and the kernel uses for OOM
+      - runtime heap, off-heap and native memory
+    rubric:
+      excellent: Explains the components of cgroup memory, why working set is the eviction signal, how file cache and off-heap memory inflate it, and how to attribute usage precisely.
+      good: Knows page cache counts toward container memory and that working set is the key metric.
+      weak: Assumes the application's own heap figure is the whole story.
+    followups:
+      - Can page cache cause an OOM kill, or will the kernel always reclaim it first?
+      - How would you size the limit for a JVM with large direct buffers?
+    common_errors:
+      - Alerting on total usage, which includes reclaimable cache, instead of working set.
+
+  - external_key: technical.devops_kubernetes.noisy_neighbor_isolation
+    competency_key: kubernetes
+    topic: Noisy neighbours and CPU isolation
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A trading service has strict latency targets, and it misbehaves whenever a batch job lands on the
+      same node, even though both stay within their limits. How would you diagnose and isolate it?
+    expected_concepts:
+      - contention on shared resources beyond CPU quota such as caches, memory bandwidth, disk and network
+      - CPU manager static policy with exclusive cores for Guaranteed pods
+      - topology manager and NUMA alignment
+      - dedicated nodes through taints and affinity
+      - measuring with node-level metrics and correlating with co-located pods
+    rubric:
+      excellent: Proves the co-location effect with data, explains why limits don't isolate shared hardware, and chooses between exclusive cores, NUMA alignment and dedicated nodes based on cost and need.
+      good: Moves the service to dedicated nodes or mentions CPU pinning.
+      weak: Raises the service's limits and expects the problem to go away.
+    followups:
+      - What does a pod need to qualify for exclusive cores under the static policy?
+      - How would you justify the cost of dedicated nodes to the business?
+    common_errors:
+      - Believing CPU limits give full performance isolation.
+
+  - external_key: technical.devops_kubernetes.slow_start_scaling
+    competency_key: kubernetes
+    topic: Autoscaling services with slow startup
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A service takes about three minutes to become ready because it loads a large model into memory, and it
+      misses its latency target every weekday morning when traffic ramps up. How would you redesign its
+      scaling?
+    expected_concepts:
+      - reactive autoscaling lags behind startup time
+      - scheduled or predictive pre-scaling before the known ramp
+      - headroom by targeting lower utilisation
+      - reducing startup time through image layout, caching or lazy loading
+      - startup probes so slow pods aren't killed
+      - warm node capacity
+    rubric:
+      excellent: Quantifies the lag between signal and ready capacity, combines proactive scaling with headroom and startup-time reductions, and keeps the pods safe while starting.
+      good: Proposes scheduled scaling or a higher minimum and mentions startup probes.
+      weak: Only lowers the CPU target and hopes it reacts fast enough.
+    followups:
+      - How would you measure the end-to-end time from scale decision to serving traffic?
+      - How would you make the model load faster on a fresh node?
+    common_errors:
+      - Ignoring node provisioning time on top of application startup.
+
+  - external_key: technical.devops_kubernetes.gpu_sharing
+    competency_key: kubernetes
+    topic: Sharing and scheduling GPUs
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your data science teams complain that GPUs in the cluster sit idle while their jobs wait. How do GPUs
+      get scheduled in Kubernetes, and what options would you consider for using them more efficiently?
+    expected_concepts:
+      - device plugin exposes GPUs as an extended resource in whole units
+      - no overcommit by default
+      - time slicing versus hardware partitioning such as MIG
+      - queueing and quotas for batch jobs, for example Kueue
+      - scaling GPU nodes to zero and bin packing
+    rubric:
+      excellent: Explains whole-unit allocation through the device plugin, compares sharing approaches with their isolation trade-offs, and adds queueing and autoscaling to raise utilisation.
+      good: Knows GPUs are requested via an extended resource and names one sharing approach.
+      weak: Assumes GPUs can be requested fractionally like CPU.
+    followups:
+      - Which workloads are safe to put on time-sliced GPUs and which aren't?
+      - How would you measure GPU utilisation per team?
+    common_errors:
+      - Treating GPU memory as isolated under time slicing.

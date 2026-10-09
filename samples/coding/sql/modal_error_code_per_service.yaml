@@ -1,0 +1,204 @@
+version: 1
+slug: modal_error_code_per_service
+title: Most Common Error Code per Service
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [sre, backend, data_analyst]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Most Common Error Code per Service
+
+  The API gateway records every failed request in table `error_events`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | service | VARCHAR(60) | service that returned the error |
+  | code | INTEGER | HTTP status or internal error code |
+
+  For the weekly reliability review, report for **each service** the error code it returned **most
+  often**. When several codes share the highest count for a service, report the **smallest** of those
+  codes. Return exactly one row per service that has at least one event, with columns `service`,
+  `code` and `occurrences` (how many events that service had with that code), ordered by `service`
+  ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  error_events
+  +----+----------+------+
+  | id | service  | code |
+  +----+----------+------+
+  | 1  | billing  | 502  |
+  | 2  | billing  | 500  |
+  | 3  | billing  | 502  |
+  | 4  | search   | 504  |
+  | 5  | search   | 429  |
+  | 6  | billing  | 500  |
+  | 7  | search   | 504  |
+  | 8  | billing  | 502  |
+  +----+----------+------+
+
+  Output
+  +---------+------+-------------+
+  | service | code | occurrences |
+  +---------+------+-------------+
+  | billing | 502  | 3           |
+  | search  | 504  | 2           |
+  +---------+------+-------------+
+  ```
+
+  ### Example 2
+  ```
+  error_events
+  +----+---------+------+
+  | id | service | code |
+  +----+---------+------+
+  | 1  | auth    | 503  |
+  | 2  | auth    | 401  |
+  | 3  | auth    | 503  |
+  | 4  | auth    | 401  |
+  +----+---------+------+
+
+  Output
+  +---------+------+-------------+
+  | service | code | occurrences |
+  +---------+------+-------------+
+  | auth    | 401  | 2           |
+  +---------+------+-------------+
+  401 and 503 both occur twice; the smaller code wins.
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return service, code and occurrences for each service's most frequent code
+    -- (smallest code on ties), ordered by service.
+    SELECT service, MAX(code) AS code, COUNT(*) AS occurrences
+    FROM error_events
+    GROUP BY service
+    ORDER BY service;
+reference_solutions:
+  sql: |
+    WITH code_counts AS (
+      SELECT service, code, COUNT(*) AS occurrences
+      FROM error_events
+      GROUP BY service, code
+    ),
+    ranked AS (
+      SELECT service,
+             code,
+             occurrences,
+             ROW_NUMBER() OVER (PARTITION BY service ORDER BY occurrences DESC, code ASC) AS rn
+      FROM code_counts
+    )
+    SELECT service, code, occurrences
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY service;
+sql_setup: |
+  CREATE TABLE error_events (
+    id INTEGER PRIMARY KEY,
+    service VARCHAR(60) NOT NULL,
+    code INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - two services with clear winners, rows interleaved"
+    setup_sql: |
+      INSERT INTO error_events (id, service, code) VALUES
+        (1, 'billing', 502), (2, 'billing', 500), (3, 'billing', 502), (4, 'search', 504),
+        (5, 'search', 429), (6, 'billing', 500), (7, 'search', 504), (8, 'billing', 502);
+    expected_rows: [["billing", 502, 3], ["search", 504, 2]]
+    ordered: true
+  - id: t2
+    description: "Example 2 - tie on count, the smaller code wins"
+    setup_sql: |
+      INSERT INTO error_events (id, service, code) VALUES
+        (1, 'auth', 503), (2, 'auth', 401), (3, 'auth', 503), (4, 'auth', 401);
+    expected_rows: [["auth", 401, 2]]
+    ordered: true
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    expected_rows: []
+    ordered: true
+  - id: t4
+    hidden: true
+    description: "Single event per service; every code occurs once so the smallest is chosen"
+    setup_sql: |
+      INSERT INTO error_events (id, service, code) VALUES
+        (1, 'cart', 500), (2, 'inventory', 504), (3, 'inventory', 400), (4, 'inventory', 409);
+    expected_rows: [["cart", 500, 1], ["inventory", 400, 1]]
+    ordered: true
+  - id: t5
+    hidden: true
+    description: "Three-way tie - exactly one row per service (RANK/DENSE_RANK would return three)"
+    setup_sql: |
+      INSERT INTO error_events (id, service, code) VALUES
+        (1, 'mail', 550), (2, 'mail', 421), (3, 'mail', 451), (4, 'mail', 550), (5, 'mail', 421), (6, 'mail', 451), (7, 'mail', 999);
+    expected_rows: [["mail", 421, 2]]
+    ordered: true
+  - id: t6
+    hidden: true
+    description: "Most frequent code is neither the smallest nor the largest code of the service"
+    setup_sql: |
+      INSERT INTO error_events (id, service, code) VALUES
+        (1, 'feeds', 400), (2, 'feeds', 503), (3, 'feeds', 429), (4, 'feeds', 429), (5, 'feeds', 429),
+        (6, 'feeds', 503), (7, 'feeds', 400), (8, 'feeds', 599);
+    expected_rows: [["feeds", 429, 3]]
+    ordered: true
+  - id: t7
+    hidden: true
+    description: "Same code dominant in one service but not another; counts are per service, not global"
+    setup_sql: |
+      INSERT INTO error_events (id, service, code) VALUES
+        (1, 'api', 500), (2, 'api', 500), (3, 'api', 500), (4, 'api', 500), (5, 'web', 500),
+        (6, 'web', 404), (7, 'web', 404), (8, 'worker', 1), (9, 'worker', 1), (10, 'worker', 500), (11, 'worker', 500);
+    expected_rows: [["api", 500, 4], ["web", 404, 2], ["worker", 1, 2]]
+    ordered: true
+  - id: t8
+    hidden: true
+    description: "Numeric tie-break - code 99 is smaller than 100 (string comparison would pick 100)"
+    setup_sql: |
+      INSERT INTO error_events (id, service, code) VALUES
+        (1, 'queue', 100), (2, 'queue', 99), (3, 'queue', 100), (4, 'queue', 99), (5, 'queue', 7000);
+    expected_rows: [["queue", 99, 2]]
+    ordered: true
+  - id: t9
+    hidden: true
+    description: "Stress - 300 events for one service via a generator; code 503 wins by one event"
+    setup_sql: |
+      WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 300)
+      INSERT INTO error_events (id, service, code)
+      SELECT n, 'gateway', CASE WHEN n <= 101 THEN 503 WHEN n <= 201 THEN 500 ELSE 502 END FROM seq;
+    expected_rows: [["gateway", 503, 101]]
+    ordered: true
+expected_concepts:
+  - aggregating counts per (service, code)
+  - ROW_NUMBER window with a deterministic tie-breaker
+  - per-group argmax (greatest-n-per-group)
+  - filtering window results in an outer query
+optimal_complexity: {time: "O(n log n) for grouping and ranking", space: O(n)}
+rubric:
+  excellent: Counts per (service, code), picks one row per service with ROW_NUMBER ordered by count descending and code ascending (or an equivalent NOT EXISTS / correlated subquery), and explains why RANK would return several rows on ties.
+  good: Correct counts and ranking but needs a hint on the tie-break or on returning exactly one row per service.
+  weak: Returns MAX(code) or the global most common code, returns several rows on ties, or orders the tie-break the wrong way.
+  criteria:
+    correctness: All tests pass, including two- and three-way ties and per-service counting.
+    efficiency: Groups once and ranks the small aggregated set instead of repeated correlated scans of the raw table.
+    code_quality: Readable CTEs with clear names for the count and rank.
+    edge_cases: Empty table, single-event services, ties and codes of different digit lengths.
+    communication: Explains the difference between ROW_NUMBER, RANK and DENSE_RANK for the tie-break.
+hints:
+  - First find out how many times each service returned each code; the answer for a service is one of those counted rows.
+  - Within each service you need the single best counted row, where "best" means the highest count and, among equal counts, the lowest code; a window function can number rows in that order.
+  - Group by service and code to get COUNT(*), then add ROW_NUMBER() OVER (PARTITION BY service ORDER BY count DESC, code ASC) in a second CTE and keep rows numbered 1, ordered by service.
+followups:
+  - How would you return the top three codes per service instead of one?
+  - How would you report the code's share of all the service's errors as a percentage?
+  - What changes if events arrive continuously and the report must cover only the last 24 hours?
+common_errors:
+  - Using MAX(code) or MIN(code) per service, which ignores how often each code occurs.
+  - Using RANK or DENSE_RANK, which returns every tied code instead of one row.
+  - Ordering the tie-break by code descending, which picks the largest tied code.

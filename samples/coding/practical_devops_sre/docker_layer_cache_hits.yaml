@@ -1,0 +1,148 @@
+version: 1
+slug: docker_layer_cache_hits
+title: Build Cache Layer Reuse
+difficulty: easy
+competency_keys: [problem_solving, code_quality]
+role_tags: [devops, platform, backend]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Build Cache Layer Reuse
+
+  A CI system wants to predict, before starting a container image build, how many layers it will be
+  able to take from the cache. Each instruction of the build file produces one layer. You get the
+  instructions of the previous build, the instructions of the current build and the list of files in
+  the build context that changed since the previous build.
+
+  Walk the current instructions from the top. Instruction `i` is **reused** only if all of these hold:
+
+  1. The previous build has an instruction at position `i` and it is exactly the same string.
+  2. If the instruction is a `COPY` or `ADD` (its first token), none of its **source paths** was touched
+     by a changed file.
+  3. Every instruction before it was reused. As soon as one instruction is not reused, nothing after it
+     is reused either.
+
+  Parsing a `COPY` or `ADD` instruction: tokens are separated by single spaces; the first token is the
+  keyword, the **last** token is the destination, tokens starting with `--` are flags (for example
+  `--chown=app:app`), and every other token in between is a source path.
+
+  A changed file `f` **touches** a source `s` if `s` is `.` (the whole context), or `f` equals `s`, or
+  `f` lies inside directory `s` on a path-component boundary (`src` covers `src/main.py` but not
+  `src2/main.py`). A trailing `/` on a source is ignored. Other instructions (such as `RUN`) are never
+  affected by changed files, even if they mention a path.
+
+  Return the number of reused layers.
+
+  ### Example 1
+  ```
+  Input:  previous = ["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], current = ["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], changed_files = ["src/app/main.py"]
+  Output: 4
+  Explanation: FROM, WORKDIR, COPY requirements.txt and RUN are reused; COPY src is touched by src/app/main.py.
+  ```
+
+  ### Example 2
+  ```
+  Input:  previous = ["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], current = ["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], changed_files = ["requirements.txt"]
+  Output: 2
+  ```
+
+  ### Example 3
+  ```
+  Input:  previous = ["FROM node:20", "COPY --chown=node:node . /home/node/app", "RUN npm ci"], current = ["FROM node:20", "COPY --chown=node:node . /home/node/app", "RUN npm ci"], changed_files = ["README.md"]
+  Output: 1
+  ```
+
+  ### Constraints
+  - `0 <= previous.length, current.length <= 100`
+  - `0 <= changed_files.length <= 1000`
+  - Instructions are non-empty, have no leading or trailing spaces, and use single spaces between tokens.
+  - `COPY` and `ADD` instructions have at least one source and a destination; sources are `.` or relative paths without `./`, `..` or wildcards.
+  - Changed files are relative paths without a leading `./` or a trailing `/`.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: docker_layer_cache_hits
+  params:
+    - {name: previous, type: "string[]"}
+    - {name: current, type: "string[]"}
+    - {name: changed_files, type: "string[]"}
+  return_type: "int"
+  comparison: exact
+reference_solutions:
+  python: |
+    def docker_layer_cache_hits(previous: list[str], current: list[str], changed_files: list[str]) -> int:
+        def touches(source: str, changed: str) -> bool:
+            source = source.rstrip("/") or "."
+            return source == "." or changed == source or changed.startswith(source + "/")
+
+        reused = 0
+        for i, instruction in enumerate(current):
+            if i >= len(previous) or previous[i] != instruction:
+                break
+            tokens = instruction.split(" ")
+            if tokens[0] in ("COPY", "ADD"):
+                sources = [t for t in tokens[1:-1] if not t.startswith("--")]
+                if any(touches(s, f) for s in sources for f in changed_files):
+                    break
+            reused += 1
+        return reused
+  javascript: |
+    function dockerLayerCacheHits(previous, current, changedFiles) {
+      function touches(source, changed) {
+        let s = source.replace(/\/+$/, "");
+        if (s === "") s = ".";
+        return s === "." || changed === s || changed.startsWith(s + "/");
+      }
+
+      let reused = 0;
+      for (let i = 0; i < current.length; i++) {
+        if (i >= previous.length || previous[i] !== current[i]) break;
+        const tokens = current[i].split(" ");
+        if (tokens[0] === "COPY" || tokens[0] === "ADD") {
+          const sources = tokens.slice(1, -1).filter((t) => !t.startsWith("--"));
+          if (sources.some((s) => changedFiles.some((f) => touches(s, f)))) break;
+        }
+        reused++;
+      }
+      return reused;
+    }
+tests:
+  - {id: t1, args: [["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], ["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], ["src/app/main.py"]], expected: 4, description: "Example 1 - source change invalidates the COPY src layer"}
+  - {id: t2, args: [["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], ["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], ["requirements.txt"]], expected: 2, description: "Example 2 - dependency file change invalidates the early COPY"}
+  - {id: t3, args: [["FROM node:20", "COPY --chown=node:node . /home/node/app", "RUN npm ci"], ["FROM node:20", "COPY --chown=node:node . /home/node/app", "RUN npm ci"], ["README.md"]], expected: 1, description: "Example 3 - copying the whole context means any change is a miss; flags are not sources"}
+  - {id: t4, hidden: true, args: [["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], ["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], []], expected: 6, description: "Identical builds and nothing changed - everything reused"}
+  - {id: t5, hidden: true, args: [["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], ["FROM python:3.13-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], []], expected: 0, description: "First instruction differs - nothing reused"}
+  - {id: t6, hidden: true, args: [[], ["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], []], expected: 0, description: "No previous build"}
+  - {id: t7, hidden: true, args: [["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/"], ["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], ["docs/guide.md"]], expected: 3, description: "Current build is longer than the previous one"}
+  - {id: t8, hidden: true, args: [["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt", "COPY src /app/src", "CMD python -m app"], ["FROM python:3.12-slim", "WORKDIR /app", "COPY requirements.txt /app/", "RUN pip install -r requirements.txt"], ["src/x.py"]], expected: 4, description: "Current build is shorter; the touched COPY is no longer present"}
+  - {id: t9, hidden: true, args: [["FROM alpine", "COPY src /s", "COPY config/ /etc/app/", "RUN make", "COPY app /opt/app"], ["FROM alpine", "COPY src /s", "COPY config/ /etc/app/", "RUN make", "COPY app /opt/app"], ["src2/main.c", "srcs", "appendix/a.txt", "opt/app", "Makefile"]], expected: 5, description: "Boundary traps (src2, srcs, appendix), destination-like path and RUN never invalidated"}
+  - {id: t10, hidden: true, args: [["FROM alpine", "ADD vendor.tar.gz /vendor", "COPY --chmod=755 bin/run.sh lib config/ /opt/", "CMD run"], ["FROM alpine", "ADD vendor.tar.gz /vendor", "COPY --chmod=755 bin/run.sh lib config/ /opt/", "CMD run"], ["config/prod/app.yaml"]], expected: 2, description: "Multi-source COPY with a flag; the third source with a trailing slash is touched"}
+  - {id: t11, hidden: true, args: [["FROM alpine", "ADD vendor.tar.gz /vendor", "RUN true"], ["FROM alpine", "ADD vendor.tar.gz /vendor", "RUN false"], ["vendor.tar.gz"]], expected: 1, description: "ADD is checked like COPY; the changed archive is the exact source path"}
+expected_concepts:
+  - "prefix scan that stops at the first miss"
+  - "tokenising instructions into keyword, flags, sources and destination"
+  - "path matching on component boundaries"
+  - "cache invalidation semantics of layered builds"
+optimal_complexity: {time: "O(I * S * F) for I instructions, S sources per instruction and F changed files", space: "O(1) beyond tokenisation"}
+rubric:
+  excellent: "Scans instructions in order and stops at the first miss, parses COPY and ADD into flags, sources and destination, matches changed files on component boundaries with '.' covering everything, and explains how a set or trie of changed directories could speed up large inputs."
+  good: "Correct scan and parsing with one boundary detail fixed after testing, such as trailing slashes or flags."
+  weak: "Keeps counting after a miss, treats the destination or flags as sources, uses plain prefix matching, or checks RUN lines for paths."
+  criteria:
+    correctness: "All tests pass, including length mismatches, boundary traps, flags and whole-context copies."
+    efficiency: "Linear scan over instructions with simple per-source checks; reasonable for the limits."
+    code_quality: "Separate helpers for parsing an instruction and for the touch rule."
+    edge_cases: "Empty previous build, shorter or longer current build, '.' sources, trailing slashes and exact file sources."
+    communication: "Explains why a single miss invalidates every later layer."
+hints:
+  - "The cache works like a prefix: once one layer cannot be reused, nothing after it can be. Focus on deciding, for one instruction at a time, whether it is a hit."
+  - "A hit first needs the same instruction at the same position. For COPY and ADD you also need the source paths: drop the keyword, the final destination and any flags, then check each changed file against each source."
+  - "Loop over the current instructions and stop at the first one that is missing from the previous build or differs from it. For COPY and ADD, strip a trailing slash from every source; a source of a single dot is touched by any change, otherwise a changed file touches it when it equals the source or starts with the source followed by a slash. Stop if any source is touched; otherwise count the layer and continue."
+followups:
+  - "How would you support wildcard sources such as *.json?"
+  - "How would you handle a .dockerignore file that excludes some changed files?"
+  - "How would you reorder a build file to maximise cache reuse for typical code changes?"
+  - "How would you speed up the touch check when there are thousands of changed files?"
+common_errors:
+  - "Continuing to count matching instructions after the first miss."
+  - "Treating the destination or a --flag token as a source path."
+  - "Plain prefix matching, so a change to src2/ invalidates COPY src."
+  - "Forgetting that a trailing slash on a source or a '.' source changes the match."

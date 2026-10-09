@@ -1,0 +1,188 @@
+version: 1
+slug: bpe_merge_training
+title: Train Byte-Pair Encoding Merges
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [llm, ml, data_scientist]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Train Byte-Pair Encoding Merges
+
+  The search team is building a small subword tokenizer for incident-ticket text and wants to learn
+  its merge table with byte-pair encoding (BPE). You are given `corpus`, a list of lowercase words
+  (a word may appear several times; every occurrence counts), and the maximum number of merges
+  `num_merges`.
+
+  At the start every word is split into single-character **symbols**: `"deploy"` becomes
+  `d e p l o y`. Then training repeats these rounds:
+
+  1. **Count** every pair of adjacent symbols in every word. Each position counts, so the symbols
+     `a a a` contain the pair `(a, a)` twice.
+  2. **Pick** the pair with the highest count. Break ties by the smaller left symbol, then by the
+     smaller right symbol, using plain string comparison (so `"ab" < "b"`).
+  3. **Stop** if there is no pair or the best count is less than `2`.
+  4. **Merge**: in every word, scan left to right and replace each occurrence of the chosen left symbol
+     immediately followed by the chosen right symbol with one joined symbol. Occurrences do not
+     overlap: after a replacement the scan continues after the new symbol, so `a a a` becomes `aa a`.
+  5. **Record** the merge as the string `"left right"` (the two symbols separated by one space).
+
+  Training also stops once `num_merges` merges are recorded. Return the recorded merges in the order
+  they were learned.
+
+  ### Example 1
+  ```
+  Input:  corpus = ["deploy", "deploys", "redeploy", "employ"], num_merges = 4
+  Output: ["l o", "lo y", "p loy", "d e"]
+  Explanation: round 1 - (l, o), (o, y) and (p, l) all occur 4 times; "l" is the smallest left symbol.
+  Round 2 - (lo, y) and (p, lo) both occur 4 times and "lo" < "p". Round 3 merges (p, loy).
+  Round 4 - (d, e) and (e, ploy) both occur 3 times and "d" < "e".
+  ```
+
+  ### Example 2
+  ```
+  Input:  corpus = ["cache", "cached", "caches", "ache"], num_merges = 3
+  Output: ["a c", "ac h", "ach e"]
+  ```
+
+  ### Example 3
+  ```
+  Input:  corpus = ["log", "gap"], num_merges = 5
+  Output: []
+  Explanation: every adjacent pair occurs only once, so training stops before the first merge.
+  ```
+
+  ### Constraints
+  - `0 <= corpus.length <= 200`
+  - `1 <= corpus[i].length <= 20`, lowercase English letters only
+  - `0 <= num_merges <= 100`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: learn_bpe_merges
+  params:
+    - {name: corpus, type: "string[]"}
+    - {name: num_merges, type: int}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def learn_bpe_merges(corpus: list[str], num_merges: int) -> list[str]:
+        words = [list(word) for word in corpus]
+        merges: list[str] = []
+        while len(merges) < num_merges:
+            counts: dict[tuple[str, str], int] = {}
+            for word in words:
+                for pair in zip(word, word[1:]):
+                    counts[pair] = counts.get(pair, 0) + 1
+            best = None
+            best_count = 0
+            for pair, count in counts.items():
+                if count > best_count or (count == best_count and pair < best):
+                    best, best_count = pair, count
+            if best is None or best_count < 2:
+                break
+            left, right = best
+            joined = left + right
+            for idx, word in enumerate(words):
+                out = []
+                i = 0
+                while i < len(word):
+                    if i + 1 < len(word) and word[i] == left and word[i + 1] == right:
+                        out.append(joined)
+                        i += 2
+                    else:
+                        out.append(word[i])
+                        i += 1
+                words[idx] = out
+            merges.append(f"{left} {right}")
+        return merges
+  javascript: |
+    function learnBpeMerges(corpus, numMerges) {
+      let words = corpus.map((word) => word.split(""));
+      const merges = [];
+      while (merges.length < numMerges) {
+        const counts = new Map();
+        for (const word of words) {
+          for (let i = 0; i + 1 < word.length; i++) {
+            const key = word[i] + " " + word[i + 1];
+            counts.set(key, (counts.get(key) || 0) + 1);
+          }
+        }
+        let bestLeft = null;
+        let bestRight = null;
+        let bestCount = 0;
+        for (const [key, count] of counts) {
+          const [left, right] = key.split(" ");
+          const better =
+            count > bestCount ||
+            (count === bestCount &&
+              (left < bestLeft || (left === bestLeft && right < bestRight)));
+          if (better) {
+            bestLeft = left;
+            bestRight = right;
+            bestCount = count;
+          }
+        }
+        if (bestLeft === null || bestCount < 2) break;
+        const joined = bestLeft + bestRight;
+        words = words.map((word) => {
+          const out = [];
+          let i = 0;
+          while (i < word.length) {
+            if (i + 1 < word.length && word[i] === bestLeft && word[i + 1] === bestRight) {
+              out.push(joined);
+              i += 2;
+            } else {
+              out.push(word[i]);
+              i += 1;
+            }
+          }
+          return out;
+        });
+        merges.push(bestLeft + " " + bestRight);
+      }
+      return merges;
+    }
+tests:
+  - {id: t1, args: [["deploy", "deploys", "redeploy", "employ"], 4], expected: ["l o", "lo y", "p loy", "d e"], description: "Example 1 - frequent pairs merged into longer symbols, merges reuse earlier merges"}
+  - {id: t2, args: [["cache", "cached", "caches", "ache"], 3], expected: ["a c", "ac h", "ach e"], description: "Example 2 - frequency ties broken by the smaller left symbol; merge budget reached"}
+  - {id: t3, args: [["log", "gap"], 5], expected: [], description: "Example 3 - every pair occurs once so training stops immediately"}
+  - {id: t4, hidden: true, args: [[], 3], expected: [], description: "Empty corpus returns no merges"}
+  - {id: t5, hidden: true, args: [["retry", "retry", "retry"], 0], expected: [], description: "num_merges 0 returns an empty list"}
+  - {id: t6, hidden: true, args: [["a", "b", "xy", "a", "xz", "xy", "z", "xz"], 4], expected: ["x y", "x z"], description: "Single-character words contribute no pairs; equal counts with the same left symbol are broken by the right symbol"}
+  - {id: t7, hidden: true, args: [["aaa", "aaa"], 5], expected: ["a a", "aa a"], description: "Overlapping pair counts 4 but merges go left to right (aa a, not a aa)"}
+  - {id: t8, hidden: true, args: [["aaaa", "aaaa", "aa"], 5], expected: ["a a", "aa aa"], description: "Runs of one letter: merged symbols merge again; counts include overlaps"}
+  - {id: t9, hidden: true, args: [["abz", "by", "abz", "by"], 5], expected: ["a b", "ab z", "b y"], description: "Tie between pairs (ab, z) and (b, y) - plain string order puts ab before b (ordering by length would be wrong)"}
+  - {id: t10, hidden: true, args: [["queue", "queued", "queues", "queue", "queued"], 3], expected: ["u e", "q ue", "que ue"], description: "Duplicate words count once per occurrence; budget stops before counts drop"}
+  - {id: t11, hidden: true, args: [["redeploy", "release", "redeploy", "queued", "router", "rollback", "queued", "released", "rollback", "requests", "redeploy", "trace", "restarted", "request", "retry", "throttled", "redeploy", "rollout", "timeout", "retrying", "retried", "retry", "router", "replicas", "timeouts", "release", "tracer", "redeploy", "router", "replica", "errors", "queue", "timeout", "request", "release", "error", "deploy", "request", "latency", "tracer", "replica", "queued", "errors", "timeouts", "retrying", "requests", "throttled", "requests", "errors", "throttle", "retrying", "timeouts", "timeout", "routes", "routes", "retried", "released", "throttle", "throttled", "deploy", "retrying", "router", "error", "traced", "request", "trace", "traced", "timeout", "deploy", "reset", "restart", "replicas", "requests", "timeout", "retried", "release", "queue", "rollback", "router", "redeploy", "queued", "router", "restart", "deploy", "throttle", "reset", "throttled", "deploy", "routes", "timeout", "error", "trace", "timeouts", "routes", "rollback", "throttled", "requests", "retry", "restarted", "routes", "redeploy", "latency", "timeout", "traced", "errors", "throttle", "retrying", "retrying", "request", "routes", "replicas", "timeout", "tokens", "tokens", "release", "restart", "released", "restart", "throttle", "rollback", "restarted", "trace", "replica", "replicas", "router", "rollout", "router", "throttle", "released", "request", "deploy", "retried", "requests", "requests", "retry", "queued", "latency", "replicas", "throttled", "latency", "deploy", "queue", "errors", "rollback", "retrying", "restart", "replica", "released", "retrying", "error"], 40], expected: ["r e", "r o", "u e", "u t", "t r", "p l", "l e", "q ue", "s t", "e r", "re tr", "a c", "a s", "e d", "d e", "de pl", "depl o", "deplo y", "o ut", "ro ut", "que st", "re quest", "e out", "h ro", "hro t", "hrot t", "hrott le", "i m", "im eout", "retr y", "t hrottle", "t imeout", "le as", "re leas", "er ro", "erro r", "i c", "pl ic", "re plic", "tr ac"], description: "150 log tokens, 40 merges - stress for repeated recounting"}
+expected_concepts:
+  - simulating an iterative training loop exactly as specified
+  - hash map of adjacent-pair counts
+  - deterministic tie-breaking on (left, right) string order
+  - non-overlapping left-to-right replacement
+  - incremental pair-count updates or priority queues for speed
+optimal_complexity: {time: "O(num_merges * L) where L is the total number of characters (incremental count updates make each merge proportional to the affected words)", space: "O(L)"}
+rubric:
+  excellent: "Implements the loop exactly - pair counting including overlapping positions, tie-break on (left, right) string order, the stop rule, non-overlapping left-to-right merging - and explains how real tokenizers avoid recounting everything by updating counts only for words containing the merged pair."
+  good: "Correct output after a hint on tie-breaking or overlapping runs such as aaa; recounts every round with a clear structure."
+  weak: "Merges overlapping occurrences or right to left, ignores the tie-break, stops on the wrong count, or treats duplicate words as one."
+  criteria:
+    correctness: "All tests pass, including runs of one letter, ties between multi-character symbols and the merge budget."
+    efficiency: "Each round is linear in the corpus size; mentions word-frequency deduplication and incremental pair updates."
+    code_quality: "Separate helpers for counting, choosing and applying a merge; symbols kept as lists rather than re-split strings."
+    edge_cases: "Empty corpus, zero merges, single-character words and counts that fall below 2."
+    communication: "Explains why counting allows overlaps while merging does not, and how the learned merges are later applied to new text."
+hints:
+  - Keep each word as a list of symbols and simulate the rounds exactly - count, pick, stop check, merge, record - until the budget is used up.
+  - A hash map from (left, right) to count rebuilt each round is enough at this size. Pick the winner by highest count, then smallest left symbol, then smallest right symbol, comparing symbols as strings rather than by length.
+  - When applying a merge, build a new symbol list per word with an index that advances by two after a replacement and by one otherwise, so a run like a a a becomes aa a. Stop as soon as the best count is below two, and record each merge as left, a space, then right.
+followups:
+  - How would you encode a new word with the learned merges, and why must merges be applied in learned order?
+  - How can you avoid recounting all pairs after every merge on a corpus of millions of words?
+  - Why do production tokenizers work on bytes rather than characters, and what does that solve?
+  - How would you add an end-of-word marker, and what changes in the merges?
+common_errors:
+  - Merging overlapping occurrences, turning a a a into two merged symbols.
+  - Merging right to left, which yields a aa instead of aa a.
+  - Ignoring the tie-break or comparing symbols by length.
+  - Deduplicating the corpus and losing word frequencies.
+  - Continuing to merge pairs that occur only once.

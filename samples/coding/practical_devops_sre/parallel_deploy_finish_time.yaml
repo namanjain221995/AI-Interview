@@ -1,0 +1,217 @@
+version: 1
+slug: parallel_deploy_finish_time
+title: Parallel Rollout Simulator
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [devops, platform, sre]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Parallel Rollout Simulator
+
+  A release train deploys a set of microservices. Service `services[i]` takes `durations[i]` minutes to
+  deploy. Each pair `[a, b]` in `dependencies` means service `a` may only **start** after service `b` has
+  **finished**. The deploy tool has `workers` slots, and each slot deploys one service at a time without
+  interruption.
+
+  The tool follows this exact policy:
+
+  1. A service is **ready** when all of its dependencies have finished and it has not started yet.
+  2. At time `0`, and afterwards at every moment when at least one running deployment finishes, the tool
+     first marks **all** deployments finishing at that moment as finished (which can make new services
+     ready). Then, while there is an idle slot and a ready service, it starts the ready service whose name
+     is **smallest in ASCII order**.
+  3. Nothing else happens between those moments.
+
+  Return the time at which the last service finishes. If the dependencies contain a cycle, some services
+  can never become ready: return `-1` in that case.
+
+  ### Example 1
+  ```
+  Input:  services = ["web", "api", "db", "cache", "auth"],
+          durations = [1, 4, 4, 2, 3],
+          dependencies = [["web", "api"], ["web", "db"], ["api", "auth"]],
+          workers = 2
+  Output: 8
+  Explanation: at 0, auth, cache and db are ready and the two slots take auth and cache (smallest
+  names). cache finishes at 2 and db takes its slot (2 to 6). auth finishes at 3, which makes api
+  ready, and api takes the freed slot (3 to 7). web needs both api and db, so it starts at 7 and
+  finishes at 8.
+  ```
+
+  ### Example 2
+  ```
+  Input:  services = ["a", "b", "c", "d"],
+          durations = [1, 1, 1, 5],
+          dependencies = [["a", "c"], ["c", "b"], ["b", "a"]],
+          workers = 2
+  Output: -1
+  Explanation: a needs c, c needs b and b needs a, so none of them can ever start.
+  ```
+
+  ### Constraints
+  - `1 <= services.length <= 10^4`; names are distinct and use lowercase letters, digits and `-`
+  - `1 <= durations[i] <= 10^4`
+  - `0 <= dependencies.length <= 5 * 10^4`; both names of every pair are in `services`, and a pair may
+    repeat (a pair `[a, a]` is a cycle)
+  - `1 <= workers <= 100`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: parallel_deploy_finish_time
+  params:
+    - {name: services, type: "string[]"}
+    - {name: durations, type: "int[]"}
+    - {name: dependencies, type: "string[][]"}
+    - {name: workers, type: int}
+  return_type: int
+  comparison: exact
+reference_solutions:
+  python: |
+    import heapq
+
+
+    def parallel_deploy_finish_time(services: list[str], durations: list[int], dependencies: list[list[str]], workers: int) -> int:
+        index = {name: i for i, name in enumerate(services)}
+        waiting_on = [0] * len(services)
+        unlocks: list[list[int]] = [[] for _ in services]
+        for service, needed in dependencies:
+            waiting_on[index[service]] += 1
+            unlocks[index[needed]].append(index[service])
+        ready = [name for i, name in enumerate(services) if waiting_on[i] == 0]
+        heapq.heapify(ready)
+        running: list[tuple[int, int]] = []  # (finish time, service index)
+        now = finished = 0
+        while True:
+            while running and running[0][0] == now:
+                _, done = heapq.heappop(running)
+                finished += 1
+                for nxt in unlocks[done]:
+                    waiting_on[nxt] -= 1
+                    if waiting_on[nxt] == 0:
+                        heapq.heappush(ready, services[nxt])
+            while ready and len(running) < workers:
+                name = heapq.heappop(ready)
+                heapq.heappush(running, (now + durations[index[name]], index[name]))
+            if not running:
+                break
+            now = running[0][0]
+        return now if finished == len(services) else -1
+  javascript: |
+    class MinHeap {
+      constructor(less) {
+        this.items = [];
+        this.less = less;
+      }
+      get size() {
+        return this.items.length;
+      }
+      peek() {
+        return this.items[0];
+      }
+      push(value) {
+        const a = this.items;
+        a.push(value);
+        let i = a.length - 1;
+        while (i > 0) {
+          const p = (i - 1) >> 1;
+          if (!this.less(a[i], a[p])) break;
+          [a[i], a[p]] = [a[p], a[i]];
+          i = p;
+        }
+      }
+      pop() {
+        const a = this.items;
+        const top = a[0];
+        const last = a.pop();
+        if (a.length > 0) {
+          a[0] = last;
+          let i = 0;
+          for (;;) {
+            const l = 2 * i + 1;
+            const r = l + 1;
+            let m = i;
+            if (l < a.length && this.less(a[l], a[m])) m = l;
+            if (r < a.length && this.less(a[r], a[m])) m = r;
+            if (m === i) break;
+            [a[i], a[m]] = [a[m], a[i]];
+            i = m;
+          }
+        }
+        return top;
+      }
+    }
+
+    function parallelDeployFinishTime(services, durations, dependencies, workers) {
+      const index = new Map(services.map((name, i) => [name, i]));
+      const waitingOn = new Array(services.length).fill(0);
+      const unlocks = services.map(() => []);
+      for (const [service, needed] of dependencies) {
+        waitingOn[index.get(service)] += 1;
+        unlocks[index.get(needed)].push(index.get(service));
+      }
+      const ready = new MinHeap((x, y) => x < y);
+      services.forEach((name, i) => {
+        if (waitingOn[i] === 0) ready.push(name);
+      });
+      const running = new MinHeap((x, y) => x[0] < y[0]);
+      let now = 0;
+      let finished = 0;
+      for (;;) {
+        while (running.size > 0 && running.peek()[0] === now) {
+          const [, done] = running.pop();
+          finished += 1;
+          for (const nxt of unlocks[done]) {
+            waitingOn[nxt] -= 1;
+            if (waitingOn[nxt] === 0) ready.push(services[nxt]);
+          }
+        }
+        while (ready.size > 0 && running.size < workers) {
+          const name = ready.pop();
+          const i = index.get(name);
+          running.push([now + durations[i], i]);
+        }
+        if (running.size === 0) break;
+        now = running.peek()[0];
+      }
+      return finished === services.length ? now : -1;
+    }
+tests:
+  - {id: t1, args: [["web", "api", "db", "cache", "auth"], [1, 4, 4, 2, 3], [["web", "api"], ["web", "db"], ["api", "auth"]], 2], expected: 8, description: "Example 1 - two slots, name order picks auth and cache first"}
+  - {id: t2, args: [["a", "b", "c", "d"], [1, 1, 1, 5], [["a", "c"], ["c", "b"], ["b", "a"]], 2], expected: -1, description: "Example 2 - three-service cycle makes the rollout impossible"}
+  - {id: t3, hidden: true, args: [["solo"], [7], [], 3], expected: 7, description: "Single service, no dependencies - its duration"}
+  - {id: t4, hidden: true, args: [["e", "d", "c", "b", "a"], [3, 1, 4, 1, 5], [], 1], expected: 14, description: "One worker, no dependencies - durations add up"}
+  - {id: t5, hidden: true, args: [["s1", "s2", "s3", "s4"], [2, 3, 4, 5], [["s2", "s1"], ["s3", "s2"], ["s4", "s1"]], 10], expected: 9, description: "More workers than services - a chain gives the critical path"}
+  - {id: t6, hidden: true, args: [["p", "q", "z", "a", "b"], [2, 2, 10, 5, 1], [["a", "q"], ["b", "q"]], 2], expected: 13, description: "Two completions at the same moment - all must be processed before assigning slots (wrong order gives 12)"}
+  - {id: t7, hidden: true, args: [["base", "mid", "top"], [2, 2, 2], [["mid", "base"], ["mid", "base"], ["top", "mid"], ["top", "base"], ["top", "mid"]], 2], expected: 6, description: "Repeated dependency pairs must be counted consistently"}
+  - {id: t8, hidden: true, args: [["ok", "loop"], [3, 1], [["loop", "loop"]], 2], expected: -1, description: "Self-dependency is a cycle - -1 even though other services finish"}
+  - {id: t9, hidden: true, args: [["svc2", "svc10", "svc-b", "tail"], [1, 5, 5, 10], [["tail", "svc2"]], 2], expected: 16, description: "ASCII name order ('-' < digits) decides which service starts first and delays the tail"}
+  - {id: t10, hidden: true, args: [["qw7b3", "pdkhx", "4py8g", "-pan0", "rlyke", "i2iia", "annkk", "sum8n", "lmytb", "x0kjq", "evtav", "etwt4", "ul44l", "dqbwz", "b90xy", "a2clm", "hp3w6", "w7q3g", "xsc1f", "nv6xj", "vr8ft", "utlfj", "t4kdf", "8zcpw", "q30jd", "c5vni", "-i0gk", "1xjd0", "sj3k7", "35u4r", "s4zjh", "y8l5v", "lf5r6", "96xew", "ctx9r", "5qsvl", "a49qu", "r3s6w", "wrw0w", "l2xv7", "j7kmx", "4sf0k", "70t9r", "bmk2l", "olc4o", "kdihu", "l4m9c", "03wye", "npxaw", "zr0h9", "xc9tg", "s86vs", "wi00-", "8x3jk", "y-4mi", "fwayg", "u-8ju", "-y11o", "5s4yy", "kqt5q", "0but5", "sj4bh", "2psci", "za489", "rp4cp", "5rjss", "547hb", "its8v", "s7b3w", "xicaq", "93g8m", "a11-4", "y4zms", "3eta1", "s4tjk", "495v8", "j18de", "orfeb", "v1ez5", "dhhoh", "is2jl", "l0ken", "c9gye", "rd--h", "zia1f", "u55wx", "disj-", "6s99o", "qe9pq", "s7ipx", "3ylib", "vf-cf", "h63py", "34ug7", "b8ydj", "1ohf5", "niywp", "svwyy", "iws1x", "7c-nl", "zegcc", "lmmc5", "4wa14", "t1u33", "gmjke", "xy4j9", "qhrks", "pc4cw", "xudb3", "4jhus", "3pkcm", "b-ofz", "xtl3x", "se3kp", "lnc1r", "a3d20", "kcc97", "-wgep", "5f4dp", "d5zdd", "q02td", "cml6z", "m8ofu", "gf8ke", "nb28w", "51-y7", "iat2o", "9hit4", "fqzui", "i8f4p", "f1-pr", "d5pdm", "sxge0", "uy9as", "i-b2j", "bd1rg", "y9iue", "tkiq5", "usce8", "9bbhd", "iw1qb", "o71ix", "mvwak", "kgr7k", "j211h", "vu2o3", "1k2dk", "845ag", "i0dna", "c-p4w", "z3nmr", "mt97w", "pxwpd", "5zwjj", "p5ycg", "kzgsm", "u448f", "myag6", "lybub", "t6y64", "8z29d", "8j0xb", "7nsse", "bfw0t", "arpec", "ftw9n", "47fhp", "v81za", "yyl7n", "uyug9", "xpgns", "treke", "0loe-", "-800o", "147pt", "0rfvl", "0bjhs", "-9-l1", "mugve", "d5i7e", "um3yo", "4gamk", "hfvjx", "g-2ul", "9gxge", "mnuxl", "3fpz8", "3yahx", "ia5yv", "e5sbh", "4wmvy", "js5f-", "hs0ve", "71do0", "prejr", "g941l", "8ypf2", "wifaj", "xbbq9", "3y7fd"], [7, 7, 26, 15, 1, 16, 17, 3, 9, 20, 27, 22, 16, 17, 1, 2, 6, 13, 25, 25, 17, 14, 28, 19, 29, 22, 21, 20, 21, 19, 2, 7, 1, 14, 25, 24, 14, 26, 28, 27, 27, 14, 29, 13, 1, 27, 25, 6, 29, 11, 5, 10, 25, 7, 14, 27, 3, 12, 7, 13, 14, 7, 9, 5, 16, 12, 10, 1, 22, 21, 4, 25, 6, 25, 15, 3, 3, 22, 13, 2, 29, 14, 29, 5, 7, 21, 1, 24, 27, 16, 11, 20, 15, 5, 15, 8, 3, 12, 20, 1, 1, 6, 26, 14, 3, 9, 5, 25, 21, 12, 11, 25, 7, 5, 10, 17, 29, 29, 23, 18, 3, 10, 4, 4, 21, 13, 12, 10, 12, 16, 18, 19, 15, 28, 8, 19, 5, 9, 1, 18, 1, 24, 13, 5, 8, 16, 22, 23, 2, 1, 1, 25, 7, 14, 8, 17, 23, 20, 8, 26, 10, 2, 26, 17, 8, 2, 23, 13, 29, 12, 25, 1, 18, 10, 15, 15, 4, 21, 4, 29, 12, 19, 17, 9, 23, 19, 20, 13, 13, 10, 28, 6, 19, 22, 3, 21, 15, 2, 24, 7], [["pdkhx", "qw7b3"], ["-pan0", "pdkhx"], ["-pan0", "4py8g"], ["rlyke", "pdkhx"], ["i2iia", "4py8g"], ["sum8n", "qw7b3"], ["lmytb", "-pan0"], ["lmytb", "rlyke"], ["x0kjq", "qw7b3"], ["etwt4", "pdkhx"], ["etwt4", "evtav"], ["ul44l", "4py8g"], ["dqbwz", "i2iia"], ["b90xy", "dqbwz"], ["a2clm", "sum8n"], ["w7q3g", "-pan0"], ["w7q3g", "lmytb"], ["xsc1f", "qw7b3"], ["nv6xj", "lmytb"], ["nv6xj", "ul44l"], ["utlfj", "sum8n"], ["utlfj", "lmytb"], ["t4kdf", "b90xy"], ["t4kdf", "i2iia"], ["8zcpw", "rlyke"], ["8zcpw", "xsc1f"], ["c5vni", "etwt4"], ["c5vni", "w7q3g"], ["sj3k7", "pdkhx"], ["35u4r", "-i0gk"], ["35u4r", "nv6xj"], ["s4zjh", "utlfj"], ["y8l5v", "pdkhx"], ["y8l5v", "qw7b3"], ["lf5r6", "-i0gk"], ["lf5r6", "sum8n"], ["96xew", "sj3k7"], ["ctx9r", "b90xy"], ["ctx9r", "sum8n"], ["5qsvl", "rlyke"], ["5qsvl", "i2iia"], ["wrw0w", "35u4r"], ["wrw0w", "nv6xj"], ["l2xv7", "96xew"], ["l2xv7", "ctx9r"], ["j7kmx", "rlyke"], ["j7kmx", "w7q3g"], ["70t9r", "nv6xj"], ["bmk2l", "35u4r"], ["olc4o", "nv6xj"], ["l4m9c", "96xew"], ["03wye", "y8l5v"], ["03wye", "35u4r"], ["npxaw", "x0kjq"], ["zr0h9", "dqbwz"], ["zr0h9", "hp3w6"], ["xc9tg", "l2xv7"], ["wi00-", "i2iia"], ["y-4mi", "i2iia"], ["fwayg", "1xjd0"], ["fwayg", "sj3k7"], ["u-8ju", "96xew"], ["u-8ju", "4sf0k"], ["-y11o", "etwt4"], ["0but5", "evtav"], ["sj4bh", "lf5r6"], ["sj4bh", "sj3k7"], ["2psci", "t4kdf"], ["2psci", "5s4yy"], ["5rjss", "ctx9r"], ["547hb", "za489"], ["547hb", "rp4cp"], ["its8v", "1xjd0"], ["its8v", "s4zjh"], ["s7b3w", "utlfj"], ["s7b3w", "8x3jk"], ["xicaq", "lf5r6"], ["xicaq", "j7kmx"], ["93g8m", "dqbwz"], ["y4zms", "y-4mi"], ["3eta1", "547hb"], ["s4tjk", "2psci"], ["495v8", "etwt4"], ["495v8", "b90xy"], ["j18de", "b90xy"], ["j18de", "bmk2l"], ["dhhoh", "a49qu"], ["dhhoh", "s4tjk"], ["c9gye", "zr0h9"], ["c9gye", "t4kdf"], ["rd--h", "70t9r"], ["rd--h", "96xew"], ["u55wx", "70t9r"], ["6s99o", "lmytb"], ["qe9pq", "bmk2l"], ["s7ipx", "wi00-"], ["h63py", "lmytb"], ["niywp", "rp4cp"], ["niywp", "wi00-"], ["iws1x", "8x3jk"], ["lmmc5", "-pan0"], ["4wa14", "xicaq"], ["4wa14", "r3s6w"], ["t1u33", "dqbwz"], ["t1u33", "6s99o"], ["gmjke", "4sf0k"], ["gmjke", "l4m9c"], ["qhrks", "npxaw"], ["b-ofz", "s7b3w"], ["b-ofz", "ul44l"], ["se3kp", "zia1f"], ["se3kp", "xicaq"], ["lnc1r", "fwayg"], ["kcc97", "l2xv7"], ["-wgep", "5s4yy"], ["-wgep", "xy4j9"], ["5f4dp", "i2iia"], ["q02td", "-wgep"], ["q02td", "w7q3g"], ["cml6z", "zia1f"], ["m8ofu", "8zcpw"], ["m8ofu", "-wgep"], ["nb28w", "xtl3x"], ["51-y7", "its8v"], ["51-y7", "x0kjq"], ["9hit4", "annkk"], ["fqzui", "d5zdd"], ["fqzui", "v1ez5"], ["i8f4p", "fqzui"], ["f1-pr", "y4zms"], ["sxge0", "5rjss"], ["sxge0", "kcc97"], ["uy9as", "t1u33"], ["i-b2j", "c5vni"], ["i-b2j", "ctx9r"], ["bd1rg", "s86vs"], ["bd1rg", "-wgep"], ["y9iue", "-i0gk"], ["y9iue", "se3kp"], ["o71ix", "t4kdf"], ["o71ix", "lnc1r"], ["mvwak", "5f4dp"], ["kgr7k", "4sf0k"], ["kgr7k", "gf8ke"], ["vu2o3", "rp4cp"], ["1k2dk", "vf-cf"], ["1k2dk", "dqbwz"], ["845ag", "mvwak"], ["845ag", "y8l5v"], ["z3nmr", "845ag"], ["mt97w", "gf8ke"], ["mt97w", "51-y7"], ["pxwpd", "y4zms"], ["pxwpd", "u55wx"], ["p5ycg", "ctx9r"], ["kzgsm", "pc4cw"], ["kzgsm", "495v8"], ["u448f", "b8ydj"], ["lybub", "zr0h9"], ["t6y64", "lmytb"], ["t6y64", "qw7b3"], ["8z29d", "j7kmx"], ["8j0xb", "qhrks"], ["7nsse", "y4zms"], ["7nsse", "pc4cw"], ["bfw0t", "5f4dp"], ["bfw0t", "6s99o"], ["arpec", "i-b2j"], ["arpec", "i8f4p"], ["ftw9n", "myag6"], ["yyl7n", "iat2o"], ["yyl7n", "47fhp"], ["xpgns", "gf8ke"], ["xpgns", "d5zdd"], ["treke", "etwt4"], ["-800o", "qw7b3"], ["-800o", "m8ofu"], ["0rfvl", "s86vs"], ["0rfvl", "bmk2l"], ["-9-l1", "0but5"], ["-9-l1", "xpgns"], ["mugve", "47fhp"], ["um3yo", "qhrks"], ["4gamk", "5s4yy"], ["4gamk", "ftw9n"], ["hfvjx", "4py8g"], ["9gxge", "0but5"], ["9gxge", "i0dna"], ["3fpz8", "fqzui"], ["3fpz8", "1ohf5"], ["3yahx", "c-p4w"], ["ia5yv", "-y11o"], ["e5sbh", "q30jd"], ["e5sbh", "1ohf5"], ["4wmvy", "pxwpd"], ["4wmvy", "o71ix"], ["js5f-", "0rfvl"], ["hs0ve", "a2clm"], ["hs0ve", "547hb"], ["71do0", "qw7b3"], ["71do0", "r3s6w"], ["prejr", "b90xy"], ["g941l", "-pan0"]], 4], expected: 720, description: "Stress - 200-service random DAG with 4 workers"}
+expected_concepts:
+  - topological ordering with in-degree counts (Kahn's algorithm)
+  - event-driven simulation with a min-heap of finish times
+  - a second min-heap for the ready set ordered by name
+  - processing all simultaneous completions before assigning slots
+  - cycle detection by counting finished services
+optimal_complexity: {time: "O((V + E) log V)", space: O(V + E)}
+rubric:
+  excellent: Builds in-degree counts and reverse edges, simulates with a heap of running finish times and a heap of ready names, jumps from event to event, processes every completion at the same instant before filling slots, detects cycles when the simulation stalls, and states O((V + E) log V).
+  good: Correct simulation with a sorted ready list or a minute-by-minute clock after hints, or with a minor slip in simultaneous completions that is fixed when prompted.
+  weak: Ignores the worker limit, computes only the critical path, assigns slots before processing all finishes at the same time, or loops forever on a cycle.
+  criteria:
+    correctness: All tests pass, including simultaneous completions, more ready services than workers, duplicates and self-dependencies.
+    efficiency: Event-driven with heaps instead of advancing the clock one minute at a time.
+    code_quality: Clear separation of the completion step and the assignment step; meaningful names for the two heaps.
+    edge_cases: A single service, no dependencies, one worker, more workers than services, repeated pairs and cycles.
+    communication: Explains why the name-ordered policy can give a later finish than the critical path and how cycles are detected.
+hints:
+  - Count for every service how many unfinished dependencies it still waits on, and for every service which others it unblocks. Services with a count of zero are ready.
+  - Do not advance time minute by minute. Keep the running deployments ordered by finish time and jump straight to the next finish, and keep the ready services ordered by name so the policy can pick the smallest one quickly.
+  - Use one min-heap of running pairs of finish time and service, and one min-heap of ready names. At each event time pop every deployment that finishes now, decrement the counts of the services it unblocks and push newly ready names. Then fill idle slots from the ready heap. Stop when nothing is running. If fewer services finished than exist, there was a cycle and the answer is minus one; otherwise it is the last event time.
+followups:
+  - How would you choose a better policy, for example by preferring services on the longest remaining path?
+  - How would you report which services form the cycle?
+  - What changes if a failed deployment must be retried once with the same duration?
+common_errors:
+  - Filling slots before processing every deployment that finishes at the same moment.
+  - Returning the critical-path length, which ignores the worker limit and the name-ordered policy.
+  - Looping forever or returning a time when a cycle prevents some services from ever starting.
+  - Counting a repeated dependency pair once when adding it but twice when releasing it (or the other way round).

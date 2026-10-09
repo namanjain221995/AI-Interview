@@ -1,0 +1,177 @@
+version: 1
+slug: utf8_payload_code_points
+title: UTF-8 Payload Code Points
+difficulty: medium
+competency_keys: [algorithms, problem_solving]
+role_tags: [backend, network, security]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## UTF-8 Payload Code Points
+
+  An ingestion API stores free-text fields from many clients and must reject malformed text before it
+  reaches the database. You receive a field as raw bytes in `data` (integers `0` to `255`). Decide
+  whether the bytes are **strictly valid UTF-8** and, if so, how many code points they encode.
+
+  UTF-8 encodes each code point as a sequence of 1 to 4 bytes. The first (lead) byte says how long the
+  sequence is; every following byte must be a **continuation byte** of the form `10xxxxxx`
+  (`128` to `191`):
+
+  | Lead byte bits | Sequence length | Payload bits |
+  |----------------|-----------------|--------------|
+  | `0xxxxxxx` | 1 | 7 |
+  | `110xxxxx` | 2 | 5 + 6 = 11 |
+  | `1110xxxx` | 3 | 4 + 6 + 6 = 16 |
+  | `11110xxx` | 4 | 3 + 6 + 6 + 6 = 21 |
+
+  The code point is the payload bits concatenated in order, from the lead byte to the last continuation
+  byte. The bytes are invalid if any of these happens:
+
+  - a byte that cannot start a sequence appears where a lead byte is expected (a continuation byte, or a
+    byte starting with `11111`);
+  - a sequence is cut short by the end of `data`, or one of its following bytes is not a continuation
+    byte;
+  - the encoding is **overlong**: the code point would fit in a shorter sequence (2-byte sequences must
+    encode at least `U+0080`, 3-byte at least `U+0800`, 4-byte at least `U+10000`);
+  - the code point is a **surrogate** (`U+D800` to `U+DFFF`) or is above `U+10FFFF`.
+
+  Return the number of code points if `data` is valid, otherwise `-1`. Empty input is valid and returns `0`.
+
+  ### Example 1
+  ```
+  Input:  data = [104, 105, 33]
+  Output: 3
+  ```
+
+  ### Example 2
+  ```
+  Input:  data = [226, 130, 172, 49, 48]
+  Output: 3
+  Explanation: 226 130 172 is the three-byte encoding of U+20AC; 49 and 48 are one byte each, so there are 3
+               code points.
+  ```
+
+  ### Example 3
+  ```
+  Input:  data = [192, 175]
+  Output: -1
+  Explanation: 192 175 would decode to U+002F, which fits in one byte, so this is an overlong encoding.
+  ```
+
+  ### Constraints
+  - `0 <= data.length <= 10^4`
+  - `0 <= data[i] <= 255`
+
+  **Follow-up:** instead of rejecting the whole payload, how would you replace each invalid sequence with U+FFFD and continue?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: utf8_code_point_count
+  params:
+    - {name: data, type: "int[]"}
+  return_type: "int"
+  comparison: exact
+reference_solutions:
+  python: |
+    def utf8_code_point_count(data: list[int]) -> int:
+        count = 0
+        i, n = 0, len(data)
+        while i < n:
+            lead = data[i]
+            if lead < 0x80:
+                i += 1
+                count += 1
+                continue
+            if 0xC0 <= lead <= 0xDF:
+                length, value, minimum = 2, lead & 0x1F, 0x80
+            elif 0xE0 <= lead <= 0xEF:
+                length, value, minimum = 3, lead & 0x0F, 0x800
+            elif 0xF0 <= lead <= 0xF7:
+                length, value, minimum = 4, lead & 0x07, 0x10000
+            else:
+                return -1
+            if i + length > n:
+                return -1
+            for k in range(1, length):
+                byte = data[i + k]
+                if byte & 0xC0 != 0x80:
+                    return -1
+                value = (value << 6) | (byte & 0x3F)
+            if value < minimum or value > 0x10FFFF or 0xD800 <= value <= 0xDFFF:
+                return -1
+            i += length
+            count += 1
+        return count
+  javascript: |
+    function utf8CodePointCount(data) {
+      let count = 0;
+      let i = 0;
+      const n = data.length;
+      while (i < n) {
+        const lead = data[i];
+        if (lead < 0x80) {
+          i++;
+          count++;
+          continue;
+        }
+        let length, value, minimum;
+        if (lead >= 0xc0 && lead <= 0xdf) [length, value, minimum] = [2, lead & 0x1f, 0x80];
+        else if (lead >= 0xe0 && lead <= 0xef) [length, value, minimum] = [3, lead & 0x0f, 0x800];
+        else if (lead >= 0xf0 && lead <= 0xf7) [length, value, minimum] = [4, lead & 0x07, 0x10000];
+        else return -1;
+        if (i + length > n) return -1;
+        for (let k = 1; k < length; k++) {
+          const byte = data[i + k];
+          if ((byte & 0xc0) !== 0x80) return -1;
+          value = (value << 6) | (byte & 0x3f);
+        }
+        if (value < minimum || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) return -1;
+        i += length;
+        count++;
+      }
+      return count;
+    }
+tests:
+  - {id: t1, args: [[104, 105, 33]], expected: 3, description: "Example 1 - plain ASCII"}
+  - {id: t2, args: [[226, 130, 172, 49, 48]], expected: 3, description: "Example 2 - three-byte sequence followed by ASCII"}
+  - {id: t3, args: [[192, 175]], expected: -1, description: "Example 3 - overlong two-byte encoding is rejected"}
+  - {id: t4, hidden: true, args: [[]], expected: 0, description: "Empty input has zero code points"}
+  - {id: t5, hidden: true, args: [[240, 159, 154, 128, 65]], expected: 2, description: "Valid four-byte sequence (U+1F680) then ASCII"}
+  - {id: t6, hidden: true, args: [[72, 226, 130]], expected: -1, description: "Truncated three-byte sequence at the end"}
+  - {id: t7, hidden: true, args: [[237, 160, 128]], expected: -1, description: "Encoded surrogate U+D800 is invalid"}
+  - {id: t8, hidden: true, args: [[244, 144, 128, 128]], expected: -1, description: "Code point above U+10FFFF is invalid"}
+  - {id: t9, hidden: true, args: [[224, 128, 175, 128, 65]], expected: -1, description: "Overlong three-byte encoding and a stray continuation byte"}
+  - {id: t10, hidden: true, args: [[244, 143, 191, 191, 237, 159, 191, 238, 128, 128, 194, 128, 127, 0]], expected: 6, description: "Boundary values that are valid: U+10FFFF, U+D7FF, U+E000, U+0080, U+007F and U+0000"}
+  - {id: t11, hidden: true, args: [[65, 128, 66]], expected: -1, description: "Continuation byte where a lead byte is expected"}
+  - {id: t12, hidden: true, args: [[248, 136, 128, 128, 128]], expected: -1, description: "Five-byte style lead byte 0xF8 is never valid"}
+  - {id: t13, hidden: true, args: [[115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 115, 101, 110, 115, 111, 114, 45, 52, 50, 32, 194, 176, 67, 32, 226, 134, 146, 32, 79, 75, 32, 240, 159, 154, 128, 32, 226, 40, 161]], expected: -1, description: "Long valid mixed payload ending with a three-byte sequence whose second byte is not a continuation"}
+expected_concepts:
+  - "classify the lead byte with bit masks"
+  - "validate continuation bytes as 10xxxxxx"
+  - "decode the code point to detect overlong forms, surrogates and the U+10FFFF limit"
+  - "bounds check for truncated sequences"
+  - "single linear pass with constant memory"
+optimal_complexity: {time: "O(n)", space: "O(1)"}
+rubric:
+  excellent: "Decodes each sequence with masks and shifts, checks length against the remaining bytes, validates every continuation byte, rejects overlong forms by comparing against the per-length minimum, rejects surrogates and values above U+10FFFF, and explains each rule with an example byte pattern."
+  good: "Correct structural validation (lead bytes, continuation bytes, truncation) with one of the semantic checks (overlong, surrogate or maximum) added after a prompt or failing test."
+  weak: "Only counts lead bytes, misses truncation at the end, or accepts overlong and surrogate encodings without recognising why they are dangerous."
+  criteria:
+    correctness: "All tests pass, including boundary code points that are valid and each kind of invalid sequence."
+    efficiency: "One pass over the bytes with O(1) extra memory."
+    code_quality: "Lead-byte classification expressed as a small table or clear branches; hex constants named or commented; no deeply nested special cases."
+    edge_cases: "Empty input, truncated final sequence, stray continuation byte, overlong 2- and 3-byte forms, surrogates, U+10FFFF and just above it, lead bytes 0xF8 and above."
+    communication: "Explains why overlong encodings are a security problem (they can smuggle characters such as / past filters)."
+hints:
+  - "Look at the top bits of each byte: they tell you whether it starts a sequence, how long that sequence is, or whether it is a continuation byte."
+  - "Walk through the bytes one sequence at a time. From the lead byte you know how many continuation bytes must follow; check that they exist and all have the form one-zero followed by six payload bits. Structure alone is not enough, though, so also rebuild the actual code point."
+  - "For each lead byte pick the length and its payload mask, reject it if it is a continuation byte or starts with five ones, make sure enough bytes remain, fold each continuation byte's low six bits into the value, then reject the value if it is below the minimum for that length, inside the surrogate range or above the maximum code point. Count one code point per accepted sequence and return minus one at the first failure."
+followups:
+  - "How would you repair invalid input with replacement characters instead of rejecting it?"
+  - "How would you validate a stream that arrives in chunks that may split a sequence?"
+  - "Why are overlong encodings and surrogates a security concern for input filters?"
+  - "How could you speed this up for mostly-ASCII payloads?"
+common_errors:
+  - "Counting bytes or lead bytes without validating continuation bytes."
+  - "Reading past the end of the array when the last sequence is truncated."
+  - "Accepting overlong encodings such as 192 175 for the slash character."
+  - "Forgetting the surrogate range or the U+10FFFF upper limit."
+  - "Treating 0xF8 to 0xFF as five- or six-byte lead bytes."

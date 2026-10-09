@@ -1,0 +1,197 @@
+{% extends "base.html.j2" %}
+{% set n = c.narrative %}
+{% set overall = c.scores.overall %}
+{% block title %}Interview report — {{ c.candidate.full_name or "Candidate" }} — {{ c.job.title or "Role" }}{% endblock %}
+{% block body %}
+<header class="report">
+  <div>
+    <div class="eyebrow">Recruiter report · Confidential</div>
+    <h1>{{ c.candidate.full_name or "Candidate" }}</h1>
+    <div class="muted">{{ c.job.title or "Role" }} · {{ c.round.name }} ({{ c.round.round_type | label }})</div>
+    <div class="meta-grid">
+      <div><span>Interview date</span><strong>{{ c.session.started_at | date }}</strong></div>
+      <div><span>Interview time</span><strong>{{ c.session.elapsed_seconds | duration }}</strong></div>
+      <div><span>End reason</span><strong>{{ (c.session.end_reason or "—") | label }}</strong></div>
+      <div><span>Questions</span><strong>{{ c.questions | length }}</strong></div>
+    </div>
+  </div>
+  <div class="score-hero">
+    <div class="small muted">Overall score</div>
+    <div class="value">{{ overall.score | num(0) }}<small>/100</small></div>
+    <div class="conf">AI confidence {{ overall.confidence | percent }} · coverage {{ overall.required_coverage | percent }}</div>
+  </div>
+</header>
+
+<section class="banner">
+  <div class="small muted">Assistive recommendation</div>
+  <div class="rec">{{ c.recommendation.value | label }}</div>
+  <p>{{ c.recommendation.rationale }}</p>
+  <p class="small"><strong>{{ c.recommendation.human_decision_note }}</strong></p>
+</section>
+
+<h2>Executive summary</h2>
+<p>{{ n.executive_summary }}</p>
+{% if n.recommendation_rationale and n.recommendation_rationale != c.recommendation.rationale %}<p class="muted">{{ n.recommendation_rationale }}</p>{% endif %}
+
+{% if c.scores.rubric %}
+<h2>Rubric</h2>
+<table>
+  <thead><tr><th>Category</th><th class="num">Weight</th><th style="width:38%" aria-label="Score bar"></th><th class="num">Score</th><th class="num">Confidence</th></tr></thead>
+  <tbody>
+  {% for r in c.scores.rubric %}
+    <tr>
+      <td>{{ r.label }}</td>
+      <td class="num">{{ r.weight | num(0) }}%</td>
+      <td><div class="bar {{ r.score | band }}"><i style="width: {{ r.score | pct }}%"></i></div></td>
+      <td class="num">{{ r.score | num(0) }}</td>
+      <td class="num">{{ r.confidence | percent }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h2>Competencies</h2>
+<table>
+  <thead><tr><th>Competency</th><th style="width:30%" aria-label="Score bar (0-10)"></th><th class="num">Score /10</th><th class="num">Confidence</th><th class="num">Evidence</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for comp in c.scores.competencies %}
+    <tr>
+      <td>{{ comp.name }}{% if not comp.required %} <span class="pill">optional</span>{% endif %}</td>
+      {% if comp.evidence_count > 0 %}
+      <td><div class="bar {{ comp.score | band(10) }}"><i style="width: {{ comp.score | pct(10) }}%"></i></div></td>
+      <td class="num">{{ comp.score | num(1) }}</td>
+      <td class="num">{{ comp.confidence | percent }}</td>
+      <td class="num">{{ comp.positive_count }}+ / {{ comp.negative_count }}−</td>
+      <td>{% if comp.sufficient_evidence %}<span class="pill pos">sufficient</span>{% else %}<span class="pill warn">more evidence needed</span>{% endif %}</td>
+      {% else %}
+      <td><div class="bar band-none"></div></td>
+      <td class="num muted">–</td>
+      <td class="num muted">–</td>
+      <td class="num muted">0</td>
+      <td><span class="pill">not assessed</span></td>
+      {% endif %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% for f in n.competency_findings %}
+<div class="card">
+  <h3>{{ (c.scores.competencies | selectattr("key", "equalto", f.competency_key) | map(attribute="name") | first) or f.competency_key }}</h3>
+  <p>{{ f.summary }}</p>
+  <div class="grid-2">
+    <div>{% if f.strengths %}<strong class="small">Strengths</strong><ul class="clean">{% for s in f.strengths %}<li>{{ s }}</li>{% endfor %}</ul>{% endif %}</div>
+    <div>{% if f.weaknesses %}<strong class="small">Weaknesses</strong><ul class="clean">{% for s in f.weaknesses %}<li>{{ s }}</li>{% endfor %}</ul>{% endif %}</div>
+  </div>
+  {% if f.unanswered_areas %}<p class="small"><strong>Unanswered areas:</strong> {{ f.unanswered_areas | map("topic") | join(", ") }}</p>{% endif %}
+  {% for eid in f.evidence_ids %}{% set e = evidence_by_id.get(eid) %}{% if e %}
+  <div class="evidence {{ e.signal }}"><span class="pill {{ 'pos' if e.signal == 'positive' else ('neg' if e.signal == 'negative' else '') }}">{{ e.signal }}</span> <span class="small muted">{{ e.dimension | label }}</span> — {{ e.evidence }}{% if e.quote %} <q>{{ e.quote }}</q>{% endif %}</div>
+  {% endif %}{% endfor %}
+</div>
+{% endfor %}
+
+{% if n.areas_for_human_followup or n.risks %}
+<h2>For the human reviewer</h2>
+<div class="grid-2">
+  <div class="card"><h3>Areas for human follow-up</h3>{% if n.areas_for_human_followup %}<ul class="clean">{% for a in n.areas_for_human_followup %}<li>{{ a }}</li>{% endfor %}</ul>{% else %}<p class="muted">None noted.</p>{% endif %}</div>
+  <div class="card"><h3>Risks and evidence gaps</h3>{% if n.risks %}<ul class="clean">{% for r in n.risks %}<li>{{ r }}</li>{% endfor %}</ul>{% else %}<p class="muted">None noted.</p>{% endif %}</div>
+</div>
+{% endif %}
+
+<h2>Resume claims</h2>
+<p>{{ n.claims_summary }}</p>
+{% if c.claims %}
+<table>
+  <thead><tr><th>Claim</th><th>Status</th><th>Note</th></tr></thead>
+  <tbody>{% for cl in c.claims %}<tr><td>{{ cl.claim or cl.id }}</td><td><span class="pill {{ 'pos' if cl.status in ('verified', 'partially_verified') else ('neg' if cl.status == 'contradicted' else 'warn') }}">{{ cl.status | label }}</span></td><td class="small">{{ cl.note or "" }}</td></tr>{% endfor %}</tbody>
+</table>
+{% endif %}
+
+<h2>Inconsistencies</h2>
+<p>{{ n.contradictions_summary }}</p>
+{% if c.contradictions %}
+<ul class="clean">{% for ct in c.contradictions %}<li>{{ ct.description }} <span class="pill {{ 'neg' if ct.severity == 'high' else 'warn' }}">{{ ct.severity }}</span> <span class="pill">{{ ct.status }}</span></li>{% endfor %}</ul>
+{% endif %}
+
+{% if c.coding %}
+<h2>Coding</h2>
+{% if n.coding_summary %}<p>{{ n.coding_summary }}</p>{% endif %}
+{% for cd in c.coding %}{% set ev = cd.evaluation or {} %}
+<div class="card">
+  <h3>{{ cd.title }} <span class="pill">{{ cd.difficulty or "" }}</span> <span class="pill accent">{{ cd.language }}</span></h3>
+  <div class="meta-grid">
+    <div><span>Status</span><strong>{{ cd.status | label }}</strong></div>
+    <div><span>Tests (final)</span><strong>{% if cd.final_result %}{{ cd.final_result.passed }}/{{ cd.final_result.total }}{% else %}–{% endif %}</strong></div>
+    <div><span>Hints used</span><strong>{{ cd.hints_used }} of {{ cd.hints_available }} (assistance factor {{ cd.assistance_factor | num(2) }})</strong></div>
+    <div><span>Time</span><strong>{{ cd.duration_seconds | duration }}</strong></div>
+  </div>
+  {% if ev %}
+  <p>{{ ev.correctness_summary }}</p>
+  <p class="small">Complexity: {{ ev.time_complexity or "?" }} time, {{ ev.space_complexity or "?" }} space. {{ ev.complexity_assessment or "" }}</p>
+  <div class="dims">
+    <span class="pill">Score estimate {{ ev.score_estimate | num(1) }}/10</span>
+    <span class="pill">Code quality {{ ev.code_quality | num(1) }}</span>
+    <span class="pill">Problem solving {{ ev.problem_solving | num(1) }}</span>
+    <span class="pill">Edge cases {{ ev.edge_case_handling | num(1) }}</span>
+  </div>
+  {% if ev.hints_impact %}<p class="small"><strong>Hints:</strong> {{ ev.hints_impact }}</p>{% endif %}
+  {% endif %}
+  {% if cd.hints %}<p class="small">Hint levels requested: {% for h in cd.hints %}L{{ h.level }} ({{ h.requested_via }}{% if h.elapsed_seconds is not none %}, {{ h.elapsed_seconds | duration }}{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+  {% if cd.runs %}<p class="small muted">{{ cd.runs | length }} run(s); paste events: {{ cd.paste_event_count }}</p>{% endif %}
+  {% if cd.final_code %}<pre class="code">{{ cd.final_code }}</pre>{% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+<h2 class="page-break">Question-by-question evaluation</h2>
+{% for q in c.questions %}
+<div class="card qa">
+  <div class="small muted">Q{{ q.sequence }} · {{ q.competency_keys | join(", ") or "general" }} · <span class="pill">{{ q.difficulty }}</span>{% if q.parent_question_id %} · follow-up{% endif %} · {{ q.elapsed_seconds | duration }}</div>
+  <div class="question">{{ q.text }}</div>
+  {% for a in q.answers %}
+  <div class="answer">{{ a.transcript_text or "(no answer)" }}</div>
+  {% if a.evaluation %}{% set ev = a.evaluation %}
+  <div class="dims"><span class="pill accent">{{ ev.overall_quality | label }}</span>{% for k, v in ev.dimensions.items() %}<span class="pill">{{ k | label }} {{ v | num(1) }}</span>{% endfor %}<span class="pill">confidence {{ ev.confidence | percent }}</span>{% if ev.is_fallback %}<span class="pill warn">fallback evaluation</span>{% endif %}</div>
+  {% if ev.summary %}<p class="small">{{ ev.summary }}</p>{% endif %}
+  {% if ev.missing_details %}<p class="small"><strong>Missing:</strong> {{ ev.missing_details | join("; ") }}</p>{% endif %}
+  {% endif %}
+  {% for eid in a.evidence_ids %}{% set e = evidence_by_id.get(eid) %}{% if e %}
+  <div class="evidence {{ e.signal }} small"><span class="pill {{ 'pos' if e.signal == 'positive' else ('neg' if e.signal == 'negative' else '') }}">{{ e.competency_key }}</span> {{ e.evidence }}</div>
+  {% endif %}{% endfor %}
+  {% endfor %}
+</div>
+{% endfor %}
+
+{% if c.timeline.windows %}
+<h2>Performance timeline</h2>
+<table>
+  <thead><tr><th>Window</th><th>Competency estimates (last value in window)</th></tr></thead>
+  <tbody>{% for w in c.timeline.windows %}<tr><td>{{ w.label }}</td><td>{% if w.scores %}{% for k, v in w.scores.items() %}<span class="pill">{{ k | label }} {{ v | num(1) }}</span> {% endfor %}{% else %}<span class="muted">—</span>{% endif %}</td></tr>{% endfor %}</tbody>
+</table>
+{% endif %}
+
+<h2>Integrity signals</h2>
+<div class="banner note"><p class="small">{{ c.integrity.note }}</p></div>
+<div class="meta-grid">
+  <div><span>Signals recorded</span><strong>{{ c.integrity.total_events }}</strong></div>
+  <div><span>Flagged for review</span><strong>{{ c.integrity.flagged_for_review }}</strong></div>
+  <div><span>Awaiting review</span><strong>{{ c.integrity.unreviewed_flags }}</strong></div>
+  <div><span>Reconnects</span><strong>{{ c.session.reconnect_count }}</strong></div>
+</div>
+{% if c.integrity.by_type %}
+<table>
+  <thead><tr><th>Signal</th><th class="num">Events</th><th class="num">Occurrences</th><th>Highest severity</th></tr></thead>
+  <tbody>{% for t, entry in c.integrity.by_type.items() %}<tr><td>{{ entry.label or (t | label) }}</td><td class="num">{{ entry.events }}</td><td class="num">{{ entry.occurrences }}</td><td><span class="pill">{{ entry.max_severity }}</span></td></tr>{% endfor %}</tbody>
+</table>
+{% endif %}
+{% set flagged_events = c.integrity.events | selectattr("flagged") | list %}
+{% if flagged_events %}
+<h3>Signals flagged for human review</h3>
+<table>
+  <thead><tr><th>Signal</th><th>When</th><th class="num">Confidence</th><th>Severity</th><th>Review</th></tr></thead>
+  <tbody>{% for e in flagged_events %}<tr><td>{{ e.label }}</td><td>{{ e.elapsed_seconds | duration }}</td><td class="num">{{ e.confidence | percent }}</td><td><span class="pill">{{ e.severity }}</span></td><td><span class="pill {{ 'warn' if e.review_status == 'unreviewed' else '' }}">{{ e.review_status | label }}</span>{% if e.review_note %} <span class="small muted">{{ e.review_note }}</span>{% endif %}</td></tr>{% endfor %}</tbody>
+</table>
+{% endif %}
+{% endblock %}
+{% block footer_note %}Advisory report generated by the AI Interview Platform. A human reviewer owns every hiring decision.{% endblock %}

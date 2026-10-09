@@ -1,0 +1,190 @@
+version: 1
+slug: strip_source_comments_string_aware
+title: "Strip Source Comments (String Aware)"
+difficulty: medium
+competency_keys: [algorithms, code_quality, problem_solving]
+role_tags: [backend, platform, qa]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Strip Source Comments (String Aware)
+
+  A build pipeline minifies configuration scripts written in a C-like language before shipping them to
+  edge devices. Your job is the comment-removal pass. The source is given as a list of `lines`.
+
+  - A **line comment** starts with `//` and runs to the end of that line.
+  - A **block comment** starts with `/*` and ends at the first `*/` after it. It may span several
+    lines. Block comments do not nest. If a block comment is never closed, it runs to the end of the
+    input.
+  - A **string literal** starts with `"` and ends at the next unescaped `"` on the same line. Inside a
+    string, a backslash escapes the character after it (so `\"` does not end the string). Comment
+    markers inside a string literal are ordinary text. String literals always close on the line they
+    start on, and quote characters inside comments have no effect.
+  - Comments are removed **with nothing inserted** in their place.
+  - When a block comment spans several lines, the code before it on its first line and the code after
+    it on its last line are joined into a **single** line.
+
+  After removing comments, strip trailing whitespace from every resulting line and drop lines that are
+  then empty. Leading whitespace is kept. Return the remaining lines in order.
+
+  ### Example 1
+  ```
+  Input:  lines = [
+            "int total = 0; // running sum",
+            "url = \"http://svc/api\"; /* default",
+            "   endpoint */ retries = 3;",
+            "/* header */"
+          ]
+  Output: [
+            "int total = 0;",
+            "url = \"http://svc/api\";  retries = 3;"
+          ]
+  Explanation: The // inside the string is kept. The block comment spans lines 2 and 3,
+  so the code around it is joined into one line (both surrounding spaces remain).
+  ```
+
+  ### Example 2
+  ```
+  Input:  lines = ["msg = \"/* not a comment */\";", "", "x = 1;   "]
+  Output: ["msg = \"/* not a comment */\";", "x = 1;"]
+  ```
+
+  ### Constraints
+  - `0 <= lines.length <= 500`
+  - `0 <= lines[i].length <= 200`
+  - Lines contain printable ASCII characters (codes 32 to 126).
+  - Every string literal is closed on the line where it starts (outside comments).
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: strip_source_comments
+  params:
+    - {name: lines, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def strip_source_comments(lines: list[str]) -> list[str]:
+        result: list[str] = []
+        pending: list[str] = []
+        in_block = False
+
+        def emit() -> None:
+            text = "".join(pending).rstrip()
+            if text:
+                result.append(text)
+            pending.clear()
+
+        for line in lines:
+            i, n = 0, len(line)
+            while i < n:
+                if in_block:
+                    if line.startswith("*/", i):
+                        in_block = False
+                        i += 2
+                    else:
+                        i += 1
+                elif line[i] == '"':
+                    j = i + 1
+                    while j < n and line[j] != '"':
+                        j += 2 if line[j] == "\\" else 1
+                    j = min(j + 1, n)
+                    pending.append(line[i:j])
+                    i = j
+                elif line.startswith("//", i):
+                    break
+                elif line.startswith("/*", i):
+                    in_block = True
+                    i += 2
+                else:
+                    pending.append(line[i])
+                    i += 1
+            if not in_block:
+                emit()
+        emit()
+        return result
+  javascript: |
+    function stripSourceComments(lines) {
+      const result = [];
+      let pending = "";
+      let inBlock = false;
+      const emit = () => {
+        const text = pending.replace(/\s+$/, "");
+        if (text.length > 0) result.push(text);
+        pending = "";
+      };
+      for (const line of lines) {
+        const n = line.length;
+        let i = 0;
+        while (i < n) {
+          if (inBlock) {
+            if (line.startsWith("*/", i)) {
+              inBlock = false;
+              i += 2;
+            } else {
+              i += 1;
+            }
+          } else if (line[i] === '"') {
+            let j = i + 1;
+            while (j < n && line[j] !== '"') j += line[j] === "\\" ? 2 : 1;
+            j = Math.min(j + 1, n);
+            pending += line.slice(i, j);
+            i = j;
+          } else if (line.startsWith("//", i)) {
+            break;
+          } else if (line.startsWith("/*", i)) {
+            inBlock = true;
+            i += 2;
+          } else {
+            pending += line[i];
+            i += 1;
+          }
+        }
+        if (!inBlock) emit();
+      }
+      emit();
+      return result;
+    }
+tests:
+  - {id: t1, args: [["int total = 0; // running sum", "url = \"http://svc/api\"; /* default", "   endpoint */ retries = 3;", "/* header */"]], expected: ["int total = 0;", "url = \"http://svc/api\";  retries = 3;"], description: "Example 1 - line comment, // inside a string, multi-line block joining two lines, comment-only line"}
+  - {id: t2, args: [["msg = \"/* not a comment */\";", "", "x = 1;   "]], expected: ["msg = \"/* not a comment */\";", "x = 1;"], description: "Example 2 - block markers inside a string, empty line, trailing spaces"}
+  - {id: t3, hidden: true, args: [[]], expected: [], description: "No lines at all"}
+  - {id: t4, hidden: true, args: [["// only a comment", "/* and", "another */", "   "]], expected: [], description: "Everything is comments or whitespace"}
+  - {id: t5, hidden: true, args: [["a = 1; /* x /* y */ b = 2; */ c = 3;"]], expected: ["a = 1;  b = 2; */ c = 3;"], description: "Block comments do not nest: the first */ closes, the rest is code"}
+  - {id: t6, hidden: true, args: [["keep(); /* todo", "more text", "say(\"hi\");"]], expected: ["keep();"], description: "Unterminated block comment swallows the rest of the input, code before it survives"}
+  - {id: t7, hidden: true, args: [["s = \"he said \\\"//hi\\\" ok\"; // trailing", "p = \"C:\\\\\"; // dir"]], expected: ["s = \"he said \\\"//hi\\\" ok\";", "p = \"C:\\\\\";"], description: "Escaped quotes inside a string and a string ending in an escaped backslash"}
+  - {id: t8, hidden: true, args: [["x = 1; // start /* not a block", "y = 2;"]], expected: ["x = 1;", "y = 2;"], description: "A block opener inside a line comment is ignored"}
+  - {id: t9, hidden: true, args: [["a /*/ b */ c", "d */ e"]], expected: ["a  c", "d */ e"], description: "Slash-star-slash does not close the comment it opens; a stray */ in code is kept"}
+  - {id: t10, hidden: true, args: [["    return x; // done", "  if (y) {", "z = \"/*\"; w = \"*/\";"]], expected: ["    return x;", "  if (y) {", "z = \"/*\"; w = \"*/\";"], description: "Leading whitespace kept; strings containing only comment markers"}
+  - {id: t11, hidden: true, args: [["f(); /* one", "\"quote inside comment", "two */ g(); /* three", "four */ h();"]], expected: ["f();  g();  h();"], description: "Quote inside a block comment is ignored; one statement line joins across two block comments"}
+  - {id: t12, hidden: true, args: [["int v0 = 0; // init 0", "log(\"step 0 // not a comment\"); /* start 0", "   still comment 0 */ v0++;", "   ", "int v1 = 1; // init 1", "log(\"step 1 // not a comment\"); /* start 1", "   still comment 1 */ v1++;", "   ", "int v2 = 2; // init 2", "log(\"step 2 // not a comment\"); /* start 2", "   still comment 2 */ v2++;", "   ", "int v3 = 3; // init 3", "log(\"step 3 // not a comment\"); /* start 3", "   still comment 3 */ v3++;", "   ", "int v4 = 4; // init 4", "log(\"step 4 // not a comment\"); /* start 4", "   still comment 4 */ v4++;", "   ", "int v5 = 5; // init 5", "log(\"step 5 // not a comment\"); /* start 5", "   still comment 5 */ v5++;", "   ", "int v6 = 6; // init 6", "log(\"step 6 // not a comment\"); /* start 6", "   still comment 6 */ v6++;", "   ", "int v7 = 7; // init 7", "log(\"step 7 // not a comment\"); /* start 7", "   still comment 7 */ v7++;", "   ", "int v8 = 8; // init 8", "log(\"step 8 // not a comment\"); /* start 8", "   still comment 8 */ v8++;", "   ", "int v9 = 9; // init 9", "log(\"step 9 // not a comment\"); /* start 9", "   still comment 9 */ v9++;", "   ", "int v10 = 10; // init 10", "log(\"step 10 // not a comment\"); /* start 10", "   still comment 10 */ v10++;", "   ", "int v11 = 11; // init 11", "log(\"step 11 // not a comment\"); /* start 11", "   still comment 11 */ v11++;", "   ", "int v12 = 12; // init 12", "log(\"step 12 // not a comment\"); /* start 12", "   still comment 12 */ v12++;", "   ", "int v13 = 13; // init 13", "log(\"step 13 // not a comment\"); /* start 13", "   still comment 13 */ v13++;", "   ", "int v14 = 14; // init 14", "log(\"step 14 // not a comment\"); /* start 14", "   still comment 14 */ v14++;", "   "]], expected: ["int v0 = 0;", "log(\"step 0 // not a comment\");  v0++;", "int v1 = 1;", "log(\"step 1 // not a comment\");  v1++;", "int v2 = 2;", "log(\"step 2 // not a comment\");  v2++;", "int v3 = 3;", "log(\"step 3 // not a comment\");  v3++;", "int v4 = 4;", "log(\"step 4 // not a comment\");  v4++;", "int v5 = 5;", "log(\"step 5 // not a comment\");  v5++;", "int v6 = 6;", "log(\"step 6 // not a comment\");  v6++;", "int v7 = 7;", "log(\"step 7 // not a comment\");  v7++;", "int v8 = 8;", "log(\"step 8 // not a comment\");  v8++;", "int v9 = 9;", "log(\"step 9 // not a comment\");  v9++;", "int v10 = 10;", "log(\"step 10 // not a comment\");  v10++;", "int v11 = 11;", "log(\"step 11 // not a comment\");  v11++;", "int v12 = 12;", "log(\"step 12 // not a comment\");  v12++;", "int v13 = 13;", "log(\"step 13 // not a comment\");  v13++;", "int v14 = 14;", "log(\"step 14 // not a comment\");  v14++;"], description: "60 lines mixing all constructs"}
+expected_concepts:
+- finite state machine (code, string, block comment)
+- scanning with lookahead for two-character tokens
+- escape handling inside string literals
+- state that carries across line boundaries
+optimal_complexity:
+  time: O(total characters)
+  space: O(total characters)
+rubric:
+  excellent: Designs an explicit state machine for code, string and block-comment states, carries the block state and the pending line across lines, handles escapes and two-character markers precisely, and tests tricky inputs such as an unterminated block, the slash-star-slash sequence and markers inside strings.
+  good: Correct for most inputs with a clear scanner, needing a hint on string escapes, on joining lines around a multi-line block or on unterminated blocks.
+  weak: Uses regular expressions or string search that ignore string literals, loses code before or after a block comment, or keeps empty lines.
+  criteria:
+    correctness: All tests pass, including escapes, non-nesting blocks and unterminated comments.
+    efficiency: Single pass over the characters with no repeated rescanning.
+    code_quality: States are explicit and each branch handles exactly one token type; output assembly is separated from scanning.
+    edge_cases: Empty input, comment-only input, markers inside strings and comments, and trailing whitespace.
+    communication: Describes the states and transitions before coding and walks through a multi-line example.
+hints:
+- 'At any point while reading the source you are in one of a few situations: ordinary code, inside a string, or inside a block comment. What changes when you move between them?'
+- Read character by character with a flag for being inside a block comment that survives across lines; when you see a quote in ordinary code, copy the whole string literal through, respecting backslash escapes, before looking for comment markers again.
+- Keep a pending output line. In ordinary code, a quote copies through the closing unescaped quote, a double slash ends the line, a slash-star enters block state, and anything else is copied. In block state skip characters until star-slash. Only finish the pending line when a line ends outside a block comment (and once more at the end), stripping trailing whitespace and dropping it when empty.
+followups:
+- How would you add single-quoted character literals such as a quoted slash?
+- Real compilers replace a comment with a space; how would that change your output and why does it matter?
+- How would you preserve line numbers for error messages after stripping?
+- How would you stream a very large file through this pass with constant memory per line?
+common_errors:
+- Searching for // or /* with string functions without skipping string literals.
+- Treating an escaped quote as the end of a string, or missing a string that ends with an escaped backslash.
+- Emitting the line before a multi-line block comment separately instead of joining it with the code after the comment.
+- Nesting block comments or treating slash-star-slash as an empty comment.

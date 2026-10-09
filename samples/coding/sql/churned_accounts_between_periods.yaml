@@ -1,0 +1,226 @@
+version: 1
+slug: churned_accounts_between_periods
+title: "Accounts Churned After March"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, product_manager, business_analyst]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Accounts Churned After March
+
+  The product analytics team tracks a coarse activity log for each customer account and wants to
+  know which accounts were active in March 2026 but went silent in April 2026, together with how
+  busy they were in March (to prioritise the follow-up calls).
+
+  Table `account_activity`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | account_id | INTEGER | the account that was active |
+  | month | CHAR(7) | the month of the activity as text `'YYYY-MM'`, for example `'2026-03'` |
+
+  An account can have many rows in the same month. An account **churned after March** when it has at
+  least one row with month `'2026-03'` and **no** row with month `'2026-04'`. Activity in any other
+  month (including later months, and March or April of other years) does not matter.
+
+  Return `account_id` and `march_events` (the number of the account's rows with month `'2026-03'`)
+  for every churned account, ordered by `account_id` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  account_activity
+  +----+------------+---------+
+  | id | account_id | month   |
+  +----+------------+---------+
+  | 1  | 101        | 2026-02 |
+  | 2  | 101        | 2026-03 |
+  | 3  | 101        | 2026-03 |
+  | 4  | 102        | 2026-03 |
+  | 5  | 102        | 2026-04 |
+  | 6  | 103        | 2026-03 |
+  | 7  | 103        | 2026-05 |
+  | 8  | 104        | 2026-04 |
+  | 9  | 105        | 2025-03 |
+  +----+------------+---------+
+
+  Output
+  +------------+--------------+
+  | account_id | march_events |
+  +------------+--------------+
+  | 101        | 2            |
+  | 103        | 1            |
+  +------------+--------------+
+  ```
+  Account 101 had two March rows and none in April. Account 102 stayed active in April. Account 103
+  came back in May but still churned after March. Account 104 was not active in March and account
+  105's March activity was in 2025.
+
+  ### Example 2
+  ```
+  account_activity
+  +----+------------+---------+
+  | id | account_id | month   |
+  +----+------------+---------+
+  | 1  | 1          | 2026-03 |
+  | 2  | 1          | 2026-04 |
+  +----+------------+---------+
+
+  Output: no rows
+  ```
+
+  ### Constraints
+  - `0 <= rows in account_activity <= 10^6`
+  - `month` is always a valid `'YYYY-MM'` string.
+  - The output order is part of the answer.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Accounts active in 2026-03 with no activity in 2026-04, with their March row count.
+    SELECT account_id, COUNT(*) AS march_events
+    FROM account_activity
+    GROUP BY account_id
+    ORDER BY account_id;
+reference_solutions:
+  sql: |
+    SELECT a.account_id, COUNT(*) AS march_events
+    FROM account_activity a
+    WHERE a.month = '2026-03'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM account_activity b
+        WHERE b.account_id = a.account_id
+          AND b.month = '2026-04'
+      )
+    GROUP BY a.account_id
+    ORDER BY a.account_id;
+sql_setup: |
+  CREATE TABLE account_activity (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    month CHAR(7) NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - churned, retained, back in May, April-only and previous-year March"
+    setup_sql: |
+      INSERT INTO account_activity (id, account_id, month) VALUES
+        (1, 101, '2026-02'), (2, 101, '2026-03'), (3, 101, '2026-03'), (4, 102, '2026-03'),
+        (5, 102, '2026-04'), (6, 103, '2026-03'), (7, 103, '2026-05'), (8, 104, '2026-04'),
+        (9, 105, '2025-03');
+    expected_rows: [[101, 2], [103, 1]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - every March account is still active in April"
+    setup_sql: |
+      INSERT INTO account_activity (id, account_id, month) VALUES
+        (1, 1, '2026-03'), (2, 1, '2026-04');
+    expected_rows: []
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Only April activity - nobody churned"
+    setup_sql: |
+      INSERT INTO account_activity (id, account_id, month) VALUES
+        (1, 5, '2026-04'), (2, 5, '2026-04'), (3, 5, '2026-04'), (4, 6, '2026-04');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "March and April of the wrong year do not count"
+    setup_sql: |
+      INSERT INTO account_activity (id, account_id, month) VALUES
+        (1, 7, '2025-03'), (2, 7, '2025-03'), (3, 7, '2026-03'), (4, 8, '2026-03'),
+        (5, 8, '2025-04');
+    expected_rows: [[7, 1], [8, 1]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Many March events per account and many April rows on a retained account (join fan-out)"
+    setup_sql: |
+      INSERT INTO account_activity (id, account_id, month) VALUES
+        (1, 20, '2026-03'), (2, 20, '2026-03'), (3, 20, '2026-03'), (4, 20, '2026-03'),
+        (5, 20, '2026-03'), (6, 21, '2026-03'), (7, 21, '2026-03'), (8, 21, '2026-03'),
+        (9, 21, '2026-04'), (10, 21, '2026-04'), (11, 21, '2026-04'), (12, 21, '2026-04'),
+        (13, 22, '2026-03');
+    expected_rows: [[20, 5], [22, 1]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Accounts inserted out of order - output ordered by account_id"
+    setup_sql: |
+      INSERT INTO account_activity (id, account_id, month) VALUES
+        (1, 900, '2026-03'), (2, 15, '2026-03'), (3, 15, '2026-03'), (4, 300, '2026-03'),
+        (5, 300, '2026-04'), (6, 2, '2026-03');
+    expected_rows: [[2, 1], [15, 2], [900, 1]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Large account ids and activity in many other months"
+    setup_sql: |
+      INSERT INTO account_activity (id, account_id, month) VALUES
+        (1, 2000000000, '2026-03'), (2, 2000000000, '2026-03'), (3, 2000000000, '2026-01'), (4, 2000000000, '2026-01'),
+        (5, 2000000000, '2026-01'), (6, 1999999999, '2026-02'), (7, 1999999999, '2026-03'), (8, 1999999999, '2026-04'),
+        (9, 1999999999, '2026-06');
+    expected_rows: [[2000000000, 2]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Stress - 12 accounts with mixed patterns"
+    setup_sql: |
+      INSERT INTO account_activity (id, account_id, month) VALUES
+        (1, 1, '2026-03'), (2, 1, '2026-03'), (3, 2, '2026-03'), (4, 2, '2026-03'),
+        (5, 2, '2026-03'), (6, 3, '2026-03'), (7, 4, '2026-03'), (8, 4, '2026-03'),
+        (9, 5, '2026-03'), (10, 5, '2026-03'), (11, 5, '2026-03'), (12, 6, '2026-03'),
+        (13, 7, '2026-03'), (14, 7, '2026-03'), (15, 8, '2026-03'), (16, 8, '2026-03'),
+        (17, 8, '2026-03'), (18, 9, '2026-03'), (19, 10, '2026-03'), (20, 10, '2026-03'),
+        (21, 11, '2026-03'), (22, 11, '2026-03'), (23, 11, '2026-03'), (24, 12, '2026-03'),
+        (25, 4, '2026-04'), (26, 8, '2026-04'), (27, 12, '2026-04'), (28, 5, '2026-05'),
+        (29, 5, '2026-05'), (30, 10, '2026-05'), (31, 10, '2026-05');
+    expected_rows:
+      - [1, 2]
+      - [2, 3]
+      - [3, 1]
+      - [5, 3]
+      - [6, 1]
+      - [7, 2]
+      - [9, 1]
+      - [10, 2]
+      - [11, 3]
+expected_concepts:
+  - "anti-join (NOT EXISTS or LEFT JOIN ... IS NULL) between two periods"
+  - "aggregating after filtering to one period"
+  - "avoiding count inflation from joins"
+  - "exact matching on period keys stored as text"
+optimal_complexity: {time: "O(n log n), or O(n) with an index on (account_id, month)", space: "O(a) for a distinct accounts"}
+rubric:
+  excellent: "Filters to March rows, excludes accounts with an April row via NOT EXISTS (or an anti-join on a de-duplicated April set), counts the March rows per account, orders by account_id and mentions an index on (account_id, month)."
+  good: "Correct result after a hint about inflated counts or about other years and later months."
+  weak: "Treats any later activity as retention, matches months with LIKE '%-03', or joins March rows to April rows so counts are wrong."
+  criteria:
+    correctness: "All tests pass, including other years, accounts that return in May and multiple rows per month."
+    efficiency: "One pass over March rows with an indexed existence check; no repeated full scans per account."
+    code_quality: "Clear aliases for the two periods and output names that match the contract."
+    edge_cases: "Empty table, April-only accounts, many events per month and large account ids."
+    communication: "Explains why joining two periods row by row can multiply counts and how an anti-join avoids it."
+hints:
+  - "Split the question into two sets of accounts: those with March 2026 activity and those with April 2026 activity."
+  - "Keep March rows only for accounts that do not appear in the April set, and only then count rows per account; be careful that matching a March row against several April rows can change the count."
+  - "Select from account_activity WHERE month = '2026-03' AND NOT EXISTS (a row for the same account with month = '2026-04'), GROUP BY account_id with COUNT(*) AS march_events, and ORDER BY account_id."
+followups:
+  - "How would you generalise this to every pair of consecutive months in one query?"
+  - "Why would storing month as a DATE (first of the month) be preferable, and what would change?"
+  - "How would you compute the churn rate as a percentage of March-active accounts?"
+common_errors:
+  - "Using LIKE '%-03' and LIKE '%-04', which mixes in March and April of other years."
+  - "Excluding accounts with any later activity (such as May), which is not the definition asked for."
+  - "Joining March rows to April rows before counting, which multiplies or zeroes the counts."
+  - "Using NOT IN on a subquery and counting distinct accounts instead of March rows."

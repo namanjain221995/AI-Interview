@@ -1,0 +1,851 @@
+# Curated questions: DevOps / SRE / platform engineering.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [devops, sre, platform]
+  round_types: [technical_screening, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------- kubernetes
+  - external_key: devops.kubernetes.crashloop_backoff
+    competency_key: kubernetes
+    topic: CrashLoopBackOff troubleshooting
+    difficulty: easy
+    kind: scenario
+    text: >-
+      Suppose you've just rolled out a new version of a service and its pods are stuck in CrashLoopBackOff.
+      Walk me through how you'd figure out what's going on.
+    expected_concepts:
+      - kubectl describe pod and events
+      - logs of the previous container (--previous)
+      - exit codes such as 137 (OOMKilled) or 1
+      - misconfigured liveness probes
+      - missing config, secrets or environment variables
+      - rolling back while investigating
+    rubric:
+      excellent: Follows a clear sequence (events, previous logs, exit code, probes, config), distinguishes application crashes from probe or OOM kills, and mentions rolling back to restore service first.
+      good: Checks logs and describe output and names two or three plausible causes.
+      weak: Restarts or deletes pods repeatedly without gathering evidence, or cannot name where to look.
+    followups:
+      - What does exit code 137 tell you, and how would you confirm it?
+      - The logs are empty because the container dies instantly — what next?
+      - How would you stop a bad rollout from taking down every replica?
+    common_errors:
+      - Reading only current logs and missing the crashed container's output.
+      - Blaming Kubernetes before checking the application's exit code.
+
+  - external_key: devops.kubernetes.workload_types
+    competency_key: kubernetes
+    topic: Deployments, StatefulSets and DaemonSets
+    difficulty: easy
+    kind: technical
+    text: >-
+      When would you choose a Deployment, a StatefulSet or a DaemonSet? Ideally give me a real example of
+      each from systems you've worked on.
+    expected_concepts:
+      - stateless replicas with rolling updates (Deployment)
+      - stable network identity and per-pod volumes (StatefulSet)
+      - one pod per node for agents (DaemonSet)
+      - ordered rollout and scale-down for StatefulSets
+      - headless services
+    rubric:
+      excellent: Explains identity, storage and scheduling differences precisely with concrete examples (API, database or Kafka, log or metrics agent) and mentions ordering and headless services.
+      good: Correct one-line distinction for each with at least one real example.
+      weak: Treats them as interchangeable or confuses StatefulSets with persistent storage in general.
+    followups:
+      - Why might you still run a database outside Kubernetes even though StatefulSets exist?
+      - How does a StatefulSet handle a node failure differently from a Deployment?
+    common_errors:
+      - Believing a Deployment cannot use persistent volumes at all.
+      - Not knowing that DaemonSets also schedule onto new nodes automatically.
+
+  - external_key: devops.kubernetes.pending_pods
+    competency_key: kubernetes
+    topic: Pods stuck in Pending
+    difficulty: medium
+    kind: scenario
+    text: >-
+      Imagine a batch of new pods has been sitting in Pending for ten minutes. What are the likely reasons,
+      and how would you narrow it down?
+    expected_concepts:
+      - scheduler events (FailedScheduling)
+      - insufficient CPU or memory requests
+      - taints and tolerations
+      - node affinity and selectors
+      - unbound PVCs or zonal volume constraints
+      - cluster autoscaler limits or quotas
+    rubric:
+      excellent: Starts from the scheduler events, covers resources, taints, affinity, volume topology and autoscaler limits, and explains how each shows up in the event message.
+      good: Names resource shortage and taints or affinity, and knows to check events.
+      weak: Only suggests adding nodes, or does not know what Pending means.
+    followups:
+      - The event says "volume node affinity conflict" — what does that mean on a multi-AZ cluster?
+      - The cluster autoscaler isn't adding nodes — where would you look?
+    common_errors:
+      - Confusing Pending with ContainerCreating or ImagePullBackOff.
+      - Ignoring that requests, not actual usage, drive scheduling decisions.
+
+  - external_key: devops.kubernetes.probes
+    competency_key: kubernetes
+    topic: Liveness, readiness and startup probes
+    difficulty: medium
+    kind: technical
+    text: >-
+      Can you explain the difference between liveness, readiness and startup probes, and describe a situation
+      where a badly configured probe made things worse rather than better?
+    expected_concepts:
+      - readiness controls traffic routing
+      - liveness triggers container restarts
+      - startup probes for slow-starting applications
+      - liveness probes depending on downstream services cause cascading restarts
+      - timeouts, thresholds and initial delays
+    rubric:
+      excellent: Explains each probe's effect precisely, gives a realistic failure such as liveness checks calling a database during an outage, and describes how they would design the endpoints and thresholds.
+      good: Correct definitions and a plausible failure scenario.
+      weak: Mixes up readiness and liveness or uses the same deep health check for both.
+    followups:
+      - Should a liveness probe check the database connection? Why or why not?
+      - How would you tune probes for a JVM service that takes 90 seconds to warm up?
+    common_errors:
+      - Pointing liveness at an endpoint that checks dependencies.
+      - Omitting a readiness probe so traffic arrives before the app is ready.
+
+  - external_key: devops.kubernetes.zero_downtime_rollout
+    competency_key: kubernetes
+    topic: Zero-downtime deployments
+    difficulty: medium
+    kind: scenario
+    text: >-
+      Your team sees a burst of 502 errors every time an API is deployed to Kubernetes, even with a rolling
+      update. How would you get to genuinely zero-downtime deploys?
+    expected_concepts:
+      - readiness probes gating traffic
+      - graceful shutdown on SIGTERM
+      - preStop hook to allow endpoint removal to propagate
+      - terminationGracePeriodSeconds
+      - maxSurge and maxUnavailable
+      - PodDisruptionBudgets
+      - connection draining at the load balancer
+    rubric:
+      excellent: Explains the race between endpoint removal and SIGTERM, fixes it with a preStop delay and graceful shutdown, tunes rollout parameters and validates with load during a deploy.
+      good: Mentions readiness probes and graceful shutdown with sensible rollout settings.
+      weak: Suggests only adding replicas or deploying at night.
+    followups:
+      - Why does the pod still receive traffic for a few seconds after it starts terminating?
+      - How would you prove the fix works before the next production release?
+    common_errors:
+      - Assuming the rolling update alone guarantees zero downtime.
+      - An application that exits immediately on SIGTERM, dropping in-flight requests.
+
+  - external_key: devops.kubernetes.az_failure
+    competency_key: kubernetes
+    topic: Availability-zone failure
+    difficulty: hard
+    kind: scenario
+    text: >-
+      Suppose one availability zone becomes unavailable in the region where your production cluster runs.
+      What happens to your workloads, and how would you design the platform so users barely notice?
+    expected_concepts:
+      - multi-AZ node groups and control plane
+      - topology spread constraints or pod anti-affinity
+      - capacity headroom to absorb a lost zone (N+1)
+      - PodDisruptionBudgets
+      - zonal block volumes and stateful workloads
+      - load balancer health checks and cross-zone routing
+      - quorum-based systems (etcd, databases) across three zones
+    rubric:
+      excellent: Walks through the failure timeline (node NotReady, eviction timeouts, rescheduling), covers spreading, headroom, zonal storage limits and quorum, and quantifies capacity needed to survive one zone loss.
+      good: Mentions spreading replicas across zones and multi-AZ node groups with some awareness of storage constraints.
+      weak: Assumes Kubernetes handles it automatically or ignores stateful workloads.
+    followups:
+      - Your PostgreSQL pod used a zonal volume in the failed zone — what now?
+      - How much spare capacity do you need with three zones to survive losing one?
+      - How would you rehearse this failure safely?
+    common_errors:
+      - Forgetting that block volumes are zonal and cannot follow a pod to another zone.
+      - Running replicas spread across zones without headroom to absorb the lost capacity.
+
+  - external_key: devops.kubernetes.autoscaling
+    competency_key: kubernetes
+    topic: Autoscaling interplay
+    difficulty: hard
+    kind: technical
+    text: >-
+      Talk me through how the Horizontal Pod Autoscaler and a node autoscaler such as Cluster Autoscaler or
+      Karpenter work together. Where does this setup typically fail during a sudden traffic spike?
+    expected_concepts:
+      - HPA scaling on CPU or custom metrics
+      - requests determine utilisation and bin packing
+      - node provisioning latency
+      - pending pods trigger node scale-up
+      - overprovisioning or placeholder pods
+      - scale-down stabilisation and flapping
+      - metrics pipeline lag
+    rubric:
+      excellent: Explains the full chain (metric, HPA decision, pending pods, node provisioning, image pull, readiness) with realistic timings and mitigations such as headroom pods, pre-pulled images and predictive scaling.
+      good: Describes both autoscalers correctly and names node provisioning delay as a weakness.
+      weak: Thinks the HPA adds nodes, or cannot explain what triggers node scale-up.
+    followups:
+      - How would you scale on queue depth instead of CPU?
+      - What request and limit settings make HPA decisions unreliable?
+    common_errors:
+      - Setting no CPU requests, which breaks utilisation-based scaling.
+      - Ignoring the minutes it takes for new nodes to join and pull images.
+
+  - external_key: devops.kubernetes.multitenancy_security
+    competency_key: kubernetes
+    topic: Multi-tenant cluster isolation
+    difficulty: hard
+    kind: scenario
+    text: >-
+      Several product teams are going to share one Kubernetes cluster. How would you isolate them from each
+      other, both for security and so one team's workload can't starve the others?
+    expected_concepts:
+      - namespaces per team
+      - RBAC with least privilege
+      - NetworkPolicies with default deny
+      - ResourceQuotas and LimitRanges
+      - Pod Security Admission (restricted profile)
+      - separate node pools or taints for sensitive workloads
+      - admission policies (OPA Gatekeeper or Kyverno)
+    rubric:
+      excellent: Layers identity, network, compute and policy controls, explains the limits of soft multi-tenancy and when separate clusters are justified.
+      good: Covers namespaces, RBAC, quotas and network policies sensibly.
+      weak: Relies on namespaces alone or gives every team cluster-admin.
+    followups:
+      - When would you give a team its own cluster instead?
+      - How do you stop a team from running privileged containers?
+    common_errors:
+      - Assuming namespaces provide network isolation by default.
+      - Forgetting quotas, so one runaway job exhausts cluster capacity.
+
+  # ----------------------------------------------------------------- docker
+  - external_key: devops.docker.image_size
+    competency_key: docker
+    topic: Image size and build caching
+    difficulty: easy
+    kind: technical
+    text: >-
+      A colleague's Docker image is 2 GB and takes ages to build in CI. What would you look at to make it
+      smaller and faster to build?
+    expected_concepts:
+      - multi-stage builds
+      - slim or distroless base images
+      - layer ordering for cache hits (dependencies before source)
+      - .dockerignore
+      - removing build tools and caches
+      - BuildKit cache mounts
+    rubric:
+      excellent: Explains how layer caching works, reorders instructions, uses multi-stage builds and minimal bases, and mentions measuring with image history or dive.
+      good: Suggests multi-stage builds and a smaller base image with a sensible ordering tip.
+      weak: Only suggests compressing the image or does not understand layers.
+    followups:
+      - Why does copying the whole source tree before installing dependencies hurt caching?
+      - What are the trade-offs of distroless images when debugging?
+    common_errors:
+      - Deleting files in a later layer and expecting the image to shrink.
+      - Shipping compilers and package caches in the runtime image.
+
+  - external_key: devops.docker.works_locally
+    competency_key: docker
+    topic: Container behaves differently in production
+    difficulty: medium
+    kind: scenario
+    text: >-
+      A container works perfectly on a developer's laptop but crashes or behaves oddly in production. What
+      differences between the two environments would you investigate?
+    expected_concepts:
+      - CPU architecture (arm64 versus amd64)
+      - environment variables and mounted config
+      - running as non-root and file permissions
+      - signal handling and PID 1
+      - resource limits (memory, CPU throttling)
+      - read-only root filesystem
+      - network policies and DNS
+    rubric:
+      excellent: Systematically compares architecture, configuration, user, limits and network, and explains how to reproduce production constraints locally.
+      good: Names several realistic differences such as config and resource limits.
+      weak: Assumes containers are identical everywhere so the problem must be the code.
+    followups:
+      - Why might an image built on an M-series laptop fail on an x86 node?
+      - How does running as PID 1 affect signal handling?
+    common_errors:
+      - Ignoring memory limits that cause OOM kills only in production.
+      - Hard-coding environment-specific values into the image.
+
+  - external_key: devops.docker.image_security
+    competency_key: docker
+    topic: Securing container images
+    difficulty: medium
+    kind: technical
+    text: >-
+      What do you do to make container images secure before they reach production?
+    expected_concepts:
+      - minimal base images
+      - running as a non-root user
+      - vulnerability scanning in CI
+      - pinning base images by digest
+      - no secrets in layers or build args
+      - image signing and admission verification
+    rubric:
+      excellent: Covers build-time and run-time controls, explains why secrets leak through layers, and describes a policy that blocks unsigned or vulnerable images.
+      good: Mentions scanning, non-root users and minimal bases.
+      weak: Relies only on scanning or stores credentials in the image.
+    followups:
+      - A scan reports 300 vulnerabilities in the base image — how do you prioritise?
+      - How would you enforce that only signed images run in the cluster?
+    common_errors:
+      - Passing secrets as build arguments, which remain in the image history.
+      - Using the latest tag so builds are not reproducible.
+
+  # ------------------------------------------------------------------ ci_cd
+  - external_key: devops.ci_cd.pipeline_walkthrough
+    competency_key: ci_cd
+    topic: Pipeline design walkthrough
+    difficulty: easy
+    kind: technical
+    text: >-
+      Walk me through a CI/CD pipeline you've built or worked with — the stages, what each one protects
+      against, and how a change finally reaches production.
+    expected_concepts:
+      - build, test, scan and package stages
+      - artifact versioning and immutability
+      - environment promotion
+      - quality gates and approvals
+      - automated deployment with rollback
+    rubric:
+      excellent: Describes a concrete pipeline end to end, explains the purpose of each gate, how artifacts are promoted unchanged and how rollback works.
+      good: Clear description of the main stages with some reasoning.
+      weak: Lists tool names without explaining stages or safety mechanisms.
+    followups:
+      - How do you make sure the artifact you tested is exactly the one you deploy?
+      - What would you remove from this pipeline if it were too slow?
+    common_errors:
+      - Rebuilding the artifact per environment instead of promoting it.
+      - No automated way to roll back a bad release.
+
+  - external_key: devops.ci_cd.slow_pipeline
+    competency_key: ci_cd
+    topic: Speeding up a slow pipeline
+    difficulty: medium
+    kind: scenario
+    text: >-
+      Developers complain that the CI pipeline takes 45 minutes and they've started batching changes to
+      avoid it. How would you approach making it fast again?
+    expected_concepts:
+      - measuring where time goes per stage
+      - dependency and build caching
+      - parallelising and sharding tests
+      - running only affected tests or builds
+      - faster or autoscaled runners
+      - moving slow suites off the critical path
+    rubric:
+      excellent: Starts by measuring, targets the biggest stages first, combines caching, parallelism and selective builds, and tracks lead time as the success metric.
+      good: Suggests caching and parallel tests with some prioritisation.
+      weak: Proposes deleting tests or buying bigger machines without analysis.
+    followups:
+      - How would you shard a test suite so the shards finish at roughly the same time?
+      - Which tests would you still run on every commit, and why?
+    common_errors:
+      - Optimising stages that are not on the critical path.
+      - Caching too aggressively and producing stale, incorrect builds.
+
+  - external_key: devops.ci_cd.deployment_strategies
+    competency_key: ci_cd
+    topic: Blue/green, canary and rolling deployments
+    difficulty: medium
+    kind: technical
+    text: >-
+      How do blue/green, canary and rolling deployments differ, and how would you decide which one to use for
+      a high-traffic payments service?
+    expected_concepts:
+      - rolling replacement of instances
+      - blue/green full environment switch with instant rollback
+      - canary with a small traffic percentage
+      - metric-based automated analysis and rollback
+      - database schema compatibility across versions
+      - cost of duplicate capacity
+    rubric:
+      excellent: Compares risk, cost and rollback speed, chooses canary with automated metric analysis for payments, and addresses backward-compatible schema changes.
+      good: Correct descriptions and a reasonable recommendation.
+      weak: Confuses the strategies or ignores rollback and data compatibility.
+    followups:
+      - Which metrics would decide whether a canary is promoted?
+      - How do you handle a database migration during a blue/green switch?
+    common_errors:
+      - Ignoring that both versions run at once and must share the same schema.
+      - Promoting canaries on a timer without looking at metrics.
+
+  - external_key: devops.ci_cd.supply_chain
+    competency_key: ci_cd
+    topic: Securing the delivery pipeline
+    difficulty: hard
+    kind: scenario
+    text: >-
+      If an attacker compromised your CI system, what could they do, and how would you design the pipeline to
+      limit that damage?
+    expected_concepts:
+      - short-lived credentials through OIDC federation
+      - least-privilege, environment-scoped deploy roles
+      - isolated or ephemeral runners
+      - protected branches and required reviews
+      - artifact signing and provenance (SLSA)
+      - pinning third-party actions or plugins
+      - audit logs
+    rubric:
+      excellent: Threat-models the pipeline (secrets, runners, dependencies, artifacts) and proposes layered controls with OIDC, signing, provenance verification and ephemeral runners.
+      good: Mentions secret management, least privilege and review requirements.
+      weak: Has no clear picture of CI as an attack surface.
+    followups:
+      - Why are long-lived cloud keys in CI variables risky, and what replaces them?
+      - How would production verify that an image came from your pipeline?
+    common_errors:
+      - Sharing one powerful credential across all pipelines and environments.
+      - Using unpinned third-party CI actions that can change underneath you.
+
+  # -------------------------------------------------------------- terraform
+  - external_key: devops.terraform.state_basics
+    competency_key: terraform
+    topic: Terraform state and locking
+    difficulty: easy
+    kind: technical
+    text: >-
+      What is Terraform state, why does it matter, and how do you manage it safely when several engineers work
+      on the same infrastructure?
+    expected_concepts:
+      - mapping between configuration and real resources
+      - remote backend
+      - state locking
+      - encryption and access control (state can contain secrets)
+      - never editing state by hand casually
+    rubric:
+      excellent: Explains what state stores and why, sets up a remote encrypted backend with locking and restricted access, and knows the state commands for safe changes.
+      good: Knows to use remote state with locking.
+      weak: Keeps state locally or in git, or cannot explain its purpose.
+    followups:
+      - What happens if two people run apply at the same time without locking?
+      - Why should access to state files be restricted?
+    common_errors:
+      - Committing terraform.tfstate to version control.
+      - Assuming state contains no sensitive values.
+
+  - external_key: devops.terraform.destructive_plan
+    competency_key: terraform
+    topic: Plan wants to replace a production database
+    difficulty: medium
+    kind: scenario
+    text: >-
+      You run terraform plan for what should be a small change, and it says it will destroy and recreate the
+      production database. What do you do?
+    expected_concepts:
+      - stop and do not apply
+      - identify the attribute forcing replacement
+      - provider or module version changes
+      - renamed resources and moved blocks or state mv
+      - lifecycle prevent_destroy and ignore_changes
+      - reviewing plans in CI before apply
+    rubric:
+      excellent: Halts, finds the forcing attribute, fixes it with moved blocks, state operations or configuration changes, and adds guardrails such as prevent_destroy and mandatory plan review.
+      good: Recognises the danger, inspects the plan and proposes a reasonable fix.
+      weak: Applies anyway or plans to restore from backup afterwards.
+    followups:
+      - What does a "forces replacement" note in the plan mean?
+      - How would you rename a resource in code without recreating it?
+    common_errors:
+      - Applying a plan without reading the replacement details.
+      - Using ignore_changes broadly to hide real drift.
+
+  - external_key: devops.terraform.module_design
+    competency_key: terraform
+    topic: Modules and environments
+    difficulty: medium
+    kind: technical
+    text: >-
+      How do you structure Terraform for several environments — dev, staging and production — and several
+      teams, so that changes are safe and code isn't copy-pasted?
+    expected_concepts:
+      - reusable, versioned modules
+      - separate state per environment and component
+      - directories or workspaces trade-offs
+      - variable files per environment
+      - promotion of module versions
+      - small blast radius
+    rubric:
+      excellent: Proposes versioned modules, per-environment state with small blast radius, explains workspace versus directory trade-offs and how a module change is promoted.
+      good: Uses modules and separates environment state.
+      weak: One giant state for everything, or copies code per environment.
+    followups:
+      - Why might workspaces be a poor fit for separating production from development?
+      - How do you roll out a breaking module change to 20 consumers?
+    common_errors:
+      - A single state file for the entire company, making every apply risky and slow.
+      - Unversioned module references that change under consumers.
+
+  - external_key: devops.terraform.drift_at_scale
+    competency_key: terraform
+    topic: Drift and large codebases
+    difficulty: hard
+    kind: scenario
+    text: >-
+      Someone has been fixing things directly in the cloud console for months, and now terraform plan shows
+      dozens of unexpected changes across several states. How would you get back to a trustworthy state and
+      keep it that way?
+    expected_concepts:
+      - auditing drift before changing anything
+      - deciding per change whether code or reality is correct
+      - terraform import and import blocks
+      - refresh-only plans
+      - scheduled drift detection
+      - restricting console write access
+      - policy as code
+    rubric:
+      excellent: Proposes a careful triage (refresh-only plans, classify drift, codify or revert), uses import where needed, and prevents recurrence with scheduled drift checks, restricted permissions and policy.
+      good: Plans to reconcile drift deliberately and limit console changes.
+      weak: Applies everything to overwrite reality without checking.
+    followups:
+      - How do you bring a manually created resource under Terraform without recreating it?
+      - How would you detect drift automatically?
+    common_errors:
+      - Overwriting manual fixes that were keeping production alive.
+      - Leaving broad console write access in place after the clean-up.
+
+  # ------------------------------------------------------------------ linux
+  - external_key: devops.linux.disk_full
+    competency_key: linux
+    topic: Disk full on a server
+    difficulty: easy
+    kind: scenario
+    text: >-
+      You get an alert that a production server's disk is 100 percent full. How do you find what's using the
+      space and get things back to normal safely?
+    expected_concepts:
+      - df and du to locate usage
+      - deleted files still held open (lsof)
+      - inode exhaustion (df -i)
+      - log rotation and journal size
+      - safe clean-up versus deleting active files
+      - preventing recurrence with alerts and retention
+    rubric:
+      excellent: Uses df and du methodically, knows deleted-but-open files and inode exhaustion, frees space safely and fixes the root cause with rotation or retention.
+      good: Finds large directories with du and cleans up logs sensibly.
+      weak: Deletes random files or reboots without investigation.
+    followups:
+      - df says the disk is full but du finds far less — why?
+      - What would you change so this alert never fires again for the same reason?
+    common_errors:
+      - Deleting a log file that a process still holds open, so space is not released.
+      - Overlooking inode exhaustion when there is free space.
+
+  - external_key: devops.linux.load_without_cpu
+    competency_key: linux
+    topic: High load average with idle CPU
+    difficulty: medium
+    kind: scenario
+    text: >-
+      A server shows a load average of 40 on an 8-core machine, but CPU usage is only about 10 percent. What
+      could be going on, and which tools would you use?
+    expected_concepts:
+      - load includes tasks in uninterruptible sleep (D state)
+      - I/O wait and slow storage
+      - hung NFS or network mounts
+      - vmstat, iostat, top and ps state columns
+      - memory pressure and swapping
+    rubric:
+      excellent: Explains that load counts runnable and uninterruptible tasks, identifies I/O or blocked mounts as likely causes and confirms with iostat, vmstat and process states.
+      good: Suspects disk I/O and knows at least one tool to confirm it.
+      weak: Equates load average with CPU usage.
+    followups:
+      - How would you find which process is stuck in D state?
+      - How does swapping show up in these metrics?
+    common_errors:
+      - Assuming load average equals CPU utilisation.
+      - Restarting services without identifying the blocked resource.
+
+  - external_key: devops.linux.oom_investigation
+    competency_key: linux
+    topic: OOM killer and memory accounting
+    difficulty: hard
+    kind: technical
+    text: >-
+      A service on Linux keeps getting killed by the OOM killer, but your monitoring says the box has plenty of
+      free memory. How do you explain and investigate that?
+    expected_concepts:
+      - cgroup memory limits versus host memory
+      - RSS versus page cache versus available memory
+      - kernel logs (dmesg) for OOM events
+      - memory overcommit
+      - container limits and OOMKilled status
+      - finding leaks with heap profiling
+    rubric:
+      excellent: Distinguishes host and cgroup memory, explains page cache and RSS accounting, reads OOM kill logs and identifies whether the limit or a leak is the issue.
+      good: Identifies container memory limits as a likely cause and knows where OOM events are logged.
+      weak: Treats free memory as a single number and cannot explain the discrepancy.
+    followups:
+      - Why can page cache make free memory look low without being a problem?
+      - How would you tell a genuine leak from an undersized limit?
+    common_errors:
+      - Looking only at host-level free memory instead of the cgroup limit.
+      - Raising limits repeatedly without checking for a leak.
+
+  # ------------------------------------------------------------- networking
+  - external_key: devops.networking.request_lifecycle
+    competency_key: networking
+    topic: What happens when a request is made
+    difficulty: easy
+    kind: technical
+    text: >-
+      From an infrastructure point of view, what happens between a user typing your site's URL and your
+      application receiving the request?
+    expected_concepts:
+      - DNS resolution and TTLs
+      - TCP handshake
+      - TLS handshake and certificates
+      - CDN or edge proxy
+      - load balancer and health checks
+      - ingress or reverse proxy to the application
+    rubric:
+      excellent: Gives an ordered, accurate walk-through including DNS, TCP, TLS, CDN and load balancing, and points out where latency or failures typically occur.
+      good: Covers DNS, TCP/TLS and a load balancer correctly.
+      weak: Skips major steps or confuses DNS with routing.
+    followups:
+      - Where would you look first if users in one country see slow page loads?
+      - How do DNS TTLs affect a failover?
+    common_errors:
+      - Forgetting the TLS handshake cost.
+      - Not knowing where TLS terminates in their own architecture.
+
+  - external_key: devops.networking.intermittent_502
+    competency_key: networking
+    topic: Intermittent 502s behind a load balancer
+    difficulty: medium
+    kind: scenario
+    text: >-
+      Users see occasional 502 errors from your load balancer — maybe one in a thousand requests — while the
+      backends look healthy. What would you suspect, and how would you prove it?
+    expected_concepts:
+      - keep-alive timeout mismatch between load balancer and backend
+      - backends closing idle connections
+      - deploys without connection draining
+      - health check gaps
+      - load balancer access logs and backend logs correlation
+      - packet capture
+    rubric:
+      excellent: Suspects idle timeout mismatches and draining issues, explains why the backend must keep idle connections open longer than the load balancer, and correlates logs to confirm.
+      good: Considers timeouts and deploys and proposes log correlation.
+      weak: Suggests adding more backends without diagnosing.
+    followups:
+      - Why should the backend keep-alive timeout be longer than the load balancer's?
+      - How would you correlate a specific 502 with backend logs?
+    common_errors:
+      - Ignoring connection reuse and idle timeouts.
+      - Assuming healthy health checks mean every request succeeds.
+
+  - external_key: devops.networking.k8s_dns
+    competency_key: networking
+    topic: DNS problems inside Kubernetes
+    difficulty: hard
+    kind: scenario
+    text: >-
+      Services in your Kubernetes cluster report sporadic five-second delays and occasional DNS resolution
+      failures when calling each other. How would you investigate and fix this?
+    expected_concepts:
+      - CoreDNS capacity and scaling
+      - ndots and search-domain expansion
+      - conntrack race conditions with UDP
+      - NodeLocal DNSCache
+      - fully qualified names with a trailing dot
+      - DNS metrics and query logs
+    rubric:
+      excellent: Recognises the classic five-second timeout pattern, explains ndots expansion and conntrack races, and proposes NodeLocal DNSCache, CoreDNS scaling and client configuration changes backed by metrics.
+      good: Checks CoreDNS health and scaling and knows search domains add extra queries.
+      weak: Restarts CoreDNS without understanding the cause.
+    followups:
+      - Why does ndots set to 5 multiply the number of DNS queries?
+      - How does NodeLocal DNSCache help?
+    common_errors:
+      - Not knowing that short names trigger several search-domain lookups.
+      - Scaling application pods while CoreDNS is the bottleneck.
+
+  # ---------------------------------------------------------- observability
+  - external_key: devops.observability.three_pillars
+    competency_key: observability
+    topic: Metrics, logs and traces
+    difficulty: easy
+    kind: technical
+    text: >-
+      How do metrics, logs and traces differ, and when would you reach for each one while debugging a
+      production problem?
+    expected_concepts:
+      - metrics for aggregated trends and alerting
+      - logs for detailed discrete events
+      - traces for request paths across services
+      - correlation through trace ids
+      - cost and cardinality trade-offs
+    rubric:
+      excellent: Explains each signal's strengths and costs and describes a debugging flow that moves from metrics to traces to logs using correlation ids.
+      good: Correct definitions with a sensible example of when to use each.
+      weak: Treats them as interchangeable or knows only logs.
+    followups:
+      - How do you link a slow trace to the relevant log lines?
+      - Why can high-cardinality labels be dangerous in a metrics system?
+    common_errors:
+      - Putting user ids into metric labels.
+      - Logging everything at debug level in production.
+
+  - external_key: devops.observability.slo_design
+    competency_key: observability
+    topic: SLOs and error budgets
+    difficulty: medium
+    kind: technical
+    text: >-
+      How would you define SLIs and SLOs for a customer-facing API, and how would the error budget actually
+      change how the team works?
+    expected_concepts:
+      - user-centric SLIs (availability, latency percentiles)
+      - SLO targets and measurement windows
+      - error budget calculation
+      - burn-rate alerts
+      - policy when the budget is exhausted
+    rubric:
+      excellent: Chooses user-centric SLIs, sets realistic targets with windows, computes the budget and burn-rate alerts, and explains how the budget governs release risk.
+      good: Defines sensible SLIs and SLOs and understands the error budget concept.
+      weak: Confuses SLOs with SLAs or picks infrastructure metrics such as CPU as SLIs.
+    followups:
+      - What does 99.9 percent monthly availability allow in minutes of downtime?
+      - What is a burn-rate alert, and why is it better than a static threshold?
+    common_errors:
+      - Choosing 100 percent as the target.
+      - Measuring at the server instead of where users experience the service.
+
+  - external_key: devops.observability.alert_fatigue
+    competency_key: observability
+    topic: Alert fatigue
+    difficulty: medium
+    kind: scenario
+    text: >-
+      The on-call engineer receives around 200 alerts a week and has started ignoring them. What would you do
+      to fix that situation?
+    expected_concepts:
+      - auditing alerts for actionability
+      - symptom-based rather than cause-based alerting
+      - severity levels and routing
+      - deduplication and grouping
+      - runbooks linked to alerts
+      - ownership and regular review
+    rubric:
+      excellent: Audits alerts with data, deletes or downgrades non-actionable ones, moves to SLO and symptom-based paging, adds runbooks and sets up a recurring review with clear ownership.
+      good: Proposes removing noisy alerts and adding severity levels.
+      weak: Suggests muting alerts or hiring more on-call staff.
+    followups:
+      - What makes an alert worth waking someone up at 3 a.m.?
+      - How would you measure whether the changes worked?
+    common_errors:
+      - Paging on causes such as high CPU instead of user-facing symptoms.
+      - Deleting alerts without checking what failure they were meant to catch.
+
+  - external_key: devops.observability.p99_regression
+    competency_key: observability
+    topic: Tail-latency regression
+    difficulty: hard
+    kind: scenario
+    text: >-
+      After a release, your API's p99 latency doubled, but average latency barely moved. How would you track
+      down the cause?
+    expected_concepts:
+      - percentiles versus averages
+      - comparing before and after release by endpoint and dimension
+      - distributed tracing of slow requests
+      - exemplars linking metrics to traces
+      - garbage collection, lock contention or slow dependencies
+      - canary comparison or rollback to confirm
+    rubric:
+      excellent: Explains why averages hide tail latency, slices metrics by endpoint, region and instance, uses traces or exemplars for slow requests, forms hypotheses and confirms with a rollback or canary.
+      good: Uses tracing and per-endpoint breakdowns to investigate.
+      weak: Looks only at averages or immediately scales up infrastructure.
+    followups:
+      - Why is averaging percentiles across instances mathematically wrong?
+      - What would you do if only one availability zone shows the regression?
+    common_errors:
+      - Averaging p99 values from multiple hosts.
+      - Not comparing against the previous version directly.
+
+  # ------------------------------------------------------ incident_response
+  - external_key: devops.incident_response.first_steps
+    competency_key: incident_response
+    topic: First steps when paged
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined, behavioral]
+    text: >-
+      You're paged at 3 a.m. because checkout is failing for many users. Talk me through your first 15
+      minutes.
+    expected_concepts:
+      - acknowledge and assess user impact
+      - declare an incident and open a channel
+      - check recent changes and deploys
+      - mitigate first (rollback, failover, feature flag)
+      - communicate status regularly
+      - escalate when needed
+    rubric:
+      excellent: Prioritises impact assessment and mitigation over root cause, checks recent changes, communicates early and escalates appropriately, with a clear timeline.
+      good: Reasonable sequence with mitigation and communication mentioned.
+      weak: Dives into root-cause debugging alone without communicating or mitigating.
+    followups:
+      - When would you roll back even though you're not sure the deploy caused it?
+      - Who needs to know, and how often would you update them?
+    common_errors:
+      - Spending the first hour finding the root cause while users stay affected.
+      - Working silently without updating stakeholders.
+
+  - external_key: devops.incident_response.coordination
+    competency_key: incident_response
+    topic: Coordinating a multi-team incident
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined, behavioral]
+    text: >-
+      A major incident involves your platform team, two product teams and a database vendor. How would you
+      organise the response so it doesn't turn into chaos?
+    expected_concepts:
+      - incident commander role
+      - separate communications lead
+      - clear workstreams and owners
+      - regular status cadence
+      - a single source of truth (incident doc or channel)
+      - decision log and timeline
+    rubric:
+      excellent: Establishes clear roles, workstreams and a communication cadence, keeps a decision log, and explains how the commander avoids hands-on debugging.
+      good: Mentions an incident lead and regular updates.
+      weak: Everyone debugs in one channel with no roles.
+    followups:
+      - Why shouldn't the incident commander also be the main debugger?
+      - How do you hand over an incident at a shift change?
+    common_errors:
+      - No single owner, so decisions stall.
+      - Too many people in the incident channel creating noise.
+
+  - external_key: devops.incident_response.postmortem
+    competency_key: incident_response
+    topic: Blameless postmortems
+    difficulty: hard
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined, behavioral, leadership]
+    text: >-
+      An outage was caused by an engineer pushing a configuration change that took down the API gateway. How
+      would you run the postmortem, and what would good action items look like?
+    expected_concepts:
+      - blameless framing focused on systems
+      - timeline reconstruction
+      - contributing factors beyond the trigger
+      - detection and response gaps
+      - specific, owned and tracked action items
+      - safer config rollout (validation, canary)
+    rubric:
+      excellent: Runs a blameless review, reconstructs the timeline, identifies systemic contributing factors (no validation, no canary, slow detection), and proposes specific owned action items with follow-up tracking.
+      good: Blameless intent with a timeline and some concrete improvements.
+      weak: Focuses on the individual's mistake or produces vague actions like "be more careful".
+    followups:
+      - How do you make sure action items actually get done?
+      - What would you change so a bad config can't take down production instantly?
+    common_errors:
+      - Naming "human error" as the root cause.
+      - Action items without owners or deadlines.

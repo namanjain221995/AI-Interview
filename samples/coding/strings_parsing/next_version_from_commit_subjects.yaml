@@ -1,0 +1,169 @@
+version: 1
+slug: next_version_from_commit_subjects
+title: Next Version from Commit Subjects
+difficulty: medium
+competency_keys: [problem_solving, code_quality]
+role_tags: [devops, platform, backend]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Next Version from Commit Subjects
+
+  A release pipeline picks the next semantic version automatically from the commit messages merged since
+  the last release. You are given the `current` version `MAJOR.MINOR.PATCH` and the commit `subjects`.
+
+  A subject counts only if it has **exactly** this shape:
+
+  ```
+  type(scope)!: description
+  ```
+
+  - `type` is one or more ASCII letters; it is compared **case-insensitively** (`Feat` and `FEAT` are
+    `feat`).
+  - `(scope)` is optional; when present it is `(`, one or more characters that are not parentheses, `)`.
+  - `!` is optional and marks a **breaking change**, whatever the type.
+  - Then comes a colon, a single space, and a non-empty description.
+
+  Subjects of any other shape (for example `feat:missing space`, `feat (api): x`, `Merge branch 'main'`)
+  are ignored, as are well-formed subjects of other types such as `docs` or `chore` without `!`.
+
+  Decide the bump from all counted subjects together:
+
+  1. If any counted subject has `!`: bump **MAJOR** - except while `MAJOR` is `0`, when a breaking change
+     bumps **MINOR** instead.
+  2. Otherwise, if any counted subject has type `feat`: bump **MINOR**.
+  3. Otherwise, if any counted subject has type `fix` or `perf`: bump **PATCH**.
+  4. Otherwise the version is unchanged.
+
+  Bumping a component resets every component to its right to `0`. Return the new version string.
+
+  ### Example 1
+  ```
+  Input:  current = "1.4.2"
+          subjects = ["fix(api): handle empty cart", "docs: update README", "feat(search): add filters"]
+  Output: "1.5.0"
+  Explanation: The feat subject bumps MINOR, which resets PATCH to 0.
+  ```
+
+  ### Example 2
+  ```
+  Input:  current = "0.9.3"
+          subjects = ["chore(deps)!: drop legacy client", "fix: retry on timeout"]
+  Output: "0.10.0"
+  Explanation: A breaking change while MAJOR is 0 bumps MINOR instead of MAJOR.
+  ```
+
+  ### Example 3
+  ```
+  Input:  current = "2.0.7"
+          subjects = ["Merge branch 'release'", "feat:no space", "test: add cases"]
+  Output: "2.0.7"
+  Explanation: The first two subjects are not in the required shape and test does not bump anything.
+  ```
+
+  ### Constraints
+  - `current` is `MAJOR.MINOR.PATCH` with each part an integer from `0` to `10^6` without leading zeros.
+  - `0 <= subjects.length <= 500`
+  - Each subject has 1 to 120 printable ASCII characters and does not start or end with a space.
+
+  **Follow-up:** how would you also honour a `BREAKING CHANGE:` line in the commit body?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: next_release_version
+  params:
+    - {name: current, type: "string"}
+    - {name: subjects, type: "string[]"}
+  return_type: "string"
+  comparison: exact
+reference_solutions:
+  python: |
+    import re
+
+    SUBJECT = re.compile(r"([A-Za-z]+)(\([^()]+\))?(!)?: (.+)")
+
+
+    def next_release_version(current: str, subjects: list[str]) -> str:
+        major, minor, patch = (int(part) for part in current.split("."))
+        breaking = feature = fix = False
+        for subject in subjects:
+            match = SUBJECT.fullmatch(subject)
+            if not match:
+                continue
+            kind = match.group(1).lower()
+            if match.group(3):
+                breaking = True
+            if kind == "feat":
+                feature = True
+            elif kind in ("fix", "perf"):
+                fix = True
+        if breaking and major > 0:
+            return f"{major + 1}.0.0"
+        if breaking or feature:
+            return f"{major}.{minor + 1}.0"
+        if fix:
+            return f"{major}.{minor}.{patch + 1}"
+        return f"{major}.{minor}.{patch}"
+  javascript: |
+    function nextReleaseVersion(current, subjects) {
+      const [major, minor, patch] = current.split(".").map(Number);
+      const pattern = /^([A-Za-z]+)(\([^()]+\))?(!)?: (.+)$/;
+      let breaking = false;
+      let feature = false;
+      let fix = false;
+      for (const subject of subjects) {
+        const m = pattern.exec(subject);
+        if (!m) continue;
+        const kind = m[1].toLowerCase();
+        if (m[3]) breaking = true;
+        if (kind === "feat") feature = true;
+        else if (kind === "fix" || kind === "perf") fix = true;
+      }
+      if (breaking && major > 0) return `${major + 1}.0.0`;
+      if (breaking || feature) return `${major}.${minor + 1}.0`;
+      if (fix) return `${major}.${minor}.${patch + 1}`;
+      return `${major}.${minor}.${patch}`;
+    }
+tests:
+  - {id: t1, args: ["1.4.2", ["fix(api): handle empty cart", "docs: update README", "feat(search): add filters"]], expected: "1.5.0", description: "Example 1 - feat outranks fix; patch resets"}
+  - {id: t2, args: ["0.9.3", ["chore(deps)!: drop legacy client", "fix: retry on timeout"]], expected: "0.10.0", description: "Example 2 - breaking change while MAJOR is 0 bumps MINOR"}
+  - {id: t3, args: ["2.0.7", ["Merge branch 'release'", "feat:no space", "test: add cases"]], expected: "2.0.7", description: "Example 3 - nothing that counts leaves the version unchanged"}
+  - {id: t4, hidden: true, args: ["3.1.4", []], expected: "3.1.4", description: "No commits at all"}
+  - {id: t5, hidden: true, args: ["1.9.9", ["perf: cache lookups", "FIX(Auth): token refresh"]], expected: "1.9.10", description: "perf and upper-case FIX both give a patch bump without carrying into minor"}
+  - {id: t6, hidden: true, args: ["4.2.0", ["refactor(core)!: rename config keys", "feat: new endpoint"]], expected: "5.0.0", description: "Breaking non-feat type outranks feat; MAJOR bump resets minor and patch"}
+  - {id: t7, hidden: true, args: ["0.0.0", ["Feat(ui): dark theme"]], expected: "0.1.0", description: "Version zero with a mixed-case feat type"}
+  - {id: t8, hidden: true, args: ["1.2.3", ["feat (api): spaced type", "fix(): empty scope", "fix(a(b)): nested", "feat!:no space", "fix:  two spaces"]], expected: "1.2.4", description: "Malformed shapes ignored (space before scope, empty scope, nested parentheses, missing space); two spaces after the colon still has a non-empty description"}
+  - {id: t9, hidden: true, args: ["1.0.0", ["feat2: digits in type", "fix-up: hyphen", "feature: longer type", "fixes: plural"]], expected: "1.0.0", description: "Types that only start with feat or fix do not count"}
+  - {id: t10, hidden: true, args: ["999999.1000000.5", ["fix(db)!: change schema"]], expected: "1000000.0.0", description: "Breaking fix on large version numbers; MAJOR becomes a seven-digit number"}
+  - {id: t11, hidden: true, args: ["0.3.12", ["docs!: remove deprecated guide", "chore: bump", "fix: typo"]], expected: "0.4.0", description: "Breaking docs change while MAJOR is 0 bumps minor, overriding the fix"}
+  - {id: t12, hidden: true, args: ["5.5.5", ["ci(github-actions): cache deps", "style: format", "chore(release): 5.5.5"]], expected: "5.5.5", description: "Only non-bumping types: version unchanged"}
+expected_concepts:
+  - "precise parsing of a structured subject line"
+  - "case-insensitive comparison of the type"
+  - "aggregate flags first, then decide the highest bump"
+  - "semantic versioning reset rules"
+  - "pre-1.0 special case for breaking changes"
+optimal_complexity: {time: "O(total characters)", space: "O(1)"}
+rubric:
+  excellent: "Parses the subject shape exactly (with a well-explained regex or a hand-written parser), collects breaking/feature/fix flags in one pass, applies the precedence and the major-zero rule, resets lower components, and tests malformed subjects deliberately."
+  good: "Correct precedence and resets; parsing needs one fix such as the case-insensitive type, the optional scope or the required space after the colon."
+  weak: "Uses startswith checks that accept feature or fixes, ignores the ! on non-feat types, forgets to reset lower components, or mishandles MAJOR 0."
+  criteria:
+    correctness: "All tests pass, including malformed subjects, mixed-case types and version zero."
+    efficiency: "One pass over the subjects; constant extra memory."
+    code_quality: "Parsing and bump decision are separate; the precedence reads top to bottom; no string concatenation bugs with numeric parts."
+    edge_cases: "Empty list, breaking change on a non-feature type, MAJOR 0, empty or nested scope, types that only share a prefix with feat or fix."
+    communication: "States the precedence order and why counting flags first is simpler than bumping per commit."
+hints:
+  - "Two separate questions: does a subject count, and what does the strongest counted subject imply for the version?"
+  - "Write a parser for the subject shape that pulls out the type and whether the breaking marker is present, then remember three yes-or-no facts across all subjects instead of bumping the version once per commit."
+  - "Match each subject against letters, an optional parenthesised scope without nested parentheses, an optional exclamation mark, then a colon and one space and at least one more character. Record whether you saw any breaking marker, any feat and any fix or perf. Then apply the rules in order: breaking bumps major (or minor while major is zero), else feat bumps minor, else fix or perf bumps patch, resetting the lower parts to zero."
+followups:
+  - "How would you support pre-release versions such as 2.0.0-rc.1?"
+  - "How would you also detect BREAKING CHANGE footers in commit bodies?"
+  - "How would you generate a changelog grouped by type at the same time?"
+  - "What should happen if the current tag is not a valid version?"
+common_errors:
+  - "Bumping once per commit, which produces 1.6.0 from two feat commits on 1.4.2."
+  - "Accepting any subject that merely starts with feat or fix, such as feature or fixes."
+  - "Only treating feat! as breaking and ignoring the marker on other types."
+  - "Forgetting to reset PATCH (and MINOR) to zero after a higher bump."
+  - "Comparing the version parts as strings, which breaks at 9 to 10."

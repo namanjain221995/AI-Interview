@@ -1,0 +1,219 @@
+version: 1
+slug: component_ticket_mentions_sql
+title: Component Ticket Mentions (SQL)
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, support_engineer, backend]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Component Ticket Mentions
+
+  Table `components`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | name | VARCHAR(60) | unique; only letters, digits and single spaces |
+
+  Table `tickets`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | title | VARCHAR(200) | free text typed by customers |
+
+  The support team wants a rough heat map of which product components customers complain about. A
+  ticket **mentions** a component when the component's name appears anywhere inside the ticket title,
+  ignoring case. This is a plain substring check: there are no word boundaries, so `Cart` is mentioned by
+  `Carton labels misprinted`.
+
+  For **every** component return `component_name` and `ticket_count`, the number of distinct tickets
+  that mention it. Components that no ticket mentions appear with `0`, and one ticket may count for
+  several components. Order the rows by `ticket_count` descending, then by `component_name` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite. Remember that `LIKE` is case-sensitive
+  in PostgreSQL.
+
+  ### Example 1
+  ```
+  components                      tickets
+  +----+-----------------+        +----+-----------------------------------------+
+  | id | name            |        | id | title                                   |
+  +----+-----------------+        +----+-----------------------------------------+
+  | 1  | Checkout        |        | 1  | Checkout button greyed out              |
+  | 2  | Search          |        | 2  | payment gateway timeout during CHECKOUT |
+  | 3  | Payment Gateway |        | 3  | Search returns stale results            |
+  | 4  | Reports         |        | 4  | Slow checkout on mobile                 |
+  +----+-----------------+        | 5  | Dark mode request                       |
+                                  +----+-----------------------------------------+
+
+  Output
+  +-----------------+--------------+
+  | component_name  | ticket_count |
+  +-----------------+--------------+
+  | Checkout        | 3            |
+  | Payment Gateway | 1            |
+  | Search          | 1            |
+  | Reports         | 0            |
+  +-----------------+--------------+
+  Ticket 2 counts for both Checkout and Payment Gateway.
+  ```
+
+  ### Example 2
+  ```
+  components          tickets
+  +----+--------+     +----+----------------------------+
+  | id | name   |     | id | title                      |
+  +----+--------+     +----+----------------------------+
+  | 1  | Login  |     | 1  | Export to CSV drops header |
+  | 2  | Export |     | 2  | login loop after reset     |
+  +----+--------+     | 3  | LOGIN page typo            |
+                      +----+----------------------------+
+
+  Output
+  +----------------+--------------+
+  | component_name | ticket_count |
+  +----------------+--------------+
+  | Login          | 2            |
+  | Export         | 1            |
+  +----------------+--------------+
+  ```
+
+  ### Constraints
+  - Component names are non-empty, unique, and contain only ASCII letters, digits and single spaces.
+  - Titles may contain any printable ASCII characters, including `%` and `_`.
+  - Each ticket counts at most once per component, however many times the name appears in its title.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return component_name and ticket_count for every component.
+    SELECT name AS component_name
+    FROM components;
+reference_solutions:
+  sql: |
+    SELECT c.name AS component_name,
+           COUNT(t.id) AS ticket_count
+    FROM components c
+    LEFT JOIN tickets t
+      ON LOWER(t.title) LIKE '%' || LOWER(c.name) || '%'
+    GROUP BY c.id, c.name
+    ORDER BY ticket_count DESC, component_name ASC;
+sql_setup: |
+  CREATE TABLE components (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(60) NOT NULL
+  );
+  CREATE TABLE tickets (
+    id INTEGER PRIMARY KEY,
+    title VARCHAR(200) NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - case-insensitive match, one ticket counts for two components, zero row kept"
+    setup_sql: |
+      INSERT INTO components (id, name) VALUES (1, 'Checkout'), (2, 'Search'), (3, 'Payment Gateway'), (4, 'Reports');
+      INSERT INTO tickets (id, title) VALUES
+        (1, 'Checkout button greyed out'), (2, 'payment gateway timeout during CHECKOUT'),
+        (3, 'Search returns stale results'), (4, 'Slow checkout on mobile'), (5, 'Dark mode request');
+    expected_rows: [["Checkout", 3], ["Payment Gateway", 1], ["Search", 1], ["Reports", 0]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - ordering by count then name"
+    setup_sql: |
+      INSERT INTO components (id, name) VALUES (1, 'Login'), (2, 'Export');
+      INSERT INTO tickets (id, title) VALUES (1, 'Export to CSV drops header'), (2, 'login loop after reset'), (3, 'LOGIN page typo');
+    expected_rows: [["Login", 2], ["Export", 1]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Both tables empty - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "No tickets - every component reported with 0 sorted by name"
+    setup_sql: |
+      INSERT INTO components (id, name) VALUES (1, 'Search'), (2, 'Billing'), (3, 'Alerts');
+    expected_rows: [["Alerts", 0], ["Billing", 0], ["Search", 0]]
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "No components - no rows even though tickets exist"
+    setup_sql: |
+      INSERT INTO tickets (id, title) VALUES (1, 'Billing broken'), (2, 'Search slow');
+    expected_rows: []
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Repeated mention counts once per ticket; plain substring matches inside words (Carton, rapid)"
+    setup_sql: |
+      INSERT INTO components (id, name) VALUES (1, 'Cart'), (2, 'Api');
+      INSERT INTO tickets (id, title) VALUES (1, 'cart cart CART totals wrong'), (2, 'Carton labels misprinted'), (3, 'rapid retries from mobile client');
+    expected_rows: [["Cart", 2], ["Api", 1]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Multi-word names need the exact spacing; overlapping names counted independently"
+    setup_sql: |
+      INSERT INTO components (id, name) VALUES (1, 'Order History'), (2, 'Orders'), (3, 'History');
+      INSERT INTO tickets (id, title) VALUES (1, 'ORDER HISTORY empty for new users'), (2, 'order  history pagination'), (3, 'Orders export fails'), (4, 'history tab blank');
+    expected_rows: [["History", 3], ["Order History", 1], ["Orders", 1]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Titles containing LIKE wildcard characters (% and _) are matched literally from the name side"
+    setup_sql: |
+      INSERT INTO tickets (id, title) VALUES (1, '100% CPU in Scheduler_v2'), (2, 'scheduler v2 misses jobs'), (3, 'Scheduler v2 drift 5%');
+      INSERT INTO components (id, name) VALUES (1, 'Scheduler v2'), (2, 'Queue');
+    expected_rows: [["Scheduler v2", 2], ["Queue", 0]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Larger set - 7 components, 30 tickets with single and double mentions in mixed case"
+    setup_sql: |
+      INSERT INTO components (id, name) VALUES
+        (1, 'Billing'), (2, 'Checkout'), (3, 'Inventory'), (4, 'Login'), (5, 'Search'), (6, 'Shipping'), (7, 'Reports');
+      INSERT INTO tickets (id, title) VALUES
+        (1, 'Billing and INVENTORY slow, case 0'), (2, 'checkout error in step 1'), (3, 'INVENTORY error in step 2'),
+        (4, 'login and shipping slow, case 3'), (5, 'Search error in step 4'), (6, 'shipping error in step 5'),
+        (7, 'Billing and INVENTORY slow, case 6'), (8, 'checkout error in step 7'), (9, 'INVENTORY error in step 8'),
+        (10, 'login and shipping slow, case 9'), (11, 'Search error in step 10'), (12, 'shipping error in step 11'),
+        (13, 'Billing and INVENTORY slow, case 12'), (14, 'checkout error in step 13'), (15, 'INVENTORY error in step 14'),
+        (16, 'login and shipping slow, case 15'), (17, 'Search error in step 16'), (18, 'shipping error in step 17'),
+        (19, 'Billing and INVENTORY slow, case 18'), (20, 'checkout error in step 19'), (21, 'INVENTORY error in step 20'),
+        (22, 'login and shipping slow, case 21'), (23, 'Search error in step 22'), (24, 'shipping error in step 23'),
+        (25, 'Billing and INVENTORY slow, case 24'), (26, 'checkout error in step 25'), (27, 'INVENTORY error in step 26'),
+        (28, 'login and shipping slow, case 27'), (29, 'Search error in step 28'), (30, 'shipping error in step 29');
+    expected_rows: [["Inventory", 10], ["Shipping", 10], ["Billing", 5], ["Checkout", 5], ["Login", 5], ["Search", 5], ["Reports", 0]]
+expected_concepts:
+  - "LEFT JOIN on a non-equality (pattern) condition"
+  - "case-insensitive matching with LOWER on both sides"
+  - "string concatenation to build a LIKE pattern"
+  - "COUNT of a nullable column so unmatched components get 0"
+  - "deterministic multi-key ORDER BY"
+optimal_complexity: {time: "O(c * t * L) for c components, t tickets and title length L", space: "O(c)"}
+rubric:
+  excellent: "Writes a LEFT JOIN with LOWER(title) LIKE '%' || LOWER(name) || '%', counts the ticket id so empty components show 0, groups by component id and name, orders by count then name, and discusses why this is a full cross comparison and how full-text search or tagging at intake would scale better."
+  good: "Correct query after a hint about case sensitivity in PostgreSQL or about COUNT(*) returning 1 for unmatched components."
+  weak: "Uses an inner join that drops zero-count components, relies on case-insensitive LIKE from SQLite, or counts rows with COUNT(*)."
+  criteria:
+    correctness: "All tests pass, including zero-count components, mixed case, repeated mentions and tickets mentioning several components."
+    efficiency: "Acknowledges the nested comparison and suggests a better design for large volumes (full-text index, trigram index or component tags)."
+    code_quality: "Clear aliases, a readable join condition and output names that match the contract."
+    edge_cases: "Empty tables, multi-word names, wildcard characters in titles and names that occur inside other words."
+    communication: "Explains the difference between COUNT(*) and COUNT(column) after an outer join."
+hints:
+  - "Every component must appear in the result even when nothing matches it, so think about which kind of join keeps unmatched rows from one side."
+  - "The join condition is not an equality: it asks whether the title contains the name. Build a pattern around the name and make both sides the same case, because PostgreSQL compares LIKE patterns case-sensitively."
+  - "Left join tickets to components on the lower-cased title being like the lower-cased name wrapped in percent signs, group by the component id and name, count the ticket id rather than all rows so components without matches get zero, and sort by that count descending and then by name."
+followups:
+  - "How would you require whole-word matches instead of substrings, portably?"
+  - "How would you make this fast for millions of tickets?"
+  - "How would you show the share of tickets per component instead of raw counts?"
+  - "What happens if a component name could contain a percent sign or underscore?"
+common_errors:
+  - "Using an inner join, which drops components with no mentions."
+  - "Using COUNT(*), which reports 1 instead of 0 for unmatched components."
+  - "Relying on SQLite's case-insensitive LIKE, which fails on PostgreSQL."
+  - "Grouping by name only and ordering without a tie-breaker."

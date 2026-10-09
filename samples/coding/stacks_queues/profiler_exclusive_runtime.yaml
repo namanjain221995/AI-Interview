@@ -1,0 +1,141 @@
+version: 1
+slug: profiler_exclusive_runtime
+title: Profiler Exclusive Runtime
+difficulty: medium
+competency_keys: [data_structures, algorithms, debugging]
+role_tags: [backend, sre, platform]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Profiler Exclusive Runtime
+
+  A lightweight tracer is attached to a **single-threaded** worker. Whenever a function starts or
+  finishes it writes one log line of the form `"<t> enter <id>"` or `"<t> exit <id>"`, where `t` is a
+  timestamp in microseconds and `id` is a function id from `0` to `n - 1`.
+
+  The worker runs one function at a time: when function A calls function B, A is paused until B exits.
+  The log is **well nested**: every `exit` closes the most recent `enter` that is still open (and has the
+  same id), and every `enter` is eventually closed. Functions may call themselves (recursion).
+
+  Timestamps are **non-decreasing instants**. The time between two consecutive lines stamped `a` and `b`
+  lasts exactly `b - a` microseconds and belongs to whichever call is innermost (on top of the call
+  stack) during that span. Time when no call is open belongs to nobody.
+
+  The **exclusive runtime** of a function is the total time during which one of its calls was the
+  innermost running call; time spent inside functions it called does not count. For a recursive
+  function, every one of its calls contributes while it is on top.
+
+  Return an array of length `n` whose entry `i` is the exclusive runtime of function `i`
+  (`0` for functions that never ran).
+
+  ### Example 1
+  ```
+  Input:  n = 3, events = ["0 enter 0", "2 enter 1", "5 enter 2", "6 exit 2", "9 exit 1", "10 exit 0"]
+  Output: [3, 6, 1]
+  Explanation: function 0 is on top during 0-2 and 9-10 (3 in total), function 1 during 2-5 and 6-9 (6), function 2 during 5-6 (1)
+  ```
+
+  ### Example 2
+  ```
+  Input:  n = 2, events = ["4 enter 1", "7 enter 1", "7 exit 1", "12 exit 1", "12 enter 0", "21 exit 0"]
+  Output: [9, 8]
+  Explanation: the outer call of function 1 is on top during 4-7 and 7-12, its zero-length recursive call adds nothing (8 in total); function 0 runs 12-21 (9)
+  ```
+
+  ### Example 3
+  ```
+  Input:  n = 2, events = ["1 enter 0", "3 exit 0", "10 enter 0", "11 exit 0"]
+  Output: [3, 0]
+  Explanation: the idle gap 3-10 belongs to nobody, and function 1 never ran
+  ```
+
+  ### Constraints
+  - `1 <= n <= 100`
+  - `0 <= events.length <= 2 * 10^4` and `events.length` is even
+  - Each line is exactly `"<t> enter <id>"` or `"<t> exit <id>"` with single spaces
+  - `0 <= t <= 10^12`, and timestamps never decrease from one line to the next
+  - `0 <= id < n`
+  - The log is well nested and every call is closed
+
+  **Follow-up:** the totals can exceed the 32-bit range; which type do you use for them, and why?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: exclusive_runtime_per_function
+  params:
+    - {name: n, type: int}
+    - {name: events, type: "string[]"}
+  return_type: "long[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def exclusive_runtime_per_function(n: int, events: list[str]) -> list[int]:
+        totals = [0] * n
+        stack: list[int] = []  # ids of open calls, innermost last
+        previous = 0
+        for line in events:
+            stamp, kind, ident = line.split(" ")
+            t = int(stamp)
+            if stack:
+                totals[stack[-1]] += t - previous  # the span since the last line belongs to the top call
+            if kind == "enter":
+                stack.append(int(ident))
+            else:
+                stack.pop()
+            previous = t
+        return totals
+  javascript: |
+    function exclusiveRuntimePerFunction(n, events) {
+      const totals = new Array(n).fill(0);
+      const stack = []; // ids of open calls, innermost last
+      let previous = 0;
+      for (const line of events) {
+        const [stamp, kind, ident] = line.split(" ");
+        const t = Number(stamp);
+        if (stack.length > 0) totals[stack[stack.length - 1]] += t - previous;
+        if (kind === "enter") stack.push(Number(ident));
+        else stack.pop();
+        previous = t;
+      }
+      return totals;
+    }
+tests:
+  - {id: t1, args: [3, ["0 enter 0", "2 enter 1", "5 enter 2", "6 exit 2", "9 exit 1", "10 exit 0"]], expected: [3, 6, 1], description: "Example 1"}
+  - {id: t2, args: [2, ["4 enter 1", "7 enter 1", "7 exit 1", "12 exit 1", "12 enter 0", "21 exit 0"]], expected: [9, 8], description: "Example 2 - recursion with a zero-length inner call"}
+  - {id: t3, args: [2, ["1 enter 0", "3 exit 0", "10 enter 0", "11 exit 0"]], expected: [3, 0], description: "Example 3 - idle gap and a function that never ran"}
+  - {id: t4, hidden: true, args: [1, []], expected: [0], description: "Empty log: every total is zero"}
+  - {id: t5, hidden: true, args: [3, ["5 enter 2", "5 enter 1", "5 exit 1", "5 exit 2"]], expected: [0, 0, 0], description: "All lines share one timestamp: nothing accumulates"}
+  - {id: t6, hidden: true, args: [5, ["0 enter 0", "10 enter 1", "20 enter 2", "30 enter 3", "40 enter 4", "60 exit 4", "70 exit 3", "80 exit 2", "90 exit 1", "100 exit 0"]], expected: [20, 20, 20, 20, 20], description: "Deep nesting chain 0..4 entered every 10 and unwound every 10 (every id ends with 20)"}
+  - {id: t7, hidden: true, args: [1, ["0 enter 0", "1 enter 0", "3 enter 0", "6 enter 0", "10 exit 0", "15 exit 0", "21 exit 0", "28 exit 0"]], expected: [28], description: "Four-deep recursion of one id: every frame contributes while on top"}
+  - {id: t8, hidden: true, args: [3, ["0 enter 1", "999999999999 enter 2", "1000000000000 exit 2", "1000000000000 exit 1", "1000000000000 enter 0", "1000000000000 exit 0"]], expected: [0, 999999999999, 1], description: "Timestamps near 10^12: totals exceed 32 bits and a zero-length trailing call"}
+  - {id: t9, hidden: true, args: [4, ["2 enter 3", "4 enter 0", "5 exit 0", "7 enter 1", "9 exit 1", "9 enter 0", "14 exit 0", "20 exit 3", "30 enter 2", "31 exit 2"]], expected: [6, 2, 1, 10], description: "Sibling callees with back-to-back exit and enter at the same instant, then a later top-level call"}
+  - {id: t10, hidden: true, args: [6, ["1254939781 enter 1", "5421685128 exit 1", "5421685128 enter 3", "10239662912 enter 2", "11204125129 exit 2", "11204125129 exit 3", "14909001951 enter 3", "14909001951 exit 3", "19538825218 enter 0", "22151483393 enter 0", "22151483393 exit 0", "23412841728 exit 0", "24143248678 enter 0", "24602770434 exit 0", "24602770434 enter 3", "24602770434 exit 3", "24602770434 enter 5", "24602770434 enter 2", "29394902436 enter 5", "32138591558 enter 5", "32138591558 enter 4", "32138591558 enter 5", "34337956668 exit 5", "36623147509 exit 4", "36623147509 enter 0", "36623147509 enter 3", "38680772956 exit 3", "38680772956 exit 0", "38680772956 enter 5", "38680772956 exit 5", "43564651882 enter 2", "44120108765 exit 2", "44120108765 enter 3", "44120108765 exit 3", "48047633351 enter 0", "48047633351 enter 4", "52232732803 exit 4", "54226820866 exit 0", "54226820866 exit 5", "54226820866 enter 2", "54226820866 exit 2", "54914236507 exit 5", "54914236507 exit 2", "54914236507 enter 4", "54914236507 exit 4", "59087581541 enter 3", "59837291333 enter 1", "61554844166 exit 1", "64520303192 enter 2", "65795631061 exit 2", "68942871167 enter 4", "70632314990 enter 2", "70632314990 enter 2", "72124803377 exit 2", "72124803377 enter 3", "72821337160 exit 3", "72821337160 enter 3", "72821337160 exit 3", "77533055427 enter 0", "77533055427 enter 1", "77807023507 exit 1", "77807023507 enter 3", "77807023507 enter 2", "77807023507 exit 2", "77807023507 enter 4", "79626456670 exit 4", "79626456670 exit 3", "79626456670 exit 0", "79626456670 exit 2", "79626456670 exit 4", "83513478073 exit 3", "83513478073 enter 5", "83513478073 exit 5", "83513478073 enter 1", "87368546114 enter 2", "87423257710 exit 2", "87423257710 enter 1", "88881795456 enter 0", "91958796645 enter 5", "91958796645 exit 5", "91958796645 exit 0", "91958796645 exit 1", "91958796645 exit 1", "91958796645 exit 5", "91958796645 enter 2", "96634852494 exit 2", "96634852494 enter 5", "99901100650 enter 2", "103172212170 exit 2", "105873215964 exit 5", "105873215964 enter 2", "105873215964 enter 1", "105873215964 enter 3", "105873215964 exit 3", "105873215964 enter 1", "109944413927 enter 1", "110534433179 exit 1", "110534433179 enter 2", "113141254528 enter 0", "115974072284 enter 4", "115974072284 enter 5", "116958114936 enter 4", "118539344407 exit 4", "118539344407 exit 5", "118539344407 exit 4", "118539344407 enter 1", "118539344407 exit 1", "118539344407 exit 0", "118539344407 exit 2", "118539344407 enter 4", "118539344407 enter 4", "118539344407 enter 2", "118539344407 enter 0", "120828336193 exit 0", "120828336193 exit 2", "125257930814 exit 4", "125257930814 enter 5", "125616385927 exit 5", "130273039156 enter 3", "130657477909 enter 1", "134911750670 enter 4", "134911750670 enter 4", "137957967691 enter 3", "137957967691 enter 0", "142635946584 enter 0", "142635946584 enter 0", "144427377733 enter 2", "144427377733 exit 2", "148286493515 exit 0", "148286493515 enter 3", "152002923808 exit 3", "152002923808 exit 0", "153973241701 exit 0", "153973241701 enter 2", "157793403200 exit 2", "158813496028 enter 1", "161375813041 enter 4", "162090792953 enter 2", "162090792953 exit 2", "164410116105 enter 0", "164410116105 exit 0", "164410116105 exit 4", "164601359547 enter 2", "164601359547 exit 2", "166454869634 exit 1", "166454869634 enter 4", "169265012678 exit 4", "169754551024 enter 4", "171134187427 exit 4", "171134187427 enter 3", "171134187427 exit 3", "171134187427 enter 3", "171315953300 exit 3", "171315953300 enter 5", "173570677197 exit 5", "175252184614 enter 0", "177325593081 enter 3", "177947467105 enter 2", "182699321052 enter 0", "186737876473 exit 0", "190307374177 enter 1", "190307374177 enter 1", "191338921879 enter 0", "192517821197 enter 3", "196097559477 enter 4", "198918168790 exit 4", "203106695848 exit 3", "203106695848 enter 5", "203106695848 enter 3", "205114451551 enter 1", "205114451551 enter 3", "205114451551 enter 2", "207945162834 enter 3", "207945162834 exit 3", "208302731369 enter 3", "208302731369 exit 3", "210094069118 enter 1", "210094069118 exit 1", "212114218054 exit 2", "215952895356 enter 1", "216865792249 enter 4", "216865792249 enter 0", "216865792249 enter 5", "216865792249 exit 5", "216865792249 exit 0", "219850750256 enter 3", "219850750256 exit 3", "220730546684 enter 5", "223398306351 enter 5", "225791881481 enter 5", "225791881481 exit 5", "225791881481 enter 3", "230389870298 enter 1", "231814200697 exit 1", "233467463429 enter 1", "233467463429 enter 2", "233467463429 enter 0", "233467463429 exit 0", "234406436074 enter 5", "236090675146 enter 2", "236274937068 exit 2", "236274937068 enter 4", "236535837239 enter 0", "240877001786 enter 1", "242159405083 enter 2", "246535594602 enter 1", "246535594602 enter 0", "246535594602 enter 3", "246535594602 enter 5", "246535594602 exit 5", "246535594602 enter 1", "246535594602 enter 4", "246535594602 exit 4", "246535594602 enter 5", "246535594602 exit 5", "251359890015 exit 1", "251359890015 enter 4", "251359890015 exit 4", "252235384237 enter 4", "252235384237 exit 4", "252235384237 exit 3", "256659559606 exit 0", "256659559606 exit 1", "261506920790 enter 5", "261506920790 exit 5", "263713276238 exit 2", "263713276238 exit 1", "265159542207 exit 0", "265159542207 exit 4", "265159542207 enter 5", "265159542207 enter 0", "265159542207 enter 0", "265159542207 enter 1", "265159542207 exit 1", "266833790175 exit 0", "271113872984 enter 1", "273976739281 enter 0", "277186484015 exit 0", "280394622771 enter 4", "280394622771 exit 4", "280394622771 exit 1", "281174287066 enter 2", "282735405349 exit 2", "282735405349 exit 0", "282735405349 enter 2", "282735405349 exit 2", "282735405349 exit 5", "282735405349 exit 5", "283087701686 enter 1", "283297700183 exit 1", "283297700183 exit 2", "285818459358 exit 1", "285818459358 exit 3", "290060702793 enter 2", "290060702793 exit 2", "290060702793 exit 5", "294129696070 enter 5", "296908187191 exit 5", "296908187191 enter 3", "296908187191 exit 3", "299402629938 enter 3", "300498461820 enter 2", "300498461820 enter 3", "301444198390 enter 3", "301444198390 exit 3", "303318064587 exit 3", "303318064587 enter 0", "303318064587 enter 3", "304094598172 exit 3", "307261187492 exit 0", "307261187492 enter 5", "307261187492 enter 0", "309664800641 exit 0", "309664800641 enter 4", "309664800641 enter 5", "309664800641 exit 5", "309664800641 exit 4", "310906651138 enter 1", "310906651138 enter 1", "310906651138 enter 2", "310906651138 enter 5", "311558566426 exit 5", "312322296040 exit 2", "314625123288 enter 2", "316955704951 enter 3", "316955704951 exit 3", "318200457921 exit 2", "318200457921 exit 1", "318200457921 exit 1", "322403388381 enter 2", "322403388381 enter 0", "322403388381 enter 0", "324238827476 exit 0", "326752275492 exit 0", "326752275492 enter 1", "326752275492 enter 2", "326752275492 enter 0", "326752275492 exit 0", "327325301594 enter 5", "329361772945 exit 5", "329361772945 exit 2", "331814161820 enter 0", "331814161820 exit 0", "331814161820 exit 1", "331814161820 enter 4", "331814161820 enter 2", "333303061450 exit 2", "333303061450 exit 4", "333303061450 exit 2", "333535741094 enter 3", "333535741094 enter 0", "333535741094 enter 5", "333535741094 exit 5", "337462664471 exit 0", "342005599470 exit 3", "343906871652 exit 5", "343913663866 enter 2", "343913663866 exit 2", "343913663866 enter 4", "344448512194 exit 4", "344448512194 enter 3", "344448512194 exit 3", "344448512194 exit 2", "344448512194 exit 3", "344448512194 enter 2", "347891543264 enter 3", "349121631732 enter 5", "353335895923 enter 3", "353335895923 enter 1", "353335895923 enter 1", "356420933049 enter 5", "357529075518 enter 3", "357529075518 exit 3", "358592684572 exit 5", "358592684572 enter 4", "358592684572 enter 1", "358592684572 exit 1", "358592684572 enter 4", "362529142218 exit 4", "365428435505 enter 1", "370121146518 enter 2", "370789541210 exit 2", "370789541210 exit 1", "370789541210 enter 5", "375644335433 enter 1", "375644335433 exit 1", "375644335433 enter 4", "379149092415 enter 2", "384026303163 enter 2", "384026303163 exit 2", "384219077253 exit 2", "384219077253 exit 4", "385755528285 exit 5", "390075732878 enter 1", "390075732878 enter 0", "393727001394 exit 0", "396069999024 enter 1", "396069999024 exit 1", "396305522922 enter 5", "398348802780 enter 2", "398348802780 exit 2", "401384345393 enter 3", "401650900842 enter 1", "406594162813 enter 5", "406594162813 exit 5", "410430773951 enter 0", "414557823118 exit 0", "415966191711 exit 1", "419614189648 exit 3", "421364943891 exit 5", "421364943891 exit 1", "421364943891 exit 4", "421364943891 exit 1", "421364943891 exit 1", "421364943891 exit 3", "421364943891 exit 5", "421364943891 exit 3", "421364943891 exit 2", "421364943891 exit 5", "424178778733 exit 4", "428705744857 exit 1", "428705744857 exit 3", "431588128998 exit 1", "436098122117 exit 3", "440157038052 exit 5", "442303884276 exit 0", "442303884276 exit 1", "442303884276 exit 1", "442303884276 exit 2", "442303884276 exit 3", "446040957663 exit 0", "449944169808 exit 3", "449944169808 exit 4", "449944169808 exit 4", "449944169808 exit 1", "449944169808 exit 3", "451420718072 exit 4", "455896820506 exit 1", "455896820506 exit 1", "460760800005 exit 2"]], expected: [81779739925, 80456849185, 78461293222, 69951409340, 57349151993, 82442309520], description: "Stress: 400 lines of random well-nested calls over 6 ids with large gaps"}
+expected_concepts:
+  - stack of open calls where the top is the running function
+  - attributing the span between consecutive events to the current top
+  - instant timestamps so an exit at t ends the call exactly at t
+  - recursion handled by pushing every call, not every distinct id
+  - 64-bit totals for large timestamps
+optimal_complexity: {time: O(m), space: O(m + n)}
+rubric:
+  excellent: "Models the log as a call stack, charges each gap between consecutive lines to the call on top, handles recursion, zero-length calls and idle gaps without special cases, uses 64-bit totals and states O(m) time with m log lines."
+  good: "Reaches a correct stack-based solution, perhaps after fixing an off-by-one in how enter and exit times are charged, and gives the right complexity."
+  weak: "Charges whole inclusive durations, double counts nested calls, uses 32-bit totals that overflow, or tracks one start time per id so recursion breaks."
+  criteria:
+    correctness: "All tests pass, including recursion, zero-length calls, idle gaps and timestamps near 10^12."
+    efficiency: "One pass over the log with constant work per line."
+    code_quality: "Clear parsing of each line and a single previous-timestamp variable instead of per-case bookkeeping."
+    edge_cases: "Empty log, functions that never run, identical timestamps and deep nesting."
+    communication: "Explains why the time since the previous line always belongs to the call on top of the stack."
+hints:
+  - "At any moment exactly one open call (or none) is actually running; think about which structure tells you which one it is."
+  - "Keep a stack of open calls. Between two consecutive log lines nothing changes, so the whole span between them belongs to whatever is on top of the stack."
+  - "Remember the timestamp of the previous line; for each new line, if the stack is not empty add the difference to the total of the id on top, then push on enter or pop on exit and update the previous timestamp. Keep totals in a 64-bit type."
+followups:
+  - "How would you also report inclusive runtime (time including callees) for every function?"
+  - "What would change if the tracer used inclusive integer ticks, where an exit at t means the call ran through the end of tick t?"
+  - "How would you detect and report a malformed log where an exit does not match the open call?"
+  - "How would you extend this to several threads that each write their own interleaved lines?"
+common_errors:
+  - "Adding one to durations as if timestamps were inclusive ticks."
+  - "Storing a single start time per function id, which breaks for recursive calls."
+  - "Subtracting the callee's full duration from the caller in a second pass and getting nested sums wrong."
+  - "Accumulating totals in a 32-bit integer and overflowing for timestamps near 10^12."

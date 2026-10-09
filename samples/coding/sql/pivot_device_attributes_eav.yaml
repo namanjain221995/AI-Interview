@@ -1,0 +1,247 @@
+version: 1
+slug: pivot_device_attributes_eav
+title: Pivot Current Device Attributes
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data, backend, platform]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Pivot Current Device Attributes
+
+  An asset-inventory service stores device attributes as an append-only **entity-attribute-value**
+  log in table `device_attributes`. Every change to an attribute adds a new row; old rows are never
+  updated or deleted.
+
+  | column | type | notes |
+  |--------|------|-------|
+  | device_id | INTEGER | device identifier |
+  | attr | VARCHAR(40) | attribute name (case-sensitive) |
+  | value | VARCHAR(100) | new value; **NULL means the attribute was cleared** |
+  | set_ts | INTEGER | Unix time of the change; `(device_id, attr, set_ts)` is the primary key |
+
+  The **current value** of an attribute for a device is the `value` of its row with the **largest
+  `set_ts`** for that device and attribute. If that latest row has a NULL value, the attribute is
+  cleared and its current value is NULL, even when an older row had a value.
+
+  Build a report with **one row per device that has at least one row in the table** (whatever its
+  attributes) and the current values of exactly three attributes as columns: `os`, `region` and
+  `owner_team`. A column is NULL when the device never had that attribute or it is currently
+  cleared. Every other attribute (for example `rack`, `os_version` or `OS`) is ignored.
+
+  Return `device_id`, `os`, `region` and `owner_team`, ordered by `device_id` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  device_attributes
+  +-----------+------------+--------------+--------+
+  | device_id | attr       | value        | set_ts |
+  +-----------+------------+--------------+--------+
+  | 1         | os         | ubuntu-22.04 | 100    |
+  | 1         | region     | eu-west      | 100    |
+  | 1         | owner_team | payments     | 100    |
+  | 1         | os         | ubuntu-24.04 | 250    |
+  | 2         | region     | us-east      | 120    |
+  | 2         | rack       | r12          | 120    |
+  | 3         | owner_team | search       | 90     |
+  | 3         | owner_team | NULL         | 300    |
+  +-----------+------------+--------------+--------+
+
+  Output
+  +-----------+--------------+---------+------------+
+  | device_id | os           | region  | owner_team |
+  +-----------+--------------+---------+------------+
+  | 1         | ubuntu-24.04 | eu-west | payments   |
+  | 2         | NULL         | us-east | NULL       |
+  | 3         | NULL         | NULL    | NULL       |
+  +-----------+--------------+---------+------------+
+  Device 3's owner_team was cleared at 300, so it is NULL rather than "search".
+  ```
+
+  ### Example 2
+  ```
+  device_attributes
+  +-----------+------------+-----------+--------+
+  | device_id | attr       | value     | set_ts |
+  +-----------+------------+-----------+--------+
+  | 10        | os_version | 6.8       | 50     |
+  | 10        | serial     | SN-77     | 50     |
+  | 11        | os         | debian-12 | 40     |
+  | 11        | region     | ap-south  | 45     |
+  +-----------+------------+-----------+--------+
+
+  Output
+  +-----------+-----------+----------+------------+
+  | device_id | os        | region   | owner_team |
+  +-----------+-----------+----------+------------+
+  | 10        | NULL      | NULL     | NULL       |
+  | 11        | debian-12 | ap-south | NULL       |
+  +-----------+-----------+----------+------------+
+  ```
+
+  ### Constraints
+  - `0 <= rows in device_attributes <= 10^6`
+  - Each `(device_id, attr, set_ts)` triple appears at most once.
+  - Attributes of the same device change independently, so the latest `set_ts` can differ per attribute.
+languages: [sql]
+starter_code:
+  sql: |
+    -- One row per device with the current (latest set_ts) os, region and owner_team.
+    SELECT
+      device_id,
+      MAX(CASE WHEN attr = 'os' THEN value END) AS os,
+      MAX(CASE WHEN attr = 'region' THEN value END) AS region,
+      MAX(CASE WHEN attr = 'owner_team' THEN value END) AS owner_team
+    FROM device_attributes
+    GROUP BY device_id
+    ORDER BY device_id;
+reference_solutions:
+  sql: |
+    WITH latest AS (
+      SELECT d.device_id, d.attr, d.value
+      FROM device_attributes d
+      WHERE d.set_ts = (
+        SELECT MAX(d2.set_ts)
+        FROM device_attributes d2
+        WHERE d2.device_id = d.device_id
+          AND d2.attr = d.attr
+      )
+    )
+    SELECT
+      device_id,
+      MAX(CASE WHEN attr = 'os' THEN value END) AS os,
+      MAX(CASE WHEN attr = 'region' THEN value END) AS region,
+      MAX(CASE WHEN attr = 'owner_team' THEN value END) AS owner_team
+    FROM latest
+    GROUP BY device_id
+    ORDER BY device_id;
+sql_setup: |
+  CREATE TABLE device_attributes (
+    device_id INTEGER NOT NULL,
+    attr VARCHAR(40) NOT NULL,
+    value VARCHAR(100),
+    set_ts INTEGER NOT NULL,
+    PRIMARY KEY (device_id, attr, set_ts)
+  );
+tests:
+  - id: t1
+    description: "Example 1 - newer os wins and a cleared owner_team becomes NULL"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_attributes (device_id, attr, value, set_ts) VALUES
+        (1, 'os', 'ubuntu-22.04', 100), (1, 'region', 'eu-west', 100), (1, 'owner_team', 'payments', 100),
+        (1, 'os', 'ubuntu-24.04', 250), (2, 'region', 'us-east', 120), (2, 'rack', 'r12', 120),
+        (3, 'owner_team', 'search', 90), (3, 'owner_team', NULL, 300);
+    expected_rows:
+      - [1, "ubuntu-24.04", "eu-west", "payments"]
+      - [2, null, "us-east", null]
+      - [3, null, null, null]
+  - id: t2
+    description: "Example 2 - device with only other attributes still gets a row; os_version is not os"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_attributes (device_id, attr, value, set_ts) VALUES
+        (10, 'os_version', '6.8', 50), (10, 'serial', 'SN-77', 50), (11, 'os', 'debian-12', 40), (11, 'region', 'ap-south', 45);
+    expected_rows: [[10, null, null, null], [11, "debian-12", "ap-south", null]]
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single row for a single device"
+    ordered: true
+    setup_sql: "INSERT INTO device_attributes (device_id, attr, value, set_ts) VALUES (7, 'owner_team', 'infra', 1);"
+    expected_rows: [[7, null, null, "infra"]]
+  - id: t5
+    hidden: true
+    description: "Older value sorts after the newer one as text - plain MAX(CASE ...) without picking the latest row is wrong"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_attributes (device_id, attr, value, set_ts) VALUES
+        (1, 'os', 'windows-2019', 10), (1, 'os', 'ubuntu-24.04', 20), (1, 'region', 'us-west', 10), (1, 'region', 'eu-central', 30);
+    expected_rows: [[1, "ubuntu-24.04", "eu-central", null]]
+  - id: t6
+    hidden: true
+    description: "Cleared then set again (value is current) versus set then cleared (NULL is current)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_attributes (device_id, attr, value, set_ts) VALUES
+        (4, 'region', 'eu-west', 100), (4, 'region', NULL, 200), (4, 'region', 'eu-north', 300),
+        (5, 'os', 'rhel-9', 100), (5, 'os', 'rhel-8', 50), (5, 'os', NULL, 400);
+    expected_rows: [[4, null, "eu-north", null], [5, null, null, null]]
+  - id: t7
+    hidden: true
+    description: "Attribute names are case-sensitive - OS, Region and owner_team_old are ignored"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_attributes (device_id, attr, value, set_ts) VALUES
+        (8, 'OS', 'freebsd-14', 10), (8, 'Region', 'sa-east', 10), (8, 'owner_team_old', 'legacy', 10), (8, 'owner_team', 'storage', 5);
+    expected_rows: [[8, null, null, "storage"]]
+  - id: t8
+    hidden: true
+    description: "Latest is per attribute, not per device - keeping only each device's newest timestamp drops attributes"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_attributes (device_id, attr, value, set_ts) VALUES
+        (100, 'os', 'alpine-3.20', 500), (100, 'region', 'us-east', 100), (100, 'owner_team', 'edge', 300),
+        (2, 'os', 'debian-11', 10), (2, 'os', 'debian-12', 700), (2, 'owner_team', 'data', 20),
+        (10, 'rack', 'r1', 1);
+    expected_rows:
+      - [2, "debian-12", null, "data"]
+      - [10, null, null, null]
+      - [100, "alpine-3.20", "us-east", "edge"]
+  - id: t9
+    hidden: true
+    description: "Fleet of six devices with interleaved history, clears and ignored attributes"
+    ordered: true
+    setup_sql: |
+      INSERT INTO device_attributes (device_id, attr, value, set_ts) VALUES
+        (21, 'os', 'ubuntu-20.04', 1), (22, 'os', 'ubuntu-20.04', 1), (23, 'os', 'debian-11', 1),
+        (21, 'region', 'eu-west', 2), (22, 'region', 'eu-west', 2), (24, 'region', 'us-east', 2),
+        (21, 'owner_team', 'payments', 3), (23, 'owner_team', 'search', 3), (25, 'owner_team', 'ml', 3),
+        (21, 'os', 'ubuntu-22.04', 10), (22, 'region', 'eu-central', 11), (23, 'os', NULL, 12),
+        (24, 'region', 'us-west', 13), (25, 'owner_team', 'ml-platform', 14), (21, 'owner_team', NULL, 15),
+        (21, 'owner_team', 'checkout', 16), (26, 'rack', 'r9', 16), (26, 'os_family', 'linux', 17),
+        (22, 'os', 'ubuntu-24.04', 18), (24, 'os', 'rhel-9', 19), (23, 'region', 'ap-south', 20);
+    expected_rows:
+      - [21, "ubuntu-22.04", "eu-west", "checkout"]
+      - [22, "ubuntu-24.04", "eu-central", null]
+      - [23, null, "ap-south", "search"]
+      - [24, "rhel-9", "us-west", null]
+      - [25, null, null, "ml-platform"]
+      - [26, null, null, null]
+expected_concepts:
+  - latest row per group (correlated MAX or ROW_NUMBER)
+  - pivoting with conditional aggregation (MAX(CASE ...))
+  - NULL as a meaningful current value versus a missing row
+  - aggregates ignore NULLs
+  - deterministic ORDER BY of the final result
+optimal_complexity: {time: "O(n log n) to find the latest row per device and attribute", space: O(n)}
+rubric:
+  excellent: Selects the latest row per (device_id, attr) first, then pivots with MAX(CASE ...) grouped by device; explains that aggregating the full history lets an older value or a non-NULL value survive a clear, and mentions an index on (device_id, attr, set_ts).
+  good: Correct pivot after a hint about picking the latest row before aggregating or about cleared attributes.
+  weak: Pivots the whole history with MAX, filters on the device's single newest timestamp, uses LIKE 'os%' or joins once per attribute and loses devices.
+  criteria:
+    correctness: All tests pass, including cleared attributes, text-ordering traps and devices that only have other attributes.
+    efficiency: One pass to rank or filter the latest rows plus one grouped aggregation instead of a subquery per output column.
+    code_quality: A named CTE for the latest values and readable CASE expressions.
+    edge_cases: Empty table, devices without any of the three attributes, cleared then re-set values and case-sensitive names.
+    communication: Explains why aggregate functions skipping NULL is a trap for cleared attributes.
+hints:
+  - Split the job in two - first decide which single row holds the current value of each attribute for each device, then turn attributes into columns.
+  - The current row of a (device, attribute) pair is the one with the largest timestamp for that pair; if you aggregate the whole history directly, MAX happily returns an older value or ignores a NULL that cleared it.
+  - Keep only rows whose set_ts equals the maximum set_ts for the same device_id and attr (a correlated subquery or ROW_NUMBER() partitioned by device_id and attr ordered by set_ts descending), then group those rows by device_id with one MAX(CASE WHEN attr = '...' THEN value END) per wanted attribute and order by device_id.
+followups:
+  - How would you produce the same report as of an arbitrary point in time?
+  - How would you make the set of pivoted attributes configurable without dynamic SQL?
+  - What are the trade-offs of the EAV model compared with a JSON column or a wide table?
+  - Which index makes finding the latest row per device and attribute cheap?
+common_errors:
+  - Pivoting the whole history with MAX(CASE ...), which picks the alphabetically largest value instead of the latest one.
+  - Treating a NULL value as "no change", so a cleared attribute keeps its older value.
+  - Keeping only rows at each device's newest timestamp, which drops attributes changed earlier.
+  - Matching attributes with LIKE or case-insensitively, which pulls in os_version or OS.
+  - Starting from an inner join per attribute, which drops devices that lack one of them.

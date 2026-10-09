@@ -1,0 +1,207 @@
+version: 1
+slug: best_selling_products_with_ties
+title: Best Sellers, Ties Included
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, business_analyst, backend]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Best Sellers, Ties Included
+
+  The merchandising team wants the "best seller" badge on the storefront. A product earns the badge when
+  its **total units sold** (the sum of `qty` over all of its order lines) equals the **highest total of
+  any product**. When several products share that highest total, **all of them** get the badge.
+
+  Table `products`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | name | VARCHAR(100) | unique product name |
+
+  Table `order_lines`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | product_id | INTEGER | references `products.id` (never NULL) |
+  | qty | INTEGER | units on this line, at least 1 |
+
+  Return one column, `name`, with one row per badge winner, **ordered by `name` ascending**. Products
+  that never appear in `order_lines` have sold nothing and never win. When `order_lines` is empty, return
+  no rows.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  products                    order_lines
+  +----+-------------+        +----+------------+-----+
+  | id | name        |        | id | product_id | qty |
+  +----+-------------+        +----+------------+-----+
+  | 1  | Desk lamp   |        | 1  | 1          | 4   |
+  | 2  | Notebook    |        | 2  | 2          | 3   |
+  | 3  | Cable tidy  |        | 3  | 3          | 6   |
+  +----+-------------+        | 4  | 1          | 2   |
+                              | 5  | 2          | 1   |
+                              +----+------------+-----+
+
+  Output
+  +------------+
+  | name       |
+  +------------+
+  | Cable tidy |
+  | Desk lamp  |
+  +------------+
+  Desk lamp and Cable tidy both sold 6 units; Notebook sold 4.
+  ```
+
+  ### Example 2
+  ```
+  products                    order_lines
+  +----+-------------+        +----+------------+-----+
+  | id | name        |        | id | product_id | qty |
+  +----+-------------+        +----+------------+-----+
+  | 1  | Desk lamp   |        | 1  | 2          | 5   |
+  | 2  | Notebook    |        | 2  | 1          | 2   |
+  | 3  | Cable tidy  |        +----+------------+-----+
+  +----+-------------+
+
+  Output
+  +----------+
+  | name     |
+  +----------+
+  | Notebook |
+  +----------+
+  ```
+
+  ### Constraints
+  - Product names are unique.
+  - Every `order_lines.product_id` refers to an existing product and `qty >= 1`.
+  - Either table may be empty.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return the name of every product whose total units sold is the maximum, ordered by name.
+    SELECT name
+    FROM products
+    ORDER BY name;
+reference_solutions:
+  sql: |
+    WITH totals AS (
+      SELECT p.id, p.name, SUM(ol.qty) AS units
+      FROM products p
+      JOIN order_lines ol ON ol.product_id = p.id
+      GROUP BY p.id, p.name
+    )
+    SELECT name
+    FROM totals
+    WHERE units = (SELECT MAX(units) FROM totals)
+    ORDER BY name;
+sql_setup: |
+  CREATE TABLE products (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE
+  );
+  CREATE TABLE order_lines (
+    id INTEGER PRIMARY KEY,
+    product_id INTEGER NOT NULL REFERENCES products (id),
+    qty INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - two products tie on 6 units"
+    setup_sql: |
+      INSERT INTO products (id, name) VALUES (1, 'Desk lamp'), (2, 'Notebook'), (3, 'Cable tidy');
+      INSERT INTO order_lines (id, product_id, qty) VALUES (1, 1, 4), (2, 2, 3), (3, 3, 6), (4, 1, 2), (5, 2, 1);
+    expected_rows: [["Cable tidy"], ["Desk lamp"]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - single winner, one product never sold"
+    setup_sql: |
+      INSERT INTO products (id, name) VALUES (1, 'Desk lamp'), (2, 'Notebook'), (3, 'Cable tidy');
+      INSERT INTO order_lines (id, product_id, qty) VALUES (1, 2, 5), (2, 1, 2);
+    expected_rows: [["Notebook"]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Both tables empty - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Products exist but nothing sold - no rows (unsold products must not tie at zero)"
+    setup_sql: |
+      INSERT INTO products (id, name) VALUES (1, 'Desk lamp'), (2, 'Notebook');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Many small lines beat one big line - must SUM qty, not take the largest line or count lines"
+    setup_sql: |
+      INSERT INTO products (id, name) VALUES (1, 'Mouse pad'), (2, 'Webcam'), (3, 'Headset');
+      INSERT INTO order_lines (id, product_id, qty) VALUES
+        (1, 2, 9), (2, 1, 2), (3, 1, 2), (4, 1, 2), (5, 1, 2), (6, 1, 2), (7, 3, 1), (8, 3, 1), (9, 3, 1), (10, 3, 1), (11, 3, 1), (12, 3, 1);
+    expected_rows: [["Mouse pad"]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Three-way tie returned alphabetically, not by id or insertion order"
+    setup_sql: |
+      INSERT INTO products (id, name) VALUES (1, 'Webcam'), (2, 'Headset'), (3, 'Monitor'), (4, 'Adapter');
+      INSERT INTO order_lines (id, product_id, qty) VALUES (1, 1, 7), (2, 3, 4), (3, 2, 7), (4, 3, 3), (5, 4, 6);
+    expected_rows: [["Headset"], ["Monitor"], ["Webcam"]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Single product with a single line"
+    setup_sql: |
+      INSERT INTO products (id, name) VALUES (1, 'Stapler');
+      INSERT INTO order_lines (id, product_id, qty) VALUES (1, 1, 1);
+    expected_rows: [["Stapler"]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Every sold product ties; an unsold product is still excluded"
+    setup_sql: |
+      INSERT INTO products (id, name) VALUES (1, 'Pen'), (2, 'Ruler'), (3, 'Eraser'), (4, 'Folder');
+      INSERT INTO order_lines (id, product_id, qty) VALUES (1, 1, 3), (2, 2, 1), (3, 2, 2), (4, 3, 2), (5, 3, 1);
+    expected_rows: [["Eraser"], ["Pen"], ["Ruler"]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Large quantities - three-way tie at 80000 built from several lines; a 79999 near-miss is excluded"
+    setup_sql: |
+      INSERT INTO products (id, name) VALUES (1, 'Batteries'), (2, 'Charger'), (3, 'Tripod'), (4, 'Lens cloth');
+      INSERT INTO order_lines (id, product_id, qty) VALUES
+        (1, 1, 50000), (2, 2, 70000), (3, 1, 30000), (4, 3, 79999), (5, 4, 40000), (6, 4, 40000), (7, 2, 9999), (8, 3, 1);
+    expected_rows: [["Batteries"], ["Lens cloth"], ["Tripod"]]
+expected_concepts:
+  - "aggregation with GROUP BY and SUM"
+  - "comparing each group to the overall maximum (subquery or CTE)"
+  - "why ORDER BY ... LIMIT 1 drops ties"
+  - "inner join to exclude products that never sold"
+optimal_complexity: {time: "O(n + m) to aggregate plus O(k log k) to sort the winners", space: "O(n) for per-product totals"}
+rubric:
+  excellent: "Aggregates units per product once (CTE or derived table), keeps products whose total equals the maximum total, orders by name, explains why LIMIT 1 or ROW_NUMBER is wrong with ties and mentions RANK() as an alternative."
+  good: "Correct query after a hint about ties or about summing quantities instead of counting lines."
+  weak: "Uses ORDER BY total DESC LIMIT 1, counts order lines instead of summing qty, or reports unsold products."
+  criteria:
+    correctness: "All tests pass, including ties, empty tables and products without sales."
+    efficiency: "Aggregates order_lines once; mentions an index on order_lines.product_id."
+    code_quality: "Readable CTE or derived table with clear aliases."
+    edge_cases: "Empty order_lines, a single product, multi-way ties and large quantities."
+    communication: "Explains why ties need a comparison against the maximum rather than a row limit."
+hints:
+  - "First work out how many units each product sold in total; only then can you decide who is on top."
+  - "Once you have one total per product, the winners are every product whose total equals the largest of those totals, however many that is."
+  - "Build per-product totals by joining products to order_lines and summing qty in a CTE, then select names from it where the total equals a subquery taking the maximum total from the same CTE, and sort by name."
+followups:
+  - "How would you return the top three totals, including everyone tied with them?"
+  - "How would the query change if the badge were computed per category?"
+  - "Which index helps this aggregation on a large order_lines table?"
+common_errors:
+  - "Using ORDER BY units DESC LIMIT 1, which drops tied products."
+  - "Counting order lines instead of summing qty."
+  - "Using a LEFT JOIN with COALESCE so unsold products tie at zero when nothing has sold."

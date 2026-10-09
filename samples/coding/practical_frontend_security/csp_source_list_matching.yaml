@@ -1,0 +1,271 @@
+version: 1
+slug: csp_source_list_matching
+title: "Content Security Policy Source Matching"
+difficulty: medium
+competency_keys: [algorithms, problem_solving, code_quality]
+role_tags: [security, frontend, fullstack]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Content Security Policy Source Matching
+
+  The front-end platform team is rolling out a `script-src` policy and wants a pre-deployment check:
+  given the policy's source list, the origin of the page and the script URLs the page loads, report
+  which scripts the policy would allow. Implement a simplified matcher with exactly the rules below.
+
+  **Origins and URLs.** `page_origin` is `scheme://host` or `scheme://host:port`. Each URL is
+  `scheme://host[:port][path][?query][#fragment]`. Schemes are `http` or `https`. The **effective
+  port** is the explicit port, otherwise `80` for `http` and `443` for `https`. A URL's path is the
+  part from the first `/` after the host up to `?` or `#`; a URL without a path has path `/`. Query
+  and fragment are ignored. Schemes and hosts compare **case-insensitively**; paths compare
+  case-sensitively.
+
+  **Sources.** Each entry of `sources` is one of:
+
+  1. `'none'` (with the quotes): matches no URL. Other entries in the list are still evaluated.
+  2. `'self'` (with the quotes): the URL has the page's scheme, host and effective port.
+  3. A **scheme source** such as `https:` (a scheme followed by `:` and nothing else): `https:`
+     matches every `https` URL; `http:` matches every `http` **and** `https` URL.
+  4. A **host source** `[scheme://]host[:port][path]`. A URL matches when all four parts match:
+     - **Scheme:** the source scheme, or the page's scheme when the source has none. If that scheme is
+       `http`, both `http` and `https` URLs match; if it is `https`, only `https` URLs match.
+     - **Host:** `*.example.com` matches any host that ends with `.example.com` (one or more extra
+       labels, but **not** `example.com` itself); any other host must be equal.
+     - **Port:** `*` matches any port; an explicit port must equal the URL's effective port; with no
+       port, the URL's effective port must be the **default port of the URL's own scheme**.
+     - **Path:** no path matches everything; a path ending in `/` matches every URL path that starts
+       with it; any other path must equal the URL path exactly.
+
+  Return one boolean per URL, in order: `true` when at least one source matches it.
+
+  ### Example 1
+  ```
+  Input:  sources = ["'self'", "https://cdn.example.net/libs/", "*.analytics.example.com"],
+          page_origin = "https://shop.example.com",
+          urls = ["https://shop.example.com/app.js", "https://cdn.example.net/libs/chart.js", "https://cdn.example.net/other.js", "https://eu.analytics.example.com/t.js", "https://analytics.example.com/t.js"]
+  Output: [true, true, false, true, false]
+  Explanation: The page's own script matches 'self'; chart.js is under the /libs/ prefix; other.js is not;
+  eu.analytics.example.com is a subdomain but the apex analytics.example.com is not.
+  ```
+
+  ### Example 2
+  ```
+  Input:  sources = ["https:", "http://legacy.example.com:8080/widget.js"],
+          page_origin = "http://intranet.example.com:8080",
+          urls = ["http://intranet.example.com:8080/a.js", "https://intranet.example.com/a.js", "https://legacy.example.com:8080/widget.js?v=3", "http://legacy.example.com:8080/widget.js/x"]
+  Output: [false, true, true, false]
+  Explanation: https: allows the second URL. The legacy source has scheme http, so the https URL on port
+  8080 matches (the query is ignored); /widget.js/x is not the exact path. The first URL is
+  http, which "https:" does not allow.
+  ```
+
+  ### Example 3
+  ```
+  Input:  sources = ["'none'"],
+          page_origin = "https://admin.example.com",
+          urls = ["https://admin.example.com/main.js"]
+  Output: [false]
+  ```
+
+  ### Constraints
+  - `1 <= sources.length <= 20`, `1 <= urls.length <= 200`
+  - Every source, origin and URL is well formed as described: no whitespace, no user info, ports are
+    decimal numbers from 1 to 65535, hosts are DNS names made of letters, digits, `-` and `.`
+  - Keywords `'none'` and `'self'` are lowercase; no other quoted keywords appear
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: csp_allows
+  params:
+    - {name: sources, type: "string[]"}
+    - {name: page_origin, type: "string"}
+    - {name: urls, type: "string[]"}
+  return_type: "bool[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def csp_allows(sources: list[str], page_origin: str, urls: list[str]) -> list[bool]:
+        default_port = {"http": 80, "https": 443}
+
+        def split_url(url: str):
+            scheme, rest = url.split("://", 1)
+            scheme = scheme.lower()
+            end = len(rest)
+            for stop in "/?#":
+                k = rest.find(stop)
+                if k != -1:
+                    end = min(end, k)
+            authority, tail = rest[:end], rest[end:]
+            for stop in "?#":
+                k = tail.find(stop)
+                if k != -1:
+                    tail = tail[:k]
+            path = tail or "/"
+            if ":" in authority:
+                host, port = authority.split(":", 1)
+                port_num = int(port)
+            else:
+                host, port_num = authority, default_port[scheme]
+            return scheme, host.lower(), port_num, path
+
+        page_scheme, page_host, page_port, _ = split_url(page_origin)
+
+        def scheme_ok(source_scheme: str, url_scheme: str) -> bool:
+            return url_scheme == source_scheme or (source_scheme == "http" and url_scheme == "https")
+
+        def matches(source: str, url) -> bool:
+            scheme, host, port, path = url
+            if source == "'none'":
+                return False
+            if source == "'self'":
+                return (scheme, host, port) == (page_scheme, page_host, page_port)
+            if "://" not in source and source.endswith(":") and source.count(":") == 1:
+                return scheme_ok(source[:-1].lower(), scheme)
+            if "://" in source:
+                src_scheme, rest = source.split("://", 1)
+                src_scheme = src_scheme.lower()
+            else:
+                src_scheme, rest = page_scheme, source
+            slash = rest.find("/")
+            authority, src_path = (rest, "") if slash == -1 else (rest[:slash], rest[slash:])
+            if ":" in authority:
+                src_host, src_port = authority.split(":", 1)
+            else:
+                src_host, src_port = authority, ""
+            src_host = src_host.lower()
+            if not scheme_ok(src_scheme, scheme):
+                return False
+            if src_host.startswith("*."):
+                if not host.endswith(src_host[1:]):
+                    return False
+            elif host != src_host:
+                return False
+            if src_port == "*":
+                pass
+            elif src_port:
+                if int(src_port) != port:
+                    return False
+            elif port != default_port[scheme]:
+                return False
+            if src_path:
+                if src_path.endswith("/"):
+                    return path.startswith(src_path)
+                return path == src_path
+            return True
+
+        result = []
+        for raw in urls:
+            url = split_url(raw)
+            result.append(any(matches(source, url) for source in sources))
+        return result
+  javascript: |
+    function cspAllows(sources, pageOrigin, urls) {
+      const defaultPort = { http: 80, https: 443 };
+      const splitUrl = (url) => {
+        const sep = url.indexOf('://');
+        const scheme = url.slice(0, sep).toLowerCase();
+        const rest = url.slice(sep + 3);
+        let end = rest.length;
+        for (const stop of ['/', '?', '#']) {
+          const k = rest.indexOf(stop);
+          if (k !== -1 && k < end) end = k;
+        }
+        const authority = rest.slice(0, end);
+        let tail = rest.slice(end);
+        for (const stop of ['?', '#']) {
+          const k = tail.indexOf(stop);
+          if (k !== -1) tail = tail.slice(0, k);
+        }
+        const path = tail || '/';
+        const colon = authority.indexOf(':');
+        const host = (colon === -1 ? authority : authority.slice(0, colon)).toLowerCase();
+        const port = colon === -1 ? defaultPort[scheme] : Number(authority.slice(colon + 1));
+        return { scheme, host, port, path };
+      };
+      const page = splitUrl(pageOrigin);
+      const schemeOk = (src, urlScheme) => urlScheme === src || (src === 'http' && urlScheme === 'https');
+      const matches = (source, u) => {
+        if (source === "'none'") return false;
+        if (source === "'self'") {
+          return u.scheme === page.scheme && u.host === page.host && u.port === page.port;
+        }
+        const hasSep = source.includes('://');
+        if (!hasSep && source.endsWith(':') && source.indexOf(':') === source.length - 1) {
+          return schemeOk(source.slice(0, -1).toLowerCase(), u.scheme);
+        }
+        let srcScheme = page.scheme;
+        let rest = source;
+        if (hasSep) {
+          const sep = source.indexOf('://');
+          srcScheme = source.slice(0, sep).toLowerCase();
+          rest = source.slice(sep + 3);
+        }
+        const slash = rest.indexOf('/');
+        const authority = slash === -1 ? rest : rest.slice(0, slash);
+        const srcPath = slash === -1 ? '' : rest.slice(slash);
+        const colon = authority.indexOf(':');
+        const srcHost = (colon === -1 ? authority : authority.slice(0, colon)).toLowerCase();
+        const srcPort = colon === -1 ? '' : authority.slice(colon + 1);
+        if (!schemeOk(srcScheme, u.scheme)) return false;
+        if (srcHost.startsWith('*.')) {
+          if (!u.host.endsWith(srcHost.slice(1))) return false;
+        } else if (u.host !== srcHost) {
+          return false;
+        }
+        if (srcPort === '*') {
+          // any port
+        } else if (srcPort !== '') {
+          if (Number(srcPort) !== u.port) return false;
+        } else if (u.port !== defaultPort[u.scheme]) {
+          return false;
+        }
+        if (srcPath) return srcPath.endsWith('/') ? u.path.startsWith(srcPath) : u.path === srcPath;
+        return true;
+      };
+      return urls.map((raw) => {
+        const u = splitUrl(raw);
+        return sources.some((s) => matches(s, u));
+      });
+    }
+tests:
+  - {id: t1, args: [["'self'", "https://cdn.example.net/libs/", "*.analytics.example.com"], "https://shop.example.com", ["https://shop.example.com/app.js", "https://cdn.example.net/libs/chart.js", "https://cdn.example.net/other.js", "https://eu.analytics.example.com/t.js", "https://analytics.example.com/t.js"]], expected: [true, true, false, true, false], description: "Example 1 - self, path prefix, wildcard subdomain excludes the apex"}
+  - {id: t2, args: [["https:", "http://legacy.example.com:8080/widget.js"], "http://intranet.example.com:8080", ["http://intranet.example.com:8080/a.js", "https://intranet.example.com/a.js", "https://legacy.example.com:8080/widget.js?v=3", "http://legacy.example.com:8080/widget.js/x"]], expected: [false, true, true, false], description: "Example 2 - scheme source, http source upgraded to https, exact path ignores the query"}
+  - {id: t3, args: [["'none'"], "https://admin.example.com", ["https://admin.example.com/main.js"]], expected: [false], description: "Example 3 - 'none' blocks everything"}
+  - {id: t4, hidden: true, args: [["cdn.example.net"], "http://app.example.com", ["http://cdn.example.net/a.js", "https://cdn.example.net/a.js", "https://cdn.example.net:80/a.js", "http://cdn.example.net:8080/a.js", "https://CDN.Example.NET:443/b.js"]], expected: [true, true, false, false, true], description: "Scheme-less source on an http page allows https; missing port means the URL scheme's default; case-insensitive host"}
+  - {id: t5, hidden: true, args: [["cdn.example.net", "'self'"], "https://app.example.com:8443", ["http://cdn.example.net/a.js", "https://cdn.example.net/a.js", "https://app.example.com/x.js", "https://app.example.com:8443/x.js", "http://app.example.com:8443/x.js"]], expected: [false, true, false, true, false], description: "Scheme-less source on an https page rejects http; self compares the effective port and scheme exactly"}
+  - {id: t6, hidden: true, args: [["https://*.example.com:*"], "https://example.com", ["https://a.b.example.com:9000/x.js", "https://example.com/x.js", "https://badexample.com/x.js", "http://a.example.com/x.js", "https://a.example.com.evil.net/x.js"]], expected: [true, false, false, false, false], description: "Wildcard port, multi-label subdomain, apex and look-alike hosts rejected"}
+  - {id: t7, hidden: true, args: [["https://static.example.org/js", "https://static.example.org/assets/"], "https://example.org", ["https://static.example.org/js", "https://static.example.org/js/", "https://static.example.org/assets", "https://static.example.org/assets/", "https://static.example.org/assets/a/b.js#frag", "https://static.example.org"]], expected: [true, false, false, true, true, false], description: "Exact path versus prefix path, trailing slash, URL without a path"}
+  - {id: t8, hidden: true, args: [["http:", "'none'"], "https://example.com", ["http://anything.test/a.js", "https://other.test:1234/b.js"]], expected: [true, true], description: "http: scheme source allows https too; 'none' alongside other sources is ignored"}
+  - {id: t9, hidden: true, args: [["https://api.example.com:443", "http://old.example.com:80/"], "https://example.com", ["https://api.example.com/v1.js", "https://api.example.com:443/v1.js", "https://old.example.com/x.js", "http://old.example.com/x.js", "https://old.example.com:80/x.js"]], expected: [true, true, false, true, true], description: "Explicit default ports; source port 80 with an upgraded https URL matches only an explicit :80, not the default 443"}
+  - {id: t10, hidden: true, args: [["'self'", "*.cdn.example.net", "https://static.example.org/js/", "api.example.com:8443/v2/loader.js"], "https://app.example.com", ["https://app.example.com/bundle-0.js", "https://edge1.cdn.example.net/lib.js?v=1", "https://static.example.org/js/chunk-2.js", "https://static.example.org/jsx/chunk-3.js", "https://api.example.com:8443/v2/loader.js", "http://app.example.com/bundle-5.js", "https://app.example.com/bundle-6.js", "https://edge7.cdn.example.net/lib.js?v=7", "https://static.example.org/js/chunk-8.js", "https://static.example.org/jsx/chunk-9.js", "https://api.example.com:443/v2/loader.js", "http://app.example.com/bundle-11.js", "https://app.example.com/bundle-12.js", "https://edge13.cdn.example.net/lib.js?v=13", "https://static.example.org/js/chunk-14.js", "https://static.example.org/jsx/chunk-15.js", "https://api.example.com:8443/v2/loader.js", "http://app.example.com/bundle-17.js", "https://app.example.com/bundle-18.js", "https://edge19.cdn.example.net/lib.js?v=19", "https://static.example.org/js/chunk-20.js", "https://static.example.org/jsx/chunk-21.js", "https://api.example.com:443/v2/loader.js", "http://app.example.com/bundle-23.js", "https://app.example.com/bundle-24.js", "https://edge25.cdn.example.net/lib.js?v=25", "https://static.example.org/js/chunk-26.js", "https://static.example.org/jsx/chunk-27.js", "https://api.example.com:8443/v2/loader.js", "http://app.example.com/bundle-29.js", "https://app.example.com/bundle-30.js", "https://edge31.cdn.example.net/lib.js?v=31", "https://static.example.org/js/chunk-32.js", "https://static.example.org/jsx/chunk-33.js", "https://api.example.com:443/v2/loader.js", "http://app.example.com/bundle-35.js", "https://app.example.com/bundle-36.js", "https://edge37.cdn.example.net/lib.js?v=37", "https://static.example.org/js/chunk-38.js", "https://static.example.org/jsx/chunk-39.js", "https://api.example.com:8443/v2/loader.js", "http://app.example.com/bundle-41.js", "https://app.example.com/bundle-42.js", "https://edge43.cdn.example.net/lib.js?v=43", "https://static.example.org/js/chunk-44.js", "https://static.example.org/jsx/chunk-45.js", "https://api.example.com:443/v2/loader.js", "http://app.example.com/bundle-47.js", "https://app.example.com/bundle-48.js", "https://edge49.cdn.example.net/lib.js?v=49", "https://static.example.org/js/chunk-50.js", "https://static.example.org/jsx/chunk-51.js", "https://api.example.com:8443/v2/loader.js", "http://app.example.com/bundle-53.js", "https://app.example.com/bundle-54.js", "https://edge55.cdn.example.net/lib.js?v=55", "https://static.example.org/js/chunk-56.js", "https://static.example.org/jsx/chunk-57.js", "https://api.example.com:443/v2/loader.js", "http://app.example.com/bundle-59.js"]], expected: [true, true, true, false, true, false, true, true, true, false, false, false, true, true, true, false, true, false, true, true, true, false, false, false, true, true, true, false, true, false, true, true, true, false, false, false, true, true, true, false, true, false, true, true, true, false, false, false, true, true, true, false, true, false, true, true, true, false, false, false], description: "Stress - 60 URLs against four sources of different kinds"}
+expected_concepts:
+  - "parsing URLs into scheme, host, port and path"
+  - "effective (default) ports"
+  - "wildcard subdomain matching that excludes the apex"
+  - "prefix versus exact path matching"
+  - "scheme upgrade from http to https"
+  - "parse sources once and reuse them"
+optimal_complexity: {time: "O(S * U * L) for S sources, U URLs and string length L", space: "O(S + U)"}
+rubric:
+  excellent: "Parses origins, URLs and sources into structured parts once, implements each rule as a small predicate (scheme, host, port, path), handles the apex and look-alike host cases, default ports per URL scheme and the http-to-https upgrade, and explains why suffix matching must include the leading dot."
+  good: "Correct for most cases; misses one subtle rule such as the default port after an upgrade or the apex exclusion and fixes it after a failing test."
+  weak: "Uses substring or contains checks for hosts (so badexample.com or example.com.evil.net pass), ignores ports, or compares the whole URL string with the source."
+  criteria:
+    correctness: "All tests pass, including apex exclusion, look-alike hosts, default ports and exact versus prefix paths."
+    efficiency: "Linear in the total input per source-URL pair; sources can be pre-parsed once."
+    code_quality: "Separate parsing from matching, one helper per component, no duplicated port logic."
+    edge_cases: "URLs without a path, queries and fragments, explicit default ports, uppercase hosts and 'none' alongside other sources."
+    communication: "Relates the rules to real attacks (look-alike domains, mixed content) and notes where real CSP differs."
+hints:
+  - "Break every URL and every host source into the same parts (scheme, host, port, path) before comparing anything; most bugs come from comparing raw strings."
+  - "Handle the keyword and scheme-only sources first, then for host sources check scheme, host, port and path in turn and reject as soon as one part fails. Work out the effective port of the URL from its own scheme."
+  - "For '*.domain' compare against the suffix '.domain' so the apex and look-alikes such as 'baddomain' fail. A source scheme of http also accepts https; a missing source port means the URL's port must equal the default for the URL's scheme; a path ending in '/' is a prefix test, otherwise equality on the path with query and fragment removed."
+followups:
+  - "Real CSP also allows a bare '*' host and nonces or hashes. How would you extend the parser without turning it into a tangle of special cases?"
+  - "Why do browsers ignore the path part of a source after a redirect?"
+  - "How would you report which source allowed each URL so the policy can be tightened?"
+  - "How would you support thousands of URLs efficiently, for example by indexing sources by host suffix?"
+common_errors:
+  - "Matching '*.example.com' with endsWith('example.com'), which lets badexample.com and the apex through."
+  - "Using the source scheme's default port instead of the URL scheme's after an http-to-https upgrade."
+  - "Forgetting to strip the query or fragment before path comparison."
+  - "Treating every path as a prefix, so '/widget.js' also matches '/widget.js/x'."
+  - "Comparing hosts case-sensitively."

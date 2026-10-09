@@ -1,0 +1,216 @@
+version: 1
+slug: effective_setting_values
+title: Effective Tenant Settings
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [backend, platform, fullstack]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Effective Tenant Settings
+
+  A multi-tenant SaaS platform stores a **platform default** for every setting. Each tenant may
+  override some of them. When support opens a tenant's settings page they need to see, for every
+  setting, the value that is actually in force and where it came from.
+
+  Table `setting_defaults`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | setting_key | VARCHAR(60) | primary key |
+  | default_value | VARCHAR(100) | never NULL |
+
+  Table `tenant_overrides`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | tenant_id | INTEGER | part of the primary key `(tenant_id, setting_key)` |
+  | setting_key | VARCHAR(60) | part of the primary key |
+  | value | VARCHAR(100) | **NULL means "no override"** (the admin cleared it) |
+
+  For **tenant 42**, return one row for **every key in `setting_defaults`** with columns:
+
+  - `setting_key`
+  - `effective_value`: the tenant's override when an override row exists **and** its `value` is not
+    NULL; otherwise the default. An empty string is a real override value.
+  - `source`: `'override'` when the effective value comes from the override, otherwise `'default'`.
+
+  Order the rows by `setting_key` ascending. Overrides for keys that have no default, and overrides of
+  other tenants, are ignored.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  setting_defaults                          tenant_overrides
+  +---------------------+---------------+   +-----------+---------------------+-------+
+  | setting_key         | default_value |   | tenant_id | setting_key         | value |
+  +---------------------+---------------+   +-----------+---------------------+-------+
+  | max_upload_mb       | 25            |   | 42        | max_upload_mb       | 100   |
+  | session_timeout_min | 30            |   | 42        | theme               | NULL  |
+  | theme               | light         |   | 7         | session_timeout_min | 5     |
+  +---------------------+---------------+   +-----------+---------------------+-------+
+
+  Output
+  +---------------------+-----------------+----------+
+  | setting_key         | effective_value | source   |
+  +---------------------+-----------------+----------+
+  | max_upload_mb       | 100             | override |
+  | session_timeout_min | 30              | default  |
+  | theme               | light           | default  |
+  +---------------------+-----------------+----------+
+  Tenant 42 cleared its theme override (NULL), and tenant 7's override does not apply to tenant 42.
+  ```
+
+  ### Example 2
+  ```
+  setting_defaults                     tenant_overrides
+  +----------------+---------------+   +-----------+----------------+-------+
+  | setting_key    | default_value |   | tenant_id | setting_key    | value |
+  +----------------+---------------+   +-----------+----------------+-------+
+  | default_locale | en            |   | 42        | default_locale | de    |
+  | theme          | light         |   | 42        | theme          | dark  |
+  +----------------+---------------+   +-----------+----------------+-------+
+
+  Output
+  +----------------+-----------------+----------+
+  | setting_key    | effective_value | source   |
+  +----------------+-----------------+----------+
+  | default_locale | de              | override |
+  | theme          | dark            | override |
+  +----------------+-----------------+----------+
+  ```
+
+  ### Constraints
+  - At most one override row per `(tenant_id, setting_key)`.
+  - Setting keys are lowercase ASCII words joined by underscores.
+  - Either table may be empty; with no defaults the result is empty.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return setting_key, effective_value, source for tenant 42, ordered by setting_key.
+    SELECT setting_key, default_value AS effective_value, 'default' AS source
+    FROM setting_defaults
+    ORDER BY setting_key;
+reference_solutions:
+  sql: |
+    SELECT d.setting_key,
+           COALESCE(o.value, d.default_value) AS effective_value,
+           CASE WHEN o.value IS NOT NULL THEN 'override' ELSE 'default' END AS source
+    FROM setting_defaults d
+    LEFT JOIN tenant_overrides o
+      ON o.setting_key = d.setting_key
+     AND o.tenant_id = 42
+    ORDER BY d.setting_key;
+sql_setup: |
+  CREATE TABLE setting_defaults (
+    setting_key VARCHAR(60) PRIMARY KEY,
+    default_value VARCHAR(100) NOT NULL
+  );
+  CREATE TABLE tenant_overrides (
+    tenant_id INTEGER NOT NULL,
+    setting_key VARCHAR(60) NOT NULL,
+    value VARCHAR(100),
+    PRIMARY KEY (tenant_id, setting_key)
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - one real override, one NULL override, another tenant's override ignored"
+    setup_sql: |
+      INSERT INTO setting_defaults (setting_key, default_value) VALUES
+        ('max_upload_mb', '25'), ('session_timeout_min', '30'), ('theme', 'light');
+      INSERT INTO tenant_overrides (tenant_id, setting_key, value) VALUES
+        (42, 'max_upload_mb', '100'), (42, 'theme', NULL), (7, 'session_timeout_min', '5');
+    expected_rows: [["max_upload_mb", "100", "override"], ["session_timeout_min", "30", "default"], ["theme", "light", "default"]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - every key overridden"
+    setup_sql: |
+      INSERT INTO setting_defaults (setting_key, default_value) VALUES ('default_locale', 'en'), ('theme', 'light');
+      INSERT INTO tenant_overrides (tenant_id, setting_key, value) VALUES (42, 'default_locale', 'de'), (42, 'theme', 'dark');
+    expected_rows: [["default_locale", "de", "override"], ["theme", "dark", "override"]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Both tables empty - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "No overrides at all - every default with source default"
+    setup_sql: |
+      INSERT INTO setting_defaults (setting_key, default_value) VALUES ('theme', 'light'), ('beta_features', 'off'), ('max_upload_mb', '25');
+    expected_rows: [["beta_features", "off", "default"], ["max_upload_mb", "25", "default"], ["theme", "light", "default"]]
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Only other tenants override - filtering tenant_id in WHERE would drop every row"
+    setup_sql: |
+      INSERT INTO setting_defaults (setting_key, default_value) VALUES ('theme', 'light'), ('mfa_required', 'false');
+      INSERT INTO tenant_overrides (tenant_id, setting_key, value) VALUES (7, 'theme', 'dark'), (9, 'mfa_required', 'true'), (420, 'theme', 'blue');
+    expected_rows: [["mfa_required", "false", "default"], ["theme", "light", "default"]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Empty-string override is a real override, distinct from a NULL override"
+    setup_sql: |
+      INSERT INTO setting_defaults (setting_key, default_value) VALUES ('login_banner', 'Welcome'), ('support_email', 'help@example.com');
+      INSERT INTO tenant_overrides (tenant_id, setting_key, value) VALUES (42, 'login_banner', ''), (42, 'support_email', NULL);
+    expected_rows: [["login_banner", "", "override"], ["support_email", "help@example.com", "default"]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Tenant 42 overrides a key with no default - ignored, defaults list drives the output"
+    setup_sql: |
+      INSERT INTO setting_defaults (setting_key, default_value) VALUES ('theme', 'light');
+      INSERT INTO tenant_overrides (tenant_id, setting_key, value) VALUES (42, 'legacy_mode', 'on'), (42, 'theme', 'dark');
+    expected_rows: [["theme", "dark", "override"]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Override equal to the default still reports source override"
+    setup_sql: |
+      INSERT INTO setting_defaults (setting_key, default_value) VALUES ('retention_days', '90'), ('audit_log', 'on');
+      INSERT INTO tenant_overrides (tenant_id, setting_key, value) VALUES (42, 'retention_days', '90');
+    expected_rows: [["audit_log", "on", "default"], ["retention_days", "90", "override"]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Mixed set - several tenants, NULL and real overrides, rows sorted by key not by insertion"
+    setup_sql: |
+      INSERT INTO setting_defaults (setting_key, default_value) VALUES
+        ('theme', 'light'), ('audit_log', 'on'), ('session_timeout_min', '30'), ('max_upload_mb', '25'),
+        ('default_locale', 'en'), ('mfa_required', 'false'), ('retention_days', '90');
+      INSERT INTO tenant_overrides (tenant_id, setting_key, value) VALUES
+        (42, 'theme', 'dark'), (42, 'audit_log', NULL), (42, 'mfa_required', 'true'), (42, 'retention_days', '365'),
+        (1, 'session_timeout_min', '10'), (1, 'default_locale', 'fr'), (43, 'max_upload_mb', '500'), (41, 'audit_log', 'off');
+    expected_rows: [["audit_log", "on", "default"], ["default_locale", "en", "default"], ["max_upload_mb", "25", "default"], ["mfa_required", "true", "override"], ["retention_days", "365", "override"], ["session_timeout_min", "30", "default"], ["theme", "dark", "override"]]
+expected_concepts:
+  - "LEFT JOIN to keep every default"
+  - "putting the tenant filter in the ON clause rather than WHERE"
+  - "COALESCE for fallback values"
+  - "CASE expression for provenance"
+  - "NULL versus empty string"
+optimal_complexity: {time: "O(d log d) for d defaults with an index on tenant_overrides (tenant_id, setting_key)", space: "O(d)"}
+rubric:
+  excellent: "LEFT JOINs the tenant's overrides with tenant_id = 42 inside the ON clause, uses COALESCE for the value and a CASE on the override value for source, treats an empty string as a real override, and explains why moving the tenant filter to WHERE turns the join into an inner join."
+  good: "Correct query after a hint about the ON versus WHERE placement or the NULL override."
+  weak: "Filters tenant_id in WHERE and loses rows, reports source from the mere presence of an override row, or drives the output from tenant_overrides."
+  criteria:
+    correctness: "All tests pass, including NULL overrides, empty-string overrides and other tenants' rows."
+    efficiency: "One join using the composite primary key of tenant_overrides."
+    code_quality: "Clear aliases and output columns that match the contract exactly."
+    edge_cases: "No overrides, overrides only for other tenants, keys without defaults and empty tables."
+    communication: "Explains outer-join filtering semantics and NULL versus empty string."
+hints:
+  - "Every default must appear exactly once, whether or not the tenant changed it, so think about which table drives the result and how to attach the optional override."
+  - "An outer join keeps defaults without a match, but a condition on the overrides table placed in the wrong clause silently removes those rows again; and a matched override can still hold NULL."
+  - "Left join setting_defaults to tenant_overrides on the key and on tenant_id = 42 inside the ON clause, take COALESCE of the override value and the default, derive source with a CASE that checks whether the override value is not NULL, and order by the key."
+followups:
+  - "How would you return the effective settings for every tenant at once?"
+  - "How would you add a third layer, such as per-region defaults between platform and tenant?"
+  - "Why might you store NULL instead of deleting the override row when an admin clears it?"
+common_errors:
+  - "Writing WHERE o.tenant_id = 42, which turns the LEFT JOIN into an inner join and drops defaults."
+  - "Setting source to override whenever an override row exists, even when its value is NULL."
+  - "Treating an empty-string override as missing."

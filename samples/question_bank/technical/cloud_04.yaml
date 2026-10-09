@@ -1,0 +1,659 @@
+# Cloud engineering (technical.cloud), part 4: availability, disaster recovery, cost optimisation,
+# migration and cross-cloud strategy on AWS, Azure and GCP.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [cloud]
+questions:
+  # ------------------------------------------------------------- availability and cost basics
+  - external_key: technical.cloud.zone_or_region_resilience
+    competency_key: system_design
+    topic: Designing for zone failure versus region failure
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What's the difference between designing for the loss of an availability zone and designing for the
+      loss of a whole region, and how would you decide which one a particular service needs?
+    expected_concepts:
+      - zones are separate facilities with low latency between them
+      - synchronous replication is practical within a region
+      - regional failure is rarer but affects every zone at once
+      - multi-region adds cost, complexity and data consistency problems
+      - the decision follows business impact and recovery targets
+    rubric:
+      excellent: Explains the failure domains and why multi-zone is a cheap default while multi-region is a business decision driven by recovery targets, giving an example of each.
+      good: Knows zones and regions are different failure domains and that multi-region costs more.
+      weak: Treats zones and regions as interchangeable or recommends multi-region for everything.
+    followups:
+      - Which parts of your stack are hardest to make multi-region?
+      - How would you explain the cost difference to a product owner?
+    common_errors:
+      - Assuming a multi-zone deployment protects against a regional outage.
+
+  - external_key: technical.cloud.managed_ha_limits
+    competency_key: databases
+    topic: What managed high availability protects against
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you turn on multi-AZ or zone redundancy for a managed database or cache, what does that actually
+      give you, and what does it not protect you from?
+    expected_concepts:
+      - a standby in another zone with automatic failover
+      - brief interruption during failover and client reconnects
+      - no protection against bad writes, deletion or corruption
+      - no protection against a regional outage
+      - backups and point-in-time recovery are still needed
+      - standby replicas are not the same as read replicas
+    rubric:
+      excellent: Describes the failover behaviour and its brief downtime, and is clear that replication copies mistakes too, so backups and regional plans are still required.
+      good: Knows it provides automatic failover to another zone and is not a backup.
+      weak: Believes multi-AZ makes backups unnecessary.
+    followups:
+      - What does the application need to do to survive a failover cleanly?
+      - Can you read from the standby, and why does that matter?
+    common_errors:
+      - Treating zone redundancy as a backup.
+
+  - external_key: technical.cloud.cost_allocation_tagging
+    competency_key: cloud_cost_optimization
+    topic: Tagging for cost allocation
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How would you set up tags or labels so cloud costs can be attributed to the right team and product,
+      and how would you keep people from skipping them?
+    expected_concepts:
+      - a small mandatory tag set such as owner, cost centre and environment
+      - enforcing tags at creation through policy
+      - defaults applied by infrastructure as code
+      - activating tags for billing reports
+      - allocating shared and untaggable costs
+      - account or project structure as a simpler allocation boundary
+    rubric:
+      excellent: Keeps the schema small and enforced at creation, uses accounts or projects as the primary boundary, and has a clear rule for shared costs.
+      good: Defines required tags and enforces them with policy.
+      weak: Relies on teams remembering to tag, or proposes dozens of optional tags.
+    followups:
+      - How would you allocate the cost of a shared networking hub?
+      - What do you do about resources that can't be tagged?
+    common_errors:
+      - Forgetting to activate tags for cost reporting, so they never appear in the bill.
+
+  - external_key: technical.cloud.commitment_discounts
+    competency_key: cloud_cost_optimization
+    topic: Reserved capacity and committed use discounts
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do reserved instances, savings plans or committed use discounts work, and how would you decide how
+      much to commit to?
+    expected_concepts:
+      - discount in exchange for a one or three year commitment
+      - flexible spend-based versus specific resource commitments
+      - committing only to the steady baseline
+      - rightsizing before committing
+      - coverage and utilisation metrics
+      - staggering purchases over time
+    rubric:
+      excellent: Explains the commitment types and their flexibility, sizes commitments to the stable baseline after rightsizing, and tracks coverage and utilisation.
+      good: Understands the discount mechanism and commits to steady usage only.
+      weak: Commits to peak usage or doesn't know how commitments are applied.
+    followups:
+      - What happens if you migrate workloads to a different instance family mid-term?
+      - How would you track whether commitments are being used?
+    common_errors:
+      - Buying commitments before rightsizing, locking in waste.
+
+  - external_key: technical.cloud.nonprod_spend
+    competency_key: cloud_cost_optimization
+    topic: Non-production environments costing too much
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Your development and test environments cost almost as much as production. What would you look at
+      first, and what changes would you make?
+    expected_concepts:
+      - schedules to stop resources outside working hours
+      - smaller instance and database sizes
+      - on-demand environments created and destroyed automatically
+      - orphaned disks, snapshots and addresses
+      - spot capacity for non-critical workloads
+      - budgets per environment
+    rubric:
+      excellent: Breaks down the cost by service first, then combines scheduling, downsizing, ephemeral environments and clean-up, with budgets to stop it creeping back.
+      good: Suggests switching resources off outside working hours and downsizing.
+      weak: Proposes deleting the environments without understanding who uses them.
+    followups:
+      - How do you handle teams in different time zones sharing an environment?
+      - Which resources keep costing money even when instances are stopped?
+    common_errors:
+      - Stopping instances but leaving expensive databases and load balancers running.
+
+  - external_key: technical.cloud.spend_alerting
+    competency_key: cloud_cost_optimization
+    topic: Catching unexpected spend early
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A team only found out about a large cloud bill at the end of the month. What would you put in place so
+      they find out about unexpected spend within a day instead?
+    expected_concepts:
+      - budgets per account or team with alert thresholds
+      - cost anomaly detection
+      - daily cost reports to owners
+      - routing alerts to the team that owns the spend
+      - forecast-based alerts
+      - quotas or limits on risky resources
+    rubric:
+      excellent: Combines budgets, anomaly detection and daily visibility, routes alerts to owners who can act, and adds limits where runaway spend is possible.
+      good: Sets up budgets and anomaly alerts.
+      weak: Relies on finance reviewing the invoice monthly.
+    followups:
+      - Billing data can lag by hours; how does that affect your alerting?
+      - How would you stop alerts being ignored?
+    common_errors:
+      - Sending all cost alerts to a central inbox nobody owns.
+
+  - external_key: technical.cloud.region_selection
+    competency_key: system_design
+    topic: Choosing a region for a first workload
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Your company is launching its first workload in the cloud and needs to pick a region. How would you
+      make that choice?
+    expected_concepts:
+      - latency to where users are
+      - data residency and regulatory requirements
+      - availability of the services you need
+      - price differences between regions
+      - number of availability zones
+      - a suitable second region for recovery later
+    rubric:
+      excellent: Balances user latency, legal requirements, service availability and price, and thinks ahead to a recovery region.
+      good: Considers latency and data residency.
+      weak: Picks the default or cheapest region without other considerations.
+    followups:
+      - A service you need isn't available in the best region yet; what would you do?
+      - How would you measure latency from your users to candidate regions?
+    common_errors:
+      - Assuming every service and instance type is available in every region.
+
+  # ------------------------------------------------------------- resilience, migration and cost
+  - external_key: technical.cloud.migration_wave_planning
+    competency_key: system_design
+    topic: Planning a portfolio migration
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your company wants to move fifty on-premises applications to the cloud within a year. How would you
+      decide which to rehost as they are, which to replatform or rebuild, and which to leave or retire?
+    expected_concepts:
+      - discovery of applications and their dependencies
+      - migration strategies such as rehost, replatform, refactor, retire and retain
+      - business value and technical complexity scoring
+      - licensing and support constraints
+      - grouping dependent applications into waves
+      - early low-risk wins to build the process
+    rubric:
+      excellent: Starts with discovery and dependency mapping, assigns strategies with clear criteria, groups tightly coupled apps into waves, and starts with low-risk migrations to prove the process.
+      good: Uses the common migration strategies and plans waves.
+      weak: Lifts and shifts everything or migrates in random order.
+    followups:
+      - What would make you retire an application rather than move it?
+      - How do you handle an application that talks constantly to an on-premises database?
+    common_errors:
+      - Migrating an application without the systems it depends on, adding latency over the hybrid link.
+
+  - external_key: technical.cloud.hidden_single_zone_dependency
+    competency_key: aws
+    topic: Hidden single-zone dependencies
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your application lost an availability zone for an hour and went down, even though everyone believed it
+      was multi-AZ. What would you check to understand why?
+    expected_concepts:
+      - zonal single points such as one NAT gateway or one cache node
+      - database primary and failover behaviour
+      - remaining zones lacking capacity to absorb the load
+      - load balancer zone settings and health checks
+      - autoscaling unable to launch in the healthy zones
+      - static stability with spare capacity provisioned ahead
+    rubric:
+      excellent: Systematically checks every component for zonal placement, verifies capacity headroom in the surviving zones, and proposes regular zone-failure tests.
+      good: Looks for single-zone components like NAT or a single database instance.
+      weak: Blames the provider without examining the architecture.
+    followups:
+      - How would you test zone failure on purpose?
+      - How much spare capacity should each zone carry?
+    common_errors:
+      - Relying on autoscaling to replace lost capacity during a zone event when everyone else is scaling too.
+
+  - external_key: technical.cloud.vm_fleet_rightsizing
+    competency_key: cloud_cost_optimization
+    topic: Rightsizing a VM fleet safely
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You're asked to rightsize a fleet of a few hundred VMs that teams provisioned generously. How would you
+      do it without causing performance incidents?
+    expected_concepts:
+      - utilisation data over a representative period
+      - memory metrics from an agent, not just CPU
+      - provider recommendation tools such as Compute Optimizer, Advisor or Recommender
+      - newer generations or different families
+      - staged changes with owner agreement and rollback
+      - measuring savings and performance afterwards
+    rubric:
+      excellent: Uses a representative window including peaks and memory, validates recommendations with owners, rolls out in stages with a rollback, and reports savings and performance.
+      good: Uses utilisation data and recommendation tools and changes instances gradually.
+      weak: Downsizes everything based on average CPU.
+    followups:
+      - How do you handle a team that refuses to downsize?
+      - Why can average CPU utilisation be misleading?
+    common_errors:
+      - Ignoring memory because the provider doesn't report it by default.
+
+  - external_key: technical.cloud.unit_cost_metrics
+    competency_key: cloud_cost_optimization
+    topic: Unit economics of cloud spend
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you go beyond total cloud spend and track cost per customer, per transaction or per feature,
+      and why does that matter to engineering decisions?
+    expected_concepts:
+      - choosing a unit that reflects business value
+      - allocating direct and shared costs to the unit
+      - joining billing data with business metrics
+      - trends in unit cost as the business grows
+      - using unit cost to compare design options
+      - showback to product teams
+    rubric:
+      excellent: Defines a meaningful unit, explains how shared costs are allocated, and shows how unit cost trends drive real engineering and pricing decisions.
+      good: Explains cost per unit and why it is better than total spend.
+      weak: Only tracks the total bill.
+    followups:
+      - Your total bill went up 40 percent but cost per order fell; how do you present that?
+      - How precise does the allocation need to be to be useful?
+    common_errors:
+      - Spending months on perfect allocation before sharing any numbers.
+
+  - external_key: technical.cloud.azure_zone_redundancy
+    competency_key: azure
+    topic: Availability sets, zones and zone-redundant services on Azure
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      On Azure, how do availability sets, availability zones and zone-redundant services differ, and how
+      would you use them for a VM-based application?
+    expected_concepts:
+      - availability sets spread VMs across fault and update domains in one datacentre
+      - availability zones are separate datacentres in a region
+      - zone-redundant load balancer, storage and databases
+      - virtual machine scale sets across zones
+      - different SLAs for each option
+      - not every region supports zones
+    rubric:
+      excellent: Explains the failure domain each option covers, designs a zonal deployment with zone-redundant supporting services, and knows the SLA and regional caveats.
+      good: Distinguishes availability sets from zones and deploys across zones.
+      weak: Thinks availability sets protect against a datacentre outage.
+    followups:
+      - Which supporting services would you also need to make zone-redundant?
+      - What would you do in a region without availability zones?
+    common_errors:
+      - Spreading VMs across zones while the storage or database stays zonal.
+
+  - external_key: technical.cloud.gcp_zonal_resilience
+    competency_key: gcp
+    topic: Surviving a zone outage on GCP
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      On GCP, how would you make a VM-based service resilient to a zone outage, and which managed services
+      handle that for you?
+    expected_concepts:
+      - regional managed instance groups with autohealing
+      - regional persistent disks for stateful workloads
+      - Cloud SQL high availability configuration
+      - load balancing across zones
+      - multi-region or dual-region Cloud Storage
+      - regional versus zonal GKE clusters
+    rubric:
+      excellent: Uses regional instance groups and regional services throughout, handles stateful parts with regional disks or HA databases, and knows which services are zonal by default.
+      good: Uses regional instance groups behind a load balancer and HA Cloud SQL.
+      weak: Deploys into a single zone and relies on snapshots.
+    followups:
+      - What's the trade-off of a regional GKE cluster versus a zonal one?
+      - How does a regional persistent disk fail over?
+    common_errors:
+      - Assuming a zonal GKE control plane stays available during a zone outage.
+
+  - external_key: technical.cloud.dr_tiering_by_application
+    competency_key: system_design
+    topic: Assigning recovery strategies by tier
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your company has around forty applications and one disaster recovery budget. How would you decide which
+      recovery approach each one gets, from backup and restore up to warm standby?
+    expected_concepts:
+      - business impact analysis with application owners
+      - recovery time and recovery point targets per tier
+      - patterns such as backup and restore, pilot light, warm standby and active-active
+      - shared dependencies like identity and DNS in the top tier
+      - cost of each pattern
+      - testing according to tier
+    rubric:
+      excellent: Tiers applications by business impact with agreed targets, maps tiers to patterns by cost, and makes sure shared dependencies support the most demanding tier.
+      good: Groups applications into tiers with different recovery approaches.
+      weak: Applies one approach to everything or lets each team decide alone.
+    followups:
+      - How do you handle an application owner who says everything they run is tier one?
+      - Which shared services do teams most often forget in recovery planning?
+    common_errors:
+      - Planning recovery for applications but not for identity, DNS or secrets they rely on.
+
+  - external_key: technical.cloud.storage_cost_creep
+    competency_key: cloud_cost_optimization
+    topic: Orphaned storage and retention clean-up
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Storage costs have grown steadily for a year from snapshots, unattached volumes and old logs. How would
+      you clean this up safely and keep it from coming back?
+    expected_concepts:
+      - inventory of unattached volumes, old snapshots and unused addresses
+      - identifying owners before deleting
+      - lifecycle policies for snapshots and backups
+      - retention settings on log groups and buckets
+      - a grace period such as snapshot-then-delete
+      - recurring reports and automation
+    rubric:
+      excellent: Inventories waste with owners, deletes safely with a grace period, and sets lifecycle and retention policies so the waste stops accumulating.
+      good: Finds and deletes orphaned resources and sets some retention.
+      weak: Deletes everything that looks unused without checking owners or retention needs.
+    followups:
+      - How would you handle snapshots that might be needed for compliance?
+      - Which default retention settings cause this problem most often?
+    common_errors:
+      - Log groups left with never-expire retention by default.
+
+  - external_key: technical.cloud.arm_instance_evaluation
+    competency_key: cloud_cost_optimization
+    topic: Moving workloads to ARM-based instances
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you evaluate moving workloads to ARM-based instances such as Graviton, Cobalt or Axion for
+      better price-performance?
+    expected_concepts:
+      - compatibility of runtimes and native dependencies
+      - multi-architecture container images and builds
+      - benchmarking with the real workload
+      - cost per request rather than per hour
+      - agents and third-party software support
+      - gradual rollout alongside existing instances
+    rubric:
+      excellent: Checks compatibility, benchmarks real workloads by cost per unit of work, builds multi-architecture artefacts and rolls out gradually.
+      good: Tests compatibility and performance before switching.
+      weak: Switches instance types without testing or rules ARM out without evaluation.
+    followups:
+      - Which workloads would you try first, and why?
+      - What changes in your CI pipeline?
+    common_errors:
+      - Forgetting native libraries or monitoring agents that only ship for x86.
+
+  - external_key: technical.cloud.managed_stack_alerting
+    competency_key: observability
+    topic: Alerting on managed cloud services
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You're taking over on-call for a web stack built from a cloud load balancer, autoscaled compute, a
+      managed database and a queue. Which signals from those services would you alert on, and why those?
+    expected_concepts:
+      - load balancer error rates and latency as user-facing symptoms
+      - unhealthy target counts
+      - database connections, CPU, free storage and replica lag
+      - age of the oldest message in the queue
+      - quota and capacity headroom
+      - provider health and maintenance events
+    rubric:
+      excellent: Pages on user-facing symptoms, keeps cause-level signals as warnings or dashboard items, and includes quotas and provider events that are easy to miss.
+      good: Picks sensible metrics for each component.
+      weak: Alerts on every available metric or only on CPU.
+    followups:
+      - Why is queue age a better alert than queue length?
+      - How would you know about provider maintenance that affects your database?
+    common_errors:
+      - Paging on CPU utilisation instead of user impact.
+
+  # ------------------------------------------------------------- advanced
+  - external_key: technical.cloud.cost_cut_plan
+    competency_key: cloud_cost_optimization
+    topic: Delivering a large cost reduction target
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Finance asks you to cut the cloud bill by thirty percent within two quarters without hurting
+      reliability. How would you build and sequence the plan?
+    expected_concepts:
+      - breakdown of spend by service, team and usage type
+      - sorting opportunities by savings, effort and risk
+      - quick wins such as waste removal and scheduling first
+      - commitments after rightsizing
+      - architectural changes for the larger savings
+      - guarding reliability with SLO monitoring and tracking delivered savings
+    rubric:
+      excellent: Builds a prioritised plan from real data, sequences quick wins before commitments and architecture changes, protects reliability explicitly and tracks savings against the target.
+      good: Lists sensible levers and orders them reasonably.
+      weak: Proposes cutting resources across the board by a fixed percentage.
+    followups:
+      - The plan only reaches twenty percent; what do you tell finance?
+      - How do you get teams to prioritise cost work over features?
+    common_errors:
+      - Claiming savings that were really caused by lower traffic.
+
+  - external_key: technical.cloud.control_plane_static_stability
+    competency_key: distributed_systems
+    topic: Static stability against control plane outages
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A regional outage of a provider control plane service, like the container registry or the autoscaling
+      API, meant your app couldn't scale or deploy even though running servers were fine. How would you
+      design for static stability against that kind of failure?
+    expected_concepts:
+      - separating control plane from data plane dependencies
+      - pre-provisioned capacity instead of scaling during an event
+      - caching images, credentials and configuration locally
+      - avoiding startup paths that call control plane APIs
+      - regional rather than global service endpoints
+      - degrading gracefully when changes are impossible
+    rubric:
+      excellent: Distinguishes control and data planes, removes control plane calls from the serving path and startup, pre-provisions capacity and accepts that changes may be impossible during the event.
+      good: Recommends spare capacity and local caching of images.
+      weak: Proposes more automation that itself relies on the failed control plane.
+    followups:
+      - Which of your startup steps call a cloud API, and what happens if they fail?
+      - How much headroom would you keep, and how would you justify its cost?
+    common_errors:
+      - Recovery plans that depend on launching new instances during the outage.
+
+  - external_key: technical.cloud.multi_cloud_advice
+    competency_key: system_design
+    topic: Advising on a multi-cloud strategy
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      A leadership team wants to go multi-cloud to avoid depending on one provider. How would you advise them,
+      and what would a sensible multi-cloud setup actually look like?
+    expected_concepts:
+      - clarifying the real goal such as negotiation leverage, resilience or regulation
+      - cost of duplicated skills, tooling and operations
+      - workload-level placement versus spreading each workload across clouds
+      - common layers such as identity, observability and infrastructure as code
+      - data gravity and egress costs between clouds
+      - exit planning as a cheaper alternative
+    rubric:
+      excellent: Starts from the business goal, quantifies the hidden costs, recommends a pragmatic model such as placing whole workloads per cloud with shared identity and tooling, and offers cheaper alternatives where they fit.
+      good: Explains the main trade-offs and recommends a measured approach.
+      weak: Endorses running every workload across all clouds or dismisses the idea without analysis.
+    followups:
+      - How would identity and access work across two providers?
+      - Is running one application active-active across two clouds ever worth it?
+    common_errors:
+      - Assuming Kubernetes alone makes workloads portable between clouds.
+
+  - external_key: technical.cloud.cell_based_architecture
+    competency_key: distributed_systems
+    topic: Cell-based architecture
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      What is a cell-based architecture in the cloud, and how would you decide on cell size and on how to
+      route customers to cells?
+    expected_concepts:
+      - independent full stacks that limit the blast radius of failures
+      - a thin, highly available routing layer
+      - cell size bounded by the largest scale you've tested
+      - account or project per cell
+      - deployments rolled out cell by cell
+      - migrating customers between cells
+    rubric:
+      excellent: Explains how cells contain failures and bad deployments, sizes cells from tested limits, keeps the router simple, and handles rebalancing and large customers.
+      good: Describes cells as isolated copies of the stack with a routing layer.
+      weak: Confuses cells with ordinary autoscaling or sharding a single database.
+    followups:
+      - How do you stop the routing layer becoming the new single point of failure?
+      - What do you do with a customer too big for one cell?
+    common_errors:
+      - Building a router with so much logic that it fails more often than the cells.
+
+  - external_key: technical.cloud.cross_provider_migration
+    competency_key: system_design
+    topic: Migrating between cloud providers
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      After an acquisition, your company must move its workloads from Azure to AWS within a year. How would
+      you approach that migration?
+    expected_concepts:
+      - inventory and mapping of services to equivalents
+      - landing zone, identity and networking first
+      - interim connectivity between the two clouds
+      - data migration with replication and validation
+      - rewriting dependencies on proprietary services
+      - dual-running cost and decommissioning plan
+    rubric:
+      excellent: Builds the foundations first, maps every service to an equivalent and flags those needing rework, migrates data with replication and validation, runs workloads in waves and plans for dual-running cost and decommissioning.
+      good: Plans inventory, foundations and phased migration.
+      weak: Assumes services map one to one and plans a single cutover.
+    followups:
+      - How would you move a large database with minimal downtime across providers?
+      - What would you do about a team heavily using a service with no direct equivalent?
+    common_errors:
+      - Ignoring egress charges for moving large volumes of data out of the old provider.
+
+  - external_key: technical.cloud.feature_cost_estimate
+    competency_key: cloud_cost_optimization
+    topic: Estimating the cloud cost of a new feature
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Product wants to launch a feature that stores and processes video for every customer. How would you
+      estimate its cloud cost before it's built and design it to stay within budget?
+    expected_concepts:
+      - identifying cost drivers such as storage, transcoding compute and delivery egress
+      - modelling cost per customer under different usage scenarios
+      - storage tiering and retention choices
+      - CDN delivery to reduce egress
+      - per-customer limits or plan-based quotas
+      - comparing the estimate with actual cost after launch
+    rubric:
+      excellent: Builds a driver-based model per customer with low, expected and high scenarios, designs for the dominant cost drivers, adds limits and validates against real spend after launch.
+      good: Estimates storage and compute costs and suggests ways to reduce them.
+      weak: Gives a single guessed number or ignores delivery and egress costs.
+    followups:
+      - Which assumption in your model would you validate first?
+      - How would you feed this into pricing decisions for the product?
+    common_errors:
+      - Forgetting data transfer costs for delivering video to users.
+
+  - external_key: technical.cloud.data_residency_enforcement
+    competency_key: security
+    topic: Enforcing data residency
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A customer contract requires that their data never leaves a specific country's cloud region, including
+      backups, logs and replicas. How would you enforce and prove that in your cloud setup?
+    expected_concepts:
+      - guardrails restricting allowed regions such as SCPs, Azure Policy or resource location constraints
+      - global services that store data outside the region
+      - backup copies, replication and disaster recovery targets
+      - log and monitoring destinations
+      - region-specific encryption keys
+      - evidence through configuration audits and documentation
+    rubric:
+      excellent: Enforces region restrictions with guardrails, hunts down the less obvious paths such as global services, backups and telemetry, and produces auditable evidence of compliance.
+      good: Restricts resources to the region and checks backups and logs.
+      weak: Deploys in the right region and assumes nothing else leaves it.
+    followups:
+      - How does this constrain your disaster recovery options?
+      - Which managed services would you have to avoid or configure specially?
+    common_errors:
+      - Overlooking telemetry, support tooling or cross-region backup copies.
+
+  - external_key: technical.cloud.forensics_readiness
+    competency_key: security
+    topic: Preparing to investigate cloud incidents
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      What would you put in place before any incident happens so your team can investigate a compromise in
+      the cloud quickly and reliably?
+    expected_concepts:
+      - centralised, tamper-resistant logs with adequate retention
+      - a separate forensics account or project
+      - pre-provisioned incident response roles
+      - automated snapshot and isolation tooling
+      - playbooks for common cloud incident types
+      - regular exercises
+    rubric:
+      excellent: Prepares logging, access, isolated forensic environments and automation in advance, writes playbooks for likely scenarios and tests them through exercises.
+      good: Centralises logs and has an incident response plan.
+      weak: Assumes the necessary evidence and access can be set up once an incident starts.
+    followups:
+      - How long should you keep audit logs, and what drives that decision?
+      - How would you isolate a compromised instance while preserving its memory and disk?
+    common_errors:
+      - Discovering during an incident that the relevant logs were never enabled.

@@ -1,0 +1,226 @@
+version: 1
+slug: missing_field_counts
+title: Missing Field Profile
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data, qa, data_analyst]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Missing Field Profile
+
+  Partner warehouses upload shipment records into a staging table before they are cleaned. As a
+  data-quality check, you need a one-row **profile of how many values are missing in each column**.
+
+  Table `shipments_raw`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | carrier | VARCHAR(40) | may be NULL, empty or only spaces |
+  | tracking_code | VARCHAR(60) | may be NULL, empty or only spaces |
+  | weight_grams | INTEGER | may be NULL; `0` is a real (if suspicious) weight |
+  | destination | VARCHAR(100) | may be NULL, empty or only spaces |
+
+  The rules for "missing" are:
+
+  - a **text** value (`carrier`, `tracking_code`, `destination`) is missing when it is NULL **or** when it
+    is empty after removing leading and trailing spaces (`''`, `'   '`). Placeholder text such as `'n/a'`
+    or `'-'` is **not** missing;
+  - `weight_grams` is missing only when it is NULL.
+
+  Return **exactly one row** with the columns `total_rows`, `missing_carrier`, `missing_tracking`,
+  `missing_weight` and `missing_destination` (each an integer count). An empty table still returns one
+  row, with every count `0`.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite. In the examples, text values are shown in
+  single quotes so blank strings are visible.
+
+  ### Example 1
+  ```
+  shipments_raw
+  +----+---------+---------------+--------------+-------------+
+  | id | carrier | tracking_code | weight_grams | destination |
+  +----+---------+---------------+--------------+-------------+
+  | 1  | 'DHL'   | 'JD0148'      | 1200         | 'Rotterdam' |
+  | 2  | NULL    | 'JD0151'      | NULL         | 'Lyon'      |
+  | 3  | '  '    | ''            | 0            | 'Gdansk'    |
+  | 4  | 'UPS'   | NULL          | 830          | '   '       |
+  | 5  | 'n/a'   | 'JD0160'      | 2450         | NULL        |
+  +----+---------+---------------+--------------+-------------+
+
+  Output
+  +------------+-----------------+------------------+----------------+---------------------+
+  | total_rows | missing_carrier | missing_tracking | missing_weight | missing_destination |
+  +------------+-----------------+------------------+----------------+---------------------+
+  | 5          | 2               | 2                | 1              | 2                   |
+  +------------+-----------------+------------------+----------------+---------------------+
+  carrier: NULL (row 2) and '  ' (row 3) are missing, 'n/a' is not. tracking_code: '' and NULL.
+  weight_grams: only the NULL in row 2; the 0 in row 3 is a value. destination: '   ' and NULL.
+  ```
+
+  ### Example 2
+  ```
+  shipments_raw
+  +----+---------+---------------+--------------+-------------+
+  | id | carrier | tracking_code | weight_grams | destination |
+  +----+---------+---------------+--------------+-------------+
+  +----+---------+---------------+--------------+-------------+
+
+  Output
+  +------------+-----------------+------------------+----------------+---------------------+
+  | total_rows | missing_carrier | missing_tracking | missing_weight | missing_destination |
+  +------------+-----------------+------------------+----------------+---------------------+
+  | 0          | 0               | 0                | 0              | 0                   |
+  +------------+-----------------+------------------+----------------+---------------------+
+  The table is empty, so the result is a single row of zeros (not NULLs and not an empty result).
+  ```
+
+  ### Constraints
+  - `0 <= rows in shipments_raw <= 10^6`
+  - Text values contain no tabs or line breaks; only the space character counts as blank padding.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return one row: total_rows, missing_carrier, missing_tracking, missing_weight, missing_destination.
+    SELECT COUNT(*) AS total_rows,
+           0 AS missing_carrier,
+           0 AS missing_tracking,
+           0 AS missing_weight,
+           0 AS missing_destination
+    FROM shipments_raw;
+reference_solutions:
+  sql: |
+    SELECT COUNT(*) AS total_rows,
+           COUNT(CASE WHEN carrier IS NULL OR TRIM(carrier) = '' THEN 1 END) AS missing_carrier,
+           COUNT(CASE WHEN tracking_code IS NULL OR TRIM(tracking_code) = '' THEN 1 END) AS missing_tracking,
+           COUNT(CASE WHEN weight_grams IS NULL THEN 1 END) AS missing_weight,
+           COUNT(CASE WHEN destination IS NULL OR TRIM(destination) = '' THEN 1 END) AS missing_destination
+    FROM shipments_raw;
+sql_setup: |
+  CREATE TABLE shipments_raw (
+    id INTEGER PRIMARY KEY,
+    carrier VARCHAR(40),
+    tracking_code VARCHAR(60),
+    weight_grams INTEGER,
+    destination VARCHAR(100)
+  );
+tests:
+  - id: t1
+    description: "Example 1 - NULLs, empty and space-only strings are missing; a 0 weight and 'n/a' are present"
+    setup_sql: |
+      INSERT INTO shipments_raw (id, carrier, tracking_code, weight_grams, destination) VALUES
+        (1, 'DHL', 'JD0148', 1200, 'Rotterdam'), (2, NULL, 'JD0151', NULL, 'Lyon'), (3, '  ', '', 0, 'Gdansk'), (4, 'UPS', NULL, 830, '   '), (5, 'n/a', 'JD0160', 2450, NULL);
+    expected_rows: [[5, 2, 2, 1, 2]]
+  - id: t2
+    description: "Example 2 - empty table still returns one row of zeros"
+    expected_rows: [[0, 0, 0, 0, 0]]
+  - id: t3
+    hidden: true
+    description: "Fully populated rows - all missing counts 0"
+    setup_sql: |
+      INSERT INTO shipments_raw (id, carrier, tracking_code, weight_grams, destination) VALUES
+        (1, 'GLS', 'A1', 10, 'Porto'), (2, 'DHL', 'B2', 20, 'Lyon');
+    expected_rows: [[2, 0, 0, 0, 0]]
+  - id: t4
+    hidden: true
+    description: "Every value NULL - every missing count equals total_rows"
+    setup_sql: |
+      INSERT INTO shipments_raw (id, carrier, tracking_code, weight_grams, destination) VALUES
+        (1, NULL, NULL, NULL, NULL), (2, NULL, NULL, NULL, NULL), (3, NULL, NULL, NULL, NULL);
+    expected_rows: [[3, 3, 3, 3, 3]]
+  - id: t5
+    hidden: true
+    description: "Space-only strings of several lengths are missing - a plain = '' test misses them"
+    setup_sql: |
+      INSERT INTO shipments_raw (id, carrier, tracking_code, weight_grams, destination) VALUES
+        (1, ' ', '  ', 5, '    '), (2, '', '        ', 6, ' '), (3, 'DPD', 'X9', 7, 'Oslo');
+    expected_rows: [[3, 2, 2, 0, 2]]
+  - id: t6
+    hidden: true
+    description: "Zero weights are not missing; values padded with spaces around real text are present"
+    setup_sql: |
+      INSERT INTO shipments_raw (id, carrier, tracking_code, weight_grams, destination) VALUES
+        (1, ' DHL ', '  TRK1', 0, 'Lyon  '), (2, 'UPS', 'TRK2', 0, ' Porto'), (3, '-', '?', NULL, 'n/a');
+    expected_rows: [[3, 0, 0, 1, 0]]
+  - id: t7
+    hidden: true
+    description: "Single row with only weight missing"
+    setup_sql: |
+      INSERT INTO shipments_raw (id, carrier, tracking_code, weight_grams, destination) VALUES
+        (42, 'PostNL', 'PN42', NULL, 'Utrecht');
+    expected_rows: [[1, 0, 0, 1, 0]]
+  - id: t8
+    hidden: true
+    description: "Stress - 200 mixed rows with NULL, blank, placeholder and zero values"
+    setup_sql: |
+      INSERT INTO shipments_raw (id, carrier, tracking_code, weight_grams, destination) VALUES
+        (1, 'PostNL', 'TRK775839', 0, 'Lyon'), (2, 'UPS', 'TRK258550', 0, 'Porto'), (3, 'PostNL', 'TRK167357', 0, 'Porto'), (4, 'DHL', '', 0, 'Porto'), (5, 'UPS', 'TRK206442', 29287, '   '),
+        (6, 'PostNL', 'TRK857106', 111, '   '), (7, 'GLS', 'TRK495492', 1868, 'Rotterdam'), (8, 'PostNL', '', 12000, 'Rotterdam'), (9, 'PostNL', 'TRK124802', 26854, '   '), (10, 'PostNL', 'TRK784752', 12036, 'Lyon'),
+        (11, '  ', 'TRK969091', 3018, 'Gdansk'), (12, 'UPS', 'TRK324328', 0, NULL), (13, '  ', 'TRK442244', 0, 'Gdansk'), (14, 'UPS', 'TRK139226', 25822, NULL), (15, 'DHL', 'TRK475167', 0, 'Porto'),
+        (16, 'PostNL', 'TRK423403', 3689, 'Lyon'), (17, 'GLS', 'TRK515754', 25626, '   '), (18, 'DHL', 'TRK738689', 27369, ''), (19, 'PostNL', 'TRK012143', 25354, ''), (20, '  ', 'TRK773668', 13385, 'Lyon'),
+        (21, 'GLS', 'TRK543308', 0, 'Porto'), (22, 'UPS', 'TRK180173', 19034, ''), (23, 'DHL', 'TRK654386', 0, 'Rotterdam'), (24, 'UPS', 'TRK116212', 5949, 'Rotterdam'), (25, '  ', 'TRK618832', 23528, NULL),
+        (26, 'GLS', 'TRK573825', 1182, '   '), (27, 'PostNL', 'TRK439460', 18479, 'Lyon'), (28, 'GLS', 'TRK638173', NULL, 'Rotterdam'), (29, '  ', 'TRK147535', 28722, 'Lyon'), (30, 'n/a', 'TRK896495', 19524, 'Gdansk'),
+        (31, NULL, NULL, 10076, 'Lyon'), (32, 'UPS', 'TRK257425', 0, 'Rotterdam'), (33, '', 'TRK038548', 0, 'Gdansk'), (34, 'n/a', 'TRK923438', 0, 'Gdansk'), (35, '  ', 'TRK027908', 0, ''),
+        (36, 'DHL', 'TRK015267', 26462, 'Porto'), (37, 'GLS', 'TRK754565', 9715, 'Rotterdam'), (38, 'DHL', 'TRK300271', 15482, '-'), (39, 'GLS', 'TRK446232', 0, 'Porto'), (40, 'UPS', 'TRK026794', 0, 'Porto'),
+        (41, 'UPS', 'TRK998501', NULL, 'Gdansk'), (42, 'GLS', 'TRK434043', 0, 'Lyon'), (43, 'DHL', 'TRK124103', 0, 'Lyon'), (44, 'n/a', 'TRK392375', 4530, ''), (45, 'UPS', 'TRK266537', 0, 'Gdansk'),
+        (46, NULL, 'TRK686831', 0, 'Lyon'), (47, 'GLS', 'TRK503807', 0, 'Porto'), (48, 'PostNL', 'TRK832996', 0, 'Porto'), (49, 'UPS', 'TRK876417', 10921, 'Porto'), (50, '  ', 'TRK454447', 0, 'Lyon'),
+        (51, 'GLS', NULL, NULL, 'Porto'), (52, 'n/a', 'TRK447729', 29157, '-'), (53, 'PostNL', 'TRK911283', 28848, ''), (54, 'PostNL', 'TRK034763', 1052, 'Gdansk'), (55, 'DHL', 'TRK494646', 0, 'Gdansk'),
+        (56, 'GLS', 'TRK210787', 0, 'Porto'), (57, 'PostNL', 'TRK379018', 23998, 'Porto'), (58, 'GLS', 'TRK451567', 0, 'Porto'), (59, 'GLS', '', 27436, 'Rotterdam'), (60, 'n/a', NULL, 0, 'Porto'),
+        (61, 'DHL', NULL, 14611, 'Rotterdam'), (62, 'UPS', 'TRK421902', 0, 'Rotterdam'), (63, 'PostNL', 'TRK224824', 14458, 'Porto'), (64, 'UPS', 'TRK322553', 0, 'Lyon'), (65, 'UPS', 'TRK422154', 0, 'Rotterdam'),
+        (66, 'UPS', 'TRK260861', NULL, ''), (67, 'DHL', NULL, 0, 'Lyon'), (68, 'GLS', 'TRK819294', 0, 'Gdansk'), (69, NULL, 'TRK321330', 8605, 'Gdansk'), (70, 'DHL', NULL, NULL, '   '),
+        (71, '', 'TRK242322', 4107, '   '), (72, 'PostNL', 'TRK556072', 0, 'Porto'), (73, 'DHL', 'TRK239381', 0, 'Lyon'), (74, 'GLS', 'TRK853812', 0, 'Rotterdam'), (75, 'GLS', 'TRK411794', 6598, 'Gdansk'),
+        (76, 'PostNL', 'TRK384460', 0, 'Porto'), (77, 'PostNL', 'TRK039577', NULL, ''), (78, 'UPS', 'TRK500328', 0, 'Porto'), (79, 'DHL', 'TRK193713', 729, 'Gdansk'), (80, 'GLS', 'TRK471596', 0, 'Porto'),
+        (81, 'DHL', 'TRK297976', 0, 'Porto'), (82, 'DHL', 'TRK075532', NULL, ''), (83, 'UPS', 'TRK126947', 25746, 'Rotterdam'), (84, 'GLS', 'TRK943232', 22197, 'Lyon'), (85, 'PostNL', 'TRK308131', 0, 'Lyon'),
+        (86, NULL, 'TRK065733', 20529, 'Porto'), (87, 'GLS', 'TRK634774', 0, 'Lyon'), (88, 'PostNL', 'TRK107283', 22618, 'Rotterdam'), (89, 'UPS', 'TRK333915', 15336, 'Lyon'), (90, 'GLS', '', 0, '   '),
+        (91, 'DHL', 'TRK338435', 0, 'Rotterdam'), (92, 'UPS', 'TRK181269', 0, '-'), (93, 'UPS', 'TRK139192', 16237, 'Rotterdam'), (94, '', NULL, 0, 'Porto'), (95, 'n/a', 'TRK092909', 9699, 'Lyon'),
+        (96, 'DHL', 'TRK284226', 0, 'Lyon'), (97, 'GLS', 'TRK405050', 0, 'Lyon'), (98, 'DHL', 'TRK850001', NULL, '-'), (99, 'DHL', NULL, 26329, 'Lyon'), (100, 'GLS', 'TRK411792', 16390, 'Rotterdam'),
+        (101, NULL, 'TRK916673', 14168, 'Gdansk'), (102, 'UPS', 'TRK874730', 0, 'Porto'), (103, 'n/a', '', 0, 'Rotterdam'), (104, NULL, NULL, 0, 'Porto'), (105, 'GLS', 'TRK964878', 0, NULL),
+        (106, 'PostNL', 'TRK812841', 0, 'Lyon'), (107, 'PostNL', 'TRK574165', 0, 'Lyon'), (108, 'DHL', 'TRK504525', 0, 'Porto'), (109, 'GLS', 'TRK524863', 22684, 'Rotterdam'), (110, 'GLS', 'TRK969715', 18636, 'Porto'),
+        (111, 'PostNL', 'TRK715531', NULL, 'Lyon'), (112, 'GLS', NULL, 26786, 'Lyon'), (113, 'UPS', 'TRK217436', 0, 'Rotterdam'), (114, 'PostNL', 'TRK854728', 0, 'Gdansk'), (115, 'DHL', 'TRK659355', 23004, 'Porto'),
+        (116, 'UPS', 'TRK945486', 0, 'Rotterdam'), (117, 'GLS', 'TRK027264', 3849, 'Porto'), (118, 'UPS', 'TRK740058', NULL, 'Rotterdam'), (119, 'n/a', 'TRK567394', 2273, ''), (120, '', 'TRK338475', 29556, 'Lyon'),
+        (121, 'PostNL', 'TRK479847', NULL, 'Lyon'), (122, 'GLS', 'TRK183299', 29987, '-'), (123, 'PostNL', 'TRK280846', 0, 'Lyon'), (124, '', 'TRK113062', 13940, 'Gdansk'), (125, 'UPS', 'TRK807279', NULL, ''),
+        (126, 'UPS', NULL, 0, 'Gdansk'), (127, '  ', 'TRK306887', 13453, ''), (128, 'DHL', 'TRK939883', 0, 'Rotterdam'), (129, 'DHL', 'TRK683190', NULL, 'Gdansk'), (130, 'GLS', 'TRK257991', NULL, 'Rotterdam'),
+        (131, 'GLS', 'TRK577696', 26898, 'Gdansk'), (132, 'PostNL', 'TRK850278', 0, '-'), (133, '', 'TRK268681', 0, 'Porto'), (134, 'UPS', 'TRK261864', 2941, '-'), (135, 'UPS', 'TRK312419', 8254, 'Rotterdam'),
+        (136, 'DHL', 'TRK670134', 28670, 'Rotterdam'), (137, 'UPS', 'TRK388420', 4203, 'Rotterdam'), (138, 'PostNL', 'TRK693465', 26927, '   '), (139, 'DHL', 'TRK001269', 15819, 'Rotterdam'), (140, 'DHL', 'TRK212414', 0, 'Porto'),
+        (141, 'GLS', 'TRK676958', 0, 'Rotterdam'), (142, 'PostNL', 'TRK771031', NULL, 'Porto'), (143, 'DHL', 'TRK002777', 1863, 'Porto'), (144, 'n/a', 'TRK492223', 0, '-'), (145, 'UPS', NULL, 0, 'Gdansk'),
+        (146, '  ', 'TRK414803', NULL, 'Gdansk'), (147, NULL, 'TRK120005', 0, NULL), (148, 'UPS', '', 0, 'Gdansk'), (149, 'UPS', 'TRK436304', 29483, 'Lyon'), (150, '', 'TRK048409', 0, 'Lyon'),
+        (151, 'GLS', 'TRK302012', 0, 'Rotterdam'), (152, 'GLS', 'TRK341998', 0, 'Gdansk'), (153, 'DHL', 'TRK928552', 26324, 'Gdansk'), (154, 'GLS', 'TRK461718', 0, 'Rotterdam'), (155, 'DHL', 'TRK087295', 19478, '   '),
+        (156, '  ', 'TRK043726', 0, 'Rotterdam'), (157, 'DHL', NULL, 0, 'Lyon'), (158, 'n/a', 'TRK541764', 0, 'Rotterdam'), (159, 'PostNL', 'TRK656312', 2882, 'Gdansk'), (160, 'GLS', 'TRK520652', 22482, 'Rotterdam'),
+        (161, 'PostNL', 'TRK932739', 0, 'Porto'), (162, 'GLS', 'TRK447030', 2076, 'Rotterdam'), (163, '  ', 'TRK113476', 0, 'Rotterdam'), (164, 'DHL', NULL, NULL, 'Gdansk'), (165, 'GLS', NULL, 5298, 'Porto'),
+        (166, 'GLS', 'TRK497555', 0, ''), (167, '  ', 'TRK409155', 14725, '-'), (168, 'PostNL', 'TRK977152', 10337, 'Gdansk'), (169, 'n/a', 'TRK203507', 21594, '-'), (170, 'DHL', 'TRK321310', NULL, '   '),
+        (171, 'DHL', NULL, 8958, 'Rotterdam'), (172, 'PostNL', 'TRK478201', NULL, 'Lyon'), (173, '', 'TRK665174', NULL, 'Gdansk'), (174, 'PostNL', 'TRK321132', NULL, '-'), (175, 'PostNL', 'TRK057913', 0, 'Lyon'),
+        (176, 'DHL', '', 0, 'Gdansk'), (177, 'n/a', NULL, 64, 'Gdansk'), (178, 'GLS', 'TRK309599', 0, 'Lyon'), (179, 'DHL', 'TRK248466', 0, 'Gdansk'), (180, 'PostNL', 'TRK739136', 19537, '-'),
+        (181, 'PostNL', NULL, 0, 'Gdansk'), (182, 'DHL', 'TRK634867', 25777, '-'), (183, 'PostNL', 'TRK587483', 0, 'Rotterdam'), (184, 'UPS', '', 5290, 'Gdansk'), (185, '  ', 'TRK255026', NULL, ''),
+        (186, 'GLS', 'TRK503513', 4898, 'Porto'), (187, 'DHL', 'TRK642573', 6595, 'Gdansk'), (188, 'PostNL', 'TRK743837', 0, 'Porto'), (189, 'n/a', 'TRK802433', 15768, 'Lyon'), (190, 'PostNL', 'TRK153915', NULL, 'Porto'),
+        (191, 'DHL', 'TRK510183', 0, 'Rotterdam'), (192, 'DHL', 'TRK192597', 0, NULL), (193, 'PostNL', 'TRK517514', 27778, '   '), (194, 'DHL', 'TRK265691', 0, 'Lyon'), (195, 'UPS', 'TRK499978', 13578, NULL),
+        (196, 'UPS', 'TRK300805', 29962, 'Gdansk'), (197, 'n/a', 'TRK660635', 0, ''), (198, 'UPS', 'TRK045739', 21333, 'Lyon'), (199, NULL, 'TRK006699', 18363, 'Gdansk'), (200, '', 'TRK545891', NULL, 'Porto');
+    expected_rows: [[200, 30, 26, 24, 34]]
+expected_concepts:
+  - conditional aggregation (COUNT or SUM over CASE)
+  - NULL versus empty string versus whitespace
+  - TRIM for blank detection
+  - aggregates without GROUP BY always return one row
+optimal_complexity: {time: "O(n) single scan", space: "O(1)"}
+rubric:
+  excellent: Computes every count in one scan with conditional aggregation, treats NULL and space-only text as missing but keeps 0 and placeholders, guarantees zeros on an empty table, and explains COUNT(column) versus COUNT(*).
+  good: Correct query after a hint about blank strings or about SUM returning NULL on an empty table.
+  weak: Counts only NULLs, treats 0 weights as missing, runs a separate query per column or returns NULLs for an empty table.
+  criteria:
+    correctness: All tests pass, including space-only strings, zero weights and the empty table.
+    efficiency: One pass over the table instead of one query or subquery per column.
+    code_quality: Consistent, readable expressions and the requested column aliases.
+    edge_cases: Empty table, all-NULL rows, padded real values and placeholder text.
+    communication: Explains the NULL, empty and blank distinctions and how the profile would be used.
+hints:
+  - One pass over the table can produce every count at once if each count only counts the rows that satisfy a condition.
+  - COUNT of a column skips NULLs, and comparing a NULL with anything is never true, so blank text needs its own test after trimming. Think about what SUM returns when there are no rows at all.
+  - For each text column count the rows where the value is NULL or its trimmed form equals the empty string, count NULL weights separately, and use COUNT over a CASE that yields a value only for missing rows (or wrap sums in COALESCE) so an empty table gives zeros.
+followups:
+  - How would you return the profile as one row per column instead of one wide row?
+  - How would you also flag placeholder values such as 'n/a' or '-' without hard-coding them in every expression?
+  - How would you run this profile incrementally on each new upload batch?
+common_errors:
+  - Counting only NULLs and missing empty or space-only strings.
+  - Comparing with = '' without TRIM, which misses values made only of spaces.
+  - Treating a weight of 0 as missing.
+  - Using SUM(CASE ...) without COALESCE, which returns NULL instead of 0 on an empty table.

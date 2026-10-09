@@ -1,0 +1,171 @@
+version: 1
+slug: first_deadlock_event_index
+title: Lock Log Deadlock Detector
+difficulty: hard
+competency_keys: [algorithms, data_structures, debugging]
+role_tags: [dba, backend, sre]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Lock Log Deadlock Detector
+
+  A database froze in production and you have the lock manager's event log. Replay it and find the
+  moment the deadlock appeared. Each event is a string `"<txn> lock <resource>"` or
+  `"<txn> unlock <resource>"`. Every resource has at most one **holder** and a FIFO **wait queue**.
+
+  - `T lock R`:
+    - if nobody holds `R`, `T` becomes its holder;
+    - if `T` already holds `R`, nothing happens;
+    - otherwise `T` is appended to `R`'s wait queue and is **waiting** for `R`.
+  - `T unlock R` (only ever issued by the current holder of `R`): if `R`'s queue is empty, `R` becomes
+    free; otherwise the transaction at the **front** of the queue is removed from it, becomes the holder
+    of `R` and stops waiting.
+
+  A waiting transaction issues no events until it is granted its lock. The **wait-for graph** has an
+  edge `W -> H` for every waiting transaction `W`, where `H` is the **current** holder of the resource
+  `W` is waiting for (so when a lock is handed over, the remaining waiters now wait for the new holder).
+
+  Return the index of the **first event after which the wait-for graph contains a cycle**, or `-1` if
+  that never happens.
+
+  ### Example 1
+  ```
+  Input:  events = ["t1 lock orders", "t2 lock payments", "t1 lock payments", "t2 lock orders"]
+  Output: 3
+  Explanation: after event 2, t1 waits for t2. After event 3, t2 waits for t1: a cycle.
+  ```
+
+  ### Example 2
+  ```
+  Input:  events = ["a lock x", "b lock x", "c lock x", "a unlock x", "a lock y", "b lock y", "a lock x"]
+  Output: 6
+  Explanation: when a releases x, b (front of the queue) gets it and c now waits for b.
+  b then waits for a (holder of y), which is not a cycle. Event 6 makes a wait for b: a -> b -> a.
+  ```
+
+  ### Example 3
+  ```
+  Input:  events = ["t1 lock a", "t2 lock a", "t1 unlock a", "t2 unlock a"]
+  Output: -1
+  ```
+
+  ### Constraints
+  - `1 <= events.length <= 10^4`
+  - Transaction and resource names are non-empty and use letters, digits, `_` and `-`; the three parts
+    of an event are separated by single spaces.
+  - The log is consistent: waiting transactions issue no events and only the holder unlocks a resource.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: first_deadlock_event_index
+  params:
+    - {name: events, type: "string[]"}
+  return_type: int
+  comparison: exact
+reference_solutions:
+  python: |
+    from collections import deque
+
+
+    def first_deadlock_event_index(events):
+        holder = {}
+        queue = {}
+        waiting_on = {}
+        for i, event in enumerate(events):
+            txn, action, lock = event.split(" ")
+            if action == "lock":
+                owner = holder.get(lock)
+                if owner is None:
+                    holder[lock] = txn
+                elif owner != txn:
+                    queue.setdefault(lock, deque()).append(txn)
+                    waiting_on[txn] = lock
+                    current = owner
+                    while current in waiting_on:
+                        current = holder[waiting_on[current]]
+                        if current == txn:
+                            return i
+            else:
+                waiters = queue.get(lock)
+                if waiters:
+                    nxt = waiters.popleft()
+                    holder[lock] = nxt
+                    del waiting_on[nxt]
+                else:
+                    del holder[lock]
+        return -1
+  javascript: |
+    function firstDeadlockEventIndex(events) {
+      const holder = new Map();
+      const queues = new Map();
+      const waitingOn = new Map();
+      for (let i = 0; i < events.length; i++) {
+        const [txn, action, lock] = events[i].split(" ");
+        if (action === "lock") {
+          const owner = holder.get(lock);
+          if (owner === undefined) {
+            holder.set(lock, txn);
+          } else if (owner !== txn) {
+            if (!queues.has(lock)) queues.set(lock, []);
+            queues.get(lock).push(txn);
+            waitingOn.set(txn, lock);
+            let current = owner;
+            while (waitingOn.has(current)) {
+              current = holder.get(waitingOn.get(current));
+              if (current === txn) return i;
+            }
+          }
+        } else {
+          const waiters = queues.get(lock);
+          if (waiters && waiters.length > 0) {
+            const next = waiters.shift();
+            holder.set(lock, next);
+            waitingOn.delete(next);
+          } else {
+            holder.delete(lock);
+          }
+        }
+      }
+      return -1;
+    }
+tests:
+  - {id: t1, args: [["t1 lock orders", "t2 lock payments", "t1 lock payments", "t2 lock orders"]], expected: 3, description: "Example 1 - classic two-transaction deadlock"}
+  - {id: t2, args: [["a lock x", "b lock x", "c lock x", "a unlock x", "a lock y", "b lock y", "a lock x"]], expected: 6, description: "Example 2 - FIFO handoff, then a cycle through the new holder"}
+  - {id: t3, args: [["t1 lock a", "t2 lock a", "t1 unlock a", "t2 unlock a"]], expected: -1, description: "Example 3 - no deadlock"}
+  - {id: t4, hidden: true, args: [["solo lock r1"]], expected: -1, description: "Single event"}
+  - {id: t5, hidden: true, args: [["t1 lock a", "t1 lock a", "t2 lock b", "t2 lock b", "t1 lock b", "t2 unlock b", "t1 lock a"]], expected: -1, description: "Re-locking an owned resource is a no-op, not a self-wait"}
+  - {id: t6, hidden: true, args: [["t1 lock a", "t2 lock b", "t3 lock c", "t1 lock b", "t2 lock c", "t3 lock a", "t4 lock a"]], expected: 5, description: "Three-transaction cycle closes at the last lock of the ring"}
+  - {id: t7, hidden: true, args: [["a lock x", "c lock z", "b lock x", "c lock x", "a unlock x", "b lock z"]], expected: 5, description: "FIFO handoff to b, then b waits for c while c waits for b - missed if waiters are not re-pointed or the newest waiter is granted"}
+  - {id: t8, hidden: true, args: [["c lock z", "a lock q", "b lock q", "c lock q", "a unlock q", "a lock z", "b unlock q", "c unlock z"]], expected: -1, description: "After the handoff c waits for b, not a - keeping the stale edge c -> a would report a false deadlock at event 5"}
+  - {id: t9, hidden: true, args: [["t0 lock r0", "t1 lock r1", "t2 lock r2", "t3 lock r3", "t4 lock r4", "t5 lock r5", "t6 lock r6", "t7 lock r7", "t8 lock r8", "t9 lock r9", "t10 lock r10", "t11 lock r11", "t12 lock r12", "t13 lock r13", "t14 lock r14", "t15 lock r15", "t16 lock r16", "t17 lock r17", "t18 lock r18", "t19 lock r19", "t20 lock r20", "t21 lock r21", "t22 lock r22", "t23 lock r23", "t24 lock r24", "t25 lock r25", "t26 lock r26", "t27 lock r27", "t28 lock r28", "t29 lock r29", "t1 lock r0", "t2 lock r1", "t3 lock r2", "t4 lock r3", "t5 lock r4", "t6 lock r5", "t7 lock r6", "t8 lock r7", "t9 lock r8", "t10 lock r9", "t11 lock r10", "t12 lock r11", "t13 lock r12", "t14 lock r13", "t15 lock r14", "t16 lock r15", "t17 lock r16", "t18 lock r17", "t19 lock r18", "t20 lock r19", "t21 lock r20", "t22 lock r21", "t23 lock r22", "t24 lock r23", "t25 lock r24", "t26 lock r25", "t27 lock r26", "t28 lock r27", "t29 lock r28", "t0 unlock r0", "t1 unlock r0", "t1 unlock r1"]], expected: -1, description: "Wait chain of 30 transactions with no cycle, then partial release"}
+  - {id: t10, hidden: true, args: [["tx0 lock row1", "tx1 lock row5", "tx2 lock row4", "tx4 lock row9", "tx3 lock row9", "tx0 lock row2", "tx7 lock row6", "tx9 lock row5", "tx10 lock row7", "tx10 unlock row7", "tx0 unlock row2", "tx7 unlock row6", "tx10 lock row2", "tx4 unlock row9", "tx5 lock row2", "tx2 lock row5", "tx11 lock row8", "tx3 lock row7", "tx8 lock row8", "tx7 lock row9", "tx3 unlock row9", "tx3 lock row6", "tx11 lock row3", "tx11 unlock row8", "tx11 lock row5", "tx10 lock row7", "tx3 lock row8", "tx8 lock row3", "tx4 lock row2", "tx6 lock row7", "tx1 unlock row5", "tx7 lock row7", "tx9 unlock row5", "tx0 unlock row1", "tx2 lock row1", "tx1 lock row4", "tx0 lock row3", "tx2 unlock row5", "tx2 unlock row4", "tx2 unlock row1", "tx1 unlock row4", "tx1 lock row0", "tx1 unlock row0", "tx2 lock row2", "tx11 unlock row3", "tx8 lock row0", "tx9 lock row9", "tx11 lock row1", "tx8 unlock row0", "tx8 unlock row3", "tx1 lock row7", "tx0 unlock row3", "tx0 lock row0", "tx11 lock row6", "tx8 unlock row8", "tx8 lock row0", "tx0 lock row4", "tx0 unlock row0", "tx0 lock row3", "tx8 lock row0", "tx0 unlock row4", "tx0 unlock row3", "tx8 lock row9", "tx3 unlock row7", "tx3 lock row0", "tx0 lock row0", "tx10 unlock row2", "tx5 unlock row2", "tx4 unlock row2", "tx2 unlock row2", "tx10 unlock row7", "tx4 lock row3", "tx6 unlock row7", "tx10 lock row7", "tx5 lock row0", "tx2 lock row9", "tx6 lock row4", "tx6 unlock row4", "tx4 unlock row3", "tx7 lock row7", "tx4 lock row6", "tx7 lock row9", "tx6 lock row0", "tx7 unlock row9", "tx7 unlock row7", "tx1 unlock row7", "tx10 lock row2", "tx9 unlock row9", "tx8 unlock row0", "tx9 lock row5", "tx8 lock row1", "tx1 lock row9", "tx10 lock row0", "tx7 lock row4", "tx7 lock row2", "tx3 unlock row8", "tx3 lock row6", "tx3 unlock row6", "tx11 lock row1", "tx3 unlock row0", "tx11 unlock row5", "tx0 lock row0", "tx3 lock row4", "tx9 unlock row5", "tx9 lock row2", "tx11 unlock row6", "tx0 unlock row0", "tx5 unlock row0", "tx6 lock row3", "tx6 lock row5", "tx11 lock row7", "tx5 lock row6", "tx4 lock row6", "tx6 lock row5", "tx6 unlock row5", "tx6 unlock row0", "tx4 unlock row6", "tx0 lock row5", "tx6 lock row7", "tx4 lock row1", "tx0 unlock row5", "tx10 lock row6", "tx0 lock row1", "tx5 unlock row6", "tx10 unlock row2", "tx7 lock row1", "tx10 unlock row6", "tx5 lock row9", "tx10 lock row5", "tx10 unlock row7", "tx11 unlock row1", "tx11 lock row2", "tx10 unlock row0", "tx8 unlock row9", "tx2 unlock row9", "tx1 unlock row9", "tx10 unlock row5", "tx10 lock row4", "tx1 lock row4", "tx5 unlock row9", "tx8 lock row8", "tx2 lock row8", "tx5 lock row6", "tx5 lock row1", "tx8 unlock row8", "tx2 lock row0", "tx2 unlock row8", "tx8 unlock row1", "tx2 unlock row0", "tx2 lock row7", "tx8 lock row4", "tx4 lock row5", "tx4 unlock row1", "tx4 unlock row5", "tx0 unlock row1", "tx0 lock row4", "tx7 unlock row4", "tx4 lock row4", "tx7 lock row4", "tx3 unlock row4", "tx10 unlock row4", "tx3 lock row7", "tx10 lock row6", "tx1 unlock row4", "tx8 unlock row4", "tx0 lock row9", "tx1 lock row8", "tx1 lock row2", "tx8 lock row5", "tx0 lock row5", "tx8 unlock row5", "tx8 lock row1", "tx0 unlock row9", "tx0 lock row0", "tx0 lock row9", "tx0 unlock row5", "tx0 unlock row9", "tx0 unlock row4", "tx0 lock row6", "tx4 lock row5", "tx4 unlock row5", "tx4 unlock row4", "tx4 lock row6", "tx7 unlock row2", "tx7 unlock row1", "tx7 lock row1", "tx5 lock row7", "tx9 unlock row2", "tx9 lock row2", "tx11 unlock row2", "tx1 unlock row2", "tx1 lock row3", "tx9 lock row0", "tx11 lock row5", "tx11 unlock row5", "tx11 unlock row7", "tx11 lock row2", "tx6 unlock row7", "tx2 lock row7", "tx6 unlock row3", "tx2 unlock row7", "tx1 unlock row3", "tx2 lock row3", "tx6 lock row9", "tx1 lock row0", "tx6 unlock row9", "tx6 lock row0", "tx2 lock row9", "tx3 unlock row7", "tx2 unlock row3", "tx2 lock row7", "tx3 lock row6", "tx5 unlock row1", "tx8 lock row0", "tx5 unlock row7", "tx5 lock row3", "tx5 lock row5", "tx2 lock row7", "tx2 lock row9", "tx5 unlock row3", "tx5 lock row7", "tx2 lock row9", "tx2 unlock row7", "tx2 lock row0", "tx5 lock row5", "tx5 unlock row6", "tx5 unlock row5", "tx5 unlock row7", "tx5 lock row9", "tx10 lock row3", "tx10 lock row3", "tx10 lock row5", "tx10 lock row3", "tx10 unlock row6", "tx10 lock row1", "tx0 unlock row6", "tx4 unlock row6", "tx0 unlock row0", "tx0 lock row0", "tx4 lock row6", "tx9 unlock row2", "tx3 unlock row6", "tx11 lock row7", "tx4 unlock row6", "tx11 unlock row2", "tx4 lock row5", "tx3 lock row8", "tx9 lock row2", "tx11 lock row0", "tx9 unlock row2", "tx9 unlock row0", "tx9 lock row4", "tx1 lock row8", "tx1 unlock row8", "tx3 lock row0", "tx1 unlock row0", "tx1 lock row2", "tx1 unlock row2", "tx1 lock row4", "tx6 lock row0", "tx6 unlock row0", "tx6 lock row9", "tx8 unlock row0", "tx2 unlock row9", "tx2 lock row4", "tx5 unlock row9", "tx6 lock row2", "tx5 lock row6", "tx5 lock row5", "tx6 lock row9", "tx6 lock row7", "tx8 unlock row1", "tx8 lock row7", "tx7 unlock row1", "tx10 lock row0", "tx7 unlock row4", "tx9 lock row4", "tx7 lock row7", "tx9 unlock row4", "tx9 lock row1", "tx1 unlock row4", "tx2 unlock row4", "tx2 unlock row0", "tx2 lock row2", "tx1 lock row7", "tx0 unlock row0", "tx11 unlock row7", "tx11 unlock row0", "tx11 lock row9", "tx0 lock row3", "tx6 unlock row2", "tx3 unlock row8", "tx6 unlock row9", "tx2 lock row7", "tx6 lock row3", "tx11 lock row9", "tx3 unlock row0", "tx10 unlock row0", "tx3 lock row5", "tx11 lock row9", "tx10 lock row9", "tx11 unlock row9", "tx10 unlock row9", "tx11 lock row7", "tx10 unlock row1", "tx10 unlock row5", "tx4 lock row8", "tx10 lock row3", "tx4 lock row3", "tx10 lock row9", "tx9 lock row2", "tx10 unlock row9", "tx10 lock row3", "tx10 lock row9", "tx10 lock row3", "tx10 lock row4", "tx10 lock row0", "tx10 unlock row0", "tx10 unlock row4", "tx10 unlock row3", "tx10 unlock row9", "tx0 unlock row3", "tx10 lock row1", "tx6 unlock row3", "tx6 lock row3", "tx0 lock row6", "tx4 unlock row5", "tx5 lock row0", "tx5 lock row0", "tx4 lock row9", "tx5 lock row1", "tx4 unlock row3", "tx4 unlock row9", "tx4 unlock row8", "tx4 lock row5", "tx6 lock row3", "tx6 unlock row3", "tx6 lock row7", "tx6 lock row7", "tx6 unlock row7", "tx6 lock row0", "tx8 lock row9", "tx8 unlock row7", "tx7 lock row3", "tx8 lock row0", "tx7 unlock row7", "tx7 lock row8", "tx1 unlock row7", "tx7 unlock row3", "tx1 lock row8", "tx2 unlock row2", "tx9 lock row2", "tx9 unlock row2", "tx9 unlock row1", "tx9 lock row3", "tx2 unlock row7", "tx2 lock row9", "tx7 lock row4", "tx11 unlock row7", "tx9 lock row2", "tx11 lock row2", "tx7 lock row6", "tx10 unlock row1", "tx5 lock row0", "tx5 unlock row1", "tx9 lock row2", "tx5 unlock row5", "tx9 lock row8", "tx5 unlock row6", "tx10 lock row7", "tx10 lock row6", "tx0 lock row6", "tx3 lock row7", "tx5 lock row5", "tx0 unlock row6", "tx0 lock row4", "tx7 unlock row8", "tx1 lock row8", "tx1 unlock row8", "tx7 lock row4", "tx1 lock row2", "tx9 lock row3", "tx7 lock row4", "tx9 lock row2", "tx7 lock row6", "tx7 unlock row6", "tx7 lock row4", "tx9 unlock row3", "tx7 unlock row4", "tx10 unlock row7", "tx0 lock row0", "tx10 lock row2", "tx7 lock row7", "tx3 unlock row7", "tx3 lock row2", "tx7 unlock row7", "tx7 lock row0", "tx9 unlock row8", "tx9 unlock row2", "tx9 lock row3", "tx9 lock row8", "tx9 unlock row8", "tx11 unlock row2", "tx9 lock row1", "tx9 lock row2", "tx11 lock row0", "tx1 unlock row2", "tx10 unlock row2", "tx1 lock row3", "tx3 lock row2", "tx3 unlock row2", "tx10 unlock row6", "tx9 unlock row1", "tx10 lock row3", "tx3 lock row3", "tx9 unlock row2", "tx9 unlock row3", "tx1 unlock row3", "tx10 unlock row3", "tx1 lock row4", "tx3 lock row8", "tx10 lock row2", "tx10 lock row4", "tx9 lock row9", "tx3 lock row1", "tx3 lock row3", "tx3 unlock row1", "tx3 unlock row5", "tx3 unlock row3", "tx3 unlock row8", "tx4 unlock row5", "tx4 lock row5", "tx3 lock row0", "tx5 unlock row5", "tx4 lock row8", "tx4 unlock row5", "tx4 unlock row8", "tx4 lock row6", "tx5 lock row0", "tx4 unlock row6", "tx4 lock row1", "tx5 lock row8", "tx5 unlock row0", "tx6 unlock row0", "tx5 lock row0", "tx4 lock row7", "tx6 lock row0", "tx4 lock row3", "tx8 lock row3", "tx4 lock row1", "tx4 lock row1", "tx4 lock row6", "tx4 lock row3", "tx4 lock row7", "tx4 lock row5", "tx4 lock row6", "tx4 lock row3", "tx4 unlock row6", "tx4 unlock row7", "tx4 unlock row1", "tx4 unlock row5", "tx4 unlock row3", "tx4 lock row0", "tx8 lock row0", "tx8 lock row3", "tx8 lock row7", "tx8 lock row0", "tx8 unlock row3", "tx8 unlock row7", "tx8 lock row1", "tx8 unlock row9", "tx2 lock row9", "tx8 lock row6", "tx8 lock row9", "tx2 unlock row9", "tx2 lock row9", "tx9 unlock row9", "tx9 lock row6", "tx8 lock row9", "tx8 unlock row1", "tx8 unlock row6", "tx9 lock row4", "tx8 lock row3", "tx8 lock row9", "tx8 lock row9", "tx8 unlock row3", "tx8 lock row9", "tx8 unlock row0", "tx8 unlock row9", "tx8 lock row5", "tx0 unlock row0", "tx7 unlock row0", "tx0 unlock row4", "tx2 unlock row9", "tx2 lock row9", "tx2 lock row9", "tx8 lock row6", "tx0 lock row6", "tx1 lock row8", "tx2 unlock row9", "tx7 lock row9", "tx2 lock row6", "tx11 unlock row0", "tx11 lock row5", "tx7 lock row3", "tx3 unlock row0", "tx7 unlock row3", "tx7 unlock row9", "tx7 lock row4", "tx5 unlock row0", "tx5 unlock row8", "tx1 unlock row4", "tx3 lock row5", "tx6 lock row5", "tx5 lock row9", "tx1 unlock row8", "tx1 lock row6", "tx5 unlock row9", "tx10 unlock row4", "tx5 lock row6", "tx10 unlock row2", "tx10 lock row2", "tx10 unlock row2", "tx9 unlock row4", "tx10 lock row7", "tx10 unlock row7", "tx9 unlock row6", "tx9 lock row5", "tx7 lock row6", "tx8 unlock row5", "tx8 unlock row6", "tx8 lock row1", "tx0 lock row8", "tx11 unlock row5", "tx3 unlock row5", "tx10 lock row7", "tx8 lock row8", "tx6 unlock row0", "tx6 unlock row5", "tx11 lock row8", "tx6 lock row2", "tx3 lock row9", "tx4 lock row4", "tx9 unlock row5", "tx6 lock row0", "tx3 lock row8", "tx10 lock row9", "tx9 lock row5", "tx9 lock row3", "tx0 unlock row8", "tx0 lock row3", "tx8 unlock row8", "tx8 unlock row1", "tx9 unlock row3", "tx11 lock row0", "tx8 lock row2", "tx0 unlock row3", "tx9 unlock row5", "tx0 unlock row6", "tx2 unlock row6", "tx1 lock row3", "tx9 lock row9", "tx2 lock row3", "tx1 lock row3", "tx0 lock row2", "tx1 unlock row3", "tx1 unlock row6", "tx2 lock row2", "tx5 lock row1", "tx1 lock row8", "tx5 unlock row1", "tx5 lock row5", "tx5 lock row6", "tx5 unlock row6", "tx5 lock row6", "tx7 lock row6", "tx7 unlock row4", "tx4 unlock row0", "tx6 unlock row2", "tx6 unlock row0", "tx4 unlock row4", "tx11 unlock row8", "tx4 lock row1", "tx3 unlock row8", "tx8 unlock row2", "tx0 lock row5", "tx1 lock row8", "tx3 unlock row9", "tx7 unlock row6", "tx5 lock row7", "tx1 lock row6", "tx6 lock row7", "tx10 lock row2", "tx11 unlock row0", "tx3 lock row7", "tx4 lock row1", "tx7 lock row6", "tx8 lock row9", "tx11 lock row1", "tx4 lock row1"]], expected: 592, description: "600-event replay of 12 transactions over 10 rows; deadlock appears near the end"}
+expected_concepts:
+  - modelling lock holders and FIFO wait queues with hash maps
+  - wait-for graph with out-degree at most one
+  - incremental cycle detection by following wait edges from the new edge
+  - why only lock events can create a cycle
+  - lock handoff semantics on unlock
+optimal_complexity: {time: "O(n * w) where w is the longest wait chain", space: O(n)}
+rubric:
+  excellent: Models holders and FIFO queues, stores for each waiting transaction the resource it waits on (so a handoff automatically re-points the other waiters), observes that each transaction waits for at most one resource and that only a new wait can close a cycle, and checks only the chain starting at the new edge.
+  good: Correct replay that rebuilds the wait-for graph and runs a full cycle detection after each event, or needs a hint about re-pointing waiters after a handoff.
+  weak: Grants the lock to the newest waiter, keeps waiters pointing at the old holder after a handoff, treats re-locking an owned resource as a self-wait, or checks for cycles only at the end of the log.
+  criteria:
+    correctness: All tests pass, including handoffs, re-locks by the holder, multi-transaction cycles and logs without deadlock.
+    efficiency: Incremental check per lock event; no full graph rebuild per event.
+    code_quality: Clear state maps (holder, queue, waiting_on) and a separate lock and unlock branch.
+    edge_cases: Single event, unlock with an empty queue, long wait chains without a cycle and resources that are reused after being freed.
+    communication: Explains why storing the awaited resource rather than the holder avoids updating every waiter on a handoff.
+hints:
+  - Keep, for each resource, its holder and a FIFO queue of waiters, and for each waiting transaction the resource it is waiting for. A waiting transaction issues no events, so it waits for exactly one resource.
+  - Every transaction has at most one outgoing wait edge. Ask yourself which kind of event can create a cycle - can an unlock ever close one?
+  - On a lock event that makes T wait, start at the holder of the resource and repeatedly jump to the holder of the resource that transaction is waiting for. If you reach T, this event closed a cycle; if you reach a transaction that is not waiting, there is none. Looking holders up through the awaited resource keeps the edges correct after handoffs.
+followups:
+  - Which transaction would you abort to break the deadlock, and how would you choose it deterministically?
+  - How does the model change with shared (read) and exclusive (write) locks?
+  - How would you detect deadlocks across several database nodes that each only see their own locks?
+  - How would you make the chain walk O(1) amortised for very long wait chains?
+common_errors:
+  - Handing the lock to the newest waiter instead of the front of the FIFO queue.
+  - Leaving the remaining waiters pointing at the transaction that released the lock.
+  - Treating a re-lock by the current holder as a wait, which creates a false self-cycle.
+  - Running a full graph search after every event, which is slow on long logs.
+  - Following wait edges without a stop condition, which loops forever once a cycle exists.

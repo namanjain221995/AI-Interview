@@ -1,0 +1,408 @@
+# =============================================================================
+# Alerting rules — AI Interview Platform
+#
+# Severity: critical = candidates are (or will be) blocked right now;
+#           warning  = degraded experience or a growing problem.
+# Latency/ratio alerts carry a minimum-traffic guard so a single slow turn on
+# an idle system cannot page anyone. Unit tests: infra/prometheus/tests/.
+# Runbook notes for every alert: DEPLOYMENT.md, "Alert runbook".
+# =============================================================================
+
+groups:
+  # ---------------------------------------------------------------------------
+  - name: interview-availability
+    rules:
+      - alert: InterviewApiDown
+        expr: up{job="interview-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: Interview API is down
+          description: "{{ $labels.instance }} has not answered /metrics for 1 minute. Candidates cannot start or resume interviews."
+
+      - alert: InterviewWorkerDown
+        expr: up{job="interview-worker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: worker
+        annotations:
+          summary: Background worker is down
+          description: "{{ $labels.instance }} is unreachable. Resume processing, evaluations, scoring and reports are not progressing."
+
+      - alert: InterviewTtsDown
+        expr: up{job="interview-tts"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: tts
+        annotations:
+          summary: TTS service is down
+          description: "{{ $labels.instance }} is unreachable. Live interviews fall back to browser speech or text."
+
+      - alert: InterviewSandboxDown
+        expr: up{job="interview-sandbox"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: sandbox
+        annotations:
+          summary: Code execution sandbox is down
+          description: "{{ $labels.instance }} is unreachable. Coding rounds cannot run candidate code."
+
+      - alert: InterviewEdgeDown
+        expr: up{job="interview-edge"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: edge
+        annotations:
+          summary: Edge proxy is down
+          description: "The Caddy edge ({{ $labels.instance }}) is unreachable: the web app, API and WebSockets are unavailable to browsers."
+
+      - alert: PostgresDown
+        expr: pg_up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: postgres
+        annotations:
+          summary: PostgreSQL is unreachable
+          description: The postgres exporter cannot connect to the database.
+
+      - alert: RedisDown
+        expr: redis_up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: redis
+        annotations:
+          summary: Redis is unreachable
+          description: The redis exporter cannot connect. Sessions, queues and rate limits are affected.
+
+      - alert: MonitoringExporterDown
+        expr: up{job=~"postgres|redis"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: monitoring
+        annotations:
+          summary: "{{ $labels.job }} exporter is down"
+          description: "{{ $labels.instance }} has not been scraped for 5 minutes; database/queue alerts are blind."
+
+  # ---------------------------------------------------------------------------
+  - name: interview-latency
+    rules:
+      - alert: TurnLatencyP95High
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(interview_turn_latency_seconds_bucket[5m]))) > 3
+          and on ()
+          sum(increase(interview_turn_latency_seconds_count[5m])) >= 5
+        for: 5m
+        labels:
+          severity: warning
+          component: realtime
+        annotations:
+          summary: Interviewer response latency p95 above 3 s
+          description: "p95 from candidate end-of-turn to first interviewer audio is {{ $value | printf \"%.2f\" }} s (target < 3 s)."
+
+      - alert: TimeToFirstAudioP95High
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(interview_time_to_first_audio_seconds_bucket[5m]))) > 2
+          and on ()
+          sum(increase(interview_time_to_first_audio_seconds_count[5m])) >= 5
+        for: 5m
+        labels:
+          severity: warning
+          component: realtime
+        annotations:
+          summary: Time to first interviewer audio p95 above 2 s
+          description: "p95 from utterance start to the first TTS chunk sent is {{ $value | printf \"%.2f\" }} s (target < 2 s)."
+
+      - alert: SttLatencyP95High
+        expr: |
+          histogram_quantile(0.95, sum by (le, kind) (rate(interview_stt_latency_seconds_bucket[5m]))) > 2
+          and on (kind)
+          sum by (kind) (increase(interview_stt_latency_seconds_count[5m])) >= 10
+        for: 10m
+        labels:
+          severity: warning
+          component: stt
+        annotations:
+          summary: "Whisper {{ $labels.kind }} transcription p95 above 2 s"
+          description: "p95 STT latency ({{ $labels.kind }}) is {{ $value | printf \"%.2f\" }} s; turn latency will follow."
+
+      - alert: TtsLatencyP95High
+        expr: |
+          histogram_quantile(0.95, sum by (le, provider) (rate(interview_tts_latency_seconds_bucket[5m]))) > 1.5
+          and on (provider)
+          sum by (provider) (increase(interview_tts_latency_seconds_count[5m])) >= 10
+        for: 10m
+        labels:
+          severity: warning
+          component: tts
+        annotations:
+          summary: "TTS ({{ $labels.provider }}) chunk latency p95 above 1.5 s"
+          description: "p95 synthesis latency per chunk is {{ $value | printf \"%.2f\" }} s; the TTS container may be CPU-starved."
+
+  # ---------------------------------------------------------------------------
+  - name: interview-ai
+    rules:
+      - alert: LlmFailureRatioHigh
+        expr: |
+          (
+            sum by (endpoint) (rate(interview_llm_request_seconds_count{status=~"error|timeout|circuit_open"}[5m]))
+            /
+            sum by (endpoint) (rate(interview_llm_request_seconds_count{status!="cancelled"}[5m]))
+          ) > 0.05
+          and on (endpoint)
+          sum by (endpoint) (increase(interview_llm_request_seconds_count{status!="cancelled"}[5m])) >= 10
+        for: 5m
+        labels:
+          severity: warning
+          component: ai
+        annotations:
+          summary: "LLM failure ratio above 5% on endpoint {{ $labels.endpoint }}"
+          description: "{{ $value | humanizePercentage }} of LLM requests to {{ $labels.endpoint }} failed (error, timeout or open circuit) over 5 minutes."
+
+      - alert: LlmCircuitOpen
+        expr: sum by (endpoint) (increase(interview_model_call_failures_total{reason="circuit_open"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+          component: ai
+        annotations:
+          summary: "Circuit breaker open for endpoint {{ $labels.endpoint }}"
+          description: Calls are being short-circuited; turn tasks on the main endpoint degrade to the vision (8B) fallback.
+
+      - alert: ModelEndpointFailures
+        expr: |
+          sum by (endpoint, reason) (
+            rate(interview_model_call_failures_total{endpoint=~"whisper|embedding|reranker|ocr|tts", reason!="cancelled"}[5m])
+          ) * 60 > 3
+        for: 10m
+        labels:
+          severity: warning
+          component: ai
+        annotations:
+          summary: "{{ $labels.endpoint }} calls failing ({{ $labels.reason }})"
+          description: "{{ $value | printf \"%.1f\" }} failed {{ $labels.endpoint }} calls per minute ({{ $labels.reason }}) for 10 minutes."
+
+      - alert: MainLlmEndpointDown
+        expr: up{job="vllm", endpoint="main"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: ai
+        annotations:
+          summary: Main LLM endpoint is unreachable
+          description: "vLLM at {{ $labels.instance }} has not answered /metrics for 2 minutes. Interview turns run on the 8B fallback or fail."
+
+      - alert: AuxModelEndpointDown
+        expr: up{job="vllm", endpoint!="main"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: ai
+        annotations:
+          summary: "Model endpoint {{ $labels.endpoint }} is unreachable"
+          description: "vLLM at {{ $labels.instance }} ({{ $labels.endpoint }}) has not answered /metrics for 5 minutes."
+
+      - alert: LlmRequestsQueueing
+        expr: max by (endpoint) (vllm:num_requests_waiting{job="vllm"}) > 4
+        for: 5m
+        labels:
+          severity: warning
+          component: ai
+        annotations:
+          summary: "Requests queueing on vLLM endpoint {{ $labels.endpoint }}"
+          description: "{{ $value }} requests have been waiting for 5 minutes; the shared model server is saturated and turn latency will rise."
+
+      - alert: LlmKvCacheSaturated
+        expr: max by (endpoint) (vllm:kv_cache_usage_perc{job="vllm"}) > 0.95
+        for: 10m
+        labels:
+          severity: warning
+          component: ai
+        annotations:
+          summary: "KV cache above 95% on vLLM endpoint {{ $labels.endpoint }}"
+          description: Requests will be preempted or queued; long prompts (reports, evaluations) slow down live turns.
+
+  # ---------------------------------------------------------------------------
+  - name: interview-workers
+    rules:
+      - alert: QueueDepthGrowing
+        expr: |
+          sum by (queue) (interview_queue_depth{queue!~"(jobs:)?dead"}) > 25
+          and on (queue)
+          sum by (queue) (delta(interview_queue_depth{queue!~"(jobs:)?dead"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "Job queue {{ $labels.queue }} keeps growing"
+          description: "{{ $value }} pending messages and still rising after 15 minutes: workers are not keeping up."
+
+      - alert: QueueBacklogHigh
+        expr: sum by (queue) (interview_queue_depth{queue!~"(jobs:)?dead"}) > 200
+        for: 10m
+        labels:
+          severity: critical
+          component: worker
+        annotations:
+          summary: "Job queue {{ $labels.queue }} backlog above 200"
+          description: "{{ $value }} pending messages for 10 minutes. Reports and evaluations are delayed."
+
+      - alert: DeadLetterJobs
+        expr: |
+          sum by (type) (increase(interview_jobs_total{status="dead"}[30m])) > 0
+          or
+          label_replace(sum(delta(redis_stream_length{job="redis", stream="jobs:dead"}[30m])) > 0, "type", "unknown", "", "")
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "Jobs moved to the dead-letter stream ({{ $labels.type }})"
+          description: "Jobs exhausted their retries in the last 30 minutes. Inspect jobs:dead (XRANGE) and the background_jobs table."
+
+      - alert: JobFailureRatioHigh
+        expr: |
+          (
+            sum by (type) (rate(interview_jobs_total{status=~"failed|dead"}[15m]))
+            /
+            sum by (type) (rate(interview_jobs_total[15m]))
+          ) > 0.2
+          and on (type)
+          sum by (type) (increase(interview_jobs_total[15m])) >= 5
+        for: 15m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "More than 20% of {{ $labels.type }} jobs fail"
+          description: "{{ $value | humanizePercentage }} of {{ $labels.type }} jobs failed over 15 minutes."
+
+  # ---------------------------------------------------------------------------
+  - name: interview-coding
+    rules:
+      - alert: CodingExecutionErrorsHigh
+        expr: |
+          (
+            sum by (language) (rate(interview_coding_executions_total{status=~"sandbox_error|rejected"}[10m]))
+            /
+            sum by (language) (rate(interview_coding_executions_total[10m]))
+          ) > 0.25
+          and on (language)
+          sum by (language) (increase(interview_coding_executions_total[10m])) >= 4
+        for: 10m
+        labels:
+          severity: warning
+          component: sandbox
+        annotations:
+          summary: "Sandbox errors for {{ $labels.language }} executions"
+          description: "{{ $value | humanizePercentage }} of {{ $labels.language }} runs ended in sandbox_error/rejected (not candidate failures). Check runtime images (make sandbox-images) and sandbox logs."
+
+  # ---------------------------------------------------------------------------
+  - name: interview-errors
+    rules:
+      - alert: HttpServerErrorRatioHigh
+        expr: |
+          (
+            sum(rate(interview_http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(interview_http_requests_total[5m]))
+          ) > 0.05
+          and on ()
+          sum(increase(interview_http_requests_total[5m])) >= 20
+        for: 5m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: API 5xx ratio above 5%
+          description: "{{ $value | humanizePercentage }} of API requests returned 5xx over 5 minutes."
+
+      - alert: EdgeServerErrorRatioHigh
+        expr: |
+          (
+            sum(rate(caddy_http_request_duration_seconds_count{job="interview-edge", handler="headers", code=~"5.."}[5m]))
+            /
+            sum(rate(caddy_http_request_duration_seconds_count{job="interview-edge", handler="headers"}[5m]))
+          ) > 0.05
+          and on ()
+          sum(increase(caddy_http_request_duration_seconds_count{job="interview-edge", handler="headers"}[5m])) >= 20
+        for: 5m
+        labels:
+          severity: warning
+          component: edge
+        annotations:
+          summary: Edge 5xx ratio above 5%
+          description: "{{ $value | humanizePercentage }} of requests through the edge returned 5xx (502 = API unreachable)."
+
+      - alert: UnexpectedErrorsSpike
+        expr: sum by (component) (increase(interview_errors_total[10m])) > 10
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unexpected errors in {{ $labels.component }}"
+          description: "{{ $value | printf \"%.0f\" }} unexpected errors in 10 minutes. Check the structured logs for this component."
+
+  # ---------------------------------------------------------------------------
+  - name: interview-security
+    rules:
+      - alert: RefreshTokenReuseDetected
+        expr: sum(increase(interview_auth_events_total{event="refresh_reuse_detected"}[15m])) > 0
+        labels:
+          severity: warning
+          component: auth
+        annotations:
+          summary: Refresh token reuse detected
+          description: A rotated refresh token was presented again (possible token theft). The affected auth session was revoked; review the audit log.
+
+      - alert: AccountLockoutSpike
+        expr: sum(increase(interview_auth_events_total{event="account_locked"}[15m])) >= 3
+        labels:
+          severity: warning
+          component: auth
+        annotations:
+          summary: Several staff accounts locked out
+          description: "{{ $value | printf \"%.0f\" }} lockouts in 15 minutes: possible credential stuffing against /api/v1/auth/login."
+
+  # ---------------------------------------------------------------------------
+  - name: interview-capacity
+    rules:
+      - alert: HostDiskSpaceLow
+        expr: |
+          node_filesystem_avail_bytes{job="host", mountpoint="/"}
+          / node_filesystem_size_bytes{job="host", mountpoint="/"} < 0.10
+        for: 15m
+        labels:
+          severity: warning
+          component: host
+        annotations:
+          summary: Root filesystem below 10% free
+          description: "{{ $value | humanizePercentage }} free on /. Docker volumes (pgdata, appdata, promdata) live here."
+
+      - alert: PostgresConnectionsHigh
+        expr: |
+          sum(pg_stat_activity_count{job="postgres"})
+          / max(pg_settings_max_connections{job="postgres"}) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          component: postgres
+        annotations:
+          summary: PostgreSQL connections above 80% of max_connections
+          description: "{{ $value | humanizePercentage }} of max_connections in use; check DB_POOL_SIZE x replicas."
+
+      - alert: PrometheusRuleEvaluationFailures
+        expr: increase(prometheus_rule_evaluation_failures_total{job="prometheus"}[10m]) > 0
+        labels:
+          severity: warning
+          component: monitoring
+        annotations:
+          summary: Prometheus rule evaluation failures
+          description: "Rule group {{ $labels.rule_group }} failed to evaluate; alerts in it may be silent."

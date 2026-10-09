@@ -1,0 +1,281 @@
+version: 1
+slug: flaky_tests_same_commit
+title: "Flaky Tests on the Same Commit"
+difficulty: easy
+competency_keys: [sql, databases, testing]
+role_tags: [qa, devops, backend]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Flaky Tests on the Same Commit
+
+  The CI system stores the outcome of every test execution. Pipelines retry failed jobs, so the same
+  test often runs several times against the same commit. The QA team wants a list of flaky tests: a
+  test that gives different answers for identical code.
+
+  Table `test_runs`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | test_name | VARCHAR(120) | name of the test |
+  | commit_sha | VARCHAR(40) | commit the test ran against |
+  | outcome | VARCHAR(10) | `'pass'`, `'fail'` or `'skip'` |
+
+  A test is **flaky on a commit** when, for that same `commit_sha`, it has **at least one `'pass'`
+  and at least one `'fail'`** run. `'skip'` runs are ignored completely. A test that failed on one
+  commit and passed on a different commit is **not** flaky on either of them (the code changed).
+
+  Return one row per test that is flaky on at least one commit, with the columns:
+
+  - `test_name`
+  - `flaky_commits`: the number of distinct commits on which the test is flaky
+
+  Order the rows by `flaky_commits` descending, then by `test_name` ascending. Tests that are never
+  flaky do not appear.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  test_runs
+  +----+-------------------------+------------+---------+
+  | id | test_name               | commit_sha | outcome |
+  +----+-------------------------+------------+---------+
+  | 1  | checkout_applies_coupon | a1f3c9e    | pass    |
+  | 2  | checkout_applies_coupon | a1f3c9e    | fail    |
+  | 3  | login_redirects_home    | a1f3c9e    | pass    |
+  | 4  | login_redirects_home    | a1f3c9e    | skip    |
+  | 5  | search_paginates        | a1f3c9e    | fail    |
+  | 6  | search_paginates        | b72d014    | pass    |
+  | 7  | checkout_applies_coupon | b72d014    | pass    |
+  | 8  | checkout_applies_coupon | b72d014    | fail    |
+  | 9  | login_redirects_home    | b72d014    | fail    |
+  | 10 | login_redirects_home    | b72d014    | pass    |
+  +----+-------------------------+------------+---------+
+
+  Output
+  +-------------------------+---------------+
+  | test_name               | flaky_commits |
+  +-------------------------+---------------+
+  | checkout_applies_coupon | 2             |
+  | login_redirects_home    | 1             |
+  +-------------------------+---------------+
+  checkout_applies_coupon is flaky on a1f3c9e and b72d014; login_redirects_home only on b72d014
+  (pass + skip on a1f3c9e does not count). search_paginates failed and passed on different
+  commits, so it is not flaky.
+  ```
+
+  ### Example 2
+  ```
+  test_runs
+  +----+-------------------+------------+---------+
+  | id | test_name         | commit_sha | outcome |
+  +----+-------------------+------------+---------+
+  | 1  | report_export_csv | c90e11a    | fail    |
+  | 2  | report_export_csv | c90e11a    | fail    |
+  | 3  | report_export_csv | c90e11a    | pass    |
+  | 4  | api_rate_limit    | c90e11a    | pass    |
+  | 5  | api_rate_limit    | c90e11a    | fail    |
+  | 6  | cache_eviction    | d4410bb    | skip    |
+  | 7  | cache_eviction    | d4410bb    | fail    |
+  +----+-------------------+------------+---------+
+
+  Output
+  +-------------------+---------------+
+  | test_name         | flaky_commits |
+  +-------------------+---------------+
+  | api_rate_limit    | 1             |
+  | report_export_csv | 1             |
+  +-------------------+---------------+
+  Both flaky tests have one flaky commit, so they are ordered by name. cache_eviction only
+  failed (the skip is ignored).
+  ```
+
+  ### Constraints
+  - `0 <= rows in test_runs <= 10^5`
+  - `outcome` is always one of `'pass'`, `'fail'`, `'skip'`.
+  - The same test may run any number of times against the same commit.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return test_name and flaky_commits for every test that both passed and failed on the same commit.
+    SELECT test_name, COUNT(*) AS flaky_commits
+    FROM test_runs
+    GROUP BY test_name
+    ORDER BY flaky_commits DESC, test_name;
+reference_solutions:
+  sql: |
+    WITH flaky AS (
+      SELECT test_name, commit_sha
+      FROM test_runs
+      GROUP BY test_name, commit_sha
+      HAVING SUM(CASE WHEN outcome = 'pass' THEN 1 ELSE 0 END) > 0
+         AND SUM(CASE WHEN outcome = 'fail' THEN 1 ELSE 0 END) > 0
+    )
+    SELECT test_name, COUNT(*) AS flaky_commits
+    FROM flaky
+    GROUP BY test_name
+    ORDER BY flaky_commits DESC, test_name;
+sql_setup: |
+  CREATE TABLE test_runs (
+    id INTEGER PRIMARY KEY,
+    test_name VARCHAR(120) NOT NULL,
+    commit_sha VARCHAR(40) NOT NULL,
+    outcome VARCHAR(10) NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - flaky on two commits vs one; pass/fail split across commits is not flaky; skip ignored"
+    ordered: true
+    setup_sql: |
+      INSERT INTO test_runs (id, test_name, commit_sha, outcome) VALUES
+        (1, 'checkout_applies_coupon', 'a1f3c9e', 'pass'), (2, 'checkout_applies_coupon', 'a1f3c9e', 'fail'),
+        (3, 'login_redirects_home', 'a1f3c9e', 'pass'), (4, 'login_redirects_home', 'a1f3c9e', 'skip'),
+        (5, 'search_paginates', 'a1f3c9e', 'fail'), (6, 'search_paginates', 'b72d014', 'pass'),
+        (7, 'checkout_applies_coupon', 'b72d014', 'pass'), (8, 'checkout_applies_coupon', 'b72d014', 'fail'),
+        (9, 'login_redirects_home', 'b72d014', 'fail'), (10, 'login_redirects_home', 'b72d014', 'pass');
+    expected_rows: [["checkout_applies_coupon", 2], ["login_redirects_home", 1]]
+  - id: t2
+    description: "Example 2 - retries on one commit count once; skip + fail is not flaky; tie broken by name"
+    ordered: true
+    setup_sql: |
+      INSERT INTO test_runs (id, test_name, commit_sha, outcome) VALUES
+        (1, 'report_export_csv', 'c90e11a', 'fail'), (2, 'report_export_csv', 'c90e11a', 'fail'),
+        (3, 'report_export_csv', 'c90e11a', 'pass'), (4, 'api_rate_limit', 'c90e11a', 'pass'),
+        (5, 'api_rate_limit', 'c90e11a', 'fail'), (6, 'cache_eviction', 'd4410bb', 'skip'),
+        (7, 'cache_eviction', 'd4410bb', 'fail');
+    expected_rows: [["api_rate_limit", 1], ["report_export_csv", 1]]
+  - id: t3
+    hidden: true
+    description: "Empty table returns no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Only passes and skips (plus pass + skip on one commit) - no flaky tests"
+    ordered: true
+    setup_sql: |
+      INSERT INTO test_runs (id, test_name, commit_sha, outcome) VALUES
+        (1, 'auth_token_refresh', '1111aaa', 'pass'), (2, 'auth_token_refresh', '1111aaa', 'skip'),
+        (3, 'auth_token_refresh', '2222bbb', 'pass'), (4, 'upload_resumes', '1111aaa', 'skip'),
+        (5, 'upload_resumes', '1111aaa', 'skip'), (6, 'webhook_retry', '2222bbb', 'pass');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Pass and fail on different commits only (alternating) - grouping by test alone is wrong"
+    ordered: true
+    setup_sql: |
+      INSERT INTO test_runs (id, test_name, commit_sha, outcome) VALUES
+        (1, 'invoice_totals', 'c1', 'pass'), (2, 'invoice_totals', 'c2', 'fail'),
+        (3, 'invoice_totals', 'c3', 'pass'), (4, 'invoice_totals', 'c4', 'fail'),
+        (5, 'metrics_flush', 'c1', 'fail'), (6, 'metrics_flush', 'c2', 'pass'),
+        (7, 'metrics_flush', 'c2', 'pass'), (8, 'metrics_flush', 'c3', 'fail'),
+        (9, 'metrics_flush', 'c3', 'fail');
+    expected_rows: []
+  - id: t6
+    hidden: true
+    description: "Different tests pass and fail on the same commit - grouping by commit alone is wrong; one genuine flake"
+    ordered: true
+    setup_sql: |
+      INSERT INTO test_runs (id, test_name, commit_sha, outcome) VALUES
+        (1, 'orders_list_sorts', 'e5f6a7b', 'pass'), (2, 'payments_capture', 'e5f6a7b', 'fail'),
+        (3, 'orders_list_sorts', 'e5f6a7b', 'pass'), (4, 'payments_capture', 'e5f6a7b', 'fail'),
+        (5, 'queue_drain', 'e5f6a7b', 'pass'), (6, 'queue_drain', 'e5f6a7b', 'fail'),
+        (7, 'queue_drain', 'f0f0f0f', 'pass');
+    expected_rows: [["queue_drain", 1]]
+  - id: t7
+    hidden: true
+    description: "Skips mixed into flaky commits are ignored; skip + pass and skip + fail commits do not count"
+    ordered: true
+    setup_sql: |
+      INSERT INTO test_runs (id, test_name, commit_sha, outcome) VALUES
+        (1, 'tax_rounding', 'aa01', 'skip'), (2, 'tax_rounding', 'aa01', 'pass'),
+        (3, 'tax_rounding', 'aa01', 'skip'), (4, 'tax_rounding', 'aa01', 'fail'),
+        (5, 'tax_rounding', 'bb02', 'skip'), (6, 'tax_rounding', 'bb02', 'fail'),
+        (7, 'tax_rounding', 'cc03', 'skip'), (8, 'tax_rounding', 'cc03', 'pass'),
+        (9, 'geo_lookup', 'aa01', 'skip');
+    expected_rows: [["tax_rounding", 1]]
+  - id: t8
+    hidden: true
+    description: "Ordering - 3 flaky commits, then 2, then a three-way tie at 1 ordered by name; many retries"
+    ordered: true
+    setup_sql: |
+      INSERT INTO test_runs (id, test_name, commit_sha, outcome) VALUES
+        (1, 'zip_validation', 's1', 'fail'), (2, 'zip_validation', 's1', 'pass'),
+        (3, 'zip_validation', 's2', 'pass'), (4, 'zip_validation', 's2', 'fail'),
+        (5, 'zip_validation', 's2', 'fail'), (6, 'zip_validation', 's3', 'fail'),
+        (7, 'zip_validation', 's3', 'pass'), (8, 'zip_validation', 's3', 'pass'),
+        (9, 'health_probe', 's1', 'pass'), (10, 'health_probe', 's1', 'fail'),
+        (11, 'health_probe', 's2', 'fail'), (12, 'health_probe', 's2', 'pass'),
+        (13, 'health_probe', 's3', 'pass'), (14, 'audit_log_write', 's4', 'fail'),
+        (15, 'audit_log_write', 's4', 'pass'), (16, 'mail_digest', 's4', 'pass'),
+        (17, 'mail_digest', 's4', 'fail'), (18, 'mail_digest', 's4', 'fail'), (19, 'rbac_check', 's5', 'fail'),
+        (20, 'rbac_check', 's5', 'pass'), (21, 'rbac_check', 's6', 'fail');
+    expected_rows: [["zip_validation", 3], ["health_probe", 2], ["audit_log_write", 1], ["mail_digest", 1], ["rbac_check", 1]]
+  - id: t9
+    hidden: true
+    description: "Larger randomised run log (60 rows, 8 tests, 5 commits) - counts and ordering"
+    ordered: true
+    setup_sql: |
+      INSERT INTO test_runs (id, test_name, commit_sha, outcome) VALUES
+        (1, 'feed_ranking', '3b9f20d', 'fail'), (2, 'alerts_dedupe', '0c4e1aa', 'skip'),
+        (3, 'billing_retry', '5d71e6c', 'skip'), (4, 'alerts_dedupe', 'c6e3d19', 'pass'),
+        (5, 'alerts_dedupe', '0c4e1aa', 'fail'), (6, 'gateway_auth', '0c4e1aa', 'pass'),
+        (7, 'billing_retry', 'c6e3d19', 'fail'), (8, 'alerts_dedupe', 'c6e3d19', 'pass'),
+        (9, 'dns_failover', 'c6e3d19', 'pass'), (10, 'gateway_auth', '0c4e1aa', 'pass'),
+        (11, 'alerts_dedupe', 'c6e3d19', 'pass'), (12, 'export_report', '8a02f4b', 'pass'),
+        (13, 'billing_retry', 'c6e3d19', 'pass'), (14, 'cache_warmup', '0c4e1aa', 'skip'),
+        (15, 'dns_failover', '5d71e6c', 'pass'), (16, 'billing_retry', 'c6e3d19', 'pass'),
+        (17, 'dns_failover', '8a02f4b', 'skip'), (18, 'gateway_auth', '5d71e6c', 'fail'),
+        (19, 'hooks_signing', '5d71e6c', 'pass'), (20, 'dns_failover', '3b9f20d', 'pass'),
+        (21, 'billing_retry', 'c6e3d19', 'pass'), (22, 'hooks_signing', '5d71e6c', 'fail'),
+        (23, 'export_report', 'c6e3d19', 'pass'), (24, 'billing_retry', 'c6e3d19', 'fail'),
+        (25, 'cache_warmup', '5d71e6c', 'pass'), (26, 'hooks_signing', '8a02f4b', 'pass'),
+        (27, 'billing_retry', 'c6e3d19', 'skip'), (28, 'feed_ranking', '5d71e6c', 'pass'),
+        (29, 'hooks_signing', 'c6e3d19', 'fail'), (30, 'billing_retry', '0c4e1aa', 'pass'),
+        (31, 'hooks_signing', '0c4e1aa', 'pass'), (32, 'export_report', 'c6e3d19', 'fail'),
+        (33, 'export_report', '8a02f4b', 'pass'), (34, 'alerts_dedupe', '8a02f4b', 'pass'),
+        (35, 'cache_warmup', 'c6e3d19', 'pass'), (36, 'hooks_signing', '0c4e1aa', 'pass'),
+        (37, 'export_report', '3b9f20d', 'pass'), (38, 'gateway_auth', '8a02f4b', 'fail'),
+        (39, 'billing_retry', '3b9f20d', 'fail'), (40, 'gateway_auth', 'c6e3d19', 'pass'),
+        (41, 'cache_warmup', '8a02f4b', 'skip'), (42, 'export_report', '8a02f4b', 'pass'),
+        (43, 'gateway_auth', '3b9f20d', 'pass'), (44, 'billing_retry', '3b9f20d', 'pass'),
+        (45, 'dns_failover', '3b9f20d', 'pass'), (46, 'hooks_signing', 'c6e3d19', 'pass'),
+        (47, 'export_report', '5d71e6c', 'pass'), (48, 'cache_warmup', '8a02f4b', 'skip'),
+        (49, 'feed_ranking', 'c6e3d19', 'skip'), (50, 'feed_ranking', '3b9f20d', 'skip'),
+        (51, 'alerts_dedupe', '8a02f4b', 'skip'), (52, 'gateway_auth', '8a02f4b', 'fail'),
+        (53, 'gateway_auth', '0c4e1aa', 'fail'), (54, 'gateway_auth', '0c4e1aa', 'pass'),
+        (55, 'billing_retry', '3b9f20d', 'fail'), (56, 'cache_warmup', '0c4e1aa', 'pass'),
+        (57, 'alerts_dedupe', '0c4e1aa', 'pass'), (58, 'cache_warmup', 'c6e3d19', 'pass'),
+        (59, 'feed_ranking', 'c6e3d19', 'pass'), (60, 'billing_retry', '3b9f20d', 'skip');
+    expected_rows: [["billing_retry", 2], ["hooks_signing", 2], ["alerts_dedupe", 1], ["export_report", 1], ["gateway_auth", 1]]
+expected_concepts:
+  - "GROUP BY on two columns (test and commit)"
+  - "HAVING with conditional aggregation to require both outcomes"
+  - "two-level aggregation through a CTE or derived table"
+  - "ignoring irrelevant rows (skip) without breaking the logic"
+  - "deterministic ORDER BY with a tie-breaker"
+optimal_complexity: {time: "O(n log n) for grouping and sorting (O(n) with hash aggregation)", space: "O(t * c) for t tests and c commits"}
+rubric:
+  excellent: "Groups by test and commit, keeps groups that have both a pass and a fail with HAVING and conditional counts, counts those groups per test in an outer query, orders by count descending then name, and explains why skips need no special filter."
+  good: "Reaches a correct two-level query but needs a nudge on grouping by commit as well as test, or on the ordering tie-breaker."
+  weak: "Groups by test only (flagging tests that changed outcome across commits), counts runs instead of commits, or treats skip as a failure."
+  criteria:
+    correctness: "All tests pass, including retries on one commit, skips and outcome changes across commits."
+    efficiency: "Set-based aggregation with no correlated subquery per row; mentions an index on (test_name, commit_sha)."
+    code_quality: "Readable CTE or derived table with clear aliases and output names."
+    edge_cases: "Empty table, skip-only commits, the same commit shared by different tests and ties on the count."
+    communication: "Explains why outcomes must be compared within one commit and how the two aggregation levels fit together."
+hints:
+  - "Flakiness is a property of one test on one commit. Start by looking at all runs of a single test against a single commit."
+  - "Group by test and commit, then keep only the groups that contain at least one pass and at least one fail; counting each outcome conditionally inside the group works well."
+  - "In an inner query group by test_name and commit_sha with a HAVING clause that requires a positive count of pass rows and a positive count of fail rows; in the outer query count those rows per test_name and order by that count descending, then by test_name."
+followups:
+  - "How would you report the flake rate per test, flaky commits divided by all commits the test ran on?"
+  - "Which index would make this query fast on a table with hundreds of millions of runs?"
+  - "How would you limit the report to commits from the last 14 days if the table had a run timestamp?"
+common_errors:
+  - "Grouping by test_name only, which flags tests that failed on one commit and passed after a fix on another."
+  - "Counting runs instead of distinct commits, which inflates the number for tests with many retries."
+  - "Treating 'skip' as a failure, or filtering skips out in a way that drops the whole commit."
+  - "Ordering only by the count, which leaves tied tests in an arbitrary order."

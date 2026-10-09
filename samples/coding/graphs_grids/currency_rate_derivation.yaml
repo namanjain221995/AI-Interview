@@ -1,0 +1,146 @@
+version: 1
+slug: currency_rate_derivation
+title: Derive Currency Rates
+difficulty: medium
+competency_keys: [algorithms, problem_solving]
+role_tags: [backend, data, fullstack]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Derive Currency Rates
+
+  A payments service receives exchange quotes from several banks, but no bank quotes every pair of
+  currencies. Quote `i` says that **1 unit** of `pairs[i][0]` is worth `rates[i]` units of
+  `pairs[i][1]`. Every quote also implies the reverse rate: 1 unit of `pairs[i][1]` is worth
+  `1 / rates[i]` units of `pairs[i][0]`. Rates can be chained: if 1 A = 2 B and 1 B = 3 C, then
+  1 A = 6 C.
+
+  The quotes are **consistent**: any two chains between the same two currencies give the same rate.
+
+  For every query `[from, to]` in `queries`, return how many units of `to` one unit of `from` is worth,
+  in the same order as the queries:
+
+  - `1.0` when `from` and `to` are the same currency **and** that currency appears in some quote;
+  - `-1.0` when either currency never appears in a quote, or when no chain of quotes links them.
+
+  Answers are compared with a relative tolerance of `1e-6`.
+
+  ### Example 1
+  ```
+  Input:  pairs = [["GBP", "USD"], ["USD", "EUR"], ["JPY", "KRW"]], rates = [1.25, 0.8, 8.0], queries = [["GBP", "EUR"], ["EUR", "USD"], ["USD", "USD"], ["GBP", "JPY"], ["CHF", "CHF"]]
+  Output: [1.0, 1.25, 1.0, -1.0, -1.0]
+  Explanation: GBP -> USD -> EUR gives 1.25 * 0.8 = 1.0; EUR -> USD is the reverse of 0.8; JPY and KRW form a separate market; CHF never appears in a quote
+  ```
+
+  ### Example 2
+  ```
+  Input:  pairs = [["AUD", "NZD"], ["NZD", "SGD"], ["SGD", "HKD"]], rates = [2.0, 0.5, 4.0], queries = [["HKD", "AUD"], ["AUD", "HKD"], ["NZD", "XYZ"]]
+  Output: [0.25, 4.0, -1.0]
+  ```
+
+  ### Constraints
+  - `1 <= pairs.length == rates.length <= 200`
+  - `pairs[i].length == 2`, `pairs[i][0] != pairs[i][1]`; each unordered pair of currencies is quoted at most once
+  - currency codes are 3 uppercase letters
+  - `0.001 <= rates[i] <= 1000.0`
+  - `1 <= queries.length <= 200`, `queries[j].length == 2`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: convert_rates
+  params:
+    - {name: pairs, type: "string[][]"}
+    - {name: rates, type: "float[]"}
+    - {name: queries, type: "string[][]"}
+  return_type: "float[]"
+  comparison: float_tolerance
+reference_solutions:
+  python: |
+    from collections import deque
+
+
+    def convert_rates(pairs: list[list[str]], rates: list[float], queries: list[list[str]]) -> list[float]:
+        graph: dict[str, list[tuple[str, float]]] = {}
+        for (src, dst), rate in zip(pairs, rates):
+            graph.setdefault(src, []).append((dst, rate))
+            graph.setdefault(dst, []).append((src, 1.0 / rate))
+        answers: list[float] = []
+        for src, dst in queries:
+            if src not in graph or dst not in graph:
+                answers.append(-1.0)
+                continue
+            value = {src: 1.0}
+            queue = deque([src])
+            while queue and dst not in value:
+                node = queue.popleft()
+                for nxt, rate in graph[node]:
+                    if nxt not in value:
+                        value[nxt] = value[node] * rate
+                        queue.append(nxt)
+            answers.append(value.get(dst, -1.0))
+        return answers
+  javascript: |
+    function convertRates(pairs, rates, queries) {
+      const graph = new Map();
+      const link = (a, b, r) => {
+        if (!graph.has(a)) graph.set(a, []);
+        graph.get(a).push([b, r]);
+      };
+      pairs.forEach(([src, dst], i) => {
+        link(src, dst, rates[i]);
+        link(dst, src, 1 / rates[i]);
+      });
+      return queries.map(([src, dst]) => {
+        if (!graph.has(src) || !graph.has(dst)) return -1.0;
+        const value = new Map([[src, 1.0]]);
+        const queue = [src];
+        for (let head = 0; head < queue.length && !value.has(dst); head++) {
+          const node = queue[head];
+          for (const [nxt, rate] of graph.get(node)) {
+            if (!value.has(nxt)) {
+              value.set(nxt, value.get(node) * rate);
+              queue.push(nxt);
+            }
+          }
+        }
+        return value.has(dst) ? value.get(dst) : -1.0;
+      });
+    }
+tests:
+  - {id: t1, args: [[["GBP", "USD"], ["USD", "EUR"], ["JPY", "KRW"]], [1.25, 0.8, 8.0], [["GBP", "EUR"], ["EUR", "USD"], ["USD", "USD"], ["GBP", "JPY"], ["CHF", "CHF"]]], expected: [1.0, 1.25, 1.0, -1.0, -1.0], description: "Example 1"}
+  - {id: t2, args: [[["AUD", "NZD"], ["NZD", "SGD"], ["SGD", "HKD"]], [2.0, 0.5, 4.0], [["HKD", "AUD"], ["AUD", "HKD"], ["NZD", "XYZ"]]], expected: [0.25, 4.0, -1.0], description: "Example 2 - three-hop chain in both directions and an unknown currency"}
+  - {id: t3, hidden: true, args: [[["USD", "EUR"]], [0.5], [["EUR", "USD"]]], expected: [2.0], description: "Single quote used in reverse only"}
+  - {id: t4, hidden: true, args: [[["USD", "EUR"]], [0.5], [["XXX", "XXX"], ["EUR", "EUR"]]], expected: [-1.0, 1.0], description: "Unknown currency to itself is -1.0, known currency to itself is 1.0"}
+  - {id: t5, hidden: true, args: [[["AAA", "BBB"], ["CCC", "DDD"]], [3.0, 5.0], [["AAA", "DDD"], ["DDD", "CCC"], ["BBB", "AAA"]]], expected: [-1.0, 0.2, 0.3333333333333333], description: "Two disconnected markets; cross-market query must be -1.0"}
+  - {id: t6, hidden: true, args: [[["AAA", "BBB"], ["BBB", "CCC"], ["CCC", "DDD"], ["DDD", "EEE"], ["EEE", "FFF"], ["FFF", "GGG"]], [1000.0, 1000.0, 1000.0, 0.001, 0.001, 0.001], [["AAA", "DDD"], ["DDD", "AAA"], ["AAA", "GGG"]]], expected: [1000000000.0, 1.0e-09, 1.0], description: "Extreme rates: 10^9 and 10^-9 intermediate values, product back to 1.0"}
+  - {id: t7, hidden: true, args: [[["AAA", "BBB"], ["BBB", "CCC"], ["AAA", "CCC"], ["CCC", "DDD"]], [2.0, 3.0, 6.0, 0.1], [["AAA", "DDD"], ["DDD", "BBB"], ["CCC", "AAA"]]], expected: [0.6000000000000001, 3.333333333333333, 0.16666666666666666], description: "Consistent cycle: either chain gives the same answer (visited set needed to terminate)"}
+  - {id: t8, hidden: true, args: [[["EUR", "USD"]], [1.1], [["USD", "EUR"], ["EUR", "USD"], ["USD", "GBP"], ["GBP", "USD"]]], expected: [0.9090909090909091, 1.1, -1.0, -1.0], description: "Non-terminating reciprocal 1 / 1.1 and unknown currency on either side"}
+  - {id: t9, hidden: true, args: [[["QNZ", "JLJ"], ["JLJ", "FYW"], ["QNZ", "WRV"], ["JLJ", "IDA"], ["WRV", "HMX"], ["FYW", "NIQ"], ["NIQ", "ZKU"], ["WRV", "VXM"], ["HMX", "ERB"], ["ERB", "EZG"], ["QNZ", "EWR"], ["EWR", "RZV"], ["ERB", "GKR"], ["ERB", "DWU"], ["VXM", "CJN"], ["GKR", "CQP"], ["JLJ", "UTE"], ["EZG", "VZN"], ["VZN", "QKA"], ["HMX", "NLS"], ["UTE", "BYX"], ["ZKU", "LBP"], ["QKA", "LSY"], ["EZG", "AMH"], ["EWR", "DRG"], ["HMX", "HQL"], ["AMH", "BIC"], ["NIQ", "ZIG"], ["ERB", "XTR"], ["GKR", "EWR"], ["DWU", "VZN"], ["FYW", "CQP"], ["WRV", "CQP"], ["QNZ", "NIQ"], ["VZN", "ZIG"], ["LBP", "UTE"], ["AMH", "HMX"], ["DWU", "BIC"], ["CQP", "IDA"], ["UTE", "CJN"], ["DWU", "QNZ"], ["ERB", "VXM"], ["HMX", "QNZ"], ["HQL", "ZIG"], ["DWU", "EZG"], ["NIQ", "JLJ"], ["CQP", "BYX"], ["LBP", "QNZ"], ["CJN", "LBP"], ["ZIG", "ERB"], ["QKA", "NIQ"], ["AMH", "WRV"], ["AMH", "XTR"], ["HQL", "QNZ"], ["DWU", "UTE"], ["HQL", "AMH"], ["RRE", "IVJ"], ["RRE", "LKF"], ["IVJ", "KDS"], ["RRE", "SZI"], ["KDS", "KAB"], ["RRE", "YLA"], ["KAB", "OXI"], ["RRE", "PUB"], ["KDS", "XGJ"], ["PUB", "SZI"], ["SZI", "KAB"], ["KAB", "PUB"], ["XGJ", "YLA"], ["KAB", "IVJ"], ["KAB", "LKF"]], [8.0, 0.03125, 16.0, 0.5, 2.0, 1.0, 128.0, 0.25, 0.0625, 0.5, 4.0, 2.0, 1.0, 8.0, 0.25, 0.25, 0.0625, 16.0, 0.25, 1.0, 16.0, 0.03125, 0.25, 32.0, 0.0625, 0.25, 0.25, 8.0, 1.0, 2.0, 1.0, 2.0, 0.03125, 0.25, 0.125, 0.5, 1.0, 0.5, 8.0, 2.0, 0.0625, 2.0, 0.03125, 0.25, 0.0625, 32.0, 16.0, 1.0, 1.0, 1.0, 0.0625, 0.5, 0.0625, 0.125, 0.03125, 4.0, 4.0, 1.0, 4.0, 0.25, 2.0, 0.25, 0.0625, 32.0, 0.015625, 0.0078125, 128.0, 1.0, 1.0, 0.125, 0.03125], [["SZI", "CJN"], ["IVJ", "VZN"], ["ZIG", "ZKU"], ["CQP", "CJN"], ["IDA", "HQL"], ["QKA", "RZV"], ["RRE", "LSY"], ["VXM", "GKR"], ["LKF", "YLA"], ["ERB", "VZN"], ["HMX", "BIC"], ["ZIG", "KDS"], ["AMH", "KDS"], ["PUB", "ERB"], ["KAB", "ERB"], ["EZG", "OXI"], ["SZI", "NLS"], ["IVJ", "VZN"], ["HQL", "IDA"], ["XGJ", "CJN"], ["EZG", "ERB"], ["CJN", "BIC"], ["KAB", "NLS"], ["SZI", "ZIG"], ["LKF", "VXM"], ["ZZQ", "QNZ"], ["HMX", "HMX"]]], expected: [-1.0, -1.0, 16.0, 2.0, 2.0, 2.0, -1.0, 0.5, 0.25, 8.0, 0.25, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 0.5, -1.0, 2.0, 8.0, -1.0, -1.0, -1.0, -1.0, 1.0], description: "40 currencies in two separate markets, random consistent quotes, 27 queries incl. unknown and self (stress)"}
+expected_concepts:
+  - weighted directed graph with reciprocal edges
+  - BFS or DFS that multiplies rates along the path
+  - weighted union-find as an alternative for many queries
+  - distinguishing unknown currencies, disconnected markets and self-queries
+optimal_complexity: {time: O(Q * (V + E)), space: O(V + E)}
+rubric:
+  excellent: Models quotes as a graph with an edge in each direction (rate and its reciprocal), answers each query with BFS or DFS multiplying along the path with a visited set (or uses weighted union-find for near-constant queries), handles unknown, self and disconnected cases exactly as specified, and discusses floating-point accumulation.
+  good: Correct graph traversal with minor slips, such as the unknown-currency self-query or missing reverse edges, fixed after testing.
+  weak: Uses only direct quotes, forgets reverse rates, or loops forever on cycles without a visited set.
+  criteria:
+    correctness: Derived rates match within tolerance; 1.0 only for known self-queries; -1.0 for unknown or unlinked currencies.
+    efficiency: One traversal per query, or a precomputed union-find; no enumeration of all paths.
+    code_quality: Clean adjacency map, clear traversal and explicit special cases.
+    edge_cases: Unknown currency to itself, reverse direction, cycles, disconnected markets and extreme rates.
+    communication: Explains why consistency means any found path gives the correct rate.
+hints:
+  - Picture each currency as a node and each quote as a pair of edges, one in each direction, carrying a multiplier.
+  - To convert between two currencies, walk from one to the other along any path and multiply the multipliers you pass; because the quotes are consistent, the first path you find is good enough.
+  - Build an adjacency map with the rate on the forward edge and its reciprocal on the reverse edge; for each query, return minus one if either currency is missing from the map, otherwise run a breadth-first search from the source storing the accumulated product per currency, and return the product stored for the target or minus one if it was never reached.
+followups:
+  - How would weighted union-find answer each query in near-constant time after preprocessing?
+  - What if quotes could be inconsistent; how would you detect an arbitrage loop?
+  - How would you choose among paths when quotes carry fees or confidence values?
+  - How does floating-point error grow along long chains and how would you limit it?
+common_errors:
+  - Forgetting the reverse edge with rate 1 / rate.
+  - Returning 1.0 for a currency that never appears in any quote.
+  - Traversing without a visited set, which loops forever on cycles.
+  - Adding rates along a path instead of multiplying them.

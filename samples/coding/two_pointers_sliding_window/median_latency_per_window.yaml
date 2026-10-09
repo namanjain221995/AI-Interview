@@ -1,0 +1,167 @@
+version: 1
+slug: median_latency_per_window
+title: Median Latency per Window
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [sre, data, backend]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Median Latency per Window
+
+  A latency dashboard plots the **median** response time over the last `k` requests, because a median is
+  not dragged around by a single slow request the way an average is.
+
+  Given the request latencies in arrival order (`latencies`, in microseconds) and an integer `k`, return an
+  array of length `n - k + 1` (where `n` is the number of latencies) whose entry `i` is the median of
+  `latencies[i]` to `latencies[i + k - 1]` inclusive, in order of `i`.
+
+  The median of `k` values is the middle value after sorting them when `k` is odd, and the mean of the
+  two middle values when `k` is even. Return every median as a floating-point number; answers within
+  `10^-6` (relative for large values) are accepted.
+
+  ### Example 1
+  ```
+  Input:  latencies = [40, 12, 55, 31, 28, 90, 7], k = 3
+  Output: [40.0, 31.0, 31.0, 31.0, 28.0]
+  Explanation: the sorted windows are [12, 40, 55], [12, 31, 55], [28, 31, 55], [28, 31, 90] and [7, 28, 90]
+  ```
+
+  ### Example 2
+  ```
+  Input:  latencies = [8, 3, 10, 5, 7], k = 4
+  Output: [6.5, 6.0]
+  Explanation: [3, 5, 8, 10] has middle values 5 and 8; [3, 5, 7, 10] has 5 and 7
+  ```
+
+  ### Constraints
+  - `1 <= k <= latencies.length <= 10^5`
+  - `0 <= latencies[i] <= 10^9`
+  - The sum of the two middle values can exceed the 32-bit integer range.
+
+  **Follow-up:** re-sorting every window costs `O(n * k log k)`; can you reach `O(n log k)`?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: window_medians
+  params:
+    - {name: latencies, type: "int[]"}
+    - {name: k, type: int}
+  return_type: "float[]"
+  comparison: float_tolerance
+reference_solutions:
+  python: |
+    import heapq
+    from collections import defaultdict
+
+
+    def window_medians(latencies: list[int], k: int) -> list[float]:
+        low: list[int] = []  # max-heap (negated) with the smaller half; holds the extra value when k is odd
+        high: list[int] = []  # min-heap with the larger half
+        pending = defaultdict(int)  # value -> copies that left the window but are still inside a heap
+        live = [0, 0]  # live element counts in low and high
+
+        def prune(heap: list[int], sign: int) -> None:
+            while heap and pending[sign * heap[0]]:
+                pending[sign * heap[0]] -= 1
+                heapq.heappop(heap)
+
+        def rebalance() -> None:
+            while live[0] > live[1] + 1:
+                heapq.heappush(high, -heapq.heappop(low))
+                live[0] -= 1
+                live[1] += 1
+                prune(low, -1)
+            while live[0] < live[1]:
+                heapq.heappush(low, -heapq.heappop(high))
+                live[1] -= 1
+                live[0] += 1
+                prune(high, 1)
+
+        medians: list[float] = []
+        for i, value in enumerate(latencies):
+            if not low or value <= -low[0]:
+                heapq.heappush(low, -value)
+                live[0] += 1
+            else:
+                heapq.heappush(high, value)
+                live[1] += 1
+            if i >= k:
+                leaving = latencies[i - k]
+                pending[leaving] += 1
+                if leaving <= -low[0]:
+                    live[0] -= 1
+                else:
+                    live[1] -= 1
+                prune(low, -1)
+                prune(high, 1)
+            rebalance()
+            if i >= k - 1:
+                medians.append(float(-low[0]) if k % 2 else (-low[0] + high[0]) / 2)
+        return medians
+  javascript: |
+    function windowMedians(latencies, k) {
+      // Keep the current window sorted; binary search finds where to insert and remove.
+      const sorted = [];
+      const lowerBound = (x) => {
+        let lo = 0;
+        let hi = sorted.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (sorted[mid] < x) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo;
+      };
+      const medians = [];
+      for (let i = 0; i < latencies.length; i++) {
+        sorted.splice(lowerBound(latencies[i]), 0, latencies[i]);
+        if (i >= k) sorted.splice(lowerBound(latencies[i - k]), 1);
+        if (i >= k - 1) {
+          const mid = k >> 1;
+          medians.push(k % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2);
+        }
+      }
+      return medians;
+    }
+tests:
+  - {id: t1, args: [[40, 12, 55, 31, 28, 90, 7], 3], expected: [40.0, 31.0, 31.0, 31.0, 28.0], description: "Example 1 - odd k"}
+  - {id: t2, args: [[8, 3, 10, 5, 7], 4], expected: [6.5, 6.0], description: "Example 2 - even k averages the two middle values"}
+  - {id: t3, hidden: true, args: [[17, 4, 9], 1], expected: [17.0, 4.0, 9.0], description: "k = 1 returns every latency as a float"}
+  - {id: t4, hidden: true, args: [[9, 1, 8, 2, 7], 5], expected: [7.0], description: "Single odd window over everything"}
+  - {id: t5, hidden: true, args: [[6, 1, 4, 3], 4], expected: [3.5], description: "Single even window over everything with a half result"}
+  - {id: t6, hidden: true, args: [[5, 5, 5, 1, 5, 5, 9, 9], 3], expected: [5.0, 5.0, 5.0, 5.0, 5.0, 9.0], description: "Many duplicates - removal must delete only one copy"}
+  - {id: t7, hidden: true, args: [[1000000000, 999999999, 1000000000, 1000000000], 2], expected: [999999999.5, 999999999.5, 1000000000.0], description: "Two middle values near 10^9 - sum overflows 32-bit integers"}
+  - {id: t8, hidden: true, args: [[3, 100, 3, 100, 3, 100], 2], expected: [51.5, 51.5, 51.5, 51.5, 51.5], description: "Alternating values with k = 2"}
+  - {id: t9, hidden: true, args: [[0, 0, 7, 0, 0, 0, 7, 7, 7, 7], 4], expected: [0.0, 0.0, 0.0, 0.0, 3.5, 7.0, 7.0], description: "Zeros and sevens with even k"}
+  - {id: t10, hidden: true, args: [[497623, 282061, 689409, 554833, 698782, 366776, 149527, 400179, 11387, 392958, 505978, 287360, 674662, 849711, 482573, 724138, 906330, 630673, 238702, 585304, 1746, 693445, 654555, 152361, 461430, 385514, 170149, 356180, 949981, 220464, 61681, 604204, 858595, 209330, 78233, 538464, 720314, 859045, 353369, 714537, 424268, 836633, 883323, 91593, 19508, 963543, 63737, 859469, 959482, 694204, 533647, 234088, 95397, 444396, 992700, 465298, 117993, 692966, 443764, 141630, 565696, 327722, 924874, 651639, 585278, 171467, 730683, 928592, 53847, 582117, 179530, 531887, 855320, 87663, 419974, 636945, 439185, 700604, 624920, 492400, 499927, 638893, 403262, 567436, 31975, 671851, 761609, 86679, 201186, 825549, 695830, 274269, 373655, 986802, 380767, 908205, 723637, 404324, 706502, 324956, 119361, 264637, 246386, 351516, 380971, 389300, 536189, 601074, 849458, 802246, 524300, 188123, 29510, 399418, 862524, 900814, 451049, 34303, 544208, 26991, 232959, 708474, 447996, 45595, 407105, 214334, 809415, 636788, 107597, 789887, 576686, 231358, 186698, 81768, 729699, 287086, 38635, 454539, 289981, 522505, 360897, 631313, 667869, 761136, 54587, 538986, 481571, 386196, 218935, 356158, 295589, 477763, 499397, 730802, 897098, 504390, 251566, 175702, 487302, 969146, 575517, 381883, 190737, 198424, 803668, 784888, 230565, 956345, 636394, 6998, 993733, 281284, 959921, 808108, 840300, 358392, 188261, 253322, 833561, 9049, 525762, 41967, 259580, 649149, 121696, 378485, 573112, 528062, 162326, 25070, 972561, 338120, 924808, 825650, 701064, 872367, 293014, 670471, 123844, 240663, 822267, 552848, 526596, 500578, 513537, 657461, 370919, 275437, 717782, 992663, 466439, 937760, 774704, 170024, 470597, 305472, 646849, 915584, 48230, 291823, 346031, 989754, 904043, 540197, 671331, 729778, 466719, 738927, 830584, 224468, 769662, 298865, 546287, 267325, 29902, 716486, 3871, 727821, 28583, 138130, 585126, 929496, 278744, 440740, 145100, 252949, 209996, 456423, 494687, 61643, 587131, 597902, 655085, 753717, 964620, 981900, 270443, 797373, 41109, 437943, 452120, 617019, 97383, 944726, 424390, 827570, 208657, 608345, 583982, 364357, 386368, 669058, 771579, 403743, 590691, 168740, 17943, 722266, 744626, 162974, 947709, 32395, 836481, 39773, 941072, 76536, 954739, 435654, 560918, 209892, 827448, 972078, 397904, 830901, 103068, 744786, 370324, 198115, 327274, 283846, 979394, 831494, 722586, 719927, 567922, 515608, 652327, 640820, 130778, 222208, 560206, 628099, 734652, 712110, 413303, 608890, 257697, 75216, 426647, 373040, 339312, 86355, 718569, 348618, 148697, 719880, 94935, 755726, 327656, 325682, 729569, 188442, 796526, 711367, 691423, 668086, 980110, 457203, 383364, 184336, 31184, 219317, 511519, 653254, 465241, 508948, 188082, 59418, 699816, 623073, 357842, 479152, 249922, 927241, 343355, 101581, 989641, 235231, 8099, 377813, 384286, 293279, 890015, 211115, 721919, 453461, 310434, 231084, 541485, 963496, 153820, 525372, 946535, 732004, 348667, 170232, 525029, 487200, 407742, 635993, 525221, 883820, 740316, 262014, 482524, 481959, 823592, 896343, 51630, 872069, 809794, 238556, 427335, 564123, 732811, 798278, 830338, 414491, 546737, 706099, 461286, 695492, 54785, 111481, 580787, 598121, 713852, 327215, 367241, 798998, 767825, 17835, 337918, 812717, 524183, 939207, 378368, 663260, 322119, 178631, 142514, 500244, 236636, 839800, 570740, 141027, 264084, 518632, 48140, 449933, 842643, 382505, 299505, 428363, 981607, 657962, 627877, 296537, 407977, 852414, 915509, 827770, 940805, 636701, 336558, 155393, 131952, 271896, 672078, 34158, 883621, 690185, 638061, 834758, 822435, 396801, 432457, 444423, 647813, 690465, 275983, 356350, 426668, 806015, 398133, 516374, 403334, 985545, 418960, 854291, 846392, 191580, 178076, 827096, 215052, 876344, 267043, 114979, 280924, 548144, 930787, 55494, 910575, 875975, 684723, 915966, 777991, 861036, 750175, 376223, 770334, 959484, 320334, 808250, 143944, 900678, 907311, 326148, 873502, 915061, 221467, 785386, 922546, 901296, 25786, 582599, 323395, 44637, 13584, 849652, 179351, 204907, 171189, 206445, 750601, 847926, 310994, 972012, 199284, 193001, 811071, 327115, 572695, 904051, 22776, 636342, 955046, 107299, 382336, 718268, 522439, 562294, 209977, 470236, 102899, 553197, 6511, 683143, 132770, 839603, 411835, 529825, 509993, 666421, 307667, 489990, 373185, 664866, 881192, 407349, 894270, 435021, 936116, 541754, 29540, 749744, 885974, 292037, 21533, 969788, 162586, 515423, 793891, 897065, 384237, 723934, 108037, 884248, 715602, 834857, 447567, 575425, 425580, 637199, 393191, 790490, 75286, 879807, 961398, 135591, 365339, 65416, 242956, 113396, 443611, 88337, 844996, 59172, 877551, 8811, 978358, 261644, 32491, 118671, 719954, 718528, 592226, 645726, 968343, 760978], 50], expected: [501800.5, 519812.5, 519812.5, 494275.5, 472001.5, 472001.5, 473935.5, 473935.5, 494275.5, 494275.5, 494275.5, 508110.0, 508110.0, 508110.0, 508110.0, 536055.5, 499472.5, 499472.5, 499472.5, 499472.5, 499472.5, 499472.5, 498592.5, 498592.5, 498592.5, 498592.5, 532767.0, 532767.0, 536055.5, 536055.5, 536055.5, 536055.5, 536055.5, 532767.0, 536055.5, 536055.5, 549671.5, 549671.5, 532767.0, 532767.0, 532767.0, 549671.5, 532767.0, 515907.0, 532767.0, 532767.0, 532767.0, 549671.5, 532767.0, 532767.0, 515907.0, 496163.5, 496163.5, 496163.5, 496163.5, 478849.0, 468082.0, 496163.5, 496163.5, 515907.0, 534038.0, 528093.5, 528093.5, 512113.5, 496163.5, 496163.5, 512113.5, 496163.5, 471724.5, 496163.5, 471724.5, 471724.5, 471724.5, 449522.5, 449522.5, 449522.5, 443590.5, 449522.5, 449522.5, 427550.5, 427550.5, 427550.5, 405714.5, 405714.5, 401871.0, 405714.5, 401871.0, 394359.0, 401871.0, 401871.0, 401871.0, 394359.0, 401871.0, 405714.5, 405714.5, 405714.5, 405714.5, 405714.5, 403261.5, 394359.0, 394359.0, 394359.0, 403261.5, 427550.5, 449522.5, 452794.0, 466151.0, 452794.0, 449522.5, 449522.5, 449522.5, 449522.5, 449522.5, 449522.5, 449522.5, 449522.5, 449522.5, 427550.5, 451267.5, 451267.5, 451267.5, 466151.0, 451267.5, 466151.0, 479667.0, 484436.5, 484436.5, 479667.0, 466151.0, 479667.0, 466151.0, 466151.0, 466151.0, 466151.0, 479667.0, 466151.0, 466151.0, 479667.0, 484436.5, 484436.5, 479667.0, 484436.5, 479667.0, 479667.0, 479667.0, 484436.5, 484436.5, 482532.5, 493349.5, 493349.5, 493349.5, 501893.5, 515076.0, 526179.0, 515076.0, 508963.5, 519649.5, 519649.5, 519649.5, 526179.0, 526179.0, 519649.5, 526179.0, 527329.0, 527329.0, 526179.0, 519649.5, 526179.0, 526179.0, 519649.5, 519649.5, 507057.5, 519649.5, 519649.5, 519649.5, 519649.5, 526179.0, 526179.0, 527329.0, 527329.0, 527329.0, 534129.5, 534129.5, 543242.0, 534129.5, 534129.5, 543242.0, 534129.5, 543242.0, 543242.0, 543242.0, 543242.0, 549567.5, 543242.0, 533396.5, 520066.5, 507057.5, 507057.5, 485587.5, 497632.5, 497632.5, 497632.5, 497632.5, 497632.5, 504112.0, 517442.0, 517442.0, 517442.0, 543242.0, 517442.0, 482642.0, 482642.0, 482642.0, 468658.0, 482642.0, 480703.0, 517442.0, 480703.0, 480703.0, 517442.0, 517442.0, 517442.0, 517442.0, 517442.0, 480703.0, 480703.0, 461571.0, 454271.5, 454271.5, 454271.5, 454271.5, 454271.5, 454271.5, 454271.5, 454271.5, 475555.0, 454271.5, 475555.0, 454271.5, 475555.0, 475555.0, 475555.0, 475555.0, 475555.0, 527802.5, 527802.5, 572450.0, 572450.0, 572450.0, 572450.0, 572450.0, 572450.0, 572450.0, 572450.0, 572450.0, 564420.0, 538263.0, 564420.0, 564420.0, 564420.0, 564420.0, 564420.0, 564420.0, 575952.0, 575952.0, 575952.0, 575952.0, 575952.0, 564420.0, 560562.0, 560562.0, 560562.0, 537907.0, 537907.0, 537907.0, 475631.0, 537907.0, 537907.0, 537907.0, 475631.0, 475631.0, 475631.0, 475631.0, 475631.0, 537907.0, 537907.0, 560562.0, 560562.0, 560562.0, 537907.0, 537907.0, 486405.5, 441925.0, 484361.0, 484361.0, 488380.0, 487094.5, 487094.5, 487094.5, 510233.5, 513563.5, 510233.5, 494050.0, 472196.5, 472196.5, 461222.0, 441925.0, 441925.0, 419975.0, 419975.0, 419975.0, 398794.5, 383825.0, 383825.0, 380588.5, 380588.5, 380588.5, 380588.5, 380588.5, 380588.5, 383825.0, 383825.0, 418873.5, 418873.5, 455332.0, 455332.0, 418873.5, 455332.0, 455332.0, 455332.0, 461222.0, 461222.0, 472196.5, 472196.5, 461222.0, 461222.0, 461222.0, 461222.0, 472196.5, 472196.5, 480555.5, 482241.5, 482241.5, 480555.5, 480555.5, 482241.5, 482241.5, 484862.0, 484862.0, 484862.0, 484862.0, 484862.0, 506114.5, 506114.5, 484862.0, 506114.5, 525125.0, 525125.0, 525125.0, 525125.0, 525296.5, 533428.5, 533428.5, 525296.5, 533428.5, 525296.5, 533428.5, 533428.5, 544111.0, 536054.5, 525296.5, 525296.5, 525125.0, 524606.0, 524606.0, 525125.0, 525125.0, 524702.0, 524702.0, 524702.0, 521407.5, 521407.5, 509438.0, 491384.0, 491384.0, 509438.0, 521407.5, 521407.5, 509438.0, 509438.0, 509438.0, 509438.0, 521407.5, 535460.0, 535460.0, 521407.5, 509438.0, 480765.0, 480765.0, 480765.0, 455609.5, 475088.5, 475088.5, 509438.0, 521407.5, 521407.5, 509438.0, 475088.5, 475088.5, 509438.0, 509438.0, 475088.5, 475088.5, 475088.5, 475088.5, 447178.0, 447178.0, 447178.0, 447178.0, 447178.0, 475088.5, 508309.0, 483153.5, 483153.5, 483153.5, 447178.0, 483153.5, 483153.5, 447178.0, 447178.0, 480398.5, 480398.5, 480398.5, 532259.0, 588010.5, 588010.5, 588010.5, 592422.5, 637381.0, 642937.0, 637381.0, 637381.0, 637381.0, 592422.5, 593102.5, 593102.5, 642937.0, 659945.5, 659945.5, 666268.0, 687454.0, 666268.0, 666268.0, 687594.0, 687594.0, 666268.0, 666268.0, 666268.0, 666268.0, 633661.0, 633661.0, 633661.0, 633661.0, 633661.0, 565371.5, 633661.0, 717449.0, 717449.0, 717449.0, 717449.0, 633661.0, 633661.0, 633661.0, 633661.0, 633661.0, 633661.0, 609470.5, 660532.5, 660532.5, 660532.5, 701495.5, 660532.5, 660532.5, 609470.5, 577647.0, 567494.5, 557745.5, 537818.0, 537818.0, 496337.5, 537818.0, 496337.5, 496337.5, 516216.0, 516216.0, 516216.0, 499991.5, 480113.0, 499991.5, 499991.5, 480113.0, 499991.5, 480113.0, 480113.0, 480113.0, 480113.0, 480113.0, 499991.5, 499991.5, 499991.5, 499991.5, 499991.5, 512708.0, 518931.0, 526132.0, 518931.0, 518931.0, 518931.0, 518931.0, 526132.0, 535789.5, 526132.0, 535789.5, 526132.0, 526132.0, 526132.0, 526132.0, 518931.0, 526132.0, 535789.5, 526132.0, 522624.0, 512708.0, 512708.0, 512708.0, 512708.0, 499991.5, 512708.0, 499991.5, 512708.0, 499991.5, 512708.0, 499991.5, 468778.5, 445589.0, 468778.5, 481495.0, 528588.5, 528588.5, 528588.5, 558589.5], description: "600 random latencies with k = 50 - rewards O(n log k)"}
+expected_concepts:
+  - two heaps splitting the window into a lower and an upper half
+  - lazy deletion of values that left the window
+  - rebalancing so the halves differ in size by at most one
+  - even and odd k
+  - 64-bit or floating-point arithmetic when averaging two middle values
+optimal_complexity: {time: O(n log k), space: O(k)}
+rubric:
+  excellent: Builds the two-heap window with lazy deletion (or an order-statistics structure), keeps sizes balanced after every insert and removal, handles even k without overflow and states O(n log k).
+  good: Correct solution with a sorted window and binary search (O(n * k) moves), or two heaps with minor guidance on removing departed values.
+  weak: Re-sorts every window from scratch, mishandles even k, removes the wrong copy of a duplicate, or overflows when averaging large latencies.
+  criteria:
+    correctness: All tests pass, including k = 1, k = n, duplicates and latencies near 10^9.
+    efficiency: O(n log k) with heaps or a balanced structure; a sorted window with binary search is acceptable but noted as O(n * k).
+    code_quality: Clear separation of insert, remove, rebalance and median steps with documented heap invariants.
+    edge_cases: Duplicate values leaving the window, even windows with a half result and single-element windows.
+    communication: Explains why lazy deletion is safe and when the halves need rebalancing.
+hints:
+  - The median only depends on the middle of the sorted window; think about keeping the window split into a lower half and an upper half instead of fully sorted.
+  - A max-heap for the lower half and a min-heap for the upper half give you the middle values at their tops; the hard part is removing the value that leaves the window, which a heap cannot do directly.
+  - Record departing values in a pending-removal count and only discard them when they reach a heap top, track how many live values each half holds, rebalance so the lower half has the same number or one more, and read the median from the lower top for odd k or the average of both tops (in 64-bit or floating point) for even k.
+followups:
+  - How would you implement the same idea in a language with a balanced tree or multiset?
+  - What changes if you need the 90th percentile of each window instead of the median?
+  - How would you produce an approximate median over a very large window with bounded memory?
+  - How much memory can lazy deletion waste in the worst case, and how would you bound it?
+common_errors:
+  - Sorting a fresh copy of every window, which is O(n * k log k).
+  - Averaging the two middle values in 32-bit integers, which overflows for latencies near 10^9.
+  - Integer division for even k, which drops the half.
+  - Deciding which heap a departing value belongs to without considering duplicates, which unbalances the halves.
+  - Forgetting to rebalance after removals as well as after inserts.

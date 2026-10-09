@@ -1,0 +1,154 @@
+version: 1
+slug: moving_average_crossover_signals
+title: Traffic Trend Crossover Signals
+difficulty: medium
+competency_keys: [algorithms, problem_solving]
+role_tags: [sre, data_analyst, devops, data]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Traffic Trend Crossover Signals
+
+  The capacity-planning team records the number of requests per minute that reach the API gateway,
+  in time order, as `values`. To spot when traffic turns, they compare two **trailing averages**:
+
+  - the short average at minute `i` is the mean of the last `short_window` values ending at `i`
+    (inclusive);
+  - the long average at minute `i` is the mean of the last `long_window` values ending at `i`
+    (inclusive), with `short_window < long_window`.
+
+  Both averages exist from index `long_window - 1` onward. At each such index, look at the **sign** of
+  `shortAvg - longAvg`: `+1` (short above long), `-1` (short below long) or `0` (exactly equal).
+
+  A sign of `0` does not change the trend: carry the last non-zero sign through it. Emit a signal when
+  the trend flips:
+
+  - `[i, 1]` when the sign at index `i` is `+1` and the last non-zero sign before it was `-1`
+    (traffic is turning up);
+  - `[i, -1]` when the sign at index `i` is `-1` and the last non-zero sign before it was `+1`
+    (traffic is turning down).
+
+  The first non-zero sign only establishes the trend and never produces a signal. Return all signals
+  in increasing index order, or an empty list when there are none (including when there are fewer than
+  `long_window` values).
+
+  Averages are fractions, so compare them exactly: `shortAvg > longAvg` is equivalent to
+  `shortSum * long_window > longSum * short_window`. Use 64-bit integers for these products.
+
+  ### Example 1
+  ```
+  Input:  values = [120, 118, 115, 110, 104, 109, 121, 130, 126, 112, 101], short_window = 2, long_window = 4
+  Output: [[6, 1], [9, -1]]
+  Explanation: from index 3 the short average is below the long one; at index 6
+               (115.0 vs 111.0) it rises above, and at index 9 (119.0 vs 122.25) it drops below again.
+  ```
+
+  ### Example 2
+  ```
+  Input:  values = [30, 30, 20, 25, 30, 35], short_window = 1, long_window = 3
+  Output: [[4, 1]]
+  Explanation: index 2 is -1 (20 vs 26.67), index 3 is a tie (25 vs 25),
+               index 4 is +1 (30 vs 25). The trend before index 4 was still -1, so the flip is reported at 4.
+  ```
+
+  ### Constraints
+  - `0 <= values.length <= 10^5`
+  - `0 <= values[i] <= 10^6`
+  - `1 <= short_window < long_window <= 10^4`
+  - Aim for `O(n)` time: do not recompute every window from scratch.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: crossover_signals
+  params:
+    - {name: values, type: "int[]"}
+    - {name: short_window, type: "int"}
+    - {name: long_window, type: "int"}
+  return_type: "int[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def crossover_signals(values: list[int], short_window: int, long_window: int) -> list[list[int]]:
+        signals: list[list[int]] = []
+        short_sum = 0
+        long_sum = 0
+        previous = 0  # last non-zero sign seen, 0 while none yet
+        for i, value in enumerate(values):
+            short_sum += value
+            long_sum += value
+            if i >= short_window:
+                short_sum -= values[i - short_window]
+            if i >= long_window:
+                long_sum -= values[i - long_window]
+            if i < long_window - 1:
+                continue
+            # shortAvg - longAvg has the sign of short_sum * long_window - long_sum * short_window
+            diff = short_sum * long_window - long_sum * short_window
+            sign = (diff > 0) - (diff < 0)
+            if sign != 0:
+                if previous != 0 and sign != previous:
+                    signals.append([i, sign])
+                previous = sign
+        return signals
+  javascript: |
+    function crossoverSignals(values, shortWindow, longWindow) {
+      const signals = [];
+      let shortSum = 0;
+      let longSum = 0;
+      let previous = 0;
+      for (let i = 0; i < values.length; i++) {
+        shortSum += values[i];
+        longSum += values[i];
+        if (i >= shortWindow) shortSum -= values[i - shortWindow];
+        if (i >= longWindow) longSum -= values[i - longWindow];
+        if (i < longWindow - 1) continue;
+        const diff = shortSum * longWindow - longSum * shortWindow;
+        const sign = diff > 0 ? 1 : diff < 0 ? -1 : 0;
+        if (sign !== 0) {
+          if (previous !== 0 && sign !== previous) signals.push([i, sign]);
+          previous = sign;
+        }
+      }
+      return signals;
+    }
+tests:
+  - {id: t1, args: [[120, 118, 115, 110, 104, 109, 121, 130, 126, 112, 101], 2, 4], expected: [[6, 1], [9, -1]], description: "Example 1 - one upward and one downward crossing"}
+  - {id: t2, args: [[30, 30, 20, 25, 30, 35], 1, 3], expected: [[4, 1]], description: "Example 2 - a tie in the middle is carried through, signal fires after it"}
+  - {id: t3, hidden: true, args: [[5, 9, 3], 2, 4], expected: [], description: "Fewer values than long_window - no averages, empty result"}
+  - {id: t4, hidden: true, args: [[], 1, 2], expected: [], description: "Empty input"}
+  - {id: t5, hidden: true, args: [[40, 40, 40, 40, 40, 40, 40], 2, 5], expected: [], description: "Flat traffic - every sign is 0, no signal"}
+  - {id: t6, hidden: true, args: [[10, 10, 10, 20, 10, 10, 10, 0, 10, 10], 1, 3], expected: [[4, -1], [8, 1]], description: "Trend touches a tie and returns to the same side - ties must not reset or emit"}
+  - {id: t7, hidden: true, args: [[1, 9, 1, 9, 1, 9, 1, 9], 1, 2], expected: [[2, -1], [3, 1], [4, -1], [5, 1], [6, -1], [7, 1]], description: "Alternating every minute - a signal at every index after the first"}
+  - {id: t8, hidden: true, args: [[0, 0, 0, 7, 0, 0, 0, 0, 7, 0], 2, 3], expected: [[5, -1], [8, 1]], description: "Leading zeros give sign 0 first - the first non-zero sign must not emit a signal"}
+  - {id: t9, hidden: true, args: [[100, 90, 80, 70, 60, 50, 60, 70, 80, 90, 100, 90, 80], 3, 6], expected: [[8, 1]], description: "Wider windows over a trough and a late peak - the upward signal lags the turn and the peak has not crossed back yet"}
+  - {id: t10, hidden: true, args: [[1000000, 998081, 999162, 997243, 998324, 999405, 997486, 998567, 999648, 997729, 998810, 999891, 997972, 999053, 997134, 998215, 999296, 997377, 998458, 999539, 997620, 998701, 999782, 997863, 998944, 997025, 998106, 999187, 997268, 998349, 999430, 997511, 998592, 999673, 997754, 998835, 999916, 997997, 999078, 997159, 998240, 999321, 997402, 998483, 999564, 997645, 998726, 999807, 997888, 998969, 997050, 998131, 999212, 997293, 998374, 999455, 997536, 998617, 999698, 997779, 998860, 999941, 998022, 999103, 997184, 998265, 999346, 997427, 998508, 999589, 997670, 998751, 999832, 997913, 998994, 997075, 998156, 999237, 997318, 998399, 999480, 997561, 998642, 999723, 997804, 998885, 999966, 998047, 999128, 997209, 998290, 999371, 997452, 998533, 999614, 997695, 998776, 999857, 997938, 999019, 997100, 998181, 999262, 997343, 998424, 999505, 997586, 998667, 999748, 997829, 998910, 999991, 998072, 999153, 997234, 998315, 999396, 997477, 998558, 999639, 597720, 598801, 599882, 597963, 599044, 597125, 598206, 599287, 597368, 598449, 599530, 597611, 598692, 599773, 597854, 598935, 597016, 598097, 599178, 597259, 598340, 599421, 597502, 598583, 599664, 597745, 598826, 599907, 597988, 599069, 597150, 598231, 599312, 597393, 598474, 599555, 597636, 598717, 599798, 597879, 598960, 597041, 598122, 599203, 597284, 598365, 599446, 597527, 598608, 599689, 597770, 598851, 599932, 598013, 599094, 597175, 598256, 599337, 597418, 598499, 599580, 597661, 598742, 599823, 597904, 598985, 597066, 598147, 599228, 597309, 598390, 599471, 597552, 598633, 599714, 597795, 598876, 599957, 598038, 599119, 997200, 998281, 999362, 997443, 998524, 999605, 997686, 998767, 999848, 997929, 999010, 997091, 998172, 999253, 997334, 998415, 999496, 997577, 998658, 999739, 997820, 998901, 999982, 998063, 999144, 997225, 998306, 999387, 997468, 998549, 999630, 997711, 998792, 999873, 997954, 999035, 997116, 998197, 999278, 997359, 998440, 999521, 997602, 998683, 999764, 997845, 998926, 997007, 998088, 999169, 997250, 998331, 999412, 997493, 998574, 999655, 997736, 998817, 999898, 997979, 999060, 997141, 998222, 999303, 997384, 998465, 999546, 997627, 998708, 999789, 997870, 998951, 997032, 998113, 999194, 997275, 998356, 999437, 997518, 998599, 999680, 997761, 998842, 999923, 998004, 999085, 997166, 998247, 999328, 997409, 998490, 999571, 997652, 998733, 999814, 997895, 998976, 997057, 998138, 999219], 30, 100], expected: [[102, -1], [105, 1], [107, -1], [108, 1], [117, -1], [119, 1], [120, -1], [205, 1], [299, -1]], description: "Stress - 300 values near 10^6 with a dip; products exceed 32-bit range"}
+expected_concepts:
+  - "two sliding-window sums maintained in one pass"
+  - "comparing averages exactly by cross-multiplication"
+  - "carrying the last non-zero state through ties"
+  - "64-bit arithmetic for the products"
+  - "edge handling when there are fewer values than the long window"
+optimal_complexity: {time: "O(n)", space: "O(1) extra besides the output"}
+rubric:
+  excellent: "Maintains both window sums incrementally, compares them with integer cross-multiplication, carries the trend through ties, never signals on the first non-zero sign and explains the 64-bit requirement."
+  good: "Correct sliding sums and signals, but needs a nudge on ties, the first-trend rule or floating-point comparison."
+  weak: "Recomputes every window from scratch, emits a signal whenever the sign changes including to or from zero, or starts comparing before the long window is full."
+  criteria:
+    correctness: "All tests pass, including ties, leading zeros and inputs shorter than the long window."
+    efficiency: "O(n) time with two running sums instead of O(n * long_window)."
+    code_quality: "Clear names for the two sums and the remembered trend; the cross-multiplied comparison is explained in a comment."
+    edge_cases: "Empty input, flat traffic, a tie followed by a return to the same side, alternating values and large products."
+    communication: "Explains why cross-multiplication avoids rounding issues and why ties must not reset the trend."
+hints:
+  - "Both averages slide forward by one minute at a time; think about what changes in each window sum when a new value arrives."
+  - "Keep a running sum for each window, add the new value and subtract the one that falls out. To avoid fractions, compare the two sums after scaling each by the other window's length."
+  - "Once both windows are full, compute the sign of the short sum times the long window minus the long sum times the short window, using 64-bit integers. Remember the last non-zero sign; when a new non-zero sign differs from it, record the index and the new sign, and skip zeros entirely without updating the memory."
+followups:
+  - "How would you add a minimum gap so that a crossing must persist for k minutes before it counts?"
+  - "How would you adapt this to exponentially weighted averages instead of simple windows?"
+  - "What changes if the minutes arrive as a stream and you must emit signals in real time with O(long_window) memory?"
+  - "Why can floating-point averages produce a spurious signal when the two averages are equal?"
+common_errors:
+  - "Treating a tie as a trend change, which emits a signal when the averages touch and separate again on the same side."
+  - "Emitting a signal for the very first non-zero sign."
+  - "Comparing floating-point averages, so exact ties are misclassified."
+  - "Recomputing every window sum from scratch, which is O(n * long_window)."
+  - "Overflowing 32-bit integers when multiplying the window sums by the window lengths."

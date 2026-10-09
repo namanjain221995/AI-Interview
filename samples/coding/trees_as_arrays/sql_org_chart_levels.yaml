@@ -1,0 +1,220 @@
+version: 1
+slug: sql_org_chart_levels
+title: "Org Chart Levels with a Recursive Query (SQL)"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, backend, dba, data]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Org Chart Levels
+
+  The people-directory service stores the reporting structure in a single table. Every row points to
+  the person's direct manager; people at the top of a reporting line have no manager. The directory UI
+  needs to indent each person by how far they sit below the top.
+
+  Table `employees`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | name | VARCHAR(100) | names are not unique |
+  | manager_id | INTEGER | `employees.id` of the direct manager; **NULL for a top-level person** |
+
+  Define the **level** of a person as follows:
+
+  - a person whose `manager_id` is NULL has level `1`;
+  - anyone else has level `1 +` the level of their manager.
+
+  There can be **several** top-level people (separate reporting lines). Every non-NULL `manager_id`
+  refers to an existing row and the reporting lines contain **no cycles**, so every person reaches a
+  top-level person by following managers.
+
+  Return `id`, `name` and `level` for **every** employee, ordered by `level` ascending and then by `id`
+  ascending. If the table is empty, return no rows.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite (a recursive common table expression is
+  expected; the depth of the hierarchy is not known in advance).
+
+  ### Example 1
+  ```
+  employees
+  +----+-------+------------+
+  | id | name  | manager_id |
+  +----+-------+------------+
+  | 1  | Priya | NULL       |
+  | 2  | Marco | 1          |
+  | 3  | Lena  | 1          |
+  | 4  | Tomas | 2          |
+  | 5  | Aiko  | NULL       |
+  | 6  | Noor  | 5          |
+  | 7  | Ravi  | 4          |
+  +----+-------+------------+
+
+  Output
+  +----+-------+-------+
+  | id | name  | level |
+  +----+-------+-------+
+  | 1  | Priya | 1     |
+  | 5  | Aiko  | 1     |
+  | 2  | Marco | 2     |
+  | 3  | Lena  | 2     |
+  | 6  | Noor  | 2     |
+  | 4  | Tomas | 3     |
+  | 7  | Ravi  | 4     |
+  +----+-------+-------+
+  Priya and Aiko lead two separate reporting lines; Ravi reports to Tomas, who reports to Marco.
+  ```
+
+  ### Example 2
+  ```
+  employees
+  +----+------+------------+
+  | id | name | manager_id |
+  +----+------+------------+
+  | 1  | Eli  | 3          |
+  | 2  | Fay  | 1          |
+  | 3  | Dana | NULL       |
+  +----+------+------------+
+
+  Output
+  +----+------+-------+
+  | id | name | level |
+  +----+------+-------+
+  | 3  | Dana | 1     |
+  | 1  | Eli  | 2     |
+  | 2  | Fay  | 3     |
+  +----+------+-------+
+  A manager can have a larger id than the people who report to them.
+  ```
+
+  ### Constraints
+  - `0 <=` number of employees `<= 10^5`; the hierarchy can be hundreds of levels deep.
+  - Every non-NULL `manager_id` exists in the table and there are no cycles.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return id, name and level (top-level people are level 1), ordered by level, then id.
+    SELECT id, name, 1 AS level
+    FROM employees
+    ORDER BY id;
+reference_solutions:
+  sql: |
+    WITH RECURSIVE chain (id, name, level) AS (
+      SELECT id, name, 1
+      FROM employees
+      WHERE manager_id IS NULL
+      UNION ALL
+      SELECT e.id, e.name, c.level + 1
+      FROM employees e
+      JOIN chain c ON e.manager_id = c.id
+    )
+    SELECT id, name, level
+    FROM chain
+    ORDER BY level, id;
+sql_setup: |
+  CREATE TABLE employees (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    manager_id INTEGER REFERENCES employees (id)
+  );
+tests:
+  - id: t1
+    description: "Example 1 - two reporting lines of different depth, ties on level ordered by id"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES
+        (1, 'Priya', NULL), (2, 'Marco', 1), (3, 'Lena', 1), (4, 'Tomas', 2), (5, 'Aiko', NULL),
+        (6, 'Noor', 5), (7, 'Ravi', 4);
+    expected_rows: [[1, "Priya", 1], [5, "Aiko", 1], [2, "Marco", 2], [3, "Lena", 2], [6, "Noor", 2], [4, "Tomas", 3], [7, "Ravi", 4]]
+  - id: t2
+    description: "Example 2 - managers have larger ids than their reports"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES (1, 'Eli', 3), (2, 'Fay', 1), (3, 'Dana', NULL);
+    expected_rows: [[3, "Dana", 1], [1, "Eli", 2], [2, "Fay", 3]]
+  - id: t3
+    hidden: true
+    description: "Empty table - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single top-level person"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES (42, 'Solo', NULL);
+    expected_rows: [[42, "Solo", 1]]
+  - id: t5
+    hidden: true
+    description: "Nobody has a manager - everyone is level 1, ordered by id"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES (9, 'Ana', NULL), (2, 'Bo', NULL), (5, 'Cy', NULL);
+    expected_rows: [[2, "Bo", 1], [5, "Cy", 1], [9, "Ana", 1]]
+  - id: t6
+    hidden: true
+    description: "Chain of 25 levels with ids decreasing down the chain (fixed-depth self-joins fail)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES
+        (100, 'L01', NULL), (97, 'L02', 100), (94, 'L03', 97), (91, 'L04', 94), (88, 'L05', 91),
+        (85, 'L06', 88), (82, 'L07', 85), (79, 'L08', 82), (76, 'L09', 79), (73, 'L10', 76),
+        (70, 'L11', 73), (67, 'L12', 70), (64, 'L13', 67), (61, 'L14', 64), (58, 'L15', 61),
+        (55, 'L16', 58), (52, 'L17', 55), (49, 'L18', 52), (46, 'L19', 49), (43, 'L20', 46),
+        (40, 'L21', 43), (37, 'L22', 40), (34, 'L23', 37), (31, 'L24', 34), (28, 'L25', 31);
+    expected_rows: [[100, "L01", 1], [97, "L02", 2], [94, "L03", 3], [91, "L04", 4], [88, "L05", 5], [85, "L06", 6], [82, "L07", 7], [79, "L08", 8], [76, "L09", 9], [73, "L10", 10], [70, "L11", 11], [67, "L12", 12], [64, "L13", 13], [61, "L14", 14], [58, "L15", 15], [55, "L16", 16], [52, "L17", 17], [49, "L18", 18], [46, "L19", 19], [43, "L20", 20], [40, "L21", 21], [37, "L22", 22], [34, "L23", 23], [31, "L24", 24], [28, "L25", 25]]
+  - id: t7
+    hidden: true
+    description: "Wide team with duplicate names - each person appears exactly once"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES
+        (1, 'Sam', NULL), (2, 'Sam', 1), (3, 'Alex', 1), (4, 'Alex', 1), (5, 'Kim', 1), (6, 'Sam', 3);
+    expected_rows: [[1, "Sam", 1], [2, "Sam", 2], [3, "Alex", 2], [4, "Alex", 2], [5, "Kim", 2], [6, "Sam", 3]]
+  - id: t8
+    hidden: true
+    description: "40 people in three reporting lines inserted in id order with managers anywhere in the table"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES
+        (6, 'emp06', NULL), (13, 'emp13', NULL), (36, 'emp36', NULL),
+        (1, 'emp01', 9), (2, 'emp02', 14), (3, 'emp03', 22), (4, 'emp04', 33), (5, 'emp05', 37),
+        (7, 'emp07', 25), (8, 'emp08', 28), (9, 'emp09', 20), (10, 'emp10', 28), (11, 'emp11', 6),
+        (12, 'emp12', 11), (14, 'emp14', 12), (15, 'emp15', 36), (16, 'emp16', 36), (17, 'emp17', 8),
+        (18, 'emp18', 40), (19, 'emp19', 6), (20, 'emp20', 13), (21, 'emp21', 10), (22, 'emp22', 16),
+        (23, 'emp23', 31), (24, 'emp24', 11), (25, 'emp25', 15), (26, 'emp26', 34), (27, 'emp27', 39),
+        (28, 'emp28', 32), (29, 'emp29', 1), (30, 'emp30', 38), (31, 'emp31', 16), (32, 'emp32', 19),
+        (33, 'emp33', 39), (34, 'emp34', 11), (35, 'emp35', 7), (37, 'emp37', 22), (38, 'emp38', 1),
+        (39, 'emp39', 12), (40, 'emp40', 36);
+    expected_rows: [[6, "emp06", 1], [13, "emp13", 1], [36, "emp36", 1], [11, "emp11", 2], [15, "emp15", 2], [16, "emp16", 2], [19, "emp19", 2], [20, "emp20", 2], [40, "emp40", 2], [9, "emp09", 3], [12, "emp12", 3], [18, "emp18", 3], [22, "emp22", 3], [24, "emp24", 3], [25, "emp25", 3], [31, "emp31", 3], [32, "emp32", 3], [34, "emp34", 3], [1, "emp01", 4], [3, "emp03", 4], [7, "emp07", 4], [14, "emp14", 4], [23, "emp23", 4], [26, "emp26", 4], [28, "emp28", 4], [37, "emp37", 4], [39, "emp39", 4], [2, "emp02", 5], [5, "emp05", 5], [8, "emp08", 5], [10, "emp10", 5], [27, "emp27", 5], [29, "emp29", 5], [33, "emp33", 5], [35, "emp35", 5], [38, "emp38", 5], [4, "emp04", 6], [17, "emp17", 6], [21, "emp21", 6], [30, "emp30", 6]]
+expected_concepts:
+  - "WITH RECURSIVE with an anchor member (top-level people) and a recursive member joining reports"
+  - "carrying a depth counter through the recursion"
+  - "UNION ALL versus UNION in recursive CTEs"
+  - "termination of the recursion on acyclic data"
+  - "deterministic ORDER BY on level then id"
+optimal_complexity: {time: "O(n) recursion steps with an index on manager_id", space: "O(n)"}
+rubric:
+  excellent: "Writes a recursive CTE anchored on rows with a NULL manager_id, increments the level in the recursive member, orders by level then id, and explains termination, why fixed self-joins do not work for unknown depth, and how an index on manager_id or a cycle guard would help in production."
+  good: "Correct recursive query after a hint about the anchor member, the level counter or the final ordering."
+  weak: "Uses a fixed number of self-joins, anchors on a single hard-coded person, drops one of several reporting lines or returns rows in an undefined order."
+  criteria:
+    correctness: "All tests pass, including several top-level people, deep chains and managers with larger ids than their reports."
+    efficiency: "Each person is produced once by the recursion; mentions indexing manager_id."
+    code_quality: "Named CTE with explicit column list, clear aliases and a readable recursive join."
+    edge_cases: "Empty table, a single person, nobody with a manager and duplicate names."
+    communication: "Explains the anchor and recursive members and how the recursion stops."
+hints:
+  - "The depth of the hierarchy is not known in advance, so a fixed number of self-joins cannot work; think of a query that keeps expanding one management layer at a time."
+  - "A recursive common table expression starts from an anchor set of rows and repeatedly joins the previous result to find the next layer; the people without a manager are the natural starting point."
+  - "Anchor the recursive CTE on rows whose manager_id is NULL with level 1, and in the recursive member join employees whose manager_id equals an id already in the CTE, emitting the parent level plus one. Combine the two members with UNION ALL, then select id, name and level from the CTE ordered by level and id."
+followups:
+  - "How would you guard the query against a bad import that accidentally introduces a reporting cycle?"
+  - "How would you also return the full management path (for example 'Priya > Marco > Tomas') for each person?"
+  - "How would you count the total number of people under each manager, directly and indirectly?"
+  - "Which index makes the recursive join efficient on a large directory?"
+common_errors:
+  - "Joining the table to itself a fixed number of times, which breaks for deeper hierarchies."
+  - "Joining in the wrong direction (matching employee.id to chain.manager_id), which walks up instead of down."
+  - "Starting from a single hard-coded top-level person and losing the other reporting lines."
+  - "Forgetting the ORDER BY, or ordering only by level so ties come back in an arbitrary order."

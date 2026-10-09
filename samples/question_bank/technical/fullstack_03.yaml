@@ -1,0 +1,631 @@
+# Curated questions: full-stack engineering (part 3 of 4) — real-time updates, background work, configuration
+# and deployment. `defaults` are merged into every question (question keys win). Round types follow difficulty:
+# easy -> technical_screening + combined, medium -> + deep_technical, hard -> deep_technical + combined.
+version: 1
+defaults:
+  role_tags: [fullstack]
+  round_types: [technical_screening, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------- real-time updates
+  - external_key: technical.fullstack.realtime_transport_choice
+    competency_key: system_design
+    topic: Polling, SSE or WebSockets
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      If you needed a notification badge in the header that updates without a page refresh, how would you choose
+      between polling, server-sent events and WebSockets? What did you pick last time and why?
+    expected_concepts:
+      - polling is simple but adds latency and load
+      - server-sent events for one-way server-to-client streams over HTTP
+      - WebSockets for two-way, low-latency messaging
+      - proxy, load balancer and connection-count considerations
+      - automatic reconnection behaviour of each option
+    rubric:
+      excellent: Compares the three on direction, latency, infrastructure and complexity, justifies a choice for this use case, and draws on a real past decision.
+      good: Correctly describes the options and picks a sensible one.
+      weak: Defaults to WebSockets for everything without considering simpler options.
+    followups:
+      - What changes once you have fifty thousand users connected at once?
+      - How do the clients catch up after a dropped connection?
+    common_errors:
+      - Ignoring that long-lived connections need proxy and timeout tuning.
+
+  - external_key: technical.fullstack.websocket_authentication
+    competency_key: security
+    topic: Authenticating WebSocket connections
+    difficulty: medium
+    kind: technical
+    text: >-
+      How would you authenticate a WebSocket connection from the browser to your backend, and what happens when
+      the user's session expires while the socket is still open?
+    expected_concepts:
+      - browsers cannot set custom headers on the WebSocket handshake
+      - cookie-based auth with Origin checks against cross-site hijacking
+      - short-lived single-use connection tickets instead of tokens in the query string
+      - re-checking authorization on each subscription or message
+      - closing or re-authenticating the socket when the session expires or is revoked
+    rubric:
+      excellent: Explains the handshake constraints, chooses cookies with Origin checks or one-time tickets, avoids long-lived tokens in URLs and logs, and handles expiry and revocation on open connections.
+      good: Authenticates at connect time with a reasonable mechanism.
+      weak: Puts a long-lived access token in the query string or authenticates only once forever.
+    followups:
+      - Why is a token in the URL risky?
+      - An admin revokes a user. How quickly does their open socket stop receiving data?
+    common_errors:
+      - Not checking the Origin header, allowing cross-site WebSocket hijacking.
+
+  - external_key: technical.fullstack.reconnect_missed_messages
+    competency_key: distributed_systems
+    topic: Catching up after a reconnect
+    difficulty: medium
+    kind: scenario
+    text: >-
+      Users of your chat feature say that after their laptop sleeps, the conversation is missing messages until
+      they reload. How would you make reconnection reliable?
+    expected_concepts:
+      - detecting dead connections with heartbeats
+      - reconnect with exponential backoff and jitter
+      - client tracks the last seen message id or sequence
+      - server replays or the client refetches from that cursor
+      - deduplicating messages that arrive both by replay and live
+    rubric:
+      excellent: Combines heartbeat detection, backoff with jitter, a last-seen cursor with replay or refetch, and deduplication, and explains why live push alone can never be the source of truth.
+      good: Reconnects automatically and refetches recent messages.
+      weak: Only reconnects, assuming nothing was missed in between.
+    followups:
+      - How long would the server keep messages around for replay?
+      - What if thousands of clients reconnect at the same moment after an outage?
+    common_errors:
+      - Reconnecting all clients immediately with no jitter, causing a thundering herd.
+
+  - external_key: technical.fullstack.websocket_horizontal_scale
+    competency_key: system_design
+    topic: WebSockets across many server instances
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your real-time server worked on one instance, but now you're running six behind a load balancer and some
+      users miss updates. How would you design the fan-out so every user gets their events?
+    expected_concepts:
+      - an event published on one instance must reach connections on others
+      - pub/sub backbone such as Redis, NATS or Kafka
+      - routing by user or room channels
+      - sticky sessions and their limits
+      - draining connections on deploys and rebalancing
+      - backpressure for slow consumers
+    rubric:
+      excellent: Introduces a pub/sub layer with sensible channel design, explains where sticky sessions do and do not help, and covers deploy draining, reconnect storms and slow consumers.
+      good: Adds a shared pub/sub between instances.
+      weak: Relies on sticky sessions alone or broadcasts every event to every connection.
+    followups:
+      - How would you deploy a new version without dropping every connection at once?
+      - One client reads slowly. What protects the server?
+    common_errors:
+      - Assuming sticky sessions solve cross-instance delivery.
+
+  - external_key: technical.fullstack.out_of_order_status_events
+    competency_key: distributed_systems
+    topic: Out-of-order live updates
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A live order-tracking page sometimes shows an order going from Delivered back to Out for delivery. Events
+      come from a queue and are pushed to the browser. How would you investigate and fix it?
+    expected_concepts:
+      - events can be delivered out of order or more than once
+      - per-entity version or sequence numbers
+      - clients and server ignore updates older than the current version
+      - partitioning the queue by order id to preserve per-key ordering
+      - refetching authoritative state when a gap is detected
+    rubric:
+      excellent: Explains why ordering is not guaranteed, adds versioning so stale or duplicate updates are discarded on both server and client, uses per-key ordering where possible and falls back to refetching on gaps.
+      good: Adds a version or timestamp check on the client.
+      weak: Adds delays or sorts by arrival time.
+    followups:
+      - Why are wall-clock timestamps a weak ordering signal here?
+      - How would you test this behaviour?
+    common_errors:
+      - Trusting timestamps from different machines to order events.
+
+  - external_key: technical.fullstack.presence_indicators
+    competency_key: system_design
+    topic: Presence and typing indicators
+    difficulty: medium
+    kind: technical
+    text: >-
+      How would you build an online indicator and an is-typing indicator for a collaboration app? Talk me through
+      the client and the server side.
+    expected_concepts:
+      - heartbeats with expiry rather than relying on disconnect events
+      - ephemeral store with TTLs such as Redis
+      - throttling typing events and auto-expiring them
+      - multiple tabs and devices for one user
+      - scoping presence broadcasts to people who can see that user
+    rubric:
+      excellent: Uses heartbeats and TTL-based state, handles multiple connections per user, throttles noisy events, and limits fan-out and visibility to relevant users.
+      good: Tracks connections with heartbeats and broadcasts changes.
+      weak: Marks users offline only on a clean disconnect, so crashed clients stay online forever.
+    followups:
+      - A user has three tabs open and closes one. Are they still online?
+      - How do you keep presence traffic from swamping the system?
+    common_errors:
+      - Persisting every presence change to the main database.
+
+  - external_key: technical.fullstack.sockets_drop_every_minute
+    competency_key: debugging
+    topic: Connections dropping on a fixed interval
+    difficulty: medium
+    kind: scenario
+    text: >-
+      In production, WebSocket connections drop almost exactly every sixty seconds when the user is idle, but it
+      never happens locally. What would you suspect, and how would you confirm it?
+    expected_concepts:
+      - idle timeout on a load balancer, reverse proxy or CDN
+      - application-level ping or pong heartbeats shorter than the timeout
+      - proxy configuration for upgrade headers and read timeouts
+      - close codes and timing in browser tools and server logs
+      - comparing the local and production network path
+    rubric:
+      excellent: Recognises the fixed interval as an intermediary idle timeout, confirms it from close codes and logs at each hop, and fixes it with heartbeats plus timeout configuration.
+      good: Suspects a proxy timeout and proposes heartbeats.
+      weak: Looks only at application code and adds reconnect logic to hide it.
+    followups:
+      - Which close code would you expect, and what would it tell you?
+      - Why might heartbeats from the browser work better than from the server here?
+    common_errors:
+      - Masking the problem with automatic reconnects and never fixing the timeout.
+
+  - external_key: technical.fullstack.long_job_completion_signal
+    competency_key: api_design
+    topic: Telling the UI a long job has finished
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      A report takes two or three minutes to generate on the server. How would you design the API and the page so
+      the user knows when it's ready?
+    expected_concepts:
+      - start endpoint returns a job id, often with 202 Accepted
+      - status endpoint the client polls with backoff, or pushed updates
+      - states such as queued, running, succeeded, failed
+      - result available by link when done
+      - user can leave the page and get notified later
+    rubric:
+      excellent: Designs an asynchronous job API with clear states, explains polling versus push for this case, and handles failure, leaving the page and later retrieval.
+      good: Uses a job id with polling.
+      weak: Keeps the HTTP request open for minutes.
+    followups:
+      - The user closes the tab. How do they get their report?
+      - What would you return if the job failed?
+    common_errors:
+      - Polling every few hundred milliseconds with no backoff or stop condition.
+
+  - external_key: technical.fullstack.collaborative_editing_approach
+    competency_key: distributed_systems
+    topic: Simultaneous editing of one document
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Product wants several people to edit the same document at the same time, like a shared doc. How would you
+      approach that, and what simpler options would you put on the table first?
+    expected_concepts:
+      - simpler options first, such as section locking or edit presence with conflict prompts
+      - operational transformation versus CRDTs
+      - established libraries such as Yjs or Automerge rather than building from scratch
+      - persistence, snapshots and history of operations
+      - authorization on every operation and offline merging
+    rubric:
+      excellent: Starts from what the product truly needs, presents locking or conflict detection as cheaper options, explains OT and CRDT trade-offs at a practical level, and recommends a proven library with a plan for persistence and auth.
+      good: Knows OT and CRDTs exist and suggests a library.
+      weak: Proposes last-write-wins saves every few seconds as real-time collaboration.
+    followups:
+      - How would you store the document so it loads quickly after a year of edits?
+      - What happens when a user without edit rights sends operations?
+    common_errors:
+      - Underestimating the work of building a correct merge algorithm in-house.
+
+  # ------------------------------------------------------------- configuration and secrets
+  - external_key: technical.fullstack.frontend_runtime_config
+    competency_key: ci_cd
+    topic: Build-time versus runtime frontend config
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Frontend bundlers usually bake environment variables in at build time. How do you handle config like the
+      API URL so the same build can go to staging and production?
+    expected_concepts:
+      - build-time variables are frozen into the bundle
+      - build once, deploy the same artifact to every environment
+      - runtime config loaded from a config endpoint or injected file
+      - same-origin API paths behind a reverse proxy to avoid environment URLs
+      - nothing secret belongs in frontend config
+    rubric:
+      excellent: Explains why per-environment rebuilds are risky, offers a concrete runtime config approach and notes that anything shipped to the browser is public.
+      good: Knows the variables are baked in and proposes a way to vary them.
+      weak: Rebuilds per environment without seeing the downside, or puts secrets in frontend variables.
+    followups:
+      - How do you make sure the config loads before the app makes its first request?
+      - What would you never put in that config?
+    common_errors:
+      - Assuming environment variables in a frontend bundle stay private.
+
+  - external_key: technical.fullstack.key_found_in_bundle
+    competency_key: security
+    topic: Secret found in the JavaScript bundle
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      During a review you find a third-party API secret key in the production JavaScript bundle. What do you do,
+      in what order?
+    expected_concepts:
+      - rotate or revoke the key immediately, since it is already public
+      - check the provider's usage logs for abuse
+      - move calls that need the secret behind the backend
+      - remove it from source and history and from build configuration
+      - add secret scanning to CI to prevent repeats
+    rubric:
+      excellent: Rotates first, checks for misuse, moves the call server-side with a proxy endpoint, cleans up and adds preventive scanning, and explains why removing it from code alone is not enough.
+      good: Rotates the key and moves it to the backend.
+      weak: Only deletes it from the code and redeploys.
+    followups:
+      - The provider only offers browser keys. How would you limit the damage?
+      - How would CI catch this next time?
+    common_errors:
+      - Treating minification or obfuscation as protection for secrets.
+
+  - external_key: technical.fullstack.config_across_environments
+    competency_key: ci_cd
+    topic: Managing config across environments
+    difficulty: medium
+    kind: technical
+    text: >-
+      How do you manage configuration and secrets for a full-stack app across local development, staging and
+      production? Describe a setup that's worked for you and what went wrong with it.
+    expected_concepts:
+      - configuration from the environment, separate from code
+      - typed config validated at startup that fails fast on missing values
+      - secrets in a secret manager, not committed to the repo
+      - safe local defaults and example env files
+      - auditing and rotating secrets
+    rubric:
+      excellent: Describes a concrete setup with validated, typed config that fails at startup, secrets in a manager with rotation, clear local defaults, and learns from a real misconfiguration.
+      good: Separates config from code and keeps secrets out of the repository.
+      weak: Commits environment files with real secrets or scatters config reads throughout the code.
+    followups:
+      - A required variable is missing in production. When do you want to find out?
+      - How do new developers get a working local setup?
+    common_errors:
+      - Reading environment variables lazily deep in the code, so a missing value fails only on a rare path.
+
+  # ------------------------------------------------------------- deployment
+  - external_key: technical.fullstack.open_tabs_after_deploy
+    competency_key: ci_cd
+    topic: Version skew between open tabs and new deploys
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Right after each deploy, error tracking fills up with chunk load failures and some API calls from the old
+      frontend start failing. Users who had the app open are hit hardest. How would you deal with that?
+    expected_concepts:
+      - old tabs request hashed chunks that no longer exist
+      - keep previous assets available for a while after deploy
+      - backwards-compatible APIs during the overlap window
+      - detecting a new version and prompting or reloading at a safe moment
+      - catching chunk load errors and reloading once
+      - expressing the client version in requests for diagnosis
+    rubric:
+      excellent: Explains the skew between running clients and new servers, keeps old assets and old API behaviour available during the window, adds version detection with a graceful reload, and measures skew via a client version header.
+      good: Keeps old assets around or prompts users to reload.
+      weak: Asks users to clear their cache or hard refresh.
+    followups:
+      - How long should old assets stick around?
+      - When is it safe to force a reload?
+    common_errors:
+      - Deleting the previous build's assets during deploy.
+
+  - external_key: technical.fullstack.stale_ui_after_release
+    competency_key: ci_cd
+    topic: Users still seeing the old UI after a release
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      After a release, some users still see the old version of the UI for hours. What's likely going on, and how
+      would you set up caching so it doesn't happen again?
+    expected_concepts:
+      - index.html cached by the browser or CDN
+      - hashed asset filenames cached for a long time
+      - entry HTML served with no-cache or a short max-age
+      - CDN invalidation as part of deploy
+      - service workers holding on to old versions
+    rubric:
+      excellent: Distinguishes the entry HTML from hashed assets, sets cache headers for each correctly, includes CDN invalidation and checks for a service worker.
+      good: Identifies cached HTML and proposes cache headers or invalidation.
+      weak: Proposes disabling caching for all assets.
+    followups:
+      - Which response headers would you set on index.html?
+      - How would a service worker make this worse?
+    common_errors:
+      - Long-caching the HTML file that references the hashed assets.
+
+  - external_key: technical.fullstack.feature_needing_schema_change
+    competency_key: databases
+    topic: Coordinating a schema, API and UI release
+    difficulty: medium
+    kind: technical
+    text: >-
+      A feature needs a new database column, an API change and a UI change. In what order would you ship those
+      pieces so nothing breaks during the rollout, and why?
+    expected_concepts:
+      - additive migration first, deployed separately from code that needs it
+      - API accepts and returns the new field while staying compatible
+      - UI deployed last or behind a feature flag
+      - backfill as its own step
+      - removing old columns only in a later release
+      - rollback safety at each step
+    rubric:
+      excellent: Lays out an expand-migrate-contract sequence where each step is independently deployable and reversible, includes backfill and flagging, and explains what breaks if the order is reversed.
+      good: Migrates the database before deploying code that uses it.
+      weak: Ships everything in one deploy and assumes it all arrives at the same time.
+    followups:
+      - What happens if you need to roll back the API after the migration ran?
+      - How would you backfill without locking the table?
+    common_errors:
+      - Making the new column required before old code stops writing rows without it.
+
+  - external_key: technical.fullstack.flag_unfinished_feature
+    competency_key: ci_cd
+    topic: Shipping unfinished work behind flags
+    difficulty: medium
+    kind: technical
+    text: >-
+      How have you used feature flags to merge and deploy a feature that wasn't finished yet, across both the
+      backend and the frontend? What did you learn about keeping them under control?
+    expected_concepts:
+      - flag evaluated on the server and passed to the client
+      - backend enforces the flag, not just the UI
+      - gradual rollout by user or account
+      - testing both flag states
+      - removing flags after launch to limit debt
+    rubric:
+      excellent: Describes a real rollout with server-side evaluation, consistent behaviour across API and UI, a targeted ramp, tests for both paths and a clean-up habit.
+      good: Uses flags to hide unfinished UI and enable it gradually.
+      weak: Only hides the UI while the API stays open, or never removes flags.
+    followups:
+      - How do you stop a flag from flipping mid-session for a user?
+      - Who is responsible for removing a flag?
+    common_errors:
+      - Gating only the button while the endpoint is already live.
+
+  - external_key: technical.fullstack.per_pr_preview_environments
+    competency_key: ci_cd
+    topic: Preview environments per pull request
+    difficulty: medium
+    kind: technical
+    text: >-
+      Your team wants a live preview environment for every pull request so designers and product can try changes.
+      How would you set that up for a full-stack app with a database and login?
+    expected_concepts:
+      - ephemeral frontend and backend per branch with unique URLs
+      - database per preview, seeded with safe fake data
+      - auth callback URLs and cookie domains for dynamic hosts
+      - secrets and third-party integrations in sandbox mode
+      - automatic teardown and cost limits
+    rubric:
+      excellent: Covers per-branch deploys, seeded isolated data, the auth and cookie complications of dynamic hostnames, sandboxed integrations, and teardown and cost control.
+      good: Deploys per branch with a separate database.
+      weak: Points every preview at the shared staging database.
+    followups:
+      - How do OAuth redirect URLs work with a different hostname per PR?
+      - What stops previews from sending real emails?
+    common_errors:
+      - Using production data copies in preview environments.
+
+  - external_key: technical.fullstack.checkout_broken_rollback
+    competency_key: ci_cd
+    topic: Rolling back after a migration ran
+    difficulty: medium
+    kind: scenario
+    text: >-
+      Twenty minutes after a release, checkout starts failing. The release included a database migration that has
+      already run. How do you decide between rolling back and rolling forward, and what do you actually do?
+    expected_concepts:
+      - restore service first, then diagnose
+      - whether the old code still works with the migrated schema
+      - feature flag off as the fastest lever if available
+      - roll forward with a small fix when rollback is unsafe
+      - data written by the bad version may need repair
+      - communicating status during the incident
+    rubric:
+      excellent: Prioritises restoring checkout, checks schema compatibility before rolling back, uses flags or a targeted fix where rollback is unsafe, plans data repair and keeps stakeholders updated.
+      good: Rolls back the code after checking the migration is backwards compatible.
+      weak: Reverts the migration in production without considering data loss.
+    followups:
+      - What would make this decision easier next time?
+      - How do you find orders affected during those twenty minutes?
+    common_errors:
+      - Running a down migration that drops data written since the release.
+
+  - external_key: technical.fullstack.local_dev_parity
+    competency_key: docker
+    topic: Local development environment
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you set up local development for a full-stack app with a frontend, an API, a database and maybe a
+      queue, so it behaves close enough to production? What have you used?
+    expected_concepts:
+      - containers or compose for databases, queues and other services
+      - same database engine and version as production
+      - hot reload for the code under active development
+      - seed data and one-command setup
+      - frontend proxying API calls to mimic same-origin production routing
+    rubric:
+      excellent: Describes a concrete one-command setup with matching service versions, realistic seed data, fast reload and a proxy that mirrors production routing, and names the gaps that remain.
+      good: Uses containers for dependencies and explains how the app connects to them.
+      weak: Uses a different database locally or relies on a shared remote dev database.
+    followups:
+      - Which production differences still bite you locally?
+      - How long does it take a new teammate to get running?
+    common_errors:
+      - Using SQLite locally and PostgreSQL in production.
+
+  - external_key: technical.fullstack.monorepo_ci_pipeline
+    competency_key: ci_cd
+    topic: CI for a frontend and backend monorepo
+    difficulty: medium
+    kind: technical
+    text: >-
+      What would a good CI pipeline look like for a repo that contains both the frontend and the backend? Talk me
+      through the stages and how you'd keep it fast.
+    expected_concepts:
+      - lint, type checks and unit tests per package
+      - running only what a change affects
+      - dependency and build caching
+      - integration or contract tests between frontend and API
+      - a small set of end-to-end tests against a deployed build
+      - building the deployable artifact once
+    rubric:
+      excellent: Designs staged checks with affected-only runs and caching, includes cross-boundary tests and a lean end-to-end layer, and produces one artifact that moves through environments.
+      good: Covers the main stages and some speed optimisations.
+      weak: Runs everything serially on every change or skips cross-boundary testing.
+    followups:
+      - A backend change breaks the frontend. Which stage catches it?
+      - How long should this pipeline take before it slows the team down?
+    common_errors:
+      - Rebuilding the artifact separately for each environment.
+
+  - external_key: technical.fullstack.hydration_mismatch
+    competency_key: frontend_react
+    topic: Hydration mismatches with server rendering
+    difficulty: medium
+    kind: scenario
+    text: >-
+      Your server-rendered pages show hydration mismatch warnings and parts of the page flicker when they load.
+      What usually causes that, and how would you track it down?
+    expected_concepts:
+      - server and client render different output
+      - dates, time zones and locale formatting
+      - random ids or values that differ per render
+      - browser-only state such as window size or localStorage read during render
+      - user-specific data present on one side only
+      - deferring client-only content until after mount
+    rubric:
+      excellent: Explains hydration, lists common causes with real examples, narrows down the differing node systematically and fixes it with deterministic rendering or deferred client-only content.
+      good: Knows the server and client output differ and names a couple of causes.
+      weak: Suppresses the warning without understanding it.
+    followups:
+      - How would you render a relative time like five minutes ago without a mismatch?
+      - When is suppressing the warning acceptable?
+    common_errors:
+      - Reading localStorage during the first render on the client.
+
+  - external_key: technical.fullstack.ssr_or_spa_choice
+    competency_key: frontend_react
+    topic: Choosing server rendering or a SPA
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      For a new product with a public marketing site and a logged-in dashboard, how would you decide what to
+      render on the server and what to build as a client-side single-page app?
+    expected_concepts:
+      - SEO and first paint for public pages
+      - static generation for content that rarely changes
+      - client-side rendering often fine behind login
+      - hosting and operational cost of a rendering server
+      - auth and caching implications of server rendering personalised pages
+    rubric:
+      excellent: Splits the decision by page type with clear reasons around SEO, performance, caching, auth and operational cost, and draws on a past decision.
+      good: Uses server rendering for public pages and a SPA for the dashboard with sensible reasons.
+      weak: Picks one framework for everything without considering the trade-offs.
+    followups:
+      - What gets harder when you server-render personalised pages?
+      - Where would static generation fit in?
+    common_errors:
+      - Assuming client-rendered pages cannot be indexed at all, or that SSR is always faster.
+
+  - external_key: technical.fullstack.cdn_caching_api_responses
+    competency_key: system_design
+    topic: Caching API responses at the edge
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your product pages are served by an API that's getting expensive under load. How would you cache responses
+      at the CDN when some users are logged in and see personalised prices?
+    expected_concepts:
+      - separate public cacheable data from personalised data
+      - Cache-Control public versus private, s-maxage and stale-while-revalidate
+      - cache keys and Vary, and the risk of caching one user's response for another
+      - purging or short TTLs when data changes
+      - personalisation fetched separately or composed at the edge
+    rubric:
+      excellent: Splits public and private data, sets precise cache headers and keys, explains how a misconfigured cache leaks personal data, and plans invalidation when prices change.
+      good: Caches anonymous responses and bypasses the cache for logged-in users.
+      weak: Caches everything at the CDN with no regard for authentication.
+    followups:
+      - How would you invalidate a product page when its price changes?
+      - How would you detect that a cache served one user's data to another?
+    common_errors:
+      - Caching responses that set cookies or depend on the Authorization header.
+
+  - external_key: technical.fullstack.payment_webhook_integration
+    competency_key: api_design
+    topic: Receiving third-party webhooks
+    difficulty: medium
+    kind: scenario
+    text: >-
+      You're integrating a payment provider that confirms payments through webhooks, and the order page needs to
+      show the right status. How would you build the webhook handler and connect it to the UI?
+    expected_concepts:
+      - verifying signatures and rejecting replays
+      - acknowledging quickly and processing in a background job
+      - idempotent handling of duplicate deliveries
+      - events arriving out of order or late
+      - UI shows pending until confirmed, via polling or push
+      - reconciling with the provider's API if a webhook never arrives
+    rubric:
+      excellent: Verifies and deduplicates events, processes asynchronously, copes with ordering and missing deliveries by reconciling, and gives the UI a clear pending state that resolves.
+      good: Verifies signatures and updates order status idempotently.
+      weak: Trusts any request to the webhook URL or marks orders paid from the browser redirect alone.
+    followups:
+      - The success redirect arrives before the webhook. What does the user see?
+      - How do you test webhook handling locally?
+    common_errors:
+      - Treating the browser's return redirect as proof of payment.
+
+  - external_key: technical.fullstack.slow_dependency_hangs_page
+    competency_key: system_design
+    topic: A slow third-party API hanging the page
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Checkout calls an external shipping-rates API. Today that API is taking twenty seconds to respond, and your
+      checkout page hangs while your API servers run out of workers. How would you contain it now, and how would
+      you design for it?
+    expected_concepts:
+      - timeouts on outbound calls well below the client timeout
+      - circuit breaker and bulkheads to protect the worker pool
+      - fallback such as cached or flat-rate shipping
+      - UI that loads without that piece and shows a degraded state
+      - alerting on dependency latency
+    rubric:
+      excellent: Stops the bleeding with timeouts or a breaker, explains how one slow dependency exhausts shared workers, designs a fallback and a degraded UI, and adds dependency-level monitoring.
+      good: Adds timeouts and a fallback.
+      weak: Adds retries, which increases load on the struggling dependency.
+    followups:
+      - How would you choose the timeout value?
+      - What should the checkout page show while rates are unavailable?
+    common_errors:
+      - Retrying slow calls without a timeout or budget.

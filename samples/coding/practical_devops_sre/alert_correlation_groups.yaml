@@ -1,0 +1,160 @@
+version: 1
+slug: alert_correlation_groups
+title: Correlated Alert Grouping
+difficulty: medium
+competency_keys: [algorithms, data_structures]
+role_tags: [sre, devops, support_engineer, platform]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Correlated Alert Grouping
+
+  During an outage the paging system fires dozens of alerts, and the on-call engineer wants them folded
+  into incidents. Alert `i` was raised on host `hosts[i]` for service `services[i]` at second
+  `timestamps[i]`.
+
+  Two alerts are **directly related** when they share the same host **or** the same service, **and** their
+  timestamps differ by at most `window_seconds`. Relatedness is transitive: if alert A is related to B and
+  B to C, then A, B and C belong to the same **incident**, even if A and C are not directly related. Every
+  alert belongs to exactly one incident (an alert related to nothing forms an incident of size 1).
+
+  Return the sizes of all incidents sorted in **descending** order (an empty list when there are no alerts).
+
+  ### Example 1
+  ```
+  Input:  hosts = ["web-1", "web-1", "web-2", "web-1", "web-3"],
+          services = ["api", "checkout", "checkout", "search", "search"],
+          timestamps = [100, 110, 130, 610, 640],
+          window_seconds = 60
+  Output: [3, 2]
+  Explanation: alerts 0 and 1 share host web-1 (10 s apart); alerts 1 and 2 share service checkout
+  (20 s apart), so 0, 1 and 2 form one incident. Alert 3 shares host web-1 with alert 1, but 500 s is
+  outside the window. Alert 4 shares service search with alert 3 (30 s apart).
+  ```
+
+  ### Example 2
+  ```
+  Input:  hosts = ["db-1", "db-1", "db-1", "cache-1"],
+          services = ["postgres", "disk", "postgres", "redis"],
+          timestamps = [0, 60, 120, 30],
+          window_seconds = 60
+  Output: [3, 1]
+  Explanation: consecutive alerts on db-1 are exactly 60 s apart, which is within the window, so they
+  chain into one incident although the first and last are 120 s apart. The cache alert is alone.
+  ```
+
+  ### Constraints
+  - `0 <= n <= 10^5`, where `n` is the length of `hosts`, `services` and `timestamps`
+  - Host and service names are non-empty strings of letters, digits and `-`.
+  - `0 <= timestamps[i] <= 10^9`; timestamps are not sorted and may repeat
+  - `0 <= window_seconds <= 10^9`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: alert_correlation_groups
+  params:
+    - {name: hosts, type: "string[]"}
+    - {name: services, type: "string[]"}
+    - {name: timestamps, type: "int[]"}
+    - {name: window_seconds, type: int}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def alert_correlation_groups(hosts: list[str], services: list[str], timestamps: list[int], window_seconds: int) -> list[int]:
+        n = len(timestamps)
+        parent = list(range(n))
+
+        def find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a: int, b: int) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        order = sorted(range(n), key=lambda i: timestamps[i])
+        for labels in (hosts, services):
+            last_seen: dict[str, int] = {}
+            for i in order:
+                prev = last_seen.get(labels[i])
+                if prev is not None and timestamps[i] - timestamps[prev] <= window_seconds:
+                    union(prev, i)
+                last_seen[labels[i]] = i
+        sizes: dict[int, int] = {}
+        for i in range(n):
+            root = find(i)
+            sizes[root] = sizes.get(root, 0) + 1
+        return sorted(sizes.values(), reverse=True)
+  javascript: |
+    function alertCorrelationGroups(hosts, services, timestamps, windowSeconds) {
+      const n = timestamps.length;
+      const parent = Array.from({ length: n }, (_, i) => i);
+      const find = (x) => {
+        while (parent[x] !== x) {
+          parent[x] = parent[parent[x]];
+          x = parent[x];
+        }
+        return x;
+      };
+      const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => timestamps[a] - timestamps[b]);
+      for (const labels of [hosts, services]) {
+        const lastSeen = new Map();
+        for (const i of order) {
+          const prev = lastSeen.get(labels[i]);
+          if (prev !== undefined && timestamps[i] - timestamps[prev] <= windowSeconds) {
+            const ra = find(prev);
+            const rb = find(i);
+            if (ra !== rb) parent[ra] = rb;
+          }
+          lastSeen.set(labels[i], i);
+        }
+      }
+      const sizes = new Map();
+      for (let i = 0; i < n; i++) {
+        const root = find(i);
+        sizes.set(root, (sizes.get(root) || 0) + 1);
+      }
+      return [...sizes.values()].sort((a, b) => b - a);
+    }
+tests:
+  - {id: t1, args: [["web-1", "web-1", "web-2", "web-1", "web-3"], ["api", "checkout", "checkout", "search", "search"], [100, 110, 130, 610, 640], 60], expected: [3, 2], description: "Example 1 - host link then service link chains three alerts; a 500 s gap breaks the host link"}
+  - {id: t2, args: [["db-1", "db-1", "db-1", "cache-1"], ["postgres", "disk", "postgres", "redis"], [0, 60, 120, 30], 60], expected: [3, 1], description: "Example 2 - gaps exactly equal to the window chain transitively"}
+  - {id: t3, hidden: true, args: [[], [], [], 10], expected: [], description: "No alerts - empty list"}
+  - {id: t4, hidden: true, args: [["h"], ["s"], [5], 0], expected: [1], description: "Single alert - one incident of size 1"}
+  - {id: t5, hidden: true, args: [["a", "b", "c", "a"], ["x", "x", "y", "y"], [7, 7, 7, 8], 0], expected: [2, 1, 1], description: "Window 0 - only identical timestamps relate; repeated timestamps on different hosts but same service"}
+  - {id: t6, hidden: true, args: [["n1", "n1", "n2", "n2"], ["p", "q", "r", "t"], [0, 31, 100, 130], 30], expected: [2, 1, 1], description: "Gap of window+1 does not relate; gap of exactly window does"}
+  - {id: t7, hidden: true, args: [["h1", "h2", "h1", "h3", "h2", "h9"], ["s1", "s2", "s2", "s3", "s3", "s1"], [40, 0, 50, 15, 10, 1000], 10], expected: [3, 2, 1], description: "Unsorted input - host then service links chain three alerts; a shared service 50 s apart does not link"}
+  - {id: t8, hidden: true, args: [["a", "b", "c", "d"], ["w", "x", "y", "z"], [0, 0, 0, 0], 1000000000], expected: [1, 1, 1, 1], description: "All hosts and services distinct - every alert alone, huge window irrelevant"}
+  - {id: t9, hidden: true, args: [["a", "b", "c", "d", "e"], ["core", "core", "core", "core", "core"], [1000000000, 0, 500000000, 999999999, 1], 1000000000], expected: [5], description: "One shared service with a huge window and timestamps up to 10^9 - a single incident"}
+  - {id: t10, hidden: true, args: [["h14", "h17", "h24", "h14", "h14", "h16", "h18", "h6", "h5", "h16", "h15", "h20", "h19", "h5", "h3", "h14", "h9", "h4", "h2", "h17", "h22", "h20", "h1", "h19", "h12", "h14", "h20", "h23", "h19", "h20", "h5", "h19", "h0", "h16", "h2", "h1", "h1", "h6", "h7", "h19", "h0", "h24", "h14", "h10", "h14", "h18", "h6", "h16", "h7", "h20", "h9", "h15", "h0", "h21", "h2", "h14", "h20", "h8", "h13", "h17", "h2", "h22", "h8", "h10", "h24", "h7", "h16", "h9", "h0", "h2", "h18", "h24", "h3", "h12", "h3", "h9", "h12", "h2", "h0", "h21", "h0", "h6", "h6", "h1", "h15", "h12", "h22", "h12", "h13", "h2", "h18", "h20", "h6", "h24", "h21", "h8", "h10", "h2", "h9", "h10", "h0", "h13", "h24", "h3", "h4", "h7", "h22", "h3", "h0", "h1", "h14", "h15", "h5", "h21", "h17", "h6", "h14", "h16", "h6", "h23", "h24", "h4", "h13", "h20", "h12", "h3", "h12", "h13", "h6", "h0", "h8", "h18", "h9", "h0", "h6", "h5", "h12", "h19", "h20", "h18", "h3", "h1", "h4", "h6", "h14", "h8", "h0", "h24", "h19", "h10", "h9", "h12", "h2", "h2", "h2", "h6", "h18", "h20", "h7", "h0", "h19", "h11", "h11", "h19", "h14", "h4", "h18", "h15", "h18", "h4", "h12", "h5", "h20", "h4", "h9", "h7", "h19", "h7", "h23", "h6", "h5", "h23", "h20", "h17", "h6", "h21", "h12", "h15", "h19", "h2", "h13", "h1", "h3", "h3", "h1", "h16", "h8", "h7", "h23", "h22", "h12", "h8", "h13", "h19", "h15", "h9", "h16", "h5", "h23", "h2", "h4", "h7", "h15", "h17", "h20", "h19", "h19", "h2", "h8", "h6", "h6", "h23", "h0", "h2", "h8", "h13", "h14", "h7", "h1", "h1", "h5", "h9", "h11", "h16", "h18", "h4", "h2", "h11", "h4", "h14", "h10", "h21", "h23", "h22", "h16", "h18", "h4", "h18", "h1", "h0", "h15", "h11", "h22", "h9", "h1", "h0", "h19", "h20", "h2", "h15", "h2", "h23", "h9", "h10", "h4", "h2", "h2", "h14", "h17", "h11", "h23", "h1", "h23", "h23", "h22", "h4", "h10", "h11", "h2", "h21", "h15", "h2", "h13", "h0", "h15", "h18", "h0", "h19", "h21", "h12", "h12", "h18", "h0", "h19", "h2", "h2", "h2", "h20", "h3", "h8"], ["s6", "s11", "s5", "s6", "s11", "s11", "s9", "s7", "s7", "s7", "s8", "s1", "s8", "s8", "s0", "s4", "s9", "s1", "s7", "s0", "s3", "s11", "s1", "s7", "s9", "s10", "s7", "s4", "s0", "s5", "s4", "s2", "s10", "s9", "s3", "s8", "s2", "s5", "s10", "s7", "s7", "s3", "s5", "s6", "s10", "s4", "s3", "s10", "s6", "s3", "s3", "s6", "s3", "s9", "s5", "s3", "s2", "s2", "s7", "s5", "s0", "s11", "s1", "s4", "s2", "s1", "s7", "s7", "s4", "s3", "s6", "s6", "s10", "s8", "s7", "s10", "s5", "s11", "s9", "s7", "s5", "s1", "s0", "s4", "s9", "s0", "s10", "s11", "s4", "s9", "s5", "s4", "s10", "s9", "s0", "s10", "s2", "s6", "s7", "s3", "s0", "s4", "s3", "s2", "s0", "s10", "s1", "s7", "s1", "s10", "s8", "s10", "s10", "s5", "s1", "s10", "s3", "s3", "s7", "s4", "s2", "s11", "s0", "s7", "s8", "s11", "s0", "s2", "s3", "s4", "s5", "s8", "s11", "s8", "s8", "s9", "s2", "s6", "s11", "s3", "s1", "s6", "s11", "s6", "s2", "s7", "s7", "s3", "s10", "s0", "s6", "s8", "s9", "s10", "s8", "s5", "s7", "s5", "s10", "s3", "s1", "s11", "s10", "s11", "s1", "s3", "s3", "s6", "s1", "s4", "s8", "s5", "s4", "s11", "s0", "s5", "s8", "s1", "s0", "s7", "s5", "s8", "s6", "s4", "s7", "s0", "s3", "s1", "s6", "s0", "s2", "s8", "s5", "s10", "s2", "s7", "s2", "s8", "s11", "s8", "s10", "s11", "s7", "s7", "s9", "s11", "s1", "s3", "s7", "s8", "s8", "s4", "s11", "s8", "s10", "s2", "s8", "s8", "s8", "s4", "s4", "s10", "s6", "s9", "s3", "s4", "s2", "s8", "s8", "s4", "s9", "s7", "s3", "s6", "s8", "s1", "s8", "s0", "s9", "s6", "s0", "s8", "s0", "s8", "s6", "s8", "s9", "s1", "s7", "s1", "s11", "s2", "s1", "s8", "s7", "s6", "s6", "s4", "s3", "s7", "s7", "s2", "s5", "s6", "s7", "s8", "s5", "s1", "s3", "s6", "s9", "s0", "s4", "s2", "s11", "s0", "s0", "s3", "s2", "s3", "s0", "s10", "s4", "s5", "s11", "s5", "s3", "s9", "s7", "s1", "s7", "s11", "s9", "s1", "s8", "s9", "s4", "s11", "s3", "s11"], [4344, 3578, 190, 3078, 5185, 3386, 4336, 5044, 1308, 4408, 1673, 5171, 4374, 5230, 1788, 4338, 1770, 4447, 5011, 4805, 1117, 1905, 5143, 2847, 1483, 2587, 4940, 2580, 1594, 1787, 1593, 793, 1097, 1960, 1085, 5952, 722, 2125, 3177, 794, 3561, 3453, 4450, 5774, 1032, 1643, 3299, 5144, 5613, 145, 786, 1646, 4668, 5590, 2929, 2959, 945, 5772, 4142, 5199, 2813, 4118, 5617, 1548, 577, 3949, 869, 199, 306, 4519, 5024, 4217, 4659, 3942, 1200, 1552, 1511, 941, 1670, 1413, 1294, 2319, 5512, 780, 4749, 507, 1101, 5578, 3785, 635, 792, 2677, 3202, 3825, 3493, 4221, 2904, 3523, 1721, 4922, 3056, 108, 5193, 5742, 334, 1640, 1484, 3341, 3718, 2945, 3032, 3320, 1598, 4955, 1352, 776, 4198, 126, 2651, 694, 5772, 5155, 3313, 4666, 4911, 1564, 4131, 4789, 2793, 2115, 2289, 952, 1311, 3322, 1091, 2702, 4414, 5691, 3029, 3536, 1487, 3323, 1694, 5919, 1514, 577, 2799, 2471, 3840, 826, 86, 2913, 5232, 5111, 406, 1901, 2236, 5456, 2448, 2767, 1769, 5404, 3327, 4665, 1490, 4366, 629, 3191, 4216, 4076, 5261, 1746, 5744, 979, 3238, 4709, 186, 940, 5041, 885, 1941, 2102, 3634, 3289, 4135, 413, 1601, 5308, 3077, 88, 806, 2118, 2055, 2258, 2792, 4506, 4427, 4160, 3405, 4265, 4652, 816, 5226, 3640, 5281, 624, 4500, 4895, 5475, 369, 3165, 1310, 3161, 3864, 1385, 4059, 4439, 5006, 4887, 479, 3519, 4051, 3446, 2330, 4315, 3265, 4897, 2559, 2994, 4345, 2340, 3958, 5366, 2209, 4592, 2322, 5436, 5870, 2425, 220, 114, 2007, 4798, 350, 5185, 1282, 3348, 5606, 3194, 432, 2581, 3258, 410, 4765, 5923, 2615, 602, 1832, 3518, 5891, 3912, 2055, 1996, 372, 4287, 806, 5920, 3836, 1182, 2008, 4944, 5786, 942, 412, 5113, 3417, 3733, 966, 1668, 426, 2922, 4326, 1267, 1018, 2976, 3627, 1145, 5471, 3415, 3731, 4923, 2147, 5239, 4769, 5586, 3436, 2982, 4348, 1122, 2376], 60], expected: [7, 6, 5, 5, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], description: "Stress - 300 random alerts over 25 hosts and 12 services with a 60 s window"}
+expected_concepts:
+  - connected components of an implicit graph
+  - union-find (disjoint set union) with path compression
+  - sorting by time so only neighbouring alerts per host or service need joining
+  - why linking consecutive alerts is enough (gaps within the window chain transitively)
+optimal_complexity: {time: O(n log n), space: O(n)}
+rubric:
+  excellent: Sorts alerts by time, links each alert only to the previous alert with the same host and the previous alert with the same service, merges with union-find, argues why neighbours suffice and states O(n log n).
+  good: Correct components via union-find or BFS but builds edges for all pairs within the window, or needs a hint for the neighbour argument.
+  weak: Compares every pair in O(n^2) without noticing, treats host and service as a combined key, ignores transitivity or uses a strict inequality at the window edge.
+  criteria:
+    correctness: All tests pass, including chains that only connect through a host and then a service, equal timestamps and a zero window.
+    efficiency: Near-linear after sorting; no pairwise comparison of all alerts.
+    code_quality: A compact union-find helper and a single loop reused for hosts and services.
+    edge_cases: No alerts, a single alert, identical timestamps, window zero and gaps exactly equal to the window.
+    communication: Explains why connecting only time-adjacent alerts preserves the same components as connecting all pairs.
+hints:
+  - Think of alerts as nodes in a graph with an edge between directly related alerts; incidents are the connected pieces of that graph.
+  - You do not need every edge. If alerts on one host are sorted by time, two of them within the window are already connected through the alerts in between, so linking neighbours is enough.
+  - Sort alert indices by timestamp. For hosts and then for services, remember the last alert seen with each name and merge the current alert with it in a disjoint-set structure when their gap is at most the window. Finally count the members of each set and sort those counts from largest to smallest.
+followups:
+  - How would you process alerts as a live stream, closing an incident once the window has passed?
+  - What would you change if two alerts needed to share both the host and the service?
+  - How would you pick a representative root-cause alert for each incident?
+common_errors:
+  - Comparing all pairs, which is quadratic for large outages.
+  - Linking only alerts that share both host and service.
+  - Forgetting that a chain of small gaps connects alerts that are far apart in time.
+  - Not sorting by time before linking neighbours, so the neighbour argument fails.

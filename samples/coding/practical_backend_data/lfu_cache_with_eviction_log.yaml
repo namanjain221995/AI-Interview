@@ -1,0 +1,220 @@
+version: 1
+slug: lfu_cache_with_eviction_log
+title: LFU Cache with an Eviction Log
+difficulty: hard
+competency_keys: [data_structures, algorithms, problem_solving]
+role_tags: [backend, platform, sre, general]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## LFU Cache with an Eviction Log
+
+  A configuration service keeps hot entries in a small in-process cache. Entries that are read often
+  should stay, so the team uses a **least-frequently-used** (LFU) policy, and to tune the capacity
+  they want a log of what the cache did. Simulate the cache and return that log.
+
+  The cache holds at most `capacity` keys. Each cached key has a value and a **use count**. Process
+  the operations in order:
+
+  - `"GET k"`: if `k` is cached, its use count goes up by 1 and its value is appended to the log.
+    Otherwise `"MISS"` is appended and nothing else changes.
+  - `"PUT k v"` for a key that is already cached: the value becomes `v` and the use count goes up by 1
+    (the key is not re-inserted, so it keeps its earlier uses).
+  - `"PUT k v"` for a new key: if the cache is full, first **evict** the cached key with the
+    **smallest use count**; if several keys share that count, evict the one whose **most recent use**
+    (GET or PUT) is the oldest. Append `"EVICT <key>"` to the log. Then store `k` with value `v` and
+    use count 1. A key that was evicted and comes back starts again from count 1.
+  - With `capacity = 0` nothing is ever stored, so every `GET` misses and no eviction is logged.
+
+  `PUT` writes nothing to the log except its eviction, if any. Return the log entries in the order the
+  events happened.
+
+  ### Example 1
+  ```
+  Input:  capacity = 2,
+          ops = ["PUT a 1", "PUT b 2", "GET a", "PUT c 3", "GET b", "GET c",
+                 "PUT d 4", "GET a", "GET c", "GET d"]
+  Output: ["1", "EVICT b", "MISS", "3", "EVICT a", "MISS", "3", "4"]
+  Explanation: when c arrives, a has 2 uses and b has 1, so b is evicted. When d arrives, a and c
+  both have 2 uses; a was last used before c, so a is evicted.
+  ```
+
+  ### Example 2
+  ```
+  Input:  capacity = 1,
+          ops = ["PUT cfg v1", "PUT cfg v2", "GET cfg", "PUT flags on", "GET cfg", "GET flags"]
+  Output: ["v2", "EVICT cfg", "MISS", "on"]
+  ```
+
+  ### Example 3
+  ```
+  Input:  capacity = 0, ops = ["PUT x 1", "GET x", "PUT x 2", "GET y"]
+  Output: ["MISS", "MISS"]
+  ```
+
+  ### Constraints
+  - `0 <= capacity <= 10^4`
+  - `0 <= ops.length <= 2 * 10^5`
+  - every operation is `"GET k"` or `"PUT k v"` with single spaces; keys and values are 1 to 20
+    characters from lowercase letters, digits, `-` and `_`
+  - aim for O(1) average time per operation
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: run_lfu_cache
+  params:
+    - {name: capacity, type: int}
+    - {name: ops, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    from collections import OrderedDict
+
+
+    def run_lfu_cache(capacity: int, ops: list[str]) -> list[str]:
+        values: dict[str, str] = {}
+        counts: dict[str, int] = {}
+        # use count -> keys with that count, least recently used first
+        buckets: dict[int, OrderedDict[str, None]] = {}
+        min_count = 0
+        log: list[str] = []
+
+        def touch(key: str) -> None:
+            nonlocal min_count
+            count = counts[key]
+            bucket = buckets[count]
+            del bucket[key]
+            if not bucket:
+                del buckets[count]
+                if min_count == count:
+                    min_count = count + 1
+            counts[key] = count + 1
+            buckets.setdefault(count + 1, OrderedDict())[key] = None
+
+        for op in ops:
+            parts = op.split(" ")
+            key = parts[1]
+            if parts[0] == "GET":
+                if key in values:
+                    touch(key)
+                    log.append(values[key])
+                else:
+                    log.append("MISS")
+                continue
+            if capacity == 0:
+                continue
+            if key in values:
+                values[key] = parts[2]
+                touch(key)
+                continue
+            if len(values) == capacity:
+                bucket = buckets[min_count]
+                victim, _ = bucket.popitem(last=False)
+                if not bucket:
+                    del buckets[min_count]
+                del values[victim]
+                del counts[victim]
+                log.append("EVICT " + victim)
+            values[key] = parts[2]
+            counts[key] = 1
+            buckets.setdefault(1, OrderedDict())[key] = None
+            min_count = 1
+        return log
+  javascript: |
+    function runLfuCache(capacity, ops) {
+      const values = new Map();
+      const counts = new Map();
+      // use count -> Set of keys in insertion (= last use) order, least recent first
+      const buckets = new Map();
+      let minCount = 0;
+      const log = [];
+      const addToBucket = (count, key) => {
+        if (!buckets.has(count)) buckets.set(count, new Set());
+        buckets.get(count).add(key);
+      };
+      const touch = (key) => {
+        const count = counts.get(key);
+        const bucket = buckets.get(count);
+        bucket.delete(key);
+        if (bucket.size === 0) {
+          buckets.delete(count);
+          if (minCount === count) minCount = count + 1;
+        }
+        counts.set(key, count + 1);
+        addToBucket(count + 1, key);
+      };
+      for (const op of ops) {
+        const [kind, key, value] = op.split(" ");
+        if (kind === "GET") {
+          if (values.has(key)) {
+            touch(key);
+            log.push(values.get(key));
+          } else {
+            log.push("MISS");
+          }
+          continue;
+        }
+        if (capacity === 0) continue;
+        if (values.has(key)) {
+          values.set(key, value);
+          touch(key);
+          continue;
+        }
+        if (values.size === capacity) {
+          const bucket = buckets.get(minCount);
+          const victim = bucket.values().next().value;
+          bucket.delete(victim);
+          if (bucket.size === 0) buckets.delete(minCount);
+          values.delete(victim);
+          counts.delete(victim);
+          log.push("EVICT " + victim);
+        }
+        values.set(key, value);
+        counts.set(key, 1);
+        addToBucket(1, key);
+        minCount = 1;
+      }
+      return log;
+    }
+tests:
+  - {id: t1, args: [2, ["PUT a 1", "PUT b 2", "GET a", "PUT c 3", "GET b", "GET c", "PUT d 4", "GET a", "GET c", "GET d"]], expected: ["1", "EVICT b", "MISS", "3", "EVICT a", "MISS", "3", "4"], description: "Example 1 - lowest count evicted, then a count tie broken by least recent use"}
+  - {id: t2, args: [1, ["PUT cfg v1", "PUT cfg v2", "GET cfg", "PUT flags on", "GET cfg", "GET flags"]], expected: ["v2", "EVICT cfg", "MISS", "on"], description: "Example 2 - updating a key keeps it and returns the new value; capacity 1 eviction"}
+  - {id: t3, args: [0, ["PUT x 1", "GET x", "PUT x 2", "GET y"]], expected: ["MISS", "MISS"], description: "Example 3 - capacity 0 stores nothing and logs no evictions"}
+  - {id: t4, hidden: true, args: [3, []], expected: [], description: "No operations gives an empty log"}
+  - {id: t5, hidden: true, args: [2, ["PUT a 1", "PUT b 2", "GET b", "GET b", "GET a", "GET x", "GET x", "PUT c 3", "GET a", "GET b"]], expected: ["2", "2", "1", "MISS", "MISS", "EVICT a", "MISS", "2"], description: "A missed GET adds no use and creates no entry; a has fewer uses than b and is evicted"}
+  - {id: t6, hidden: true, args: [2, ["PUT a 1", "PUT b 1", "PUT a 2", "PUT c 3", "GET a", "GET b", "GET c"]], expected: ["EVICT b", "2", "MISS", "3"], description: "Updating an existing key counts as a use, so b (1 use) is evicted rather than a (2 uses)"}
+  - {id: t7, hidden: true, args: [2, ["PUT a 1", "GET a", "GET a", "PUT b 2", "PUT c 3", "PUT d 4", "GET a", "GET d"]], expected: ["1", "1", "EVICT b", "EVICT c", "1", "4"], description: "Fresh keys keep evicting each other while the hot key stays (new key has the lowest count)"}
+  - {id: t8, hidden: true, args: [3, ["PUT a 1", "PUT b 2", "PUT c 3", "GET a", "GET b", "GET c", "GET b", "GET a", "GET c", "PUT d 4", "PUT e 5", "GET b", "GET a"]], expected: ["1", "2", "3", "2", "1", "3", "EVICT b", "EVICT d", "MISS", "1"], description: "Three keys tied at 3 uses - the least recently used one (b) is evicted, then the newcomer d with 1 use"}
+  - {id: t9, hidden: true, args: [2, ["PUT a 1", "PUT b 2", "GET a", "GET b", "GET b", "GET a", "PUT c 3", "GET c", "GET c", "GET c", "PUT d 4", "GET a", "GET b", "PUT a 9", "GET a"]], expected: ["1", "2", "2", "1", "EVICT b", "3", "3", "3", "EVICT a", "MISS", "MISS", "EVICT d", "9"], description: "Tie at count 3 broken by least recent use; an evicted key comes back with its history forgotten"}
+  - {id: t10, hidden: true, args: [5, ["PUT k1 v0", "PUT k1 v1", "GET k3", "PUT k1 v3", "PUT k3 v4", "PUT k5 v5", "GET k3", "GET k9", "PUT k8 v8", "GET k2", "GET k0", "GET k0", "GET k9", "GET k1", "PUT k2 v14", "PUT k1 v15", "GET k0", "GET k3", "GET k0", "GET k6", "PUT k3 v20", "GET k10", "PUT k3 v22", "PUT k3 v23", "PUT k1 v24", "GET k0", "GET k1", "GET k8", "PUT k1 v28", "GET k2", "GET k2", "GET k5", "GET k3", "GET k8", "PUT k5 v34", "GET k3", "PUT k3 v36", "GET k2", "PUT k10 v38", "PUT k3 v39", "GET k3", "GET k1", "PUT k5 v42", "GET k4", "GET k1", "PUT k9 v45", "GET k11", "GET k1", "GET k11", "PUT k10 v49", "PUT k4 v50", "GET k11", "PUT k5 v52", "GET k1", "GET k1", "GET k3", "GET k6", "PUT k9 v57", "PUT k9 v58", "PUT k0 v59", "PUT k1 v60", "GET k6", "PUT k10 v62", "GET k4", "GET k3", "GET k3", "PUT k7 v66", "GET k6", "GET k2", "PUT k3 v69", "GET k6", "PUT k7 v71", "PUT k7 v72", "GET k8", "GET k0", "GET k1", "PUT k9 v76", "PUT k0 v77", "GET k1", "GET k6", "PUT k1 v80", "GET k3", "PUT k3 v82", "GET k1", "PUT k1 v84", "PUT k1 v85", "GET k8", "GET k11", "GET k0", "GET k6", "GET k11", "GET k9", "PUT k5 v92", "GET k2", "PUT k3 v94", "GET k0", "PUT k1 v96", "GET k9", "PUT k1 v98", "PUT k1 v99", "PUT k2 v100", "GET k0", "PUT k0 v102", "GET k4", "GET k0", "PUT k2 v105", "GET k0", "GET k1", "PUT k0 v108", "GET k11", "GET k3", "GET k0", "PUT k2 v112", "PUT k0 v113", "GET k1", "GET k10", "GET k4", "GET k2", "GET k8", "GET k7", "GET k5", "GET k0", "GET k3", "PUT k6 v123", "GET k2", "GET k3", "PUT k2 v126", "PUT k8 v127", "GET k1", "PUT k10 v129", "GET k0", "GET k2", "PUT k0 v132", "GET k2", "GET k2", "GET k10", "GET k4", "GET k1", "GET k2", "PUT k0 v139", "GET k1", "GET k3", "GET k6", "GET k0", "GET k1", "PUT k0 v145", "GET k3", "GET k11", "PUT k3 v148", "GET k4", "GET k0", "GET k0", "GET k0", "GET k1", "GET k8", "PUT k1 v155", "GET k0", "GET k11", "GET k5", "PUT k0 v159", "GET k1", "PUT k7 v161", "PUT k0 v162", "PUT k0 v163", "GET k3", "PUT k9 v165", "GET k2", "GET k1", "GET k2", "PUT k2 v169", "GET k1", "GET k3", "PUT k2 v172", "PUT k1 v173", "PUT k0 v174", "GET k4", "PUT k2 v176", "PUT k2 v177", "PUT k2 v178", "GET k1", "GET k8", "GET k0", "PUT k1 v182", "PUT k3 v183", "GET k3", "GET k0", "PUT k1 v186", "GET k0", "GET k2", "GET k10", "GET k5", "GET k4", "PUT k7 v192", "GET k2", "PUT k2 v194", "PUT k10 v195", "GET k10", "PUT k3 v197", "GET k8", "GET k8", "GET k2", "GET k0", "GET k8", "PUT k2 v203", "PUT k1 v204", "GET k2", "GET k0", "GET k3", "GET k6", "GET k6", "GET k5", "PUT k0 v211", "PUT k2 v212", "PUT k9 v213", "GET k2", "GET k1", "GET k0", "GET k2", "GET k2", "GET k3", "PUT k0 v220", "GET k0", "GET k0", "PUT k1 v223", "PUT k2 v224", "PUT k5 v225", "GET k0", "PUT k11 v227", "PUT k1 v228", "PUT k7 v229", "PUT k0 v230", "GET k3", "GET k3", "PUT k11 v233", "PUT k0 v234", "PUT k5 v235", "GET k1", "PUT k1 v237", "PUT k2 v238", "PUT k1 v239", "GET k4", "GET k0", "PUT k2 v242", "PUT k0 v243", "PUT k0 v244", "GET k0", "GET k4", "GET k3", "GET k1", "GET k7", "GET k10", "PUT k5 v251", "GET k0", "GET k9", "GET k3", "PUT k6 v255", "GET k8", "GET k11", "PUT k1 v258", "PUT k1 v259", "GET k3", "GET k0", "PUT k1 v262", "GET k2", "PUT k10 v264", "PUT k9 v265", "PUT k2 v266", "GET k1", "PUT k1 v268", "GET k7", "PUT k7 v270", "PUT k3 v271", "GET k7", "GET k10", "GET k3", "PUT k2 v275", "PUT k2 v276", "PUT k3 v277", "GET k0", "GET k3", "GET k2", "PUT k0 v281", "GET k0", "GET k3", "GET k2", "GET k2", "GET k3", "GET k1", "PUT k3 v288", "PUT k2 v289", "GET k5", "PUT k5 v291", "PUT k7 v292", "GET k0", "GET k5", "PUT k6 v295", "PUT k11 v296", "GET k2", "PUT k2 v298", "PUT k11 v299"]], expected: ["MISS", "v4", "MISS", "MISS", "MISS", "MISS", "MISS", "v3", "MISS", "v4", "MISS", "MISS", "MISS", "MISS", "v24", "v8", "v14", "v14", "v5", "v23", "v8", "v23", "v14", "EVICT k8", "v39", "v28", "MISS", "v28", "EVICT k10", "MISS", "v28", "MISS", "EVICT k9", "EVICT k10", "MISS", "v28", "v28", "v39", "MISS", "EVICT k4", "EVICT k9", "MISS", "EVICT k0", "MISS", "v39", "v39", "EVICT k10", "MISS", "v14", "MISS", "MISS", "MISS", "v60", "EVICT k7", "EVICT k9", "v60", "MISS", "v69", "v80", "MISS", "MISS", "v77", "MISS", "MISS", "MISS", "v14", "v77", "MISS", "v77", "MISS", "v102", "v102", "v99", "MISS", "v94", "v108", "v99", "MISS", "MISS", "v112", "MISS", "MISS", "v92", "v113", "v94", "EVICT k5", "v112", "v94", "EVICT k6", "v99", "EVICT k8", "v113", "v126", "v126", "v126", "v129", "MISS", "v99", "v126", "v99", "v94", "MISS", "v139", "v99", "v94", "MISS", "MISS", "v145", "v145", "v145", "v99", "MISS", "v145", "MISS", "MISS", "v155", "EVICT k10", "v148", "EVICT k7", "v126", "v155", "v126", "v155", "v148", "MISS", "v173", "MISS", "v174", "v183", "v174", "v174", "v178", "MISS", "MISS", "MISS", "EVICT k9", "v178", "EVICT k7", "v195", "MISS", "MISS", "v194", "v174", "MISS", "v203", "v174", "v197", "MISS", "MISS", "MISS", "EVICT k10", "v212", "v204", "v211", "v212", "v212", "v197", "v220", "v220", "EVICT k9", "v220", "EVICT k5", "EVICT k11", "v197", "v197", "EVICT k7", "EVICT k11", "v228", "MISS", "v234", "v244", "MISS", "v197", "v239", "MISS", "MISS", "v244", "MISS", "v197", "EVICT k5", "MISS", "MISS", "v197", "v244", "v242", "EVICT k6", "EVICT k10", "v262", "MISS", "EVICT k9", "v270", "MISS", "v271", "v244", "v277", "v276", "v281", "v277", "v276", "v276", "v277", "v268", "MISS", "EVICT k7", "EVICT k5", "v281", "MISS", "EVICT k7", "EVICT k6", "v289"], description: "300 random operations over 12 keys with a hot subset, capacity 5"}
+expected_concepts:
+  - hash map from key to value and use count
+  - frequency buckets, each an ordered set in least-recently-used order
+  - tracking the minimum use count for O(1) eviction
+  - tie-breaking by recency inside a frequency
+  - simulation with an event log
+optimal_complexity: {time: O(1) average per operation, space: O(capacity)}
+rubric:
+  excellent: Keeps a key map plus one recency-ordered bucket per use count and a running minimum count, explains why the minimum only resets to 1 on insertion and grows by one when its bucket empties on a touch, handles updates, misses and capacity 0, and argues the O(1) bound.
+  good: Correct simulation with a heap or a sorted structure keyed by (count, last use), O(log n) per operation, or the O(1) design with a hint about maintaining the minimum.
+  weak: Scans every key on each eviction without discussing the cost, breaks ties by insertion time instead of most recent use, counts missed GETs, or resets the count when an existing key is updated.
+  criteria:
+    correctness: All tests pass, including ties, updates, misses, re-inserted keys and capacity 0.
+    efficiency: O(1) average per operation with frequency buckets, or a clearly justified O(log n) alternative.
+    code_quality: A single touch helper shared by GET and update, and a separate eviction step.
+    edge_cases: Capacity 0 and 1, empty operations, GET of a missing key and a key evicted then re-added.
+    communication: Explains the difference between LFU and LRU and when each fits.
+hints:
+  - Each key needs its value, its use count and some notion of when it was last used; eviction picks the smallest count first and the oldest last use second.
+  - Group keys by use count, keeping each group ordered by most recent use, and remember the smallest count currently present; a touched key moves from its group to the next one, and a new key always starts in group 1.
+  - Use a map from key to value and count plus a map from count to an insertion-ordered set; to touch a key, remove it from its count's set, delete that set if it empties (raising the minimum by one if it was the minimum) and append the key to the next count's set; to evict, remove the first key of the minimum count's set; after inserting a new key set the minimum to 1; skip all storage when capacity is zero.
+followups:
+  - How would you add time-based expiry on top of LFU?
+  - LFU can keep keys that were hot long ago; how would you age the counts?
+  - How would you make the cache safe for concurrent readers and writers?
+  - How would you choose the capacity from the eviction log in production?
+common_errors:
+  - Breaking ties by insertion time instead of by the most recent use.
+  - Resetting the use count when an existing key is updated by PUT.
+  - Counting a GET that misses, or creating an entry for it.
+  - Evicting with capacity 0 or storing a key anyway.
+  - Forgetting to raise the minimum count when the last key leaves the minimum bucket.

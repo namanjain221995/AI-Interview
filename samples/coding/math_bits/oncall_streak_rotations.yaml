@@ -1,0 +1,181 @@
+version: 1
+slug: oncall_streak_rotations
+title: "On-Call Streak Rotations"
+difficulty: hard
+competency_keys: [algorithms, problem_solving]
+role_tags: [sre, engineering_manager, backend, platform]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## On-Call Streak Rotations
+
+  An operations group plans a long on-call calendar. There are `teams` teams and the calendar covers
+  `days` consecutive days. Every day **exactly one** team is on call. To limit fatigue, no team may be
+  on call for more than `max_streak` days **in a row**; the same team may come back later after
+  another team has taken at least one day.
+
+  A rotation is the full sequence of on-call teams, one per day; two rotations differ if some day has
+  a different team. Return the number of valid rotations **modulo `1_000_000_007`**.
+
+  ### Example 1
+  ```
+  Input:  days = 3, teams = 2, max_streak = 2
+  Output: 6
+  Explanation: of the 8 sequences over teams A and B, only AAA and BBB break the limit.
+  ```
+
+  ### Example 2
+  ```
+  Input:  days = 4, teams = 3, max_streak = 1
+  Output: 24
+  Explanation: 3 choices on day 1, then 2 choices (any other team) on each later day.
+  ```
+
+  ### Example 3
+  ```
+  Input:  days = 5, teams = 3, max_streak = 2
+  Output: 180
+  ```
+
+  ### Constraints
+  - `1 <= days <= 10^15`
+  - `2 <= teams <= 10^9`
+  - `1 <= max_streak <= 20`
+  - Intermediate products of two values below `1_000_000_007` exceed 32 bits (and the exact
+    integer range of a double); multiply them safely.
+
+  **Follow-up:** a day-by-day loop is fine for small `days`. How do you handle `days = 10^15`?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: count_rotations
+  params:
+    - {name: days, type: "long"}
+    - {name: teams, type: int}
+    - {name: max_streak, type: int}
+  return_type: "int"
+  comparison: exact
+reference_solutions:
+  python: |
+    MOD = 1_000_000_007
+
+
+    def count_rotations(days: int, teams: int, max_streak: int) -> int:
+        m = max_streak
+        # state k means the current team has been on call for exactly k + 1 days in a row.
+        # Next day: switching to any of the other teams - 1 teams starts a new streak of 1,
+        # staying with the same team moves state k to k + 1 (only while k + 1 < m).
+        transition = [[0] * m for _ in range(m)]
+        for k in range(m):
+            transition[0][k] = (teams - 1) % MOD
+        for k in range(1, m):
+            transition[k][k - 1] = 1
+
+        def mat_mul(a: list[list[int]], b: list[list[int]]) -> list[list[int]]:
+            columns = list(zip(*b))
+            return [[sum(x * y for x, y in zip(row, col)) % MOD for col in columns] for row in a]
+
+        def apply(mat: list[list[int]], vec: list[int]) -> list[int]:
+            return [sum(x * y for x, y in zip(row, vec)) % MOD for row in mat]
+
+        vec = [teams % MOD] + [0] * (m - 1)  # day 1: any team, streak 1
+        power = days - 1
+        base = transition
+        while power:
+            if power & 1:
+                vec = apply(base, vec)
+            power >>= 1
+            if power:
+                base = mat_mul(base, base)
+        return sum(vec) % MOD
+  javascript: |
+    const MOD = 1000000007;
+
+    // (a * b) % MOD without exceeding 2^53: split b into 15-bit halves.
+    function mulMod(a, b) {
+      const hi = Math.floor(b / 32768);
+      const lo = b % 32768;
+      return (((a * hi) % MOD) * 32768 + a * lo) % MOD;
+    }
+
+    function countRotations(days, teams, maxStreak) {
+      const m = maxStreak;
+      const trans = [];
+      for (let i = 0; i < m; i++) trans.push(new Array(m).fill(0));
+      for (let k = 0; k < m; k++) trans[0][k] = (teams - 1) % MOD;
+      for (let k = 1; k < m; k++) trans[k][k - 1] = 1;
+
+      const matMul = (a, b) => {
+        const out = [];
+        for (let i = 0; i < m; i++) {
+          const row = new Array(m).fill(0);
+          for (let k = 0; k < m; k++) {
+            const aik = a[i][k];
+            if (aik === 0) continue;
+            for (let j = 0; j < m; j++) {
+              if (b[k][j] !== 0) row[j] = (row[j] + mulMod(aik, b[k][j])) % MOD;
+            }
+          }
+          out.push(row);
+        }
+        return out;
+      };
+      const apply = (mat, vec) => mat.map((row) => {
+        let s = 0;
+        for (let j = 0; j < m; j++) s = (s + mulMod(row[j], vec[j])) % MOD;
+        return s;
+      });
+
+      let vec = new Array(m).fill(0);
+      vec[0] = teams % MOD;
+      let power = BigInt(days) - 1n;
+      let base = trans;
+      while (power > 0n) {
+        if (power & 1n) vec = apply(base, vec);
+        power >>= 1n;
+        if (power > 0n) base = matMul(base, base);
+      }
+      return vec.reduce((s, v) => (s + v) % MOD, 0);
+    }
+tests:
+  - {id: t1, args: [3, 2, 2], expected: 6, description: "Example 1"}
+  - {id: t2, args: [4, 3, 1], expected: 24, description: "Example 2 - max_streak 1 means the team changes every day"}
+  - {id: t3, args: [5, 3, 2], expected: 180, description: "Example 3"}
+  - {id: t4, hidden: true, args: [1, 7, 1], expected: 7, description: "Single day - any of the teams"}
+  - {id: t5, hidden: true, args: [1000000000000000, 2, 1], expected: 2, description: "Two teams alternating for 10^15 days - exactly 2 rotations"}
+  - {id: t6, hidden: true, args: [6, 4, 20], expected: 4096, description: "Limit never binds - 4^6 rotations"}
+  - {id: t7, hidden: true, args: [30, 2, 3], expected: 107596160, description: "Two teams with streak limit 3 over 30 days (tribonacci-like growth)"}
+  - {id: t8, hidden: true, args: [123456789012, 1000000000, 1], expected: 893478327, description: "Huge team count close to the modulus with max_streak 1"}
+  - {id: t9, hidden: true, args: [1000000000000000, 1000000000, 20], expected: 713600317, description: "Largest days, teams and max_streak - stress for log-time exponentiation"}
+  - {id: t10, hidden: true, args: [999999999999999, 5, 7], expected: 539510160, description: "Odd huge day count with a mid-size limit"}
+  - {id: t11, hidden: true, args: [20, 3, 19], expected: 486784377, description: "Limit one below days - only the 3 single-team rotations are excluded"}
+expected_concepts:
+  - "state = length of the current streak (1..max_streak)"
+  - "linear recurrence between consecutive days"
+  - "matrix exponentiation by repeated squaring in O(m^3 log days)"
+  - "modular arithmetic with overflow-safe multiplication"
+  - "64-bit day count"
+optimal_complexity: {time: "O(max_streak^3 * log days)", space: "O(max_streak^2)"}
+rubric:
+  excellent: "Defines streak-length states, derives the transition (switch to one of teams - 1 others or extend the streak), turns it into a matrix and exponentiates in O(m^3 log days) with overflow-safe modular multiplication, and checks small cases by hand."
+  good: "Finds the correct recurrence and a working day-by-day DP, then reaches matrix exponentiation with a hint, or has a minor modular-arithmetic slip that is fixed when pointed out."
+  weak: "Only enumerates sequences or loops over 10^15 days, mixes up 'teams' and 'teams - 1' in the transition, or overflows the modular products."
+  criteria:
+    correctness: "Passes all tests, including max_streak 1, max_streak at least days, and the 10^15-day cases."
+    efficiency: "Logarithmic in days via fast exponentiation; matrix size bounded by max_streak."
+    code_quality: "States and the transition are documented; matrix multiply and the power loop are separate helpers."
+    edge_cases: "Handles days = 1, teams near 10^9 (reduced modulo), and the case where the limit never binds."
+    communication: "Explains why the streak length is the only state needed and verifies the recurrence on Example 1."
+hints:
+  - "Count rotations day by day. What is the smallest piece of information about the last few days you must remember to know which teams are allowed tomorrow?"
+  - "Let the state be how many consecutive days the current team has been on call. Tomorrow either a different team takes over (teams - 1 choices, streak resets to 1) or the same team continues (streak grows by 1, only while it stays within max_streak). This is a linear recurrence over max_streak states."
+  - "Write the transition as a max_streak by max_streak matrix: the first row has teams - 1 in every column and the sub-diagonal has 1s. Start from a vector with teams in the streak-1 slot, raise the matrix to the power days - 1 by repeated squaring, apply it, and sum the vector, reducing every product modulo 1_000_000_007 with 64-bit (or split) multiplication."
+followups:
+  - "How would you also forbid a team from being on call more than k days in any 7-day window?"
+  - "Can you reduce the cost below O(m^3 log days) using the characteristic polynomial of the recurrence?"
+  - "How would the model change if some teams had different streak limits?"
+  - "How would you count rotations where a specific team covers the first and last day?"
+common_errors:
+  - "Using teams instead of teams - 1 for the 'switch' transition, which double-counts staying with the same team."
+  - "Iterating day by day, which cannot finish for 10^15 days."
+  - "Overflowing when multiplying two residues near 10^9 in 64-bit or double arithmetic before reducing."
+  - "Off-by-one in the exponent (days instead of days - 1) or in the streak limit."
+  - "Forgetting to reduce teams modulo 1_000_000_007 when it is close to 10^9."

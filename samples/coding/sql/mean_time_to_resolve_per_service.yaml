@@ -1,0 +1,220 @@
+version: 1
+slug: mean_time_to_resolve_per_service
+title: "Mean Time to Resolve per Service"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [sre, devops, support_engineer]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Mean Time to Resolve per Service
+
+  The SRE team reviews incident handling every week. For each service they want to see how many
+  incidents were resolved, how many are still open and the **mean time to resolve** (MTTR) of the
+  resolved ones.
+
+  Table `incidents`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | service | VARCHAR(40) | lowercase ASCII letters |
+  | opened_ts | INTEGER | Unix epoch seconds when the incident was opened |
+  | resolved_ts | INTEGER | Unix epoch seconds when it was resolved; NULL while still open |
+
+  When `resolved_ts` is set it is never earlier than `opened_ts`.
+
+  For every service that has at least one incident, return:
+
+  - `service`
+  - `resolved_count`: incidents with a `resolved_ts`
+  - `open_count`: incidents whose `resolved_ts` is NULL
+  - `mttr_minutes`: the total resolution time of the resolved incidents in seconds, divided by
+    `60 * resolved_count` and **rounded down** to a whole number of minutes. Compute it from the
+    total, not by rounding each incident. It is NULL when the service has no resolved incident.
+
+  Order by `service` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  incidents
+  +----+---------+------------+-------------+
+  | id | service | opened_ts  | resolved_ts |
+  +----+---------+------------+-------------+
+  | 1  | api     | 1780000000 | 1780000600  |
+  | 2  | api     | 1780001000 | 1780001900  |
+  | 3  | api     | 1780005000 | NULL        |
+  | 4  | db      | 1780000100 | 1780000190  |
+  | 5  | db      | 1780000300 | 1780000330  |
+  | 6  | queue   | 1780000700 | NULL        |
+  +----+---------+------------+-------------+
+
+  Output
+  +---------+----------------+------------+--------------+
+  | service | resolved_count | open_count | mttr_minutes |
+  +---------+----------------+------------+--------------+
+  | api     | 2              | 1          | 12           |
+  | db      | 2              | 0          | 1            |
+  | queue   | 0              | 1          | NULL         |
+  +---------+----------------+------------+--------------+
+  ```
+  api resolved two incidents in 600 + 900 = 1500 seconds: 1500 / 120 = 12.5, rounded down to 12.
+  db: (90 + 30) / 120 = 1. queue has no resolved incident, so its MTTR is NULL.
+
+  ### Example 2
+  ```
+  incidents
+  +----+---------+------------+-------------+
+  | id | service | opened_ts  | resolved_ts |
+  +----+---------+------------+-------------+
+  | 1  | auth    | 1780000000 | 1780000059  |
+  +----+---------+------------+-------------+
+
+  Output
+  +---------+----------------+------------+--------------+
+  | service | resolved_count | open_count | mttr_minutes |
+  +---------+----------------+------------+--------------+
+  | auth    | 1              | 0          | 0            |
+  +---------+----------------+------------+--------------+
+  ```
+
+  ### Constraints
+  - `0 <= rows in incidents <= 10^6`
+  - `0 <= resolved_ts - opened_ts < 2^31`; the total per service can exceed `2^31 - 1`.
+  - The output order is part of the answer.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Per service: resolved_count, open_count and mttr_minutes (whole minutes, NULL if none resolved).
+    SELECT service, COUNT(*) AS resolved_count, 0 AS open_count, NULL AS mttr_minutes
+    FROM incidents
+    GROUP BY service
+    ORDER BY service;
+reference_solutions:
+  sql: |
+    SELECT service,
+           COUNT(resolved_ts) AS resolved_count,
+           COUNT(*) - COUNT(resolved_ts) AS open_count,
+           CASE
+             WHEN COUNT(resolved_ts) = 0 THEN NULL
+             ELSE SUM(resolved_ts - opened_ts) / (60 * COUNT(resolved_ts))
+           END AS mttr_minutes
+    FROM incidents
+    GROUP BY service
+    ORDER BY service;
+sql_setup: |
+  CREATE TABLE incidents (
+    id INTEGER PRIMARY KEY,
+    service VARCHAR(40) NOT NULL,
+    opened_ts INTEGER NOT NULL,
+    resolved_ts INTEGER
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - open incidents excluded from MTTR; a service with nothing resolved gets NULL"
+    setup_sql: |
+      INSERT INTO incidents (id, service, opened_ts, resolved_ts) VALUES
+        (1, 'api', 1780000000, 1780000600), (2, 'api', 1780001000, 1780001900), (3, 'api', 1780005000, NULL), (4, 'db', 1780000100, 1780000190),
+        (5, 'db', 1780000300, 1780000330), (6, 'queue', 1780000700, NULL);
+    expected_rows: [["api", 2, 1, 12], ["db", 2, 0, 1], ["queue", 0, 1, null]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - 59 seconds rounds down to 0 minutes"
+    setup_sql: |
+      INSERT INTO incidents (id, service, opened_ts, resolved_ts) VALUES
+        (1, 'auth', 1780000000, 1780000059);
+    expected_rows: [["auth", 1, 0, 0]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Only open incidents - resolved_count 0 and NULL MTTR (no division by zero)"
+    setup_sql: |
+      INSERT INTO incidents (id, service, opened_ts, resolved_ts) VALUES
+        (1, 'cdn', 1780000000, NULL), (2, 'cdn', 1780000005, NULL);
+    expected_rows: [["cdn", 0, 2, null]]
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Rounding per incident first gives a different answer (90 s and 30 s -> 1 minute, not 0)"
+    setup_sql: |
+      INSERT INTO incidents (id, service, opened_ts, resolved_ts) VALUES
+        (1, 'dns', 1780000000, 1780000090), (2, 'dns', 1780000200, 1780000230);
+    expected_rows: [["dns", 2, 0, 1]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Instantly resolved incidents (0 seconds) and a 1-minute one"
+    setup_sql: |
+      INSERT INTO incidents (id, service, opened_ts, resolved_ts) VALUES
+        (1, 'cron', 1780000000, 1780000000), (2, 'cron', 1780000010, 1780000010), (3, 'cron', 1780000020, 1780000080);
+    expected_rows: [["cron", 3, 0, 0]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Many services inserted out of name order with mixed open and resolved"
+    setup_sql: |
+      INSERT INTO incidents (id, service, opened_ts, resolved_ts) VALUES
+        (1, 'web', 1780000000, 1780003600), (2, 'auth', 1780000000, NULL), (3, 'mail', 1780000000, 1780007200), (4, 'auth', 1780000060, 1780001260),
+        (5, 'web', 1780000010, NULL), (6, 'web', 1780000020, 1780001820), (7, 'billing', 1780000000, 1780086400), (8, 'mail', 1780000005, NULL);
+    expected_rows:
+      - ["auth", 1, 1, 20]
+      - ["billing", 1, 0, 1440]
+      - ["mail", 1, 1, 120]
+      - ["web", 2, 1, 45]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Large durations whose sum exceeds the 32-bit range"
+    setup_sql: |
+      INSERT INTO incidents (id, service, opened_ts, resolved_ts) VALUES
+        (1, 'archive', 100000000, 2100000000), (2, 'archive', 100000000, 2100000000), (3, 'archive', 100000000, NULL);
+    expected_rows: [["archive", 2, 1, 33333333]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Stress - 24 incidents on one service with varied durations"
+    setup_sql: |
+      INSERT INTO incidents (id, service, opened_ts, resolved_ts) VALUES
+        (1, 'search', 1780001000, 1780001037), (2, 'search', 1780002000, 1780002148), (3, 'search', 1780003000, 1780003333), (4, 'search', 1780004000, 1780004592),
+        (5, 'search', 1780005000, NULL), (6, 'search', 1780006000, 1780007332), (7, 'search', 1780007000, 1780008813), (8, 'search', 1780008000, 1780010368),
+        (9, 'search', 1780009000, 1780011997), (10, 'search', 1780010000, NULL), (11, 'search', 1780011000, 1780015477), (12, 'search', 1780012000, 1780017328),
+        (13, 'search', 1780013000, 1780019253), (14, 'search', 1780014000, 1780021252), (15, 'search', 1780015000, NULL), (16, 'search', 1780016000, 1780025472),
+        (17, 'search', 1780017000, 1780027693), (18, 'search', 1780018000, 1780029988), (19, 'search', 1780019000, 1780032357), (20, 'search', 1780020000, NULL),
+        (21, 'search', 1780021000, 1780037317), (22, 'search', 1780022000, 1780039908), (23, 'search', 1780023000, 1780042573), (24, 'search', 1780024000, 1780045312);
+    expected_rows: [["search", 20, 4, 127]]
+expected_concepts:
+  - "COUNT(column) versus COUNT(*) with NULLs"
+  - "aggregates ignore NULL values"
+  - "integer division and rounding down"
+  - "guarding against division by zero with CASE"
+optimal_complexity: {time: "O(n log n) for the grouping, or O(n) with hashing", space: "O(s) for s services"}
+rubric:
+  excellent: "Uses COUNT(resolved_ts) and COUNT(*) - COUNT(resolved_ts), sums durations (NULLs ignored), divides the total by 60 * resolved_count with integer division guarded by CASE, orders by service and explains why per-incident rounding or AVG would differ."
+  good: "Correct after a hint about division by zero, open incidents or rounding."
+  weak: "Counts open incidents as resolved, divides by COUNT(*), uses AVG with floats, or crashes or returns 0 instead of NULL when nothing is resolved."
+  criteria:
+    correctness: "All tests pass, including only-open services, zero-length incidents and sums beyond 32 bits."
+    efficiency: "A single grouping pass over the table."
+    code_quality: "Readable aggregate expressions and output names that match the contract."
+    edge_cases: "Empty table, services with only open incidents, instant resolutions and rounding boundaries."
+    communication: "Explains NULL handling in COUNT and SUM and the integer division semantics on both databases."
+hints:
+  - "Everything is per service, so start from one group per service; then think about which aggregates automatically skip open incidents."
+  - "COUNT of a nullable column counts only non-NULL values and SUM ignores NULLs, so the duration of an open incident never enters the total. Compute the open count from the difference between two counts, and handle the case with nothing resolved before dividing."
+  - "GROUP BY service; resolved_count is COUNT(resolved_ts), open_count is COUNT(*) minus that, and mttr_minutes is a CASE that returns NULL when the resolved count is zero and otherwise SUM(resolved_ts - opened_ts) divided by (60 * COUNT(resolved_ts)) as an integer division; ORDER BY service."
+followups:
+  - "How would you report the median time to resolve instead of the mean?"
+  - "How would you restrict the report to incidents opened in the last 7 days without vendor-specific date functions?"
+  - "Why can mean time to resolve be misleading when a few incidents stay open for weeks?"
+common_errors:
+  - "Dividing by COUNT(*), which counts open incidents as zero-length resolutions."
+  - "Rounding each incident to minutes before averaging, which loses partial minutes."
+  - "Dividing by zero for services with only open incidents instead of returning NULL."
+  - "Using AVG, which returns a fractional value instead of whole minutes rounded down."

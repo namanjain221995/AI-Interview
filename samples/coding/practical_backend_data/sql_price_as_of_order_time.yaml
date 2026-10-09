@@ -1,0 +1,255 @@
+version: 1
+slug: sql_price_as_of_order_time
+title: Price in Effect at Order Time (SQL)
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data, backend, data_analyst, dba]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Price in Effect at Order Time
+
+  Finance wants every order valued at the price that was **in effect when the order was placed**, not
+  at today's price. Prices are kept as a history table in which each row covers a time period.
+
+  Table `price_history`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | sku | VARCHAR(20) | product code |
+  | price_cents | INTEGER | unit price in cents |
+  | valid_from | INTEGER | Unix time (seconds) the price starts, **inclusive** |
+  | valid_to | INTEGER | Unix time the price stops, **exclusive**; **NULL** means it is still current |
+
+  A row covers the times `t` with `valid_from <= t < valid_to` (or `valid_from <= t` when `valid_to`
+  is NULL). Periods of the same sku never overlap, but there can be **gaps** (the product was not on
+  sale) and a sku can have no history at all. `(sku, valid_from)` is the primary key.
+
+  Table `orders`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | sku | VARCHAR(20) | product code |
+  | ordered_at | INTEGER | Unix time of the order |
+  | qty | INTEGER | units, at least 1 |
+
+  Return **one row per order** with `id`, `sku`, `unit_price_cents` (the price in effect at
+  `ordered_at`) and `line_total_cents` (`unit_price_cents * qty`). If no price was in effect at that
+  moment, return the order anyway with both price columns **NULL**. Order the result by `id`
+  ascending. Every line total fits in a 32-bit signed integer.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  price_history                                orders
+  +------+-------------+------------+----------+   +----+------+------------+-----+
+  | sku  | price_cents | valid_from | valid_to |   | id | sku  | ordered_at | qty |
+  +------+-------------+------------+----------+   +----+------+------------+-----+
+  | A100 | 1000        | 100        | 200      |   | 1  | A100 | 150        | 2   |
+  | A100 | 1200        | 200        | NULL     |   | 2  | A100 | 200        | 1   |
+  | B200 | 500         | 150        | 300      |   | 3  | B200 | 100        | 3   |
+  +------+-------------+------------+----------+   | 4  | B200 | 300        | 1   |
+                                                   | 5  | A100 | 99999      | 4   |
+                                                   +----+------+------------+-----+
+
+  Output
+  +----+------+------------------+------------------+
+  | id | sku  | unit_price_cents | line_total_cents |
+  +----+------+------------------+------------------+
+  | 1  | A100 | 1000             | 2000             |
+  | 2  | A100 | 1200             | 1200             |
+  | 3  | B200 | NULL             | NULL             |
+  | 4  | B200 | NULL             | NULL             |
+  | 5  | A100 | 1200             | 4800             |
+  +----+------+------------------+------------------+
+  Order 2 is placed exactly when the new price starts. Order 3 predates B200's first price and
+  order 4 arrives when its only period has ended (valid_to is exclusive).
+  ```
+
+  ### Example 2
+  ```
+  price_history                                orders
+  +------+-------------+------------+----------+   +----+------+------------+-----+
+  | sku  | price_cents | valid_from | valid_to |   | id | sku  | ordered_at | qty |
+  +------+-------------+------------+----------+   +----+------+------------+-----+
+  | C300 | 250         | 0          | NULL     |   | 1  | D400 | 10         | 1   |
+  | D400 | 990         | 0          | NULL     |   | 2  | C300 | 10         | 2   |
+  +------+-------------+------------+----------+   +----+------+------------+-----+
+
+  Output
+  +----+------+------------------+------------------+
+  | id | sku  | unit_price_cents | line_total_cents |
+  +----+------+------------------+------------------+
+  | 1  | D400 | 990              | 990              |
+  | 2  | C300 | 250              | 500              |
+  +----+------+------------------+------------------+
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return id, sku, unit_price_cents and line_total_cents for every order, ordered by id.
+    SELECT o.id, o.sku, NULL AS unit_price_cents, NULL AS line_total_cents
+    FROM orders o
+    ORDER BY o.id;
+reference_solutions:
+  sql: |
+    SELECT o.id,
+           o.sku,
+           p.price_cents AS unit_price_cents,
+           p.price_cents * o.qty AS line_total_cents
+    FROM orders o
+    LEFT JOIN price_history p
+      ON p.sku = o.sku
+     AND p.valid_from <= o.ordered_at
+     AND (p.valid_to IS NULL OR o.ordered_at < p.valid_to)
+    ORDER BY o.id;
+sql_setup: |
+  CREATE TABLE price_history (
+    sku VARCHAR(20) NOT NULL,
+    price_cents INTEGER NOT NULL,
+    valid_from INTEGER NOT NULL,
+    valid_to INTEGER,
+    PRIMARY KEY (sku, valid_from)
+  );
+  CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    sku VARCHAR(20) NOT NULL,
+    ordered_at INTEGER NOT NULL,
+    qty INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - inside a period, exactly at a boundary, before the first price, after a closed period, current price"
+    setup_sql: |
+      INSERT INTO price_history (sku, price_cents, valid_from, valid_to) VALUES
+        ('A100', 1000, 100, 200), ('A100', 1200, 200, NULL), ('B200', 500, 150, 300);
+      INSERT INTO orders (id, sku, ordered_at, qty) VALUES
+        (1, 'A100', 150, 2), (2, 'A100', 200, 1), (3, 'B200', 100, 3), (4, 'B200', 300, 1), (5, 'A100', 99999, 4);
+    expected_rows:
+      - [1, "A100", 1000, 2000]
+      - [2, "A100", 1200, 1200]
+      - [3, "B200", null, null]
+      - [4, "B200", null, null]
+      - [5, "A100", 1200, 4800]
+    ordered: true
+  - id: t2
+    description: "Example 2 - two skus share identical periods; join must match the sku"
+    setup_sql: |
+      INSERT INTO price_history (sku, price_cents, valid_from, valid_to) VALUES
+        ('C300', 250, 0, NULL), ('D400', 990, 0, NULL);
+      INSERT INTO orders (id, sku, ordered_at, qty) VALUES (1, 'D400', 10, 1), (2, 'C300', 10, 2);
+    expected_rows: [[1, "D400", 990, 990], [2, "C300", 250, 500]]
+    ordered: true
+  - id: t3
+    hidden: true
+    description: "Empty tables"
+    expected_rows: []
+    ordered: true
+  - id: t4
+    hidden: true
+    description: "No price history at all - every order kept with NULL prices (WHERE instead of ON would drop them)"
+    setup_sql: |
+      INSERT INTO orders (id, sku, ordered_at, qty) VALUES (1, 'A100', 5, 1), (2, 'B200', 6, 2);
+    expected_rows: [[1, "A100", null, null], [2, "B200", null, null]]
+    ordered: true
+  - id: t5
+    hidden: true
+    description: "Gap between two periods - valid_to exclusive, valid_from inclusive on both sides of the gap"
+    setup_sql: |
+      INSERT INTO price_history (sku, price_cents, valid_from, valid_to) VALUES
+        ('C300', 100, 0, 10), ('C300', 150, 20, NULL);
+      INSERT INTO orders (id, sku, ordered_at, qty) VALUES
+        (1, 'C300', 9, 1), (2, 'C300', 10, 1), (3, 'C300', 15, 1), (4, 'C300', 19, 1), (5, 'C300', 20, 1), (6, 'C300', 0, 1);
+    expected_rows:
+      - [1, "C300", 100, 100]
+      - [2, "C300", null, null]
+      - [3, "C300", null, null]
+      - [4, "C300", null, null]
+      - [5, "C300", 150, 150]
+      - [6, "C300", 100, 100]
+    ordered: true
+  - id: t6
+    hidden: true
+    description: "Sku without history next to a priced sku; output ordered by id, not by time or sku"
+    setup_sql: |
+      INSERT INTO price_history (sku, price_cents, valid_from, valid_to) VALUES ('A100', 700, 50, NULL);
+      INSERT INTO orders (id, sku, ordered_at, qty) VALUES
+        (30, 'A100', 60, 3), (4, 'Z999', 60, 1), (12, 'A100', 40, 2), (7, 'A100', 50, 1);
+    expected_rows:
+      - [4, "Z999", null, null]
+      - [7, "A100", 700, 700]
+      - [12, "A100", null, null]
+      - [30, "A100", 700, 2100]
+    ordered: true
+  - id: t7
+    hidden: true
+    description: "Many consecutive periods - each order matches exactly one row, no duplicates"
+    setup_sql: |
+      INSERT INTO price_history (sku, price_cents, valid_from, valid_to) VALUES
+        ('E500', 100, 0, 10), ('E500', 110, 10, 20), ('E500', 125, 20, 30), ('E500', 90, 30, 40), ('E500', 95, 40, NULL);
+      INSERT INTO orders (id, sku, ordered_at, qty) VALUES
+        (1, 'E500', 5, 1), (2, 'E500', 10, 2), (3, 'E500', 29, 3), (4, 'E500', 30, 4), (5, 'E500', 1000000, 5);
+    expected_rows:
+      - [1, "E500", 100, 100]
+      - [2, "E500", 110, 220]
+      - [3, "E500", 125, 375]
+      - [4, "E500", 90, 360]
+      - [5, "E500", 95, 475]
+    ordered: true
+  - id: t8
+    hidden: true
+    description: "Large but in-range totals near 2^31 and a fully closed history (discontinued sku)"
+    setup_sql: |
+      INSERT INTO price_history (sku, price_cents, valid_from, valid_to) VALUES
+        ('F600', 2000000, 1700000000, NULL), ('G700', 300, 1600000000, 1650000000);
+      INSERT INTO orders (id, sku, ordered_at, qty) VALUES
+        (1, 'F600', 1700000000, 1000), (2, 'G700', 1650000000, 1), (3, 'G700', 1649999999, 7);
+    expected_rows:
+      - [1, "F600", 2000000, 2000000000]
+      - [2, "G700", null, null]
+      - [3, "G700", 300, 2100]
+    ordered: true
+  - id: t9
+    hidden: true
+    description: "Several orders at the same instant for the same sku all get the same price"
+    setup_sql: |
+      INSERT INTO price_history (sku, price_cents, valid_from, valid_to) VALUES ('H800', 45, 100, 200), ('H800', 50, 200, NULL);
+      INSERT INTO orders (id, sku, ordered_at, qty) VALUES (1, 'H800', 199, 1), (2, 'H800', 199, 2), (3, 'H800', 200, 3), (4, 'H800', 99, 4);
+    expected_rows:
+      - [1, "H800", 45, 45]
+      - [2, "H800", 45, 90]
+      - [3, "H800", 50, 150]
+      - [4, "H800", null, null]
+    ordered: true
+expected_concepts:
+  - range (as-of) join on a slowly changing dimension
+  - half-open intervals and inclusive versus exclusive bounds
+  - NULL as an open-ended upper bound
+  - LEFT JOIN with all match conditions in the ON clause
+  - deterministic ORDER BY
+optimal_complexity: {time: "O(n log m) with an index on price_history(sku, valid_from)", space: O(n)}
+rubric:
+  excellent: Writes a LEFT JOIN whose ON clause matches the sku and the half-open period (handling NULL valid_to), keeps unpriced orders with NULLs, orders by id, and discusses the index on (sku, valid_from) and how non-overlapping periods guarantee one match per order.
+  good: Correct range join with a hint about the exclusive upper bound, NULL valid_to or keeping unmatched orders.
+  weak: Joins on sku only, uses the current price for every order, uses BETWEEN (double-matching boundary times) or filters in WHERE so unpriced orders disappear.
+  criteria:
+    correctness: All tests pass, including boundaries, gaps, unpriced skus and current prices.
+    efficiency: A single set-based join; mentions indexing price_history by sku and valid_from.
+    code_quality: Readable aliases and a clearly grouped period predicate.
+    edge_cases: Orders exactly at valid_from or valid_to, gaps, open-ended periods and empty tables.
+    communication: Explains why the condition belongs in ON and not in WHERE for an outer join.
+hints:
+  - Every order needs exactly one row in the output, whether or not a price was in effect, so think about which kind of join keeps orders that have no match.
+  - The match is not only on the product code; the order time must fall inside the price period, where the start counts but the end does not, and a missing end means the price is still running.
+  - Left join price_history to orders on equal sku, valid_from at or before ordered_at, and either valid_to is NULL or ordered_at is strictly before valid_to, all inside the ON clause; select the price and the price times qty, then order by the order id.
+followups:
+  - What would happen to the result if two periods of the same sku overlapped by mistake, and how would you detect that?
+  - How would you write this with a correlated subquery or LATERAL join instead, and when is that faster?
+  - How would you store the history so that "current price" lookups stay cheap?
+  - Why is BETWEEN a poor fit for half-open time periods?
+common_errors:
+  - Putting the period conditions in WHERE, which turns the LEFT JOIN into an inner join and drops unpriced orders.
+  - Using BETWEEN or <= valid_to, so an order exactly at a price change matches two rows.
+  - Comparing ordered_at < valid_to without handling NULL, which drops orders priced by the current row.
+  - Joining on sku only and picking the latest price for every order.

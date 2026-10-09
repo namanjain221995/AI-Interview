@@ -1,0 +1,615 @@
+# System design: cloud architecture (4 of 4) — cost-aware designs, migrations, multi-tenancy and data platforms.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [cloud, devops]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.cloud_architecture.low_traffic_internal_app_cost
+    competency_key: cloud_cost_optimization
+    topic: Cheap hosting for a low-traffic internal tool
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A team needs an internal tool used by about fifty people during office hours, with a small database. Design
+      how you'd host it so the monthly bill stays very small without making it fragile.
+    expected_concepts:
+      - serverless or scale-to-zero compute
+      - serverless or small managed database, or scheduled shutdown outside working hours
+      - avoiding always-on fixed costs such as NAT gateways and idle load balancers
+      - backups and basic monitoring still in place
+      - rough monthly cost estimate per component
+    rubric:
+      excellent: Picks scale-to-zero or scheduled components, spots the hidden fixed-cost items, keeps backups and monitoring, and backs the design with a rough per-component estimate.
+      good: Chooses cheap compute and database options sensibly, but misses fixed networking costs or gives no estimate.
+      weak: Reuses the standard production pattern with multiple always-on instances and a large database.
+    followups:
+      - Which line on the bill would surprise the team most, and why?
+      - Usage grows to two thousand people. What changes first?
+    common_errors:
+      - Overlooking NAT gateway and load balancer hourly charges that dwarf the compute cost.
+
+  - external_key: system_design.cloud_architecture.nightly_batch_cost
+    competency_key: cloud_cost_optimization
+    topic: Cost-aware design for a nightly batch job
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A nightly job processes the day's transactions for about three hours on servers that sit idle the rest of the
+      day. How would you redesign where and how it runs to cut cost?
+    expected_concepts:
+      - ephemeral compute created for the job and removed afterwards
+      - spot or preemptible capacity with retry or checkpointing
+      - managed batch or container job services
+      - right-sizing based on measured utilisation
+      - splitting work into chunks that can run in parallel or restart
+    rubric:
+      excellent: Moves to ephemeral, right-sized capacity using spot with checkpointing or chunked work so interruptions are cheap, and estimates the saving.
+      good: Proposes scheduled or ephemeral compute and mentions spot, without handling interruptions.
+      weak: Suggests buying a reserved instance for the idle server.
+    followups:
+      - A spot interruption happens two and a half hours into the run. What happens?
+      - The job must finish before six in the morning. How does that deadline affect your design?
+    common_errors:
+      - Using spot capacity for a long job with no checkpointing, so interruptions restart everything.
+
+  - external_key: system_design.cloud_architecture.log_retention_tiering
+    competency_key: cloud_cost_optimization
+    topic: Log pipeline with tiered retention
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your company keeps all application logs searchable for a year and the bill is growing fast. Teams search
+      recent logs daily but older logs only during audits. Design a cheaper log architecture.
+    expected_concepts:
+      - short hot retention in the search tool
+      - archive to cheap object storage with compressed, columnar or partitioned formats
+      - on-demand query or rehydration for old logs
+      - filtering or sampling noisy logs at the source
+      - retention periods set by log type and requirement
+    rubric:
+      excellent: Splits retention by access pattern, archives in a queryable format, reduces volume at the source and sets retention from actual requirements rather than one blanket period.
+      good: Moves older logs to cheaper storage, with less on how they are queried or on reducing volume.
+      weak: Simply deletes older logs or buys a bigger search cluster.
+    followups:
+      - An auditor wants every login event from nine months ago by tomorrow. How does your design answer that?
+      - Which logs would you stop collecting entirely?
+    common_errors:
+      - Archiving logs in a format that cannot be queried without restoring everything.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.cloud_architecture.serverless_cost_crossover
+    competency_key: cloud_cost_optimization
+    topic: When serverless becomes more expensive than containers
+    difficulty: medium
+    text: >-
+      Your API runs on serverless functions and traffic has grown tenfold in a year. Someone claims containers would
+      now be cheaper. How would you work out whether that's true and design the move if it is?
+    expected_concepts:
+      - cost model from request count, duration and memory versus steady container capacity
+      - traffic shape, steady load versus spiky load
+      - operational cost of running containers
+      - hybrid approach keeping spiky or rare paths serverless
+      - commitments and discounts for steady compute
+      - incremental migration with measurement
+    rubric:
+      excellent: Builds a cost model from real usage, accounts for traffic shape and operational effort, considers a hybrid split and plans an incremental, measured migration.
+      good: Compares compute costs with some regard for traffic shape, but ignores operational effort or a hybrid option.
+      weak: Picks one side based on general opinion without modelling the actual workload.
+    followups:
+      - What utilisation level do containers need to reach to win on cost?
+      - Which endpoints would you leave on serverless, and why?
+    common_errors:
+      - Comparing raw compute prices while ignoring idle capacity and the people time to run a cluster.
+
+  - external_key: system_design.cloud_architecture.cost_per_tenant_attribution
+    competency_key: cloud_cost_optimization
+    topic: Attributing shared infrastructure cost to tenants
+    difficulty: medium
+    text: >-
+      Your SaaS runs all customers on shared clusters and databases, and finance wants to know what each customer
+      actually costs. Design how you'd measure and attribute that.
+    expected_concepts:
+      - per-tenant usage metrics such as requests, compute time, storage and data transfer
+      - allocation of shared costs by usage drivers
+      - tagging dedicated resources per tenant
+      - joining billing exports with usage data
+      - handling unallocated and fixed platform costs
+      - reporting cost against revenue per tenant
+    rubric:
+      excellent: Instruments per-tenant usage, chooses allocation keys per cost type, joins with billing data, treats fixed costs explicitly and turns the result into margin per tenant.
+      good: Proposes usage-based allocation with some metrics, but misses fixed costs or the data pipeline.
+      weak: Divides the total bill evenly by number of tenants.
+    followups:
+      - One tenant drives most database load with few requests. How does your model capture that?
+      - How precise does this need to be before it's useful?
+    common_errors:
+      - Allocating everything by request count when storage or compute intensity differs widely between tenants.
+
+  - external_key: system_design.cloud_architecture.analytics_lake_design
+    competency_key: system_design
+    topic: Designing a cloud analytics data lake
+    difficulty: medium
+    text: >-
+      Your company wants a central analytics platform pulling data from product databases, event streams and a few
+      SaaS tools. Design the cloud architecture for it, keeping cost and access control in mind.
+    expected_concepts:
+      - ingestion through change data capture, streams and connectors
+      - object storage with open columnar formats and table formats
+      - raw, cleaned and curated layers
+      - catalogue and fine-grained access control including sensitive columns
+      - separation of storage and compute with per-team query cost controls
+      - data retention and lifecycle
+    rubric:
+      excellent: Designs ingestion, layered storage in open formats, a catalogue with fine-grained access and cost controls on compute, and explains how sensitive data is protected.
+      good: Proposes a sensible lake with layers and a query engine, but access control or cost management is thin.
+      weak: Copies production databases into one large warehouse that everyone can query freely.
+    followups:
+      - An analyst needs aggregated data but must not see personal fields. How does your design handle that?
+      - Query costs doubled in a month. Where would you look?
+    common_errors:
+      - Storing everything as many tiny files, which makes queries slow and expensive.
+
+  - external_key: system_design.cloud_architecture.flash_sale_burst
+    competency_key: system_design
+    topic: Handling a short, extreme traffic spike economically
+    difficulty: medium
+    text: >-
+      A ticketing site normally gets steady traffic, but once a month a popular sale drives fifty times the load for
+      about ten minutes. Design the architecture so the sale works without paying for peak capacity all month.
+    expected_concepts:
+      - virtual waiting room or queue in front of the purchase flow
+      - pre-scaling on a schedule before known events
+      - static and cacheable content served from the edge
+      - inventory reservation designed for contention
+      - asynchronous order processing behind a queue
+      - load testing at expected peak
+    rubric:
+      excellent: Shapes demand with a waiting room, pre-scales for known events, offloads to the edge, designs inventory for contention and processes orders asynchronously, all validated by load tests.
+      good: Combines pre-scaling and caching with some queueing, but misses inventory contention or demand shaping.
+      weak: Relies on reactive autoscaling, which cannot react within a ten-minute spike.
+    followups:
+      - Autoscaling takes four minutes to add capacity. What does that mean for your design?
+      - How would you keep the waiting room fair?
+    common_errors:
+      - Expecting reactive autoscaling to absorb a spike that peaks before new capacity is ready.
+
+  - external_key: system_design.cloud_architecture.gpu_inference_cost
+    competency_key: mlops
+    topic: Cost-aware GPU inference serving
+    difficulty: medium
+    text: >-
+      You serve a machine learning model on GPUs. Traffic is heavy in the day and low at night, and GPUs are your
+      biggest cost. Design the serving architecture to keep cost down without hurting latency for users.
+    expected_concepts:
+      - autoscaling GPU nodes on queue depth or utilisation
+      - batching requests to raise GPU utilisation
+      - right-sized GPU types and model optimisation such as quantisation
+      - minimum warm capacity versus cold start time
+      - spot capacity for tolerant traffic
+      - routing low-priority or batch work to off-peak hours
+    rubric:
+      excellent: Combines batching, right-sized hardware and model optimisation with autoscaling and warm capacity planning, and separates latency-sensitive from tolerant work.
+      good: Autoscales GPUs and mentions batching or cheaper instance types, with less on cold starts or workload separation.
+      weak: Keeps peak GPU capacity running all day, or scales to zero without considering model load time.
+    followups:
+      - Loading the model takes three minutes. How does that affect scaling?
+      - When would you choose CPU inference instead?
+    common_errors:
+      - Scaling on CPU utilisation, which says little about how busy the GPU is.
+
+  - external_key: system_design.cloud_architecture.migration_strategy_monolith
+    competency_key: system_design
+    topic: Choosing a migration path for a monolith
+    difficulty: medium
+    text: >-
+      A ten-year-old monolith with a large commercial database is moving to the cloud this year. Lay out the options
+      from rehosting to rebuilding, and design the target you'd recommend.
+    expected_concepts:
+      - rehost, replatform, refactor and replace trade-offs
+      - licensing constraints of the commercial database in the cloud
+      - managed database migration versus self-managed
+      - quick wins after moving such as managed backups and autoscaling
+      - risk, timeline and team skills
+      - a phased path rather than one rewrite
+    rubric:
+      excellent: Compares options against timeline, risk, licensing and skills, recommends a concrete phased target and explains what improvements come in which phase.
+      good: Chooses a reasonable migration approach with some justification, but misses licensing or phasing.
+      weak: Recommends rewriting the monolith into microservices during the migration by default.
+    followups:
+      - The database licence becomes much more expensive in the cloud. How does that change the plan?
+      - What would you measure to know the migration succeeded?
+    common_errors:
+      - Combining migration and re-architecture into one big step that delays every benefit.
+
+  - external_key: system_design.cloud_architecture.database_cutover_with_rollback
+    competency_key: databases
+    topic: Low-downtime database cutover with a way back
+    difficulty: medium
+    text: >-
+      You're moving a five-terabyte production database from your data centre to a managed cloud database, and
+      the business accepts at most fifteen minutes of downtime. Design the migration and cutover, including how you
+      would roll back.
+    expected_concepts:
+      - initial bulk load followed by change data capture
+      - monitoring replication lag before cutover
+      - data validation through counts and checksums
+      - cutover steps with write freeze and connection switch
+      - reverse replication to keep the old database current for rollback
+      - rehearsal of the cutover
+    rubric:
+      excellent: Uses bulk load plus change data capture, validates data, rehearses a tight cutover and keeps reverse replication running so rollback does not lose new writes.
+      good: Describes replication-based migration and a cutover plan, but has no realistic rollback after new writes land.
+      weak: Plans a dump and restore during the downtime window without checking it fits.
+    followups:
+      - Two hours after cutover you find a bug only on the new database. How do you roll back without losing data?
+      - How would you validate five terabytes quickly enough?
+    common_errors:
+      - Planning rollback as switching back to the old database, forgetting writes made after cutover.
+
+  - external_key: system_design.cloud_architecture.strangler_hybrid_migration
+    competency_key: system_design
+    topic: Incremental migration with traffic split between sites
+    difficulty: medium
+    text: >-
+      You want to move an application to the cloud one feature at a time, with a routing layer sending some paths to
+      the cloud and the rest to the data centre. Design that setup, including how shared data and user sessions work
+      across both sides.
+    expected_concepts:
+      - routing layer or facade directing paths to each side
+      - session state stored somewhere both sides can read, or stateless tokens
+      - data ownership per feature and synchronisation or shared access during transition
+      - latency of cross-site data access
+      - per-route rollback
+      - measuring parity before moving each route
+    rubric:
+      excellent: Designs a routing facade, solves session and data sharing explicitly with clear ownership, considers cross-site latency and makes each step reversible and measured.
+      good: Proposes path-based routing and a session strategy, but data ownership during the transition is unclear.
+      weak: Moves features one by one without addressing shared data or sessions, causing inconsistent behaviour.
+    followups:
+      - Both sides need to write to the same table. How do you avoid conflicts?
+      - How would you know it's safe to move the next route?
+    common_errors:
+      - Letting both sides write to the same data independently with no single owner.
+
+  - external_key: system_design.cloud_architecture.saas_tenancy_models
+    competency_key: system_design
+    topic: Silo, pool and bridge tenancy models
+    difficulty: medium
+    text: >-
+      You're designing the cloud architecture for a new B2B SaaS product. How would you choose between giving
+      each customer dedicated infrastructure, sharing everything, or something in between?
+    expected_concepts:
+      - silo, pool and bridge models
+      - isolation and compliance requirements of target customers
+      - cost per tenant and operational overhead of each model
+      - noisy neighbour risks in pooled models
+      - tenant context enforced in every layer
+      - ability to move a tenant between tiers
+    rubric:
+      excellent: Compares models on isolation, cost and operations, matches them to customer segments, explains how tenant isolation is enforced in pooled layers and plans for moving tenants between tiers.
+      good: Explains the trade-offs between dedicated and shared infrastructure and makes a sensible choice.
+      weak: Picks one model without discussing isolation, cost or how tenants are separated in shared components.
+    followups:
+      - How would you guarantee one tenant can never read another's data in the pooled database?
+      - A big customer demands dedicated infrastructure after launch. What does that take?
+    common_errors:
+      - Relying on application code alone to filter by tenant with no enforcement at the data layer.
+
+  - external_key: system_design.cloud_architecture.preventive_cost_guardrails
+    competency_key: cloud_cost_optimization
+    topic: Preventing expensive designs before they ship
+    difficulty: medium
+    text: >-
+      Most of your cost problems come from designs that were expensive from day one, like oversized databases or
+      data flowing across regions. Design guardrails that catch those before they reach production.
+    expected_concepts:
+      - cost estimates shown on infrastructure pull requests
+      - policy as code limiting instance sizes or premium services per environment
+      - architecture review triggers for high estimated spend
+      - default modules with cost-sensible settings
+      - budgets per team with forecasts
+      - feedback loop comparing estimates to actual spend
+    rubric:
+      excellent: Moves cost checks into the delivery workflow with estimates and policies, sets sensible defaults, triggers review only above thresholds and compares estimates with actual spend to improve.
+      good: Adds policies or cost estimates in pipelines, but no thresholds for review or feedback loop.
+      weak: Relies on monthly bill reviews to catch expensive designs after they ship.
+    followups:
+      - A policy blocks a large instance a team genuinely needs. How do they get it?
+      - Which cost risks can't be estimated from infrastructure code at all?
+    common_errors:
+      - Enforcing hard blocks without an exception path, so teams route around the guardrails.
+
+  - external_key: system_design.cloud_architecture.burst_compute_to_cloud
+    competency_key: system_design
+    topic: Bursting on-premises compute work into the cloud
+    difficulty: medium
+    text: >-
+      A rendering or simulation farm in your data centre is overloaded for a few weeks each quarter. Design how jobs
+      could burst into the cloud during those peaks.
+    expected_concepts:
+      - job scheduler able to dispatch to on-premises and cloud pools
+      - staging input data to the cloud and returning results
+      - bandwidth and transfer cost of moving data each way
+      - software licence servers and licensing terms in the cloud
+      - spot capacity for interruptible jobs
+      - identical machine images on both sides
+    rubric:
+      excellent: Extends the scheduler across both sites, plans data staging with cost and bandwidth in mind, handles licensing and image parity, and uses interruptible capacity where jobs allow.
+      good: Adds a cloud pool and moves data for jobs, but overlooks licensing or transfer costs.
+      weak: Proposes moving the whole farm to the cloud without analysing data movement or licensing.
+    followups:
+      - Input data is twenty terabytes per job. How does that shape which jobs you burst?
+      - The licence server lives on-premises. What happens if the link drops mid-job?
+    common_errors:
+      - Ignoring egress charges for bringing large results back on-premises.
+
+  - external_key: system_design.cloud_architecture.second_region_for_latency_cost
+    competency_key: cloud_cost_optimization
+    topic: Costing a second region for latency
+    difficulty: medium
+    text: >-
+      Product wants a second region in Asia to give users there lower latency. Before anyone builds it, how would you
+      design the deployment and estimate what it will really cost compared with alternatives?
+    expected_concepts:
+      - which components must be regional versus served from the edge
+      - data replication volume and cross-region transfer cost
+      - duplicated baseline infrastructure such as NAT, load balancers and monitoring
+      - regional price differences
+      - alternatives such as a CDN or edge caching for most of the benefit
+      - measuring expected latency gain per user journey
+    rubric:
+      excellent: Separates what really needs to be regional from what the edge can serve, builds a cost estimate including replication and fixed infrastructure, and compares it with cheaper alternatives using measured latency gains.
+      good: Plans the regional deployment and estimates main costs, but skips edge alternatives or replication cost.
+      weak: Proposes duplicating everything in the new region without estimating cost or benefit.
+    followups:
+      - Most of the latency comes from one API call that writes data. What are your options?
+      - How would you decide the second region was worth it after six months?
+    common_errors:
+      - Forgetting the fixed per-region costs that do not scale down with traffic.
+
+  - external_key: system_design.cloud_architecture.capacity_layering_commitments
+    competency_key: cloud_cost_optimization
+    topic: Layering capacity across commitments, on-demand and spot
+    difficulty: medium
+    text: >-
+      Your platform's compute usage has a steady base, a daily peak and some batch work that can be interrupted.
+      Design how you'd layer committed, on-demand and spot capacity, and how architecture choices affect that.
+    expected_concepts:
+      - commitments sized to the steady baseline
+      - on-demand for daily peaks
+      - spot for interruptible and batch work
+      - flexible commitment types that survive instance or region changes
+      - architecture that tolerates instance diversity
+      - reviewing coverage and utilisation regularly
+    rubric:
+      excellent: Maps each usage layer to a purchasing model with sizing logic, prefers flexible commitments, makes workloads tolerant of instance diversity and interruption, and sets up regular coverage reviews.
+      good: Assigns commitments, on-demand and spot sensibly, but treats commitment flexibility or review lightly.
+      weak: Commits to peak capacity or uses spot for everything without considering interruption.
+    followups:
+      - You plan to move to ARM instances next year. How does that affect what you commit to now?
+      - How would you notice that commitments are going unused?
+    common_errors:
+      - Buying commitments for specific instance types right before an architecture change.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.cloud_architecture.video_transcoding_cost
+    competency_key: cloud_cost_optimization
+    topic: Cost-aware video processing and delivery
+    difficulty: hard
+    text: >-
+      A video platform ingests a hundred thousand uploads a day, transcodes them into several formats and serves
+      them worldwide. Costs are growing faster than revenue. Design the architecture with cost as a first-class
+      requirement.
+    expected_concepts:
+      - transcoding on spot capacity through a queue with retries
+      - encoding ladders chosen by expected popularity
+      - lazy or on-demand transcoding for rarely watched videos
+      - storage tiering for originals and renditions
+      - CDN egress negotiation, cache hit ratio and origin shielding
+      - cost per minute uploaded and per minute watched as metrics
+    rubric:
+      excellent: Attacks each major cost driver (compute, storage and egress) with specific techniques, uses popularity to decide what to process and store, and defines unit-cost metrics to steer the design.
+      good: Uses spot for transcoding and tiered storage with a CDN, but treats all videos the same regardless of popularity.
+      weak: Suggests only buying more reserved capacity or a different instance type.
+    followups:
+      - Most videos are watched fewer than ten times. How should that change the pipeline?
+      - Which of compute, storage or egress would you expect to dominate, and how would you check?
+    common_errors:
+      - Transcoding every upload into every format up front even though most are rarely watched.
+
+  - external_key: system_design.cloud_architecture.tiered_tenancy_noisy_neighbour
+    competency_key: system_design
+    topic: Tiered tenancy with movement between tiers
+    difficulty: hard
+    text: >-
+      Your SaaS runs everyone on pooled infrastructure, and a few large customers now cause noisy-neighbour
+      incidents and demand stronger isolation. Design a tiered tenancy architecture and how a tenant moves between
+      tiers without downtime.
+    expected_concepts:
+      - per-tenant quotas, rate limits and fair scheduling in pooled tiers
+      - shard or cell assignment of tenants
+      - dedicated tier for large or regulated tenants
+      - tenant routing layer independent of tier
+      - live migration of tenant data with dual writes or replication
+      - consistent deployment across all tiers
+    rubric:
+      excellent: Adds isolation controls in the pool, defines tiers with a routing layer that hides placement, designs live tenant migration with data consistency and keeps deployments uniform across tiers.
+      good: Defines pooled and dedicated tiers with some isolation, but tenant migration is vague or needs downtime.
+      weak: Creates one-off environments for large tenants by hand that drift from the main product.
+    followups:
+      - How would you detect which tenant is causing an incident in the pool?
+      - Dedicated tenants lag behind on releases. How would you prevent that?
+    common_errors:
+      - Maintaining dedicated tenant environments as snowflakes with their own release cadence.
+
+  - external_key: system_design.cloud_architecture.mainframe_read_offload
+    competency_key: system_design
+    topic: Offloading mainframe reads to the cloud
+    difficulty: hard
+    text: >-
+      A bank's mainframe remains the system of record, but expensive read traffic from mobile and web channels is
+      growing. Design a cloud architecture that serves those reads while the mainframe stays authoritative.
+    expected_concepts:
+      - change data capture from mainframe data stores
+      - streaming changes into cloud read models optimised per channel
+      - freshness guarantees and read-your-writes handling
+      - reconciliation between mainframe and cloud copies
+      - security and network design for the data feed
+      - cost savings measured in mainframe processing reduced
+    rubric:
+      excellent: Designs a CDC-fed read layer with channel-specific models, defines and handles freshness including read-your-writes, adds reconciliation and secures the data feed, tying it all to measurable savings.
+      good: Proposes replicating data to the cloud for reads with some freshness discussion, but misses reconciliation or read-your-writes.
+      weak: Proposes calling the mainframe through a cache with no plan for consistency or invalidation.
+    followups:
+      - A customer makes a transfer and immediately checks their balance in the app. What do they see?
+      - How would you detect that the cloud copy has drifted from the mainframe?
+    common_errors:
+      - Ignoring that users expect to see their own changes immediately after making them.
+
+  - external_key: system_design.cloud_architecture.analytics_query_cost_governance
+    competency_key: cloud_cost_optimization
+    topic: Governing runaway analytics query costs
+    difficulty: hard
+    text: >-
+      The analytics platform, billed per query, went from a small bill to one of your biggest costs in six months, as
+      hundreds of analysts and scheduled jobs scan huge tables. Design an architecture and controls that bring it
+      under control without blocking analysis.
+    expected_concepts:
+      - attribution of query cost to users, teams and jobs
+      - partitioning, clustering and pruning to reduce scanned data
+      - materialised aggregates for common dashboards
+      - per-team quotas or reserved capacity versus on-demand
+      - finding and fixing the most expensive recurring queries
+      - limits on maximum bytes scanned per query
+    rubric:
+      excellent: Makes costs visible per team and job, cuts scanned data through table design and pre-aggregation, picks a capacity model and adds proportionate limits while targeting the top offenders first.
+      good: Proposes partitioning and quotas with some visibility, without prioritising the biggest consumers.
+      weak: Caps everyone's usage uniformly or restricts access to the platform.
+    followups:
+      - A single scheduled dashboard refresh accounts for a third of the bill. What do you do?
+      - When would switching from on-demand to reserved capacity make sense?
+    common_errors:
+      - Applying blanket limits before understanding which queries drive most of the cost.
+
+  - external_key: system_design.cloud_architecture.saas_control_and_data_planes
+    competency_key: distributed_systems
+    topic: Central control plane with regional data planes
+    difficulty: hard
+    text: >-
+      Your SaaS must keep each customer's data in a chosen region, yet you want one place to manage accounts,
+      billing and configuration. Design a control plane and data plane split across regions.
+    expected_concepts:
+      - global control plane holding only metadata and configuration
+      - regional data planes holding customer data
+      - tenant placement and routing to the correct region
+      - data planes continuing to run if the control plane is unavailable
+      - pushing configuration to regions asynchronously with versioning
+      - ensuring no customer data leaks into the global layer
+    rubric:
+      excellent: Draws a clear line between metadata and customer data, makes data planes statically stable without the control plane, designs tenant routing and asynchronous configuration propagation, and guards against data leaking into global components.
+      good: Separates global management from regional data, but data planes depend on the control plane at runtime.
+      weak: Centralises everything in one region and replicates customer data globally.
+    followups:
+      - Logs and support tools might copy customer data into the global layer. How do you prevent that?
+      - The control plane is down for an hour. What still works?
+    common_errors:
+      - Making every request in the regional data plane call the global control plane for authorisation.
+
+  - external_key: system_design.cloud_architecture.download_egress_reduction
+    competency_key: cloud_cost_optimization
+    topic: Reducing egress cost for a download-heavy product
+    difficulty: hard
+    text: >-
+      Your product serves about two petabytes of downloads a month, such as software updates, and data transfer
+      out is now the largest line on the bill. Design how you'd bring that cost down substantially.
+    expected_concepts:
+      - CDN with high cache hit ratio and committed pricing
+      - delta or differential updates to send less data
+      - compression and efficient formats
+      - multi-CDN or alternative storage with cheaper or free egress
+      - peer-assisted or on-premises caches for large customers
+      - measuring cost per gigabyte delivered and per update
+    rubric:
+      excellent: Reduces bytes sent with deltas and compression, lowers price per byte with CDN commitments or alternative providers, offloads to customer-side caches and tracks unit cost per delivery.
+      good: Moves delivery to a CDN with good caching and considers pricing, but does not reduce the bytes themselves.
+      weak: Proposes only switching regions or instance types, which does not affect egress.
+    followups:
+      - How would you introduce a second CDN without hurting reliability?
+      - Which customers would benefit most from a local cache, and how would you offer it?
+    common_errors:
+      - Optimising compute while egress, the dominant cost, stays untouched.
+
+  - external_key: system_design.cloud_architecture.region_to_region_move
+    competency_key: system_design
+    topic: Moving a whole product to a different region
+    difficulty: hard
+    text: >-
+      For cost and latency reasons, your company decides to move its entire production product from one region of
+      the same cloud provider to another. Design the move so customers notice as little as possible.
+    expected_concepts:
+      - parameterised infrastructure code to build the new region
+      - data replication for every store with lag monitoring
+      - service-by-service or traffic-weighted cutover
+      - handling region-specific endpoints, keys and quotas
+      - rollback plan for each step
+      - decommissioning the old region and its costs
+    rubric:
+      excellent: Builds the target from code, replicates every data store, moves traffic gradually with rollback, covers region-specific resources such as keys and quotas and plans a clean decommission.
+      good: Replicates data and cuts over with some rollback, but misses region-specific details or gradual traffic movement.
+      weak: Plans a weekend cutover with backups restored in the new region and no rollback.
+    followups:
+      - Some services are latency-sensitive to each other. How do you avoid running them split across regions for long?
+      - How do you handle encryption keys that cannot leave the old region?
+    common_errors:
+      - Moving stateless services first and leaving them calling databases in the old region for weeks.
+
+  - external_key: system_design.cloud_architecture.training_platform_capacity_cost
+    competency_key: mlops
+    topic: Cost-aware platform for large training jobs
+    difficulty: hard
+    text: >-
+      Research teams run multi-day training jobs on dozens of GPUs, and GPU spend dominates the cloud bill. Design a
+      training platform that cuts cost through interruptible capacity and scheduling, without losing days of work.
+    expected_concepts:
+      - frequent checkpointing to durable storage
+      - automatic resumption after spot interruption
+      - mix of reserved capacity for critical jobs and spot for the rest
+      - searching capacity across zones or regions with data locality in mind
+      - queueing and priority scheduling between teams
+      - utilisation and cost per experiment reporting
+    rubric:
+      excellent: Makes jobs interruption-tolerant through checkpointing and auto-resume, mixes capacity types by priority, schedules across teams fairly, considers data locality and measures cost per experiment.
+      good: Uses spot with checkpoints and some scheduling, but misses data locality or priority between teams.
+      weak: Runs long jobs on spot without checkpointing, or reserves peak GPU capacity for everyone.
+    followups:
+      - How often should a job checkpoint, and what does that cost?
+      - Spot GPUs are unavailable in your region for a week. What does the platform do?
+    common_errors:
+      - Checkpointing to local disks that disappear when the instance is reclaimed.
+
+  - external_key: system_design.cloud_architecture.carbon_and_cost_aware_scheduling
+    competency_key: cloud_cost_optimization
+    topic: Placing flexible workloads by cost and carbon
+    difficulty: hard
+    text: >-
+      Your company has committed to cutting both cloud cost and carbon emissions. A large share of your compute is
+      flexible batch work. Design a scheduler that decides where and when that work runs.
+    expected_concepts:
+      - classifying workloads by deadline and location constraints
+      - signals for price, spot availability and grid carbon intensity per region and time
+      - data locality and transfer cost when moving work between regions
+      - data residency constraints
+      - deadline guarantees despite deferral
+      - reporting cost and emissions saved against a baseline
+    rubric:
+      excellent: Classifies flexibility, combines price and carbon signals with data transfer and residency constraints, keeps deadlines guaranteed and measures savings against a baseline.
+      good: Shifts work in time or place based on price or carbon, but ignores data movement or deadlines.
+      weak: Moves all batch work to the cheapest region without considering data or constraints.
+    followups:
+      - Moving the job saves carbon but the input data is in another region. How do you decide?
+      - How would you prove to leadership that the scheduler actually reduced emissions?
+    common_errors:
+      - Ignoring the cost and time of moving input data when relocating work.

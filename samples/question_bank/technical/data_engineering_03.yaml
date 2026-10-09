@@ -1,0 +1,641 @@
+# Curated questions: Data engineering (part 3 of 4).
+# Streaming pipelines: Kafka, event time and watermarks, late and duplicate events, state, joins and delivery guarantees.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [data]
+questions:
+  # ------------------------------------------------------------- streaming basics
+  - external_key: technical.data_engineering.event_vs_processing_time
+    competency_key: data_engineering
+    topic: Event time versus processing time
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      In a streaming pipeline, what's the difference between event time and processing time, and when has
+      that difference actually mattered for results you produced?
+    expected_concepts:
+      - event time is when it happened, processing time is when it was handled
+      - network delays, retries and offline devices create gaps
+      - aggregations by processing time shift counts between windows
+      - reprocessing history only gives stable results with event time
+      - event time needs a way to decide when a window is complete
+    rubric:
+      excellent: Defines both precisely, explains how delays and replays make processing-time results unstable, and gives a real case where using the wrong one produced misleading numbers.
+      good: Defines both correctly and says event time is usually right for business metrics.
+      weak: Treats the two as interchangeable.
+    followups:
+      - What happens to processing-time counts when you replay a day of data?
+      - Where does the event timestamp come from, and can you trust it?
+    common_errors:
+      - Trusting device clocks without any sanity bounds.
+
+  - external_key: technical.data_engineering.kafka_partitions_and_ordering
+    competency_key: data_engineering
+    topic: Kafka partitions, keys and ordering
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do partitions and message keys in Kafka affect ordering and parallelism, and how did you choose the
+      key and partition count for a topic you've worked with?
+    expected_concepts:
+      - ordering is guaranteed only within a partition
+      - the key decides the partition, so same key stays ordered
+      - consumer parallelism is capped by partition count
+      - uneven keys create hot partitions
+      - changing partition count remaps keys
+    rubric:
+      excellent: Explains per-partition ordering, key-based routing and the cap on consumer parallelism, and justifies a real key and partition count choice including skew and future growth.
+      good: Knows ordering is per partition and that keys route messages.
+      weak: Believes Kafka orders all messages in a topic globally.
+    followups:
+      - What would you key a topic of payment events by, and why?
+      - Why not just create a thousand partitions to be safe?
+    common_errors:
+      - Sending messages without keys and then relying on per-entity ordering.
+
+  - external_key: technical.data_engineering.growing_consumer_lag
+    competency_key: data_engineering
+    topic: Consumer lag that keeps growing
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You're alerted that the lag on one of your Kafka consumer groups has been climbing for an hour. What
+      would you check first, and what are the usual causes?
+    expected_concepts:
+      - whether input rate rose or processing rate fell
+      - per-partition lag to spot a single stuck or hot partition
+      - consumer errors, retries or rebalances
+      - slow downstream sinks or external calls
+      - scaling consumers up to the partition count
+    rubric:
+      excellent: Separates rising input from slowing consumption, checks lag per partition, looks for rebalances, errors and slow sinks, and knows scaling only helps up to the partition count.
+      good: Checks consumer health and throughput and suggests adding consumers.
+      weak: Restarts consumers without looking at any metrics.
+    followups:
+      - Lag is high on only one partition. What does that suggest?
+      - The consumer group keeps rebalancing. What might cause that?
+    common_errors:
+      - Adding more consumers than partitions and expecting more throughput.
+
+  - external_key: technical.data_engineering.delivery_guarantees
+    competency_key: data_engineering
+    topic: At-most-once, at-least-once and exactly-once delivery
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Explain at-most-once, at-least-once and exactly-once processing in terms of a pipeline you've built.
+      Which did it provide in practice, and how did you know?
+    expected_concepts:
+      - when offsets are committed relative to processing
+      - at-most-once loses data on failure
+      - at-least-once duplicates on failure and needs idempotency
+      - exactly-once effects through transactions or idempotent sinks
+      - testing failure cases to confirm behaviour
+    rubric:
+      excellent: Ties each guarantee to when offsets or checkpoints are committed relative to side effects, states what their own pipeline really guaranteed, and explains how they verified it under failure.
+      good: Defines each correctly and identifies their pipeline as at-least-once with deduplication or similar.
+      weak: Claims exactly-once without being able to explain how it was achieved.
+    followups:
+      - If you commit offsets before writing to the database, what can happen?
+      - How would you test your pipeline's behaviour when a consumer crashes mid-batch?
+    common_errors:
+      - Equating auto-commit of offsets with reliable processing.
+
+  - external_key: technical.data_engineering.window_types
+    competency_key: data_engineering
+    topic: Tumbling, sliding and session windows
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Tell me about the kinds of windows you can use in stream processing, such as tumbling, sliding and
+      session windows, and a real metric where each would be the right choice.
+    expected_concepts:
+      - tumbling windows are fixed and non-overlapping
+      - sliding or hopping windows overlap for moving metrics
+      - session windows close after a gap of inactivity
+      - state and output volume of overlapping windows
+      - matching the window to the business question
+    rubric:
+      excellent: Describes each type accurately, gives a fitting real use case for each such as per-minute counts, rolling error rates and user sessions, and notes the state and output cost of overlapping windows.
+      good: Correctly describes the window types with at least one realistic example.
+      weak: Knows only fixed windows or confuses session windows with login sessions in a database.
+    followups:
+      - How would you pick the inactivity gap for session windows?
+      - What happens to state when a sliding window is long and the slide is short?
+    common_errors:
+      - Using a sliding window where a tumbling one answers the question with far less state.
+
+  - external_key: technical.data_engineering.event_schema_management
+    competency_key: data_engineering
+    topic: Managing event schemas on topics
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you manage the schema of events flowing through a topic so that producers can evolve them
+      without breaking consumers?
+    expected_concepts:
+      - a schema registry with Avro, Protobuf or JSON Schema
+      - compatibility modes such as backward and forward
+      - optional fields with defaults for safe additions
+      - versioned topics or migration for breaking changes
+      - schema checks in the producer's CI
+    rubric:
+      excellent: Uses a registry with an explicit compatibility mode, explains which changes are safe and why, has a path for breaking changes, and catches problems before deploy in CI.
+      good: Uses a schema registry and knows adding optional fields is safe.
+      weak: Sends free-form JSON and fixes consumers when they break.
+    followups:
+      - Which compatibility mode did you choose, and why?
+      - A producer needs to remove a required field. How would you roll that out?
+    common_errors:
+      - Assuming JSON payloads need no schema because they are self-describing.
+
+  - external_key: technical.data_engineering.replay_after_consumer_bug
+    competency_key: data_engineering
+    topic: Replaying a topic after a consumer bug
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A bug in your consumer wrote wrong values downstream for the last six hours. The topic still has the
+      original messages. How would you recover?
+    expected_concepts:
+      - fix and deploy the consumer first
+      - reset offsets to a point before the bug, by timestamp
+      - the sink must tolerate reprocessing through upserts or overwrites
+      - check retention covers the window
+      - verify corrected output and inform consumers
+    rubric:
+      excellent: Fixes the bug, resets offsets by time with care for other consumer groups, relies on an idempotent sink or cleans the affected range first, checks retention and verifies the result.
+      good: Fixes the bug and replays from an earlier offset.
+      weak: Patches the bad rows by hand with no plan to replay.
+    followups:
+      - The sink only appends. What extra work does the replay need?
+      - How would you replay without delaying today's live events?
+    common_errors:
+      - Replaying into an append-only sink and doubling six hours of data.
+
+  # ------------------------------------------------------------- streaming, medium
+  - external_key: technical.data_engineering.watermarks_tradeoff
+    competency_key: data_engineering
+    topic: Watermarks and completeness
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What is a watermark in a stream processor like Flink or Spark Structured Streaming, and how do you
+      choose how much lateness to allow?
+    expected_concepts:
+      - a watermark estimates how far event time has progressed
+      - windows emit or finalise once the watermark passes them
+      - allowed lateness trades latency for completeness
+      - state is kept until the watermark allows clean-up
+      - measuring the real lateness distribution
+      - idle partitions holding the watermark back
+    rubric:
+      excellent: Explains watermark mechanics and its effect on emission and state, picks lateness from measured delay percentiles and business tolerance, and mentions idle sources stalling progress.
+      good: Explains that watermarks decide when a window closes and that larger lateness means slower but more complete results.
+      weak: Cannot explain what a watermark controls.
+    followups:
+      - One partition has no traffic overnight. What happens to your windows?
+      - How would you measure how late events typically are?
+    common_errors:
+      - Setting a very long lateness to be safe and running out of state memory.
+
+  - external_key: technical.data_engineering.offline_mobile_events
+    competency_key: data_engineering
+    topic: Events that arrive hours late
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A mobile app buffers events while users are offline and sends them hours or even days later. Your hourly
+      engagement metrics are computed by a streaming job. How would you keep them accurate?
+    expected_concepts:
+      - streaming results for recent windows, corrected later
+      - updating windows with late data through upserts or retractions
+      - routing very late events to a side output
+      - batch reconciliation that recomputes past periods
+      - showing users which periods may still change
+    rubric:
+      excellent: Combines a bounded lateness window for timely results, side outputs for very late events, and a batch correction path, and makes clear to consumers which periods are provisional.
+      good: Allows some lateness and recomputes later with a batch job.
+      weak: Drops late events or counts them in the hour they arrive.
+    followups:
+      - How would a dashboard show that yesterday's numbers might still change?
+      - How do you sanity-check device timestamps that are clearly wrong?
+    common_errors:
+      - Silently discarding late events and under-reporting usage from users with poor connectivity.
+
+  - external_key: technical.data_engineering.stream_deduplication
+    competency_key: data_engineering
+    topic: Deduplicating events in a stream
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Producers retry on timeouts, so the same event sometimes shows up two or three times in your stream.
+      How would you deduplicate in the streaming job without keeping every id you've ever seen?
+    expected_concepts:
+      - a unique event id assigned by the producer
+      - keyed state of recently seen ids with a time-to-live
+      - choosing the time-to-live from observed duplicate delay
+      - watermark-based state clean-up
+      - downstream idempotency as a second line of defence
+    rubric:
+      excellent: Relies on a producer-assigned id, keeps keyed seen-id state with a TTL based on measured retry delays, cleans up with watermarks, and keeps sinks idempotent for anything that slips through.
+      good: Stores recent ids in state with expiry and drops repeats.
+      weak: Keeps all ids forever in memory or ignores the duplicates.
+    followups:
+      - The producer doesn't send an id. What could you use?
+      - What happens to your dedup state when the job restarts?
+    common_errors:
+      - Generating the id in the consumer, so retries look like different events.
+
+  - external_key: technical.data_engineering.checkpointing_and_recovery
+    competency_key: data_engineering
+    topic: Checkpoints and recovery in stream processing
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How does checkpointing work in a stateful streaming engine you've used, and what exactly happens to
+      state, offsets and output when the job crashes and restarts?
+    expected_concepts:
+      - periodic consistent snapshots of operator state and source offsets
+      - restore state and rewind sources to the checkpoint
+      - output since the last checkpoint is produced again
+      - durable checkpoint storage and interval trade-offs
+      - incremental checkpoints for large state
+    rubric:
+      excellent: Explains how state and offsets are captured consistently, how recovery rewinds and replays, why sinks see repeated output unless transactional or idempotent, and how interval and storage choices affect recovery time.
+      good: Knows state and offsets are saved together and restored on restart.
+      weak: Thinks the job resumes exactly where it stopped with no reprocessing.
+    followups:
+      - How do you choose the checkpoint interval?
+      - Checkpoints start timing out. What would you look at?
+    common_errors:
+      - Storing checkpoints on local disk that disappears with the node.
+
+  - external_key: technical.data_engineering.stream_enrichment_reference_data
+    competency_key: data_engineering
+    topic: Enriching a stream with changing reference data
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You need to enrich a high-volume event stream with product details that change a few times a day. What
+      approaches have you used or would you consider, and what are the trade-offs?
+    expected_concepts:
+      - per-event lookups to a database with caching
+      - broadcasting reference data into the job's state
+      - consuming reference changes as a CDC stream and joining
+      - temporal joins to use the version valid at event time
+      - behaviour when reference data is missing or late
+    rubric:
+      excellent: Compares remote lookups, broadcast state and stream-table joins on latency, load and correctness, chooses temporal semantics deliberately, and handles missing reference data.
+      good: Proposes caching lookups or loading the reference data into the job, with refresh.
+      weak: Calls a database per event with no caching or thought about load.
+    followups:
+      - Should an event from yesterday be enriched with yesterday's price or today's?
+      - What do you emit when the product isn't known yet?
+    common_errors:
+      - Caching reference data with no refresh so changes never appear.
+
+  - external_key: technical.data_engineering.impressions_clicks_join
+    competency_key: data_engineering
+    topic: Joining two event streams
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You need to join an ad impressions stream with a clicks stream to compute click-through rates in near
+      real time. Clicks can come up to thirty minutes after the impression. How would you build that join?
+    expected_concepts:
+      - interval join bounded by time on a shared impression id
+      - state retention for unmatched impressions
+      - watermarks to expire state and emit non-clicks
+      - handling clicks that arrive before impressions
+      - duplicate clicks and attribution rules
+    rubric:
+      excellent: Uses a time-bounded join keyed on impression id, sizes state from the window and volume, uses watermarks to finalise non-clicks, and handles out-of-order arrival and duplicate clicks.
+      good: Proposes a windowed join with state limited to thirty minutes.
+      weak: Joins without bounding state or ignores clicks that arrive late.
+    followups:
+      - Roughly how much state does this need at a hundred thousand impressions per second?
+      - A click arrives after forty minutes. What happens to it?
+    common_errors:
+      - Using an unbounded join so state grows forever.
+
+  - external_key: technical.data_engineering.idempotent_streaming_sink
+    competency_key: distributed_systems
+    topic: Writing streaming results idempotently
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A streaming job writes per-minute aggregates into a warehouse table. After restarts, the same windows
+      are emitted again. How do you design the write so the table stays correct?
+    expected_concepts:
+      - deterministic keys such as window start and dimension values
+      - upsert or merge rather than append
+      - transactional sinks tied to checkpoints
+      - batch ids or epoch numbers to skip already-committed output
+      - updated results for windows that receive late data
+    rubric:
+      excellent: Keys output deterministically, writes with upserts or transactional commits tied to checkpoints, uses batch identifiers to skip replays, and handles legitimately updated windows.
+      good: Uses an upsert keyed on the window and dimensions.
+      weak: Appends every emission and deduplicates in reporting queries.
+    followups:
+      - The warehouse doesn't support efficient upserts. What would you do?
+      - How do you distinguish a replayed result from a corrected one?
+    common_errors:
+      - Assuming the engine's exactly-once mode also covers writes to any external system.
+
+  - external_key: technical.data_engineering.streaming_backpressure
+    competency_key: data_engineering
+    topic: A streaming job that cannot keep up at peak
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      During evening peaks your streaming job falls behind, checkpoints get slower, and latency goes from
+      seconds to tens of minutes. How would you find the bottleneck and what could you do about it?
+    expected_concepts:
+      - backpressure indicators per operator
+      - slow sinks or external calls as bottlenecks
+      - parallelism limited by partitions or a single operator
+      - skewed keys overloading one subtask
+      - scaling, batching writes or asynchronous I/O
+      - capacity planning for peak with headroom
+    rubric:
+      excellent: Uses backpressure and per-operator metrics to find the slowest stage, distinguishes sink, skew and parallelism limits, applies a matched fix such as async I/O, batching or rescaling, and plans headroom for peaks.
+      good: Looks for the slow operator and suggests adding parallelism or speeding up the sink.
+      weak: Only adds more machines without finding the bottleneck.
+    followups:
+      - Why do checkpoints get slower when the job is backpressured?
+      - How would you test peak capacity before it happens?
+    common_errors:
+      - Raising parallelism beyond the number of source partitions.
+
+  - external_key: technical.data_engineering.increase_topic_partitions
+    competency_key: data_engineering
+    topic: Increasing partitions on a keyed topic
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A keyed topic with twelve partitions can no longer handle the load, and you want to go to forty-eight.
+      Stateful consumers rely on per-key ordering. What problems do you anticipate and how would you make the
+      change?
+    expected_concepts:
+      - keys map to different partitions after the change
+      - ordering per key breaks across old and new partitions
+      - consumer state keyed by partition must move
+      - creating a new topic and migrating with a controlled cut-over
+      - draining the old topic before switching consumers
+    rubric:
+      excellent: Explains key remapping and its effect on ordering and state, chooses a migration such as a new topic with a drained cut-over, and plans validation and rollback.
+      good: Knows existing keys will move partitions and that ordering may break during the change.
+      weak: Assumes adding partitions is transparent to consumers.
+    followups:
+      - How would you plan partition counts to avoid this next time?
+      - Which consumers wouldn't care about the change at all?
+    common_errors:
+      - Adding partitions in place on a topic whose consumers keep local per-key state.
+
+  - external_key: technical.data_engineering.lambda_versus_kappa
+    competency_key: data_engineering
+    topic: Batch and streaming side by side or streaming only
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Some platforms run a batch path and a streaming path for the same data, while others do everything
+      as a stream and replay for corrections. What are the trade-offs, and which have you lived with?
+    expected_concepts:
+      - two code paths drifting apart in logic
+      - batch path as the correct source of truth with stream for freshness
+      - stream-only relies on long retention and replay capacity
+      - shared logic or unified engines to reduce duplication
+      - cost and team skills
+    rubric:
+      excellent: Weighs duplicated logic and divergence against the simplicity of batch corrections, explains what stream-only needs (retention, replay speed, state handling) and reflects on the real setup they ran.
+      good: Explains both approaches and names logic duplication as the main cost of running two paths.
+      weak: Knows the names only, without the trade-offs.
+    followups:
+      - How did you keep the two paths' results consistent?
+      - How long would a full replay of history take in your stream-only setup?
+    common_errors:
+      - Assuming replaying a year of events through a streaming job is quick and cheap.
+
+  - external_key: technical.data_engineering.poison_messages
+    competency_key: data_engineering
+    topic: Malformed messages that crash consumers
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      One malformed message keeps crashing your consumer. It restarts, reads the same message, and crashes
+      again, so the whole partition is stuck. How do you get out of this and prevent it in future?
+    expected_concepts:
+      - catch deserialisation and validation errors per message
+      - route bad messages to a dead-letter topic with context
+      - skip past the offset in an emergency with a record of it
+      - alerting and a reprocessing path for dead letters
+      - producer-side validation and schemas
+    rubric:
+      excellent: Unblocks safely while preserving the bad message, adds per-message error handling with a dead-letter topic carrying error context, alerts and a replay path, and pushes validation upstream.
+      good: Adds a dead-letter queue and skips bad messages.
+      weak: Deletes the topic data or catches and ignores every exception.
+    followups:
+      - When should an error go to the dead-letter topic versus being retried?
+      - Who owns looking at the dead letters?
+    common_errors:
+      - Sending transient failures such as timeouts to the dead-letter topic and losing good data.
+
+  - external_key: technical.data_engineering.consuming_cdc_events
+    competency_key: data_engineering
+    topic: Materialising tables from CDC events
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You're consuming change events produced by a CDC tool and need to keep an up-to-date copy of the table
+      in the lakehouse. How do you apply inserts, updates and deletes correctly?
+    expected_concepts:
+      - before and after images and operation type in each event
+      - ordering by log position per primary key
+      - keeping only the latest change per key in each batch
+      - deletes and tombstones
+      - schema changes arriving in the stream
+    rubric:
+      excellent: Applies changes with merge keyed on the primary key, orders by log position, collapses multiple changes per key per batch, handles deletes and tombstones and copes with schema changes.
+      good: Merges by primary key using the operation type including deletes.
+      weak: Appends every event and leaves consumers to work out the latest state.
+    followups:
+      - Two updates for the same row are in one micro-batch. Which wins and how do you know?
+      - How would you also keep a full history of changes?
+    common_errors:
+      - Ordering by event timestamp instead of log position and applying changes in the wrong order.
+
+  # ------------------------------------------------------------- hard
+  - external_key: technical.data_engineering.exactly_once_end_to_end
+    competency_key: distributed_systems
+    topic: What exactly-once really covers
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Kafka and Flink both advertise exactly-once semantics. What exactly do those guarantees cover end to
+      end, and where in a real pipeline do they stop protecting you?
+    expected_concepts:
+      - idempotent producers and transactions within Kafka
+      - two-phase commit sinks tied to checkpoints
+      - read-committed consumers downstream
+      - side effects such as API calls or emails are not covered
+      - transaction timeouts and latency cost
+    rubric:
+      excellent: Explains the mechanisms (idempotent producers, transactions, checkpoint-aligned two-phase commit, read-committed reads), states clearly that external side effects and non-transactional sinks fall outside, and discusses the latency and timeout costs.
+      good: Knows exactly-once applies to state and transactional sinks and that external effects need idempotency.
+      weak: Believes enabling the setting guarantees no duplicates anywhere.
+    followups:
+      - A downstream consumer reads with read-uncommitted. What does it see?
+      - Why does exactly-once add latency to results?
+    common_errors:
+      - Forgetting that consumers must read committed data for transactions to matter.
+
+  - external_key: technical.data_engineering.unbounded_state_growth
+    competency_key: data_engineering
+    topic: Streaming state that grows without limit
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A stateful streaming job's state has grown from ten gigabytes to over a terabyte in three months, and
+      checkpoints now take ten minutes. How would you diagnose it and bring it back under control?
+    expected_concepts:
+      - identify which operator and key space holds the state
+      - missing time-to-live or window clean-up
+      - unbounded joins or growing key cardinality
+      - watermarks not advancing and blocking clean-up
+      - incremental checkpoints and state backend tuning
+      - migrating state safely after the fix
+    rubric:
+      excellent: Locates the operator and keys holding state, finds the root cause such as missing TTL, unbounded joins or a stalled watermark, fixes the logic, then handles migration of existing state and tunes checkpointing as a secondary step.
+      good: Looks for missing TTLs or unbounded joins and adds expiry.
+      weak: Adds disk and memory without finding why state grows.
+    followups:
+      - How do you shrink state that already exists without losing data you need?
+      - How would you alert on this before it becomes a problem?
+    common_errors:
+      - Tuning checkpoint settings while the state keeps growing for a logical reason.
+
+  - external_key: technical.data_engineering.stateful_job_upgrade
+    competency_key: data_engineering
+    topic: Upgrading a stateful streaming job
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You need to deploy a new version of a stateful streaming job that changes the aggregation logic and adds
+      a field to the state. How do you roll it out without losing state, double counting or a long outage?
+    expected_concepts:
+      - stop with a savepoint and restart from it
+      - stable operator ids so state maps across versions
+      - state schema evolution or migration
+      - running the new version in parallel to compare outputs
+      - rollback plan to the previous savepoint
+    rubric:
+      excellent: Uses savepoints with stable operator ids, plans state schema evolution, validates the new logic by running it in shadow and comparing results, and keeps a tested rollback path.
+      good: Restarts from a savepoint and checks state compatibility.
+      weak: Starts the new version fresh and loses the accumulated state.
+    followups:
+      - The new logic means past aggregates are wrong. Do you rebuild state or leave it?
+      - What would make you choose a blue-green deployment of the whole job?
+    common_errors:
+      - Letting the engine generate operator ids, so state can't be matched after code changes.
+
+  - external_key: technical.data_engineering.realtime_vs_batch_mismatch
+    competency_key: data_engineering
+    topic: Real-time numbers disagree with the batch truth
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      The real-time revenue dashboard regularly ends the day about two percent off from the next morning's
+      batch figures, and the business has stopped trusting it. How would you investigate and resolve it?
+    expected_concepts:
+      - reconcile at fine granularity to locate where the gap appears
+      - late events dropped by the stream
+      - duplicates or replays counted twice
+      - differences in logic between the two code paths
+      - corrections and refunds applied only in batch
+      - communicating provisional versus final numbers
+    rubric:
+      excellent: Builds a reconciliation by hour and dimension to find the gap, tests specific causes such as late data, duplicates, logic drift and batch-only corrections, fixes them, and agrees how provisional numbers are labelled.
+      good: Compares the two outputs to find the cause and names late data or duplicates as candidates.
+      weak: Adjusts the real-time figure by a fudge factor.
+    followups:
+      - How small would the gap need to be for the business to accept it?
+      - How would you stop the two paths from drifting again?
+    common_errors:
+      - Assuming the batch number is always correct without checking it too.
+
+  - external_key: technical.data_engineering.hot_key_streaming
+    competency_key: data_engineering
+    topic: One key dominating a stream
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      One very large customer now generates about forty percent of all events. The partition and the
+      processing subtask handling that customer are overloaded while the rest sit idle. What would you do?
+    expected_concepts:
+      - confirm with per-partition and per-subtask metrics
+      - splitting the hot key with a sub-key or salt
+      - two-stage aggregation combining partial results
+      - ordering requirements that limit splitting
+      - dedicated topic or pipeline for very large tenants
+    rubric:
+      excellent: Confirms the hot key with metrics, splits it with a sub-key and two-stage aggregation where ordering allows, explains which operations can't be split, and considers isolating the tenant.
+      good: Proposes salting the key and re-aggregating.
+      weak: Increases partitions or parallelism, which does not move a single key.
+    followups:
+      - The customer's events must be processed in order per account. How does that limit you?
+      - How would you detect new hot keys automatically?
+    common_errors:
+      - Salting a key for an operation that needs all events of that key in one place.
+
+  - external_key: technical.data_engineering.clickstream_platform_design
+    competency_key: data_engineering
+    topic: Designing a high-volume clickstream pipeline
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Design a pipeline for about half a million clickstream events per second that feeds both a live
+      dashboard with one-minute freshness and a lakehouse used for analysis the next day. Walk me through the
+      main decisions.
+    expected_concepts:
+      - collection layer with validation and buffering
+      - topic partitioning and key choice for scale
+      - stream processing for minute-level aggregates with lateness handling
+      - separate sink writing compacted files to the lakehouse
+      - schema management, deduplication and bot filtering
+      - capacity, cost and failure handling
+    rubric:
+      excellent: Lays out collection, transport, processing and both sinks with justified choices, handles late and duplicate events, schema evolution and lake file sizing, and estimates capacity, cost and failure behaviour.
+      good: Produces a sound end-to-end design with Kafka, a stream processor and a lake sink, and covers some failure cases.
+      weak: Lists tools without explaining how data moves or what happens on failure.
+    followups:
+      - Roughly how many partitions and how much storage per day would you plan for?
+      - What happens to the dashboard if the stream processor is down for twenty minutes?
+    common_errors:
+      - Writing every event as its own file in the lake.

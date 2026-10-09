@@ -1,0 +1,208 @@
+version: 1
+slug: tickets_breaching_sla
+title: "Tickets Breaching Their SLA"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [support_engineer, data_analyst, backend]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Tickets Breaching Their SLA
+
+  Every support ticket gets a resolution deadline from its service-level agreement when it is
+  created. A compliance audit runs at exactly `'2026-03-01 00:00:00'` and must list every ticket that has
+  breached its deadline, and how.
+
+  Table `tickets`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | priority | VARCHAR(2) | `'p1'` to `'p4'` |
+  | due_at | VARCHAR(19) | resolution deadline, `'YYYY-MM-DD HH:MM:SS'` |
+  | resolved_at | VARCHAR(19) | when the ticket was resolved, same format; NULL while it is still open |
+
+  All timestamps are in the same time zone and zero-padded, so comparing them as text gives the same
+  result as comparing them as times; no date functions are needed.
+
+  A ticket breaches its SLA in one of two ways:
+
+  - `'late'`: it was resolved **strictly after** its `due_at`.
+  - `'overdue_open'`: it is still open (`resolved_at` is NULL) and its `due_at` is **strictly before**
+    the audit time `'2026-03-01 00:00:00'`.
+
+  A ticket resolved exactly at its deadline, or still open with a deadline at or after the audit
+  time, has not breached. Return the columns `id`, `priority` and `breach_type` (`'late'` or
+  `'overdue_open'`) for the breaching tickets only, ordered by `id` ascending. Return no rows when no
+  ticket breached.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  tickets
+  +-----+----------+---------------------+---------------------+
+  | id  | priority | due_at              | resolved_at         |
+  +-----+----------+---------------------+---------------------+
+  | 101 | p1       | 2026-02-10 12:00:00 | 2026-02-10 15:30:00 |
+  | 102 | p2       | 2026-02-12 09:00:00 | 2026-02-11 17:45:00 |
+  | 103 | p1       | 2026-02-27 18:00:00 | NULL                |
+  | 104 | p3       | 2026-03-04 09:00:00 | NULL                |
+  | 105 | p2       | 2026-02-20 08:00:00 | 2026-02-20 08:00:00 |
+  +-----+----------+---------------------+---------------------+
+
+  Output
+  +-----+----------+--------------+
+  | id  | priority | breach_type  |
+  +-----+----------+--------------+
+  | 101 | p1       | late         |
+  | 103 | p1       | overdue_open |
+  +-----+----------+--------------+
+  104 is open but not yet due. 105 was resolved exactly at its deadline, which is not a breach.
+  ```
+
+  ### Example 2
+  ```
+  tickets
+  +----+----------+---------------------+---------------------+
+  | id | priority | due_at              | resolved_at         |
+  +----+----------+---------------------+---------------------+
+  | 1  | p3       | 2026-02-01 10:00:00 | 2026-01-31 16:20:00 |
+  | 2  | p4       | 2026-03-15 12:00:00 | NULL                |
+  +----+----------+---------------------+---------------------+
+
+  Output
+  +----+----------+-------------+
+  | id | priority | breach_type |
+  +----+----------+-------------+
+  +----+----------+-------------+
+  No rows.
+  ```
+
+  ### Constraints
+  - At most `10^6` tickets; the table may be empty.
+  - Every non-NULL `resolved_at` is at or before the audit time `'2026-03-01 00:00:00'`.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return id, priority and breach_type ('late' or 'overdue_open') for breaching tickets,
+    -- ordered by id. The audit runs at '2026-03-01 00:00:00'.
+    SELECT id, priority, 'late' AS breach_type
+    FROM tickets
+    WHERE resolved_at > due_at
+    ORDER BY id;
+reference_solutions:
+  sql: |
+    SELECT id,
+           priority,
+           CASE WHEN resolved_at IS NULL THEN 'overdue_open' ELSE 'late' END AS breach_type
+    FROM tickets
+    WHERE (resolved_at IS NOT NULL AND resolved_at > due_at)
+       OR (resolved_at IS NULL AND due_at < '2026-03-01 00:00:00')
+    ORDER BY id;
+sql_setup: |
+  CREATE TABLE tickets (
+    id INTEGER PRIMARY KEY,
+    priority VARCHAR(2) NOT NULL,
+    due_at VARCHAR(19) NOT NULL,
+    resolved_at VARCHAR(19)
+  );
+tests:
+  - id: t1
+    description: "Example 1 - one late, one overdue open, resolved-on-time, open-not-yet-due and resolved-exactly-at-deadline"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, priority, due_at, resolved_at) VALUES
+        (101, 'p1', '2026-02-10 12:00:00', '2026-02-10 15:30:00'), (102, 'p2', '2026-02-12 09:00:00', '2026-02-11 17:45:00'),
+        (103, 'p1', '2026-02-27 18:00:00', NULL), (104, 'p3', '2026-03-04 09:00:00', NULL), (105, 'p2', '2026-02-20 08:00:00', '2026-02-20 08:00:00');
+    expected_rows: [[101, "p1", "late"], [103, "p1", "overdue_open"]]
+  - id: t2
+    description: "Example 2 - nothing breached"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, priority, due_at, resolved_at) VALUES
+        (1, 'p3', '2026-02-01 10:00:00', '2026-01-31 16:20:00'), (2, 'p4', '2026-03-15 12:00:00', NULL);
+    expected_rows: []
+  - id: t3
+    hidden: true
+    description: "Empty table - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Open ticket due exactly at the audit time is not overdue; one second earlier is"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, priority, due_at, resolved_at) VALUES
+        (1, 'p1', '2026-03-01 00:00:00', NULL), (2, 'p1', '2026-02-28 23:59:59', NULL);
+    expected_rows: [[2, "p1", "overdue_open"]]
+  - id: t5
+    hidden: true
+    description: "Resolved one second after the deadline is late, across a month boundary"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, priority, due_at, resolved_at) VALUES
+        (1, 'p2', '2026-01-31 23:59:59', '2026-02-01 00:00:00'), (2, 'p2', '2026-01-31 23:59:59', '2026-01-31 23:59:58');
+    expected_rows: [[1, "p2", "late"]]
+  - id: t6
+    hidden: true
+    description: "All tickets open and past due - every row is overdue_open"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, priority, due_at, resolved_at) VALUES
+        (7, 'p4', '2025-12-01 09:00:00', NULL), (3, 'p1', '2026-02-14 10:00:00', NULL), (5, 'p2', '2026-01-20 17:30:00', NULL);
+    expected_rows: [[3, "p1", "overdue_open"], [5, "p2", "overdue_open"], [7, "p4", "overdue_open"]]
+  - id: t7
+    hidden: true
+    description: "Mixed breaches inserted out of id order - output ordered by id"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, priority, due_at, resolved_at) VALUES
+        (40, 'p3', '2026-02-02 10:00:00', '2026-02-05 10:00:00'), (12, 'p1', '2026-02-25 06:00:00', NULL),
+        (33, 'p2', '2026-02-26 12:00:00', '2026-02-26 11:59:59'), (8, 'p4', '2026-01-05 08:00:00', '2026-02-28 23:59:59'),
+        (21, 'p2', '2026-03-02 00:00:00', NULL), (17, 'p1', '2026-02-27 09:00:00', '2026-02-27 09:00:01');
+    expected_rows: [[8, "p4", "late"], [12, "p1", "overdue_open"], [17, "p1", "late"], [40, "p3", "late"]]
+  - id: t8
+    hidden: true
+    description: "NULL trap - open tickets due in the future must not appear as late"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, priority, due_at, resolved_at) VALUES
+        (1, 'p3', '2026-04-01 00:00:00', NULL), (2, 'p3', '2026-03-01 00:00:01', NULL), (3, 'p1', '2026-02-01 00:00:00', '2026-02-02 00:00:00');
+    expected_rows: [[3, "p1", "late"]]
+  - id: t9
+    hidden: true
+    description: "Resolved late long after the deadline and resolved just before the audit"
+    ordered: true
+    setup_sql: |
+      INSERT INTO tickets (id, priority, due_at, resolved_at) VALUES
+        (1, 'p1', '2025-11-30 18:00:00', '2026-02-28 23:59:59'), (2, 'p2', '2026-02-28 23:00:00', '2026-02-28 22:59:59'),
+        (3, 'p4', '2026-01-15 12:00:00', NULL);
+    expected_rows: [[1, "p1", "late"], [3, "p4", "overdue_open"]]
+expected_concepts:
+  - "NULL handling with IS NULL and IS NOT NULL"
+  - "CASE expression to label rows"
+  - "comparing ISO-8601 timestamps stored as text"
+  - "boundary conditions with strict comparisons"
+optimal_complexity: {time: "O(n) scan plus O(k log k) to sort k breaching rows (or none with a primary-key ordered scan)", space: "O(k) for the result"}
+rubric:
+  excellent: "Writes one query with a WHERE that covers both breach rules, labels them with a CASE on resolved_at IS NULL, gets both strict boundaries right and explains why comparing ISO text works."
+  good: "Correct query after a hint about open tickets with NULL resolved_at or about the exact-boundary cases."
+  weak: "Only finds late tickets, uses greater-or-equal at a boundary, compares the audit time with resolved_at, or omits the ORDER BY."
+  criteria:
+    correctness: "All tests pass, including exact-deadline, exact-audit-time and one-second boundaries."
+    efficiency: "A single scan without unions of correlated subqueries; mentions an index on due_at for open tickets."
+    code_quality: "A readable WHERE with grouped conditions and a CASE that mirrors it."
+    edge_cases: "Empty table, open tickets due exactly at or after the audit time, resolutions exactly at the deadline."
+    communication: "Explains how NULL makes the plain comparison resolved_at > due_at unknown for open tickets."
+hints:
+  - "There are two kinds of breach, one for resolved tickets and one for open tickets, and an open ticket has no resolution time to compare."
+  - "Comparing a NULL resolved_at with anything is never true, so open tickets need their own condition against the fixed audit time; both comparisons are strict."
+  - "Filter with two conditions joined by OR: resolved and resolved after the deadline, or unresolved and due before the audit timestamp; label each row with a CASE on whether resolved_at is NULL and order by id."
+followups:
+  - "How would you report how many minutes late each ticket was in PostgreSQL if the columns were real timestamps?"
+  - "How would you compute the breach rate per priority?"
+  - "What changes if the audit time is a parameter instead of a literal?"
+common_errors:
+  - "Relying on resolved_at > due_at alone, which never matches open tickets because the comparison with NULL is unknown."
+  - "Using greater-or-equal, which flags tickets resolved exactly at their deadline or open tickets due exactly at the audit time."
+  - "Comparing due_at with the current clock instead of the fixed audit time."

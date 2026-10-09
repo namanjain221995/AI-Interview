@@ -1,0 +1,202 @@
+version: 1
+slug: timeout_log_lines
+title: Timeout Lines per Service
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [sre, support_engineer, backend]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Timeout Lines per Service
+
+  The API gateway ships its log lines to table `gateway_logs`. Different upstream libraries write the
+  same problem in different letter cases (`timeout`, `Timeout`, `TIMEOUT`), and the on-call engineer
+  wants to know which services are timing out the most.
+
+  Table `gateway_logs`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | service | VARCHAR(40) | service name (lowercase letters only) |
+  | message | VARCHAR(500) | free-text log message (ASCII), never NULL |
+
+  A line is a **timeout line** when its `message` contains the substring `timeout` in **any letter
+  case** (so `TimeOut` and `read_timeout=5s` match, but `timed out` and `time out` do not). A line
+  counts once even if the word appears several times.
+
+  Return `service` and `timeout_lines` (the number of timeout lines) for every service with **at
+  least one** timeout line. Order by `timeout_lines` descending, then `service` ascending.
+
+  Your query must behave the same on PostgreSQL, where `LIKE` is case-sensitive, and on SQLite, where
+  it is not.
+
+  ### Example 1
+  ```
+  gateway_logs
+  +----+----------+-----------------------------+
+  | id | service  | message                     |
+  +----+----------+-----------------------------+
+  | 1  | checkout | upstream timeout after 30s  |
+  | 2  | checkout | 200 OK                      |
+  | 3  | search   | Read Timeout on shard 4     |
+  | 4  | checkout | TIMEOUT waiting for lock    |
+  | 5  | auth     | connection reset by peer    |
+  | 6  | search   | request timed out           |
+  +----+----------+-----------------------------+
+
+  Output
+  +----------+---------------+
+  | service  | timeout_lines |
+  +----------+---------------+
+  | checkout | 2             |
+  | search   | 1             |
+  +----------+---------------+
+  "request timed out" does not contain "timeout"; auth has no timeout lines and is omitted.
+  ```
+
+  ### Example 2
+  ```
+  gateway_logs
+  +----+----------+----------------+
+  | id | service  | message        |
+  +----+----------+----------------+
+  | 1  | payments | socket TimeOut |
+  | 2  | billing  | timeout        |
+  | 3  | ledger   | ok             |
+  +----+----------+----------------+
+
+  Output
+  +----------+---------------+
+  | service  | timeout_lines |
+  +----------+---------------+
+  | billing  | 1             |
+  | payments | 1             |
+  +----------+---------------+
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `message` is ASCII text up to 500 characters and is never NULL.
+  - Services without any timeout line are not returned.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return service and timeout_lines (lines containing "timeout" in any case), ordered by timeout_lines DESC, service.
+    SELECT service, COUNT(*) AS timeout_lines
+    FROM gateway_logs
+    GROUP BY service
+    ORDER BY timeout_lines DESC, service;
+reference_solutions:
+  sql: |
+    SELECT service, COUNT(*) AS timeout_lines
+    FROM gateway_logs
+    WHERE LOWER(message) LIKE '%timeout%'
+    GROUP BY service
+    ORDER BY timeout_lines DESC, service;
+sql_setup: |
+  CREATE TABLE gateway_logs (
+    id INTEGER PRIMARY KEY,
+    service VARCHAR(40) NOT NULL,
+    message VARCHAR(500) NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - mixed case matches, 'timed out' does not, service without matches omitted"
+    ordered: true
+    setup_sql: |
+      INSERT INTO gateway_logs (id, service, message) VALUES
+        (1, 'checkout', 'upstream timeout after 30s'), (2, 'checkout', '200 OK'), (3, 'search', 'Read Timeout on shard 4'),
+        (4, 'checkout', 'TIMEOUT waiting for lock'), (5, 'auth', 'connection reset by peer'), (6, 'search', 'request timed out');
+    expected_rows: [["checkout", 2], ["search", 1]]
+  - id: t2
+    description: "Example 2 - tie on count ordered by service name"
+    ordered: true
+    setup_sql: |
+      INSERT INTO gateway_logs (id, service, message) VALUES (1, 'payments', 'socket TimeOut'), (2, 'billing', 'timeout'), (3, 'ledger', 'ok');
+    expected_rows: [["billing", 1], ["payments", 1]]
+  - id: t3
+    hidden: true
+    description: "Empty table returns no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Lines exist but none match - no rows (services with zero must not appear)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO gateway_logs (id, service, message) VALUES
+        (1, 'search', 'time out while dialing'), (2, 'search', 'time-out budget exceeded'), (3, 'auth', 'timed out');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Substring matches inside longer tokens - timeouts, read_timeout=5s, GatewayTimeout"
+    ordered: true
+    setup_sql: |
+      INSERT INTO gateway_logs (id, service, message) VALUES
+        (1, 'search', 'too many timeouts'), (2, 'search', 'config read_timeout=5s'), (3, 'search', '504 GatewayTimeout'),
+        (4, 'search', 'healthy'), (5, 'cart', 'idle_TIMEOUT reached');
+    expected_rows: [["search", 3], ["cart", 1]]
+  - id: t6
+    hidden: true
+    description: "A line mentioning timeout several times counts once"
+    ordered: true
+    setup_sql: |
+      INSERT INTO gateway_logs (id, service, message) VALUES
+        (1, 'queue', 'timeout; retry; timeout; retry; Timeout'), (2, 'queue', 'ok'), (3, 'mailer', 'TIMEOUT TIMEOUT');
+    expected_rows: [["mailer", 1], ["queue", 1]]
+  - id: t7
+    hidden: true
+    description: "Only upper-case and title-case matches - case-sensitive LIKE or GLOB would miss them"
+    ordered: true
+    setup_sql: |
+      INSERT INTO gateway_logs (id, service, message) VALUES
+        (1, 'inventory', 'TIMEOUT'), (2, 'inventory', 'Timeout talking to db'), (3, 'inventory', 'tImEoUt'),
+        (4, 'profile', 'TIMEOUT'), (5, 'profile', 'Retry after Timeout');
+    expected_rows: [["inventory", 3], ["profile", 2]]
+  - id: t8
+    hidden: true
+    description: "Several services with different counts and ties - ordering by count desc then name"
+    ordered: true
+    setup_sql: |
+      INSERT INTO gateway_logs (id, service, message) VALUES
+        (1, 'search', 'timeout'), (2, 'auth', 'timeout'), (3, 'billing', 'timeout'), (4, 'search', 'Timeout'),
+        (5, 'auth', 'TIMEOUT'), (6, 'search', 'timeout again'), (7, 'cart', 'all good'), (8, 'billing', 'ok'),
+        (9, 'zeta', 'timeout'), (10, 'alpha', 'connect timeout'), (11, 'alpha', 'latency 120ms');
+    expected_rows: [["search", 3], ["auth", 2], ["alpha", 1], ["billing", 1], ["zeta", 1]]
+  - id: t9
+    hidden: true
+    description: "LIKE wildcard characters inside messages do not break the match"
+    ordered: true
+    setup_sql: |
+      INSERT INTO gateway_logs (id, service, message) VALUES
+        (1, 'search', '100% cpu then timeout'), (2, 'search', 'path_with_underscores'), (3, 'search', 'timeou_t'),
+        (4, 'search', 'time_out');
+    expected_rows: [["search", 1]]
+expected_concepts:
+  - "case-insensitive matching with LOWER or UPPER"
+  - "LIKE semantics differ between PostgreSQL and SQLite"
+  - "filtering with WHERE before GROUP BY"
+  - "ordering by an aggregate with a tie-breaker"
+optimal_complexity: {time: "O(n * L) for n lines of length up to L (a full scan; leading-wildcard LIKE cannot use a B-tree index)", space: "O(s) for s services"}
+rubric:
+  excellent: "Normalizes case with LOWER(message) LIKE '%timeout%', filters before grouping, orders by count then service, and explains that SQLite's LIKE is case-insensitive for ASCII while PostgreSQL's is not (ILIKE is PostgreSQL-only)."
+  good: "Correct query after a hint about case sensitivity or omitting services without matches."
+  weak: "Relies on case-sensitive matching, counts all lines, or uses an engine-specific operator such as ILIKE or GLOB."
+  criteria:
+    correctness: "All tests pass, including mixed case, substrings inside longer words and services without matches."
+    efficiency: "Single scan with a WHERE filter; mentions that a leading wildcard prevents index use and suggests full-text or trigram indexes for scale."
+    code_quality: "Readable predicate, clear alias and explicit ORDER BY with a tie-breaker."
+    edge_cases: "Empty table, no matches, several occurrences per line and wildcard characters in data."
+    communication: "Explains the portability difference in LIKE and why the result is a substring rather than a word match."
+hints:
+  - "First keep only the lines you care about, then count them per service."
+  - "The same LIKE pattern behaves differently across engines when letter case differs, so make the comparison case-insensitive yourself."
+  - "Filter with WHERE LOWER(message) LIKE '%timeout%', then GROUP BY service with COUNT(*) and order by that count descending and service ascending."
+followups:
+  - "How would you make this fast on a billion log lines?"
+  - "How would you count only the whole word timeout, not read_timeout?"
+  - "How would you report each service's timeout ratio instead of the raw count?"
+common_errors:
+  - "Using message LIKE '%timeout%' and testing only on SQLite, which hides the PostgreSQL case-sensitivity bug."
+  - "Using ILIKE, which does not exist on SQLite."
+  - "Counting all lines per service and filtering in HAVING on the wrong condition."

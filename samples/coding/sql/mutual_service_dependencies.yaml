@@ -1,0 +1,220 @@
+version: 1
+slug: mutual_service_dependencies
+title: "Mutual Service Dependencies"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [platform, sre, backend]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Mutual Service Dependencies
+
+  The observability pipeline does not store individual RPCs. Instead, every hour it writes rollup
+  rows: how many calls one service made to another during that window. The platform team wants a
+  list of services that depend on **each other** (a two-way dependency makes independent deploys
+  risky), together with how much traffic flows in each direction.
+
+  Table `call_rollups` (no primary key):
+
+  | column | type | notes |
+  |--------|------|-------|
+  | window_start | TEXT | start of the hourly window, `YYYY-MM-DD HH:MM` (not needed for the answer) |
+  | caller | VARCHAR(40) | service that made the calls |
+  | callee | VARCHAR(40) | service that received the calls |
+  | calls | INTEGER | number of calls in that window, at least 1 |
+
+  The same `(caller, callee)` combination usually appears in many windows, and the collector may even
+  write the same window twice: **every row counts**. A service can call itself; self-calls never
+  form a pair. Service names are lowercase ASCII letters.
+
+  Services `x` and `y` (with `x <> y`) are **mutually dependent** when the table has at least one
+  row from `x` to `y` and at least one row from `y` to `x`. For each such pair return one row:
+
+  - `service_a`, `service_b`: the two names with `service_a < service_b`
+  - `calls_a_to_b`: total `calls` over all rows where `service_a` called `service_b`
+  - `calls_b_to_a`: total `calls` over all rows where `service_b` called `service_a`
+
+  Order by `service_a`, then `service_b`, both ascending. Totals can exceed the 32-bit range.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  call_rollups
+  +------------------+---------+---------+-------+
+  | window_start     | caller  | callee  | calls |
+  +------------------+---------+---------+-------+
+  | 2026-05-04 10:00 | api     | auth    | 120   |
+  | 2026-05-04 10:00 | auth    | api     | 15    |
+  | 2026-05-04 11:00 | api     | auth    | 80    |
+  | 2026-05-04 11:00 | auth    | api     | 5     |
+  | 2026-05-04 10:00 | billing | ledger  | 40    |
+  | 2026-05-04 11:00 | ledger  | billing | 3     |
+  | 2026-05-04 11:00 | api     | billing | 9     |
+  | 2026-05-04 11:00 | cache   | cache   | 500   |
+  +------------------+---------+---------+-------+
+
+  Output
+  +-----------+-----------+--------------+--------------+
+  | service_a | service_b | calls_a_to_b | calls_b_to_a |
+  +-----------+-----------+--------------+--------------+
+  | api       | auth      | 200          | 20           |
+  | billing   | ledger    | 40           | 3            |
+  +-----------+-----------+--------------+--------------+
+  ```
+  In the 10:00 and 11:00 windows api called auth 120 + 80 = 200 times and auth called api 15 + 5 = 20
+  times. api -> billing has no reverse direction and cache only calls itself.
+
+  ### Example 2
+  ```
+  call_rollups
+  +------------------+--------+--------+-------+
+  | window_start     | caller | callee | calls |
+  +------------------+--------+--------+-------+
+  | 2026-05-04 10:00 | web    | api    | 10    |
+  | 2026-05-04 10:00 | api    | db     | 7     |
+  | 2026-05-04 11:00 | db     | web    | 2     |
+  +------------------+--------+--------+-------+
+
+  Output: no rows
+  ```
+  The three services form a cycle, but no two of them call each other directly.
+
+  ### Constraints
+  - `0 <= rows in call_rollups <= 10^5`
+  - `1 <= calls <= 2 * 10^9` per row; totals per direction can exceed `2^31 - 1`
+  - The output order is part of the answer.
+languages: [sql]
+starter_code:
+  sql: |
+    -- One row per pair of services that call each other, with the total calls in each direction.
+    SELECT caller AS service_a, callee AS service_b, calls AS calls_a_to_b, calls AS calls_b_to_a
+    FROM call_rollups
+    ORDER BY service_a, service_b;
+reference_solutions:
+  sql: |
+    WITH totals AS (
+      SELECT caller, callee, SUM(calls) AS total
+      FROM call_rollups
+      WHERE caller <> callee
+      GROUP BY caller, callee
+    )
+    SELECT f.caller AS service_a,
+           f.callee AS service_b,
+           f.total AS calls_a_to_b,
+           r.total AS calls_b_to_a
+    FROM totals f
+    JOIN totals r
+      ON r.caller = f.callee
+     AND r.callee = f.caller
+    WHERE f.caller < f.callee
+    ORDER BY service_a, service_b;
+sql_setup: |
+  CREATE TABLE call_rollups (
+    window_start TEXT NOT NULL,
+    caller VARCHAR(40) NOT NULL,
+    callee VARCHAR(40) NOT NULL,
+    calls INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - both directions span two windows (join-before-sum would double the totals)"
+    setup_sql: |
+      INSERT INTO call_rollups (window_start, caller, callee, calls) VALUES
+        ('2026-05-04 10:00', 'api', 'auth', 120), ('2026-05-04 10:00', 'auth', 'api', 15), ('2026-05-04 11:00', 'api', 'auth', 80), ('2026-05-04 11:00', 'auth', 'api', 5),
+        ('2026-05-04 10:00', 'billing', 'ledger', 40), ('2026-05-04 11:00', 'ledger', 'billing', 3), ('2026-05-04 11:00', 'api', 'billing', 9), ('2026-05-04 11:00', 'cache', 'cache', 500);
+    expected_rows: [["api", "auth", 200, 20], ["billing", "ledger", 40, 3]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - a three-service cycle without any direct two-way pair"
+    setup_sql: |
+      INSERT INTO call_rollups (window_start, caller, callee, calls) VALUES
+        ('2026-05-04 10:00', 'web', 'api', 10), ('2026-05-04 10:00', 'api', 'db', 7), ('2026-05-04 11:00', 'db', 'web', 2);
+    expected_rows: []
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Only self-calls across several windows - never a pair"
+    setup_sql: |
+      INSERT INTO call_rollups (window_start, caller, callee, calls) VALUES
+        ('2026-05-04 10:00', 'cache', 'cache', 4), ('2026-05-04 11:00', 'cache', 'cache', 6), ('2026-05-04 10:00', 'queue', 'queue', 1);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Asymmetric fan-out: 3 windows one way, 2 the other; columns oriented from service_a"
+    setup_sql: |
+      INSERT INTO call_rollups (window_start, caller, callee, calls) VALUES
+        ('2026-05-04 10:00', 'search', 'index', 5), ('2026-05-04 11:00', 'search', 'index', 6), ('2026-05-04 12:00', 'search', 'index', 7), ('2026-05-04 10:00', 'index', 'search', 1),
+        ('2026-05-04 12:00', 'index', 'search', 2);
+    expected_rows: [["index", "search", 3, 18]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Hub with three mutual partners and one one-way edge - order by service_b within service_a"
+    setup_sql: |
+      INSERT INTO call_rollups (window_start, caller, callee, calls) VALUES
+        ('2026-05-04 10:00', 'gateway', 'users', 50), ('2026-05-04 10:00', 'users', 'gateway', 1), ('2026-05-04 11:00', 'orders', 'gateway', 2), ('2026-05-04 11:00', 'gateway', 'orders', 30),
+        ('2026-05-04 12:00', 'gateway', 'carts', 11), ('2026-05-04 12:00', 'carts', 'gateway', 12), ('2026-05-04 10:00', 'gateway', 'metrics', 99);
+    expected_rows: [["carts", "gateway", 12, 11], ["gateway", "orders", 30, 2], ["gateway", "users", 50, 1]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Prefix names (auth vs authz) and pairs inserted in reverse orientation"
+    setup_sql: |
+      INSERT INTO call_rollups (window_start, caller, callee, calls) VALUES
+        ('2026-05-04 10:00', 'authz', 'auth', 3), ('2026-05-04 10:00', 'auth', 'authz', 4), ('2026-05-04 11:00', 'zeta', 'alpha', 8), ('2026-05-04 11:00', 'alpha', 'zeta', 9),
+        ('2026-05-04 11:00', 'auth', 'alpha', 1);
+    expected_rows: [["alpha", "zeta", 9, 8], ["auth", "authz", 4, 3]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Totals exceed 32-bit range (two windows of 2e9 calls)"
+    setup_sql: |
+      INSERT INTO call_rollups (window_start, caller, callee, calls) VALUES
+        ('2026-05-04 10:00', 'edge', 'origin', 2000000000), ('2026-05-04 11:00', 'edge', 'origin', 2000000000), ('2026-05-04 10:00', 'origin', 'edge', 1);
+    expected_rows: [["edge", "origin", 4000000000, 1]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Duplicate rows for the same window both count; self-calls inside a mutual pair are ignored"
+    setup_sql: |
+      INSERT INTO call_rollups (window_start, caller, callee, calls) VALUES
+        ('2026-05-04 10:00', 'mail', 'pager', 2), ('2026-05-04 10:00', 'mail', 'pager', 2), ('2026-05-04 10:00', 'pager', 'mail', 3), ('2026-05-04 10:00', 'mail', 'mail', 40),
+        ('2026-05-04 11:00', 'pager', 'sms', 6), ('2026-05-04 11:00', 'sms', 'push', 1), ('2026-05-04 11:00', 'push', 'sms', 1), ('2026-05-04 11:00', 'push', 'push', 7);
+    expected_rows: [["mail", "pager", 4, 3], ["push", "sms", 1, 1]]
+expected_concepts:
+  - "aggregate per direction before joining (avoids join fan-out)"
+  - "self-join with caller and callee swapped"
+  - "canonical orientation of an unordered pair (a < b)"
+  - "excluding self-loops"
+  - "deterministic ORDER BY"
+optimal_complexity: {time: "O(n log n) - one grouping pass plus a join of the per-direction totals", space: "O(d) for d distinct directed edges"}
+rubric:
+  excellent: "Aggregates calls per (caller, callee) first, self-joins the totals with the roles swapped, keeps caller < callee, drops self-calls, orders deterministically and explains why joining raw rows before summing multiplies the totals."
+  good: "Correct query after a hint about the inflated totals or about returning each pair once."
+  weak: "Joins the raw rollup rows and sums afterwards (inflated totals), returns both orientations of a pair, or includes self-calls."
+  criteria:
+    correctness: "All tests pass, including multi-window fan-out, duplicate rows, self-calls and totals beyond 32 bits."
+    efficiency: "One grouping pass and one join on the reduced edge set; mentions an index or pre-aggregation for large rollup tables."
+    code_quality: "A named CTE or derived table for the per-direction totals and clear output aliases."
+    edge_cases: "Empty table, only self-calls, cycles longer than two and a hub with several partners."
+    communication: "Explains join fan-out and why caller < callee both de-duplicates pairs and removes self-calls."
+hints:
+  - "There are two separate jobs here: totalling the traffic of each direction, and matching a direction with its reverse. Think about which should happen first."
+  - "If you join raw rollup rows to each other, a direction stored in three windows meets each of the reverse direction's rows, so its calls get counted several times. Reduce the table to one row per (caller, callee) before matching."
+  - "Group by caller and callee (ignoring rows where they are equal) to get a total per direction, then join that result to itself where the second copy's caller is the first copy's callee and vice versa, keep only the orientation where caller sorts before callee, and order by the two names."
+followups:
+  - "How would you rewrite this so the per-direction totals are computed only once on PostgreSQL?"
+  - "How would you report only pairs where the weaker direction carries at least 1% of the traffic?"
+  - "How would you detect dependency cycles of length three or more?"
+common_errors:
+  - "Joining the raw hourly rows before summing, which multiplies each total by the number of windows on the other side."
+  - "Filtering with caller <> callee only, which returns every pair twice."
+  - "Swapping the two count columns so calls_a_to_b holds the traffic from service_b."
+  - "Omitting ORDER BY when the output order is part of the contract."

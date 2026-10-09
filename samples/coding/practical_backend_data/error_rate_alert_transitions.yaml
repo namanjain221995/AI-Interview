@@ -1,0 +1,160 @@
+version: 1
+slug: error_rate_alert_transitions
+title: "Error-Rate Alert State Transitions"
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [sre, devops, platform, backend]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Error-Rate Alert State Transitions
+
+  You are replaying a request log to test a new error-rate alert before turning it on in production.
+  Request `i` arrived at `times[i]` (milliseconds; `times` is **non-decreasing**) and `failed[i]`
+  tells whether it failed.
+
+  The alert is evaluated once at every **distinct** request time `t`, after **all** requests with time
+  `t` have been counted. The evaluation looks at the requests in the window `(t - window, t]`: times
+  strictly greater than `t - window` and at most `t`. With `count` requests and `errors` failed
+  requests in that window, the alert is **firing** when
+
+  - `count >= min_requests`, and
+  - `errors * 100 >= threshold_pct * count`.
+
+  Otherwise it is **resolved**. The alert starts resolved and nothing is evaluated between requests.
+
+  Return the list of times at which the state **changes**, in increasing order. The first entry (if
+  any) is when the alert starts firing, the second when it resolves, and so on, alternating.
+
+  ### Example 1
+  ```
+  Input:  times = [100, 200, 300, 900, 1300, 1500], failed = [true, false, true, false, false, true], window = 1000, min_requests = 3, threshold_pct = 50
+  Output: [300, 1300]
+  Explanation: at 300 the window (-700, 300] holds 3 requests with 2 failures (66%), so the
+  alert fires. At 900 it is 2 failures out of 4 (50%), still firing. At 1300 the window
+  (300, 1300] holds only the requests at 900 and 1300 (the one at 300 is exactly 1000 ms old
+  and has left), which is below min_requests, so the alert resolves. At 1500 it is 1 failure
+  out of 3, still resolved.
+  ```
+
+  ### Example 2
+  ```
+  Input:  times = [10, 10, 20, 20, 30], failed = [false, false, true, true, false], window = 100, min_requests = 3, threshold_pct = 50
+  Output: [20, 30]
+  Explanation: the two requests at time 20 are evaluated together: 2 failures out of 4 meets
+  the 50% threshold exactly. At 30, 2 failures out of 5 is below it.
+  ```
+
+  ### Constraints
+  - `0 <= times.length <= 10^5`, `failed.length == times.length`
+  - `0 <= times[i] <= 10^13`, non-decreasing
+  - `1 <= window <= 10^13`
+  - `1 <= min_requests <= 10^5`
+  - `1 <= threshold_pct <= 100`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: alert_transitions
+  params:
+    - {name: times, type: "long[]"}
+    - {name: failed, type: "bool[]"}
+    - {name: window, type: "long"}
+    - {name: min_requests, type: "int"}
+    - {name: threshold_pct, type: "int"}
+  return_type: "long[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def alert_transitions(times: list[int], failed: list[bool], window: int,
+                          min_requests: int, threshold_pct: int) -> list[int]:
+        changes: list[int] = []
+        firing = False
+        left = 0
+        errors = 0
+        n = len(times)
+        i = 0
+        while i < n:
+            t = times[i]
+            # Add every request at time t.
+            while i < n and times[i] == t:
+                if failed[i]:
+                    errors += 1
+                i += 1
+            # Drop requests that are no longer inside (t - window, t].
+            while times[left] <= t - window:
+                if failed[left]:
+                    errors -= 1
+                left += 1
+            count = i - left
+            now = count >= min_requests and errors * 100 >= threshold_pct * count
+            if now != firing:
+                changes.append(t)
+                firing = now
+        return changes
+  javascript: |
+    function alertTransitions(times, failed, window, minRequests, thresholdPct) {
+      const changes = [];
+      let firing = false;
+      let left = 0;
+      let errors = 0;
+      let i = 0;
+      const n = times.length;
+      while (i < n) {
+        const t = times[i];
+        while (i < n && times[i] === t) {
+          if (failed[i]) errors += 1;
+          i += 1;
+        }
+        while (times[left] <= t - window) {
+          if (failed[left]) errors -= 1;
+          left += 1;
+        }
+        const count = i - left;
+        const now = count >= minRequests && errors * 100 >= thresholdPct * count;
+        if (now !== firing) {
+          changes.push(t);
+          firing = now;
+        }
+      }
+      return changes;
+    }
+tests:
+  - {id: t1, args: [[100, 200, 300, 900, 1300, 1500], [true, false, true, false, false, true], 1000, 3, 50], expected: [300, 1300], description: "Example 1 - fires, stays firing at exactly 50%, resolves when the exclusive window edge drops traffic below min_requests"}
+  - {id: t2, args: [[10, 10, 20, 20, 30], [false, false, true, true, false], 100, 3, 50], expected: [20, 30], description: "Example 2 - same-time requests evaluated together; exact threshold fires"}
+  - {id: t3, hidden: true, args: [[], [], 60000, 1, 10], expected: [], description: "No requests - no transitions"}
+  - {id: t4, hidden: true, args: [[5, 6, 7], [true, true, true], 100, 4, 1], expected: [], description: "Every request fails but traffic never reaches min_requests"}
+  - {id: t5, hidden: true, args: [[0, 100, 200], [true, true, false], 100, 1, 100], expected: [0, 200], description: "Window lower bound is exclusive - a request exactly window ms old has left"}
+  - {id: t6, hidden: true, args: [[1, 2, 3, 4, 5, 6, 7, 8], [true, true, false, false, true, true, false, false], 2, 2, 50], expected: [2, 4, 5, 8], description: "Flapping - state toggles repeatedly as the two-request window alternates"}
+  - {id: t7, hidden: true, args: [[1, 1, 1, 1], [true, false, false, false], 10, 1, 25], expected: [1], description: "All requests share one timestamp - a single evaluation, 25% meets a 25% threshold"}
+  - {id: t8, hidden: true, args: [[9999999999000, 9999999999500, 10000000000000, 10000000009000], [true, true, false, false], 1000, 2, 60], expected: [9999999999500, 10000000000000], description: "Timestamps near 10^13 - needs 64-bit arithmetic; fires then resolves when the ratio drops below 60%"}
+  - {id: t9, hidden: true, args: [[10, 20, 30, 40], [false, false, false, false], 50, 1, 1], expected: [], description: "No failures with a 1% threshold - never fires"}
+  - {id: t10, hidden: true, args: [[1700000000120, 1700000000240, 1700000000540, 1700000000840, 1700000001140, 1700000001140, 1700000001140, 1700000002040, 1700000002340, 1700000002460, 1700000002760, 1700000003060, 1700000003360, 1700000003360, 1700000003360, 1700000003480, 1700000003780, 1700000004080, 1700000004130, 1700000005030, 1700000005930, 1700000006230, 1700000006230, 1700000006280, 1700000006580, 1700000006580, 1700000006580, 1700000006630, 1700000006630, 1700000006630, 1700000006630, 1700000007530, 1700000007530, 1700000007530, 1700000007580, 1700000007630, 1700000007750, 1700000007750, 1700000008650, 1700000008650, 1700000008770, 1700000009070, 1700000009370, 1700000010270, 1700000010390, 1700000010390, 1700000010390, 1700000010690, 1700000010690, 1700000010810, 1700000011110, 1700000011110, 1700000011110, 1700000011160, 1700000011460, 1700000011510, 1700000011510, 1700000011810, 1700000011810, 1700000011860, 1700000011860, 1700000011980, 1700000011980, 1700000011980, 1700000012030, 1700000012330, 1700000012330, 1700000013230, 1700000013230, 1700000013350, 1700000013650, 1700000013650, 1700000013650, 1700000013700, 1700000014600, 1700000014720, 1700000015020, 1700000015320, 1700000016220, 1700000016220, 1700000016520, 1700000016820, 1700000016870, 1700000016870, 1700000016870, 1700000016990, 1700000016990, 1700000017040, 1700000017040, 1700000017040, 1700000017090, 1700000017990, 1700000017990, 1700000017990, 1700000018040, 1700000018040, 1700000018940, 1700000018940, 1700000018990, 1700000018990, 1700000019290, 1700000019290, 1700000020190, 1700000020190, 1700000020240, 1700000021140, 1700000021140, 1700000021260, 1700000021260, 1700000021560, 1700000022460, 1700000022760, 1700000022760, 1700000023660, 1700000023710, 1700000024610, 1700000025510, 1700000025630, 1700000025930, 1700000026230, 1700000026530, 1700000026530, 1700000027430, 1700000027730, 1700000027850, 1700000027850, 1700000027850, 1700000027850, 1700000027900, 1700000028020, 1700000028020, 1700000028920, 1700000029820, 1700000029820, 1700000029940, 1700000029990, 1700000029990, 1700000029990, 1700000030040, 1700000030040, 1700000030090, 1700000030210, 1700000030510, 1700000030560, 1700000030860, 1700000030860, 1700000030910, 1700000030910, 1700000030960, 1700000031010, 1700000031310, 1700000031310, 1700000031310, 1700000031360, 1700000031360, 1700000032260, 1700000032260, 1700000033160, 1700000033210, 1700000034110, 1700000034230, 1700000035130, 1700000035250, 1700000035250, 1700000035300, 1700000035600, 1700000035900, 1700000035900, 1700000036800, 1700000036800, 1700000037700, 1700000037820, 1700000038720, 1700000038720, 1700000039020, 1700000039320, 1700000039370, 1700000040270, 1700000040270, 1700000041170, 1700000041170, 1700000041290, 1700000041340, 1700000041390, 1700000042290, 1700000042340, 1700000042340, 1700000042640, 1700000042690, 1700000042690, 1700000042690, 1700000042690, 1700000042740, 1700000042740, 1700000043040, 1700000043340, 1700000044240, 1700000044360, 1700000045260, 1700000045260, 1700000045560, 1700000046460, 1700000046460, 1700000046760, 1700000047660, 1700000047960, 1700000047960, 1700000048260, 1700000048380, 1700000048680, 1700000048680, 1700000048680, 1700000048680, 1700000048800, 1700000049100, 1700000049100, 1700000049100, 1700000049220, 1700000049340, 1700000049460, 1700000049510, 1700000049630, 1700000049630, 1700000049930, 1700000049980, 1700000049980, 1700000049980, 1700000050880, 1700000051780, 1700000052080, 1700000052200, 1700000052200, 1700000052500, 1700000052500, 1700000052620, 1700000053520, 1700000053820, 1700000054120, 1700000055020, 1700000055020, 1700000055320, 1700000055320, 1700000056220, 1700000056270, 1700000056320, 1700000056320, 1700000056320, 1700000056320, 1700000056320, 1700000056370, 1700000056490, 1700000056610, 1700000057510, 1700000057630, 1700000057630, 1700000057930, 1700000057980, 1700000058280, 1700000058330, 1700000059230, 1700000059230, 1700000059230, 1700000059530, 1700000059830, 1700000059830, 1700000059830, 1700000059830, 1700000060730, 1700000060730, 1700000061630, 1700000061630, 1700000061750, 1700000061800, 1700000062100, 1700000063000, 1700000063000, 1700000063120, 1700000063170, 1700000063170, 1700000063170, 1700000063170, 1700000063170, 1700000064070, 1700000064970, 1700000065270, 1700000065570, 1700000065620, 1700000065670, 1700000065670, 1700000065670, 1700000065790, 1700000065840, 1700000066740, 1700000066860, 1700000066980, 1700000066980, 1700000067030, 1700000067030, 1700000067080, 1700000067380, 1700000067430, 1700000068330, 1700000068330, 1700000068630, 1700000068630, 1700000068750, 1700000069650, 1700000069770, 1700000069770, 1700000069770, 1700000069820, 1700000070120, 1700000070120, 1700000070120, 1700000070170, 1700000070220, 1700000070520, 1700000070820, 1700000070820, 1700000071720, 1700000072020, 1700000072020, 1700000072020, 1700000072020, 1700000072320, 1700000072320, 1700000072440, 1700000072740, 1700000072790, 1700000072840, 1700000072890, 1700000072940, 1700000073840, 1700000073840, 1700000074140, 1700000074140, 1700000075040, 1700000075090, 1700000075090, 1700000075990, 1700000075990, 1700000075990, 1700000076110, 1700000076110, 1700000076110, 1700000077010, 1700000077010, 1700000077010, 1700000077010, 1700000077130, 1700000077130, 1700000077180, 1700000077180, 1700000077180, 1700000077300, 1700000078200, 1700000078320, 1700000079220, 1700000079220, 1700000080120, 1700000080240, 1700000080290, 1700000080590, 1700000080640, 1700000081540, 1700000082440, 1700000083340, 1700000083340, 1700000083340, 1700000084240, 1700000085140, 1700000085140, 1700000085190, 1700000085490, 1700000085490, 1700000085490, 1700000086390, 1700000086390, 1700000086440, 1700000086490, 1700000086540, 1700000086540, 1700000086540, 1700000086660, 1700000086960, 1700000086960, 1700000087860, 1700000087860, 1700000088760, 1700000089060, 1700000089360, 1700000089360, 1700000089410, 1700000089530, 1700000089530, 1700000089650, 1700000089770, 1700000089890, 1700000089890, 1700000089890], [false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, true, false, true, false, false, false, false, false, false, false, false, false, false, false, true, true, false, false, false, true, true, false, true, true, false, false, true, false, true, false, false, true, false, true, true, true, false, true, false, false, false, false, false, false, true, true, false, true, true, true, false, false, false, true, false, false, false, false, true, true, true, true, true, false, true, false, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, true, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, true, true, false, true, true, true, false, false, false, false, true, false, true, true, true, false, false, true, true, true, false, true, true, true, false, false, false, false, true, false, false, true, true, false, true, false, true, true, true, true, true, true, true, false, false, false, true, false, true, true, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, true, false, true, false, true, true, false, true, false, true, false, true, true, false, true, true, false, true, false, false, true, false, true, true, false, false, true, true, true, true, false, false, false, true, false, true, true, true, false, false, false, false, true, true, true, false, false, false, false, true, false, false, false, true, false, false, false, true, false, false, true, false, false, false, false, false, false, false, false, false, false, true, true, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false], 3000, 5, 30], expected: [1700000014600, 1700000027850, 1700000042640, 1700000056220, 1700000068750, 1700000078200, 1700000078320, 1700000079220, 1700000085490, 1700000086490], description: "Stress - 400 requests with duplicate timestamps and alternating calm and failing phases"}
+expected_concepts:
+  - "sliding window with two pointers over sorted timestamps"
+  - "running counters for requests and failures in the window"
+  - "grouping equal timestamps before evaluation"
+  - "integer arithmetic for the percentage comparison"
+  - "edge-triggered output (state changes only)"
+optimal_complexity: {time: "O(n)", space: "O(1) extra besides the output"}
+rubric:
+  excellent: "Uses a two-pointer window with running request and failure counts, evaluates only after all requests at a timestamp, applies the exclusive lower bound and integer threshold comparison, emits only state changes and states O(n)."
+  good: "Correct sliding-window solution after fixing one boundary issue such as equal timestamps or the exclusive window edge."
+  weak: "Recounts the window for every request in O(n^2), evaluates between requests at the same time, or uses floating-point ratios that misjudge the exact threshold."
+  criteria:
+    correctness: "All tests pass, including same-time batches, exact threshold hits and the exclusive window bound."
+    efficiency: "Each request enters and leaves the window once; linear overall."
+    code_quality: "Clear names for the window pointers and counters, with the firing condition in one place."
+    edge_cases: "Empty log, traffic below min_requests, flapping, a single timestamp and 64-bit times."
+    communication: "Relates min_requests and the window to avoiding noisy alerts on low traffic."
+hints:
+  - "Since times are sorted, the requests inside (t - window, t] form a contiguous block of the log that only moves forward as t grows."
+  - "Keep a left pointer plus running counts of requests and failures; add every request with the current time before evaluating, then drop requests from the left while their time is at most t - window."
+  - "Loop over groups of equal times: add the group, advance left while times[left] <= t - window (subtracting failures), compute firing with count >= min_requests and errors * 100 >= threshold_pct * count, and append t whenever firing differs from the previous state."
+followups:
+  - "How would you add a cooldown so the alert cannot resolve within five minutes of firing?"
+  - "How would you evaluate the alert every minute of wall-clock time instead of only at request times?"
+  - "How would you run this per service for thousands of services in a streaming system?"
+  - "Why is comparing errors * 100 with threshold_pct * count safer than computing a floating-point ratio?"
+common_errors:
+  - "Evaluating after each individual request rather than after the whole group with the same time."
+  - "Keeping requests exactly window milliseconds old, which makes the lower bound inclusive."
+  - "Recomputing the window from scratch for every request, which is quadratic."
+  - "Emitting the state at every evaluation instead of only when it changes."

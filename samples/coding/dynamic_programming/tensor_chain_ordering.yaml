@@ -1,0 +1,117 @@
+version: 1
+slug: tensor_chain_ordering
+title: Tensor Chain Ordering
+difficulty: hard
+competency_keys: [algorithms, problem_solving]
+role_tags: [general, ml, data_scientist, llm]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Tensor Chain Ordering
+
+  An inference compiler must evaluate a fixed chain of matrix products `M0 * M1 * ... * M(n-1)` from a
+  model's projection layers. Matrix `Mi` has shape `dims[i] x dims[i + 1]`, so the chain is always
+  compatible. Matrix multiplication is associative, so the compiler may choose any parenthesization, but
+  the order of the matrices cannot change.
+
+  Multiplying a `p x q` matrix by a `q x r` matrix costs `p * q * r` scalar multiplications and produces a
+  `p x r` matrix. Return the **minimum total number of scalar multiplications** needed to compute the whole
+  product. A chain of a single matrix needs no work, so the answer is `0`.
+
+  ### Example 1
+  ```
+  Input:  dims = [4, 10, 3, 12, 20]
+  Output: 1080
+  Explanation: Compute (M0 * M1) * (M2 * M3): 4*10*3 = 120, 3*12*20 = 720, then 4*3*20 = 240.
+  Going strictly left to right costs 120 + 144 + 960 = 1224.
+  ```
+
+  ### Example 2
+  ```
+  Input:  dims = [5, 7]
+  Output: 0
+  ```
+
+  ### Constraints
+  - `2 <= dims.length <= 101` (between 1 and 100 matrices)
+  - `1 <= dims[i] <= 500`
+  - The answer can exceed the 32-bit integer range.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: min_scalar_multiplications
+  params:
+    - {name: dims, type: "int[]"}
+  return_type: "long"
+  comparison: exact
+reference_solutions:
+  python: |
+    def min_scalar_multiplications(dims: list[int]) -> int:
+        count = len(dims) - 1
+        # cost[i][j] = cheapest way to compute Mi * ... * Mj
+        cost = [[0] * count for _ in range(count)]
+        for length in range(2, count + 1):
+            for i in range(count - length + 1):
+                j = i + length - 1
+                cost[i][j] = min(
+                    cost[i][split] + cost[split + 1][j] + dims[i] * dims[split + 1] * dims[j + 1]
+                    for split in range(i, j)
+                )
+        return cost[0][count - 1]
+  javascript: |
+    function minScalarMultiplications(dims) {
+      const count = dims.length - 1;
+      const cost = Array.from({ length: count }, () => new Array(count).fill(0));
+      for (let length = 2; length <= count; length++) {
+        for (let i = 0; i + length - 1 < count; i++) {
+          const j = i + length - 1;
+          let best = Infinity;
+          for (let split = i; split < j; split++) {
+            const c = cost[i][split] + cost[split + 1][j] + dims[i] * dims[split + 1] * dims[j + 1];
+            if (c < best) best = c;
+          }
+          cost[i][j] = best;
+        }
+      }
+      return cost[0][count - 1];
+    }
+tests:
+  - {id: t1, args: [[4, 10, 3, 12, 20]], expected: 1080, description: "Example 1"}
+  - {id: t2, args: [[5, 7]], expected: 0, description: "Example 2 - single matrix costs nothing"}
+  - {id: t3, hidden: true, args: [[3, 4, 5]], expected: 60, description: "Two matrices: only one way, 3*4*5 = 60"}
+  - {id: t4, hidden: true, args: [[1, 1, 1, 1, 1, 1]], expected: 4, description: "All dimensions 1: each of the four products costs 1"}
+  - {id: t5, hidden: true, args: [[500, 1, 500, 1, 500]], expected: 251000, description: "Alternating huge and tiny dimensions; pairing (M0*M1)(M2*M3) costs over 125 million, the best is 251,000"}
+  - {id: t6, hidden: true, args: [[500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500]], expected: 2250000000, description: "19 square 500x500 matrices: 18 * 125,000,000 = 2.25e9 exceeds 32-bit"}
+  - {id: t7, hidden: true, args: [[2, 40, 3, 50, 1, 60, 2]], expected: 474, description: "Mixed small and large dimensions; neither left-to-right nor right-to-left is optimal (474)"}
+  - {id: t8, hidden: true, args: [[10, 20, 30, 40, 50, 60]], expected: 68000, description: "Increasing dimensions: left-to-right is optimal"}
+  - {id: t9, hidden: true, args: [[60, 50, 40, 30, 20, 10]], expected: 68000, description: "Decreasing dimensions: right-to-left is optimal"}
+  - {id: t10, hidden: true, args: [[378, 332, 347, 173, 385, 232, 90, 104, 178, 223, 45, 452, 78, 371, 120, 222, 60, 446, 213, 477, 410, 125, 178, 495, 18, 492, 484, 74, 409, 234, 211, 283, 315, 436, 291, 5, 339, 118, 115, 202, 322, 36, 92, 116, 264, 58, 306, 84, 381, 139, 184, 1, 232, 40, 372, 252, 414, 225, 236, 322, 79, 153, 32, 156, 207, 29, 90, 389, 245, 389, 424, 343, 82, 257, 327, 220, 142, 129, 407, 197, 461, 256, 24, 333, 143, 371, 413, 46, 131, 197, 159, 5, 146, 28, 62, 314, 191, 238, 333, 417, 348]], expected: 5197560, description: "Stress: 100 matrices with pseudo-random dimensions; O(n^3) DP"}
+expected_concepts:
+  - "the last multiplication splits the chain into two independent sub-chains"
+  - "interval DP over (first matrix, last matrix)"
+  - "split cost dims[i] * dims[k + 1] * dims[j + 1]"
+  - "filling by increasing chain length"
+  - "64-bit arithmetic"
+optimal_complexity: {time: "O(n^3)", space: "O(n^2)"}
+rubric:
+  excellent: "Explains that the final multiplication splits the chain, defines cost over sub-chains, fills the table by increasing length with the correct split cost, uses 64-bit arithmetic and states O(n^3) time and O(n^2) space."
+  good: "Correct memoised recursion or table with a small indexing slip fixed after testing."
+  weak: "Greedily multiplies the cheapest adjacent pair, enumerates all parenthesizations (Catalan many), or overflows 32-bit."
+  criteria:
+    correctness: "All tests pass, including a single matrix and the 32-bit overflow case."
+    efficiency: "O(n^3) interval DP."
+    code_quality: "Indices i, j and split are consistent with the dims layout; base case is explicit."
+    edge_cases: "One and two matrices, all-ones dimensions, extreme dimension contrasts."
+    communication: "Explains why greedy pair choice fails and why sub-chains are independent."
+hints:
+  - "Think about the very last multiplication performed. What do its two operands look like?"
+  - "The last multiplication combines the product of a prefix of the chain with the product of the remaining suffix, and those two products can be optimised independently."
+  - "Let the cost of a sub-chain from matrix i to matrix j be the minimum over every split point s of the cost from i to s, plus the cost from s plus one to j, plus dims at i times dims at s plus one times dims at j plus one. A single matrix costs zero; fill the table by increasing chain length and use 64-bit sums."
+followups:
+  - "How would you output the optimal parenthesization as a string?"
+  - "Why does always multiplying the cheapest adjacent pair first fail?"
+  - "Can the DP be sped up beyond O(n^3)? What is known about this problem?"
+  - "How would memory layout or GPU kernels change which order is actually fastest?"
+common_errors:
+  - "Using the wrong dimensions in the split cost (for example dims at s instead of s plus one)."
+  - "Greedily multiplying the cheapest adjacent pair."
+  - "Enumerating every parenthesization, which grows exponentially."
+  - "Overflowing 32-bit integers on large dimensions."

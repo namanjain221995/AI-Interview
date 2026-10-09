@@ -1,0 +1,179 @@
+version: 1
+slug: vector_clock_sibling_values
+title: Concurrent Writes Under Vector Clocks
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [backend, platform, sre, general]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Concurrent Writes Under Vector Clocks
+
+  A replicated key-value store accepts writes on several replicas at once. Each write carries a
+  **vector clock** that records how many updates from every replica the writer had already seen.
+  When a client reads a key, the store must return every value that has not been superseded, so the
+  client can merge conflicting versions itself.
+
+  Each write is `[key, value, clock]`. The clock is a comma-separated list of `replica:counter`
+  entries such as `"a:3,b:1"`; the empty string `""` is a valid clock. A replica that is not listed
+  has counter `0`, so `"a:2,b:0"` and `"a:2"` are the same clock, and the entry order in the string
+  does not matter.
+
+  For two writes to the **same key**, write `X` is **superseded** by write `Y` when every counter of
+  `X` is less than or equal to the matching counter of `Y` and the two clocks are not equal. Writes
+  whose clocks are equal, or where each has a larger counter somewhere (concurrent writes), do not
+  supersede each other.
+
+  For each key, keep the values of all writes that are not superseded by any other write to that key.
+  Return one row per key: `[key, value1, value2, ...]`, where the values are **distinct** and sorted
+  in ascending character order. Sort the rows by `key` in ascending character order (plain character
+  code comparison, so uppercase letters sort before lowercase ones).
+
+  ### Example 1
+  ```
+  Input:  writes = [["cart:42", "apples", "a:1"],
+                    ["cart:42", "apples,pears", "a:2"],
+                    ["cart:42", "apples,plums", "a:1,b:1"],
+                    ["profile:7", "dark", "b:3"],
+                    ["profile:7", "light", "b:2"]]
+  Output: [["cart:42", "apples,pears", "apples,plums"], ["profile:7", "dark"]]
+  Explanation: "apples" (a:1) is superseded by both later writes. "a:2" and "a:1,b:1" are
+  concurrent, so both values survive. For profile:7, b:2 is superseded by b:3.
+  ```
+
+  ### Example 2
+  ```
+  Input:  writes = [["flag", "on", "x:1,y:0"],
+                    ["flag", "on", "x:1"],
+                    ["flag", "off", "y:1"],
+                    ["banner", "spring", ""]]
+  Output: [["banner", "spring"], ["flag", "off", "on"]]
+  Explanation: "x:1,y:0" equals "x:1", so the two "on" writes collapse into one value. "x:1" and
+  "y:1" are concurrent. A key with a single write keeps it, whatever its clock.
+  ```
+
+  ### Constraints
+  - `0 <= writes.length <= 2000`, and every key has at most 300 writes
+  - `writes[i].length == 3`; keys and values are non-empty strings of printable ASCII characters
+  - replica ids are non-empty strings of lowercase letters and digits, listed at most once per clock
+  - `0 <= counter <= 10^9`, written in decimal without leading zeros
+  - at most 10 replicas appear in one clock
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: sibling_values
+  params:
+    - {name: writes, type: "string[][]"}
+  return_type: "string[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def sibling_values(writes: list[list[str]]) -> list[list[str]]:
+        def parse(clock: str) -> dict[str, int]:
+            vec: dict[str, int] = {}
+            if clock:
+                for part in clock.split(","):
+                    replica, counter = part.split(":")
+                    if int(counter) > 0:
+                        vec[replica] = int(counter)
+            return vec
+
+        def dominated(a: dict[str, int], b: dict[str, int]) -> bool:
+            # a happened before b: a <= b in every component and the clocks differ.
+            if a == b:
+                return False
+            return all(b.get(replica, 0) >= counter for replica, counter in a.items())
+
+        by_key: dict[str, list[tuple[str, dict[str, int]]]] = {}
+        for key, value, clock in writes:
+            by_key.setdefault(key, []).append((value, parse(clock)))
+
+        result: list[list[str]] = []
+        for key in sorted(by_key):
+            entries = by_key[key]
+            survivors = {
+                value
+                for value, vec in entries
+                if not any(dominated(vec, other) for _, other in entries)
+            }
+            result.append([key, *sorted(survivors)])
+        return result
+  javascript: |
+    function siblingValues(writes) {
+      const parse = (clock) => {
+        const vec = new Map();
+        if (clock.length > 0) {
+          for (const part of clock.split(",")) {
+            const [replica, counter] = part.split(":");
+            const n = Number(counter);
+            if (n > 0) vec.set(replica, n);
+          }
+        }
+        return vec;
+      };
+      // a happened before b: a <= b in every component and the clocks differ.
+      const dominated = (a, b) => {
+        let equal = a.size === b.size;
+        for (const [replica, counter] of a) {
+          const other = b.get(replica) || 0;
+          if (other < counter) return false;
+          if (other !== counter) equal = false;
+        }
+        return !equal;
+      };
+      const byKey = new Map();
+      for (const [key, value, clock] of writes) {
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push([value, parse(clock)]);
+      }
+      const keys = [...byKey.keys()].sort();
+      return keys.map((key) => {
+        const entries = byKey.get(key);
+        const survivors = new Set();
+        for (const [value, vec] of entries) {
+          if (!entries.some(([, other]) => dominated(vec, other))) survivors.add(value);
+        }
+        return [key, ...[...survivors].sort()];
+      });
+    }
+tests:
+  - {id: t1, args: [[["cart:42", "apples", "a:1"], ["cart:42", "apples,pears", "a:2"], ["cart:42", "apples,plums", "a:1,b:1"], ["profile:7", "dark", "b:3"], ["profile:7", "light", "b:2"]]], expected: [["cart:42", "apples,pears", "apples,plums"], ["profile:7", "dark"]], description: "Example 1 - one overwritten value, two concurrent siblings"}
+  - {id: t2, args: [[["flag", "on", "x:1,y:0"], ["flag", "on", "x:1"], ["flag", "off", "y:1"], ["banner", "spring", ""]]], expected: [["banner", "spring"], ["flag", "off", "on"]], description: "Example 2 - zero counter equals a missing replica, duplicates collapse, empty clock"}
+  - {id: t3, hidden: true, args: [[]], expected: [], description: "No writes at all returns an empty list"}
+  - {id: t4, hidden: true, args: [[["k", "v", "r1:5"]]], expected: [["k", "v"]], description: "Single write survives"}
+  - {id: t5, hidden: true, args: [[["k", "v1", "a:1"], ["k", "v2", "a:1,b:1"], ["k", "v3", "a:2,b:1"], ["k", "v4", "a:2,b:1,c:1"], ["k", "v5", "a:3,b:1,c:1"]]], expected: [["k", "v5"]], description: "Causal chain - only the newest write survives even though new replicas appear along the way"}
+  - {id: t6, hidden: true, args: [[["k", "x", "a:1"], ["k", "x", "b:1"], ["k", "y", ""], ["k", "x", "a:1"]]], expected: [["k", "x"]], description: "Same value in two concurrent writes is listed once; the empty clock is dominated"}
+  - {id: t7, hidden: true, args: [[["k", "blue", "a:2,b:1"], ["k", "green", "a:2,b:1"], ["k", "red", "b:1,a:2"], ["k", "gray", "a:1,b:1"]]], expected: [["k", "blue", "green", "red"]], description: "Identical clocks with different values are all kept (neither dominates); replica order in the clock string does not matter"}
+  - {id: t8, hidden: true, args: [[["user:9", "b", "n1:1"], ["user:10", "a", "n1:1"], ["User:1", "c", "n1:1"], ["user:9", "d", "n1:1,n2:0"], ["user:9", "e", "n2:1"]]], expected: [["User:1", "c"], ["user:10", "a"], ["user:9", "b", "d", "e"]], description: "Rows sorted by key in plain character order (uppercase first, 'user:10' before 'user:9'); duplicate clock with another value kept"}
+  - {id: t9, hidden: true, args: [[["metric", "low", "r1:999999999,r2:1000000000"], ["metric", "high", "r1:1000000000,r2:1000000000"], ["metric", "side", "r1:1,r2:1,r3:1"]]], expected: [["metric", "high", "side"]], description: "Counters near 10^9 compared numerically, not as strings; third replica makes a concurrent sibling"}
+  - {id: t10, hidden: true, args: [[["k", "v0", "a:0,b:6"], ["k", "v1", "a:1,b:5"], ["k", "v2", "a:2,b:4"], ["k", "v3", "a:3,b:3"], ["k", "v4", "a:4,b:2"], ["k", "v5", "a:5,b:1"], ["k", "v6", "a:6,b:0"], ["k", "old0", "a:0"], ["k", "old1", "a:1"], ["k", "old2", "a:2"], ["k", "old3", "a:3"], ["k", "old4", "a:4"], ["k", "older", "b:5"], ["k", "oldest", ""]]], expected: [["k", "v0", "v1", "v2", "v3", "v4", "v5", "v6"]], description: "Seven mutually concurrent writes plus seven dominated ones - all antichain values survive"}
+expected_concepts:
+  - parsing a vector clock into a map with missing replicas treated as zero
+  - partial order (happened-before) versus concurrency
+  - grouping writes by key
+  - keeping the maximal elements of each group
+  - de-duplicating and sorting the surviving values
+optimal_complexity: {time: "O(sum over keys of m^2 * r) where m is the writes for a key and r the replicas per clock", space: O(n * r)}
+rubric:
+  excellent: Parses clocks into maps with zero defaults, defines dominance precisely (less than or equal everywhere and not equal), groups by key, keeps the maximal writes, de-duplicates and sorts values and keys, and discusses the quadratic per-key cost and how equal clocks are handled.
+  good: Correct grouping and dominance check with minor prompting about zero counters, equal clocks or de-duplication.
+  weak: Compares clocks as strings, keeps only the write with the largest counter sum, treats equal clocks as superseding each other, or ignores replicas missing from one clock.
+  criteria:
+    correctness: All tests pass, including equal clocks, zero counters, duplicate values and large counters.
+    efficiency: Pairwise comparison within each key only, never across keys; clocks parsed once per write.
+    code_quality: Separate helpers for parsing a clock and testing dominance; clear names.
+    edge_cases: Empty input, empty clocks, replicas missing from one side, explicit zero counters and identical clocks with different values.
+    communication: Explains happened-before versus concurrent and why a sibling set is needed.
+hints:
+  - Turn each clock string into a map from replica to counter, and treat any replica that is missing as having counter zero.
+  - A write survives when no other write to the same key is at least as large in every component while being a different clock; the surviving writes are the maximal elements of each key's group.
+  - Group writes by key, compare every write with every other write of its key using the "less than or equal everywhere and not equal" test (dropping zero counters makes equal clocks compare as equal maps), collect the surviving values in a set, then sort the values and the keys before building the rows.
+followups:
+  - How would you shrink the sibling set when a client writes back a merged value?
+  - Clocks can grow with every replica that ever touched a key; how would you prune them safely?
+  - How would you speed up the check if a key had tens of thousands of concurrent writes?
+  - How do vector clocks differ from last-writer-wins timestamps, and what does each lose?
+common_errors:
+  - Comparing clocks as strings or by the sum of their counters instead of component by component.
+  - Forgetting that a missing replica counts as zero, so "a:2,b:0" and "a:2" are treated as different.
+  - Treating two equal clocks as superseding each other, which drops both values.
+  - Comparing writes across different keys.
+  - Returning duplicate values or forgetting to sort values and keys.

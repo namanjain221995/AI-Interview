@@ -1,0 +1,593 @@
+# Curated questions: problem solving / production troubleshooting (part 1 of 4).
+# Reasoning through production incidents step by step: symptoms, hypotheses, evidence, mitigation.
+version: 1
+defaults:
+  role_tags: [devops, sre, backend, support_engineer]
+  round_types: [problem_solving, combined]
+  kind: scenario
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: problem_solving.production_troubleshooting.search_page_timeouts
+    competency_key: debugging
+    topic: One feature timing out while the rest works
+    difficulty: easy
+    text: >-
+      The home page and product pages of your site load fine, but the search page has started timing out for
+      most users. How would you work out where the time is going?
+    expected_concepts:
+      - confirm the symptom with metrics for the search endpoint specifically
+      - compare against recent deploys or config changes to search
+      - follow the request path (frontend, API, search backend, database)
+      - use traces or per-dependency latency to find the slow hop
+      - check the health and load of the search backend itself
+    rubric:
+      excellent: Scopes the problem to the search path, uses traces or per-hop latency to locate the slow component, checks recent changes, and considers a quick mitigation such as degrading search while investigating.
+      good: Checks search endpoint metrics and logs and suspects the search backend, but follows a less systematic path.
+      weak: Restarts web servers or blames the network without narrowing down which part of the search path is slow.
+    followups:
+      - The traces show the search cluster answering quickly, yet the API is still slow. Where do you look next?
+      - What could you offer users while search is broken?
+    common_errors:
+      - Treating it as a whole-site problem and ignoring that other pages are healthy.
+
+  - external_key: problem_solving.production_troubleshooting.expired_public_certificate
+    competency_key: incident_response
+    topic: Expired public certificate
+    difficulty: easy
+    text: >-
+      Just after midnight, users start reporting browser security warnings on your API subdomain, and your
+      mobile app can't connect at all. Talk me through how you'd confirm the cause, restore service and make
+      sure it doesn't happen again.
+    expected_concepts:
+      - inspect the served certificate and its expiry date (browser or openssl s_client)
+      - identify every place the certificate is terminated (load balancer, CDN, ingress)
+      - renew or issue and deploy a valid certificate quickly
+      - verify from outside, including the mobile client
+      - automated renewal plus expiry monitoring with lead time
+    rubric:
+      excellent: Confirms expiry by inspecting the served certificate, finds all termination points, restores service quickly, verifies externally and proposes automated renewal with alerting well before expiry.
+      good: Identifies an expired certificate and replaces it, with some idea of prevention.
+      weak: Guesses at DNS or app bugs without checking the certificate, or offers no prevention.
+    followups:
+      - Renewal was automated, so why might it still have expired?
+      - How far ahead should an expiry alert fire, and who should receive it?
+    common_errors:
+      - Replacing the certificate in one place while another endpoint still serves the expired one.
+
+  - external_key: problem_solving.production_troubleshooting.credential_rotation_auth_errors
+    competency_key: debugging
+    topic: Authentication errors after credential rotation
+    difficulty: easy
+    text: >-
+      A scheduled database password rotation ran this morning. Most services are fine, but one service is now
+      failing every query with authentication errors. How would you track down why only that one broke?
+    expected_concepts:
+      - confirm which credential the failing service actually uses
+      - check how that service loads secrets (startup only versus refresh)
+      - compare its configuration and secret source with services that work
+      - restart or reload to pick up the new secret as a mitigation
+      - fix the loading path or rotation process so it is consistent
+    rubric:
+      excellent: Reasons that the service is holding a stale or differently sourced credential, compares it with working services, mitigates by reloading the secret, and fixes the root cause in how secrets are loaded or rotated.
+      good: Suspects a stale password and restarts the service, with partial explanation of why it differed.
+      weak: Rolls back the rotation for everyone or changes the database without understanding the difference.
+    followups:
+      - How would you design rotation so services pick up new credentials without restarts?
+      - What would you check if restarting did not help?
+    common_errors:
+      - Assuming the rotation itself is broken without comparing against the services that kept working.
+
+  - external_key: problem_solving.production_troubleshooting.missed_nightly_job
+    competency_key: debugging
+    topic: Scheduled job that silently did not run
+    difficulty: easy
+    text: >-
+      Finance tells you the nightly invoice export never arrived this morning, and no alert fired. How would
+      you figure out what happened and get them their data?
+    expected_concepts:
+      - check the scheduler for whether the job was triggered at all
+      - look for job logs, exit status and partial output
+      - distinguish never started, started and failed, and finished but not delivered
+      - rerun safely (idempotency, avoiding duplicates)
+      - add monitoring for absence of success, not only for failures
+    rubric:
+      excellent: Separates the stages (scheduled, started, finished, delivered), finds evidence for each, reruns safely without duplicating invoices, and adds a dead-man's-switch style alert for a missing success.
+      good: Checks scheduler and job logs and reruns the job, with some thought about alerting.
+      weak: Just reruns the job without asking why it failed or whether a rerun is safe.
+    followups:
+      - How do you alert on something that didn't happen?
+      - What if a rerun could send duplicate invoices to customers?
+    common_errors:
+      - Only alerting on job failures, which misses jobs that never start.
+
+  - external_key: problem_solving.production_troubleshooting.instance_failing_lb_health_check
+    competency_key: observability
+    topic: Load balancer keeps ejecting one instance
+    difficulty: easy
+    text: >-
+      Your load balancer keeps marking one of six application instances unhealthy and pulling it out of
+      rotation, yet the application logs on that instance look normal. How would you investigate?
+    expected_concepts:
+      - check exactly what the health check calls and its timeout
+      - call the health endpoint from the instance and from the load balancer's network
+      - compare that instance's resources, version and config with its peers
+      - look at network path or security group differences
+      - replace the instance if it is a host-level fault, then dig into why
+    rubric:
+      excellent: Reproduces the health check exactly, compares the instance against healthy peers on version, resources and network, and considers replacing it to restore capacity while keeping evidence.
+      good: Tests the health endpoint and compares with other instances, finding a plausible cause.
+      weak: Disables the health check or restarts repeatedly without understanding why it fails.
+    followups:
+      - The health check passes from the instance itself but fails from the load balancer. What does that suggest?
+      - Should a health check test downstream dependencies?
+    common_errors:
+      - Trusting application logs alone when the failing request may never reach the application.
+
+  - external_key: problem_solving.production_troubleshooting.missing_static_assets_after_release
+    competency_key: debugging
+    topic: Blank pages and missing assets after a frontend release
+    difficulty: easy
+    text: >-
+      Right after a frontend release, some users see a blank page and the browser console shows 404s for
+      JavaScript files, while other users are fine. What do you think is going on, and how would you confirm
+      it?
+    expected_concepts:
+      - stale cached HTML referencing asset filenames that no longer exist (or the reverse)
+      - CDN and browser caching behaviour for HTML versus hashed assets
+      - instances serving different versions during rollout
+      - check which version of HTML and assets each failing user gets
+      - keep previous assets available and set proper cache headers
+    rubric:
+      excellent: Explains the mismatch between cached HTML and new or removed asset files, confirms it by comparing what failing users receive, mitigates (purge, restore old assets) and prevents it by keeping old assets and caching HTML briefly.
+      good: Suspects caching or a version mismatch and suggests purging the CDN.
+      weak: Rolls back blindly or blames the users' browsers without a theory.
+    followups:
+      - Why does it affect only some users?
+      - How would you change the deploy process so this cannot recur?
+    common_errors:
+      - Deleting the previous release's assets as part of the deploy.
+
+  - external_key: problem_solving.production_troubleshooting.bad_config_push_restart_loop
+    competency_key: incident_response
+    topic: Bad configuration push taking down a service
+    difficulty: easy
+    text: >-
+      A colleague pushed a configuration change a few minutes ago, and now every instance of the service is
+      failing to start and restarting in a loop. What do you do first, and what do you do after the service is
+      back?
+    expected_concepts:
+      - revert the configuration change first to restore service
+      - confirm recovery with metrics and user-facing checks
+      - read the startup error to understand what was invalid
+      - communicate status to stakeholders
+      - add config validation and staged rollout of config changes
+    rubric:
+      excellent: Prioritises reverting the known change over debugging, verifies recovery, then finds the specific failure and proposes config validation, canarying and review for config changes, without blaming the colleague.
+      good: Reverts the change and looks at the error afterwards, with some prevention ideas.
+      weak: Debugs the new config in production while the service stays down, or focuses on who made the mistake.
+    followups:
+      - What if reverting the config isn't possible because the old value was also invalid now?
+      - How would you roll out config changes more safely?
+    common_errors:
+      - Trying to fix forward during an outage when a simple revert is available.
+
+  - external_key: problem_solving.production_troubleshooting.too_many_db_connections_after_scaleout
+    competency_key: databases
+    topic: Connection limits after scaling out
+    difficulty: easy
+    text: >-
+      To handle more traffic, the team scaled the application from ten instances to thirty. Shortly after,
+      requests started failing with "too many connections" errors from the database. Walk me through what
+      happened and what you'd do.
+    expected_concepts:
+      - each instance holds its own connection pool, so total connections multiplied
+      - database max connection limit and per-connection memory cost
+      - short-term mitigation by reducing pool size or instance count
+      - connection pooler or proxy in front of the database
+      - sizing pools from actual concurrency needs
+    rubric:
+      excellent: Explains the pool multiplication arithmetic, mitigates quickly, and proposes a durable fix such as a connection pooler and right-sized pools, noting that raising the database limit has costs.
+      good: Identifies the connection pool math and suggests smaller pools or raising the limit.
+      weak: Only suggests raising max connections or scaling the database without understanding the cause.
+    followups:
+      - Why not just raise the database's connection limit?
+      - How would you decide what pool size each instance needs?
+    common_errors:
+      - Assuming more application instances always means more throughput.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: problem_solving.production_troubleshooting.mobile_401_web_fine
+    competency_key: debugging
+    topic: Mobile users rejected while web works
+    difficulty: medium
+    text: >-
+      Since this afternoon, mobile app users are getting 401 errors and being logged out, but the web app works
+      normally against the same API. How would you narrow this down?
+    expected_concepts:
+      - compare how mobile and web authenticate (token types, refresh flow, headers)
+      - check recent changes to auth service, gateway or token signing keys
+      - check whether specific app versions or platforms are affected
+      - inspect failing requests at the gateway for the rejection reason
+      - mitigate by reverting the change or extending token acceptance
+    rubric:
+      excellent: Identifies what differs between mobile and web auth paths, segments by app version and platform, uses gateway or auth logs to find the exact rejection reason, and ties it to a recent change with a safe mitigation.
+      good: Compares mobile and web flows and checks recent auth changes.
+      weak: Asks users to reinstall the app or assumes a mobile bug without evidence.
+    followups:
+      - Only one older app version is affected. What does that point to?
+      - How would you get logs from the client side?
+    common_errors:
+      - Ignoring that clients cannot be redeployed quickly, so the fix usually belongs on the server.
+
+  - external_key: problem_solving.production_troubleshooting.cdn_edge_regional_errors
+    competency_key: networking
+    topic: Errors concentrated behind one CDN location
+    difficulty: medium
+    text: >-
+      Error reports are coming almost entirely from users in one city, and your origin servers show no
+      increase in errors. How would you figure out where the failures are happening?
+    expected_concepts:
+      - origin seeing no errors suggests failures before the origin
+      - check CDN logs and analytics by edge location
+      - test from that region (synthetic checks, remote probes, user traceroutes)
+      - consider regional DNS, ISP or edge-node issues
+      - mitigate by steering traffic away from the bad edge or contacting the provider
+    rubric:
+      excellent: Reasons that failures happen upstream of the origin, uses CDN data by edge location and tests from the affected region, and offers a mitigation such as rerouting while engaging the provider.
+      good: Suspects the CDN or regional network and checks CDN logs.
+      weak: Keeps investigating origin servers even though they show nothing.
+    followups:
+      - How would you prove to the CDN provider that the problem is theirs?
+      - What if the affected users all share one ISP?
+    common_errors:
+      - Concluding there is no problem because the origin dashboards are green.
+
+  - external_key: problem_solving.production_troubleshooting.cpu_up_after_library_upgrade
+    competency_key: debugging
+    topic: CPU regression after a dependency upgrade
+    difficulty: medium
+    text: >-
+      After a routine dependency upgrade, your service's CPU usage roughly doubled even though traffic is flat
+      and latency is only slightly worse. How would you find out what's burning the extra CPU?
+    expected_concepts:
+      - confirm correlation with the upgrade (compare before and after, canary versus baseline)
+      - CPU profiling or flame graphs on old and new versions
+      - diff the dependency changelog for relevant changes
+      - check for changed defaults (logging, serialization, TLS, GC)
+      - decide between rollback, pinning and fixing configuration
+    rubric:
+      excellent: Confirms the regression against a baseline, profiles both versions to find the hot path, connects it to a specific change in the dependency such as a new default, and weighs rollback against a targeted fix.
+      good: Profiles the service and reviews the changelog.
+      weak: Adds more instances or reverts without trying to understand the cause.
+    followups:
+      - The profile shows most time in a JSON library. What would you check?
+      - Is it acceptable to ship this if latency is fine?
+    common_errors:
+      - Comparing profiles taken under different traffic levels.
+
+  - external_key: problem_solving.production_troubleshooting.overlapping_cron_runs
+    competency_key: databases
+    topic: Scheduled jobs overlapping and loading the database
+    difficulty: medium
+    text: >-
+      Every hour on the hour, the database spikes to full CPU and the API slows down for several minutes. It
+      started a couple of weeks ago and has been getting worse. How would you investigate?
+    expected_concepts:
+      - correlate the timing with scheduled jobs and their runtimes
+      - check for runs overlapping because a job now takes longer than its interval
+      - look at top queries during the spike
+      - data growth making a job slower over time
+      - mitigate with locking or skip-if-running, spreading load, or optimizing queries
+    rubric:
+      excellent: Ties the hourly pattern to scheduled work, finds the offending queries during the spike, explains why it worsens over time (data growth, overlapping runs), and fixes both the overlap and the query cost.
+      good: Finds the cron job causing the spike and suggests moving or optimizing it.
+      weak: Scales the database up without identifying what runs at that time.
+    followups:
+      - How would you prevent two runs of the same job from overlapping?
+      - Should this job run against the primary at all?
+    common_errors:
+      - Missing that the problem gets worse because the job's input keeps growing.
+
+  - external_key: problem_solving.production_troubleshooting.layered_cache_stale_price
+    competency_key: distributed_systems
+    topic: Stale values across several cache layers
+    difficulty: medium
+    text: >-
+      An admin changed a product's price an hour ago. The product page shows the new price, but the search
+      results and the cart still show the old one for some users. How would you work out where the stale value
+      lives?
+    expected_concepts:
+      - map every cache and copy of the data (CDN, application cache, search index, client)
+      - check each layer's TTL and invalidation path
+      - query each layer directly to locate the stale copy
+      - consider events that failed to propagate to the index or cart service
+      - targeted invalidation and a durable fix for the update path
+    rubric:
+      excellent: Enumerates the copies of the price, checks each one directly, explains why different pages disagree, fixes the stale layer and addresses the invalidation or propagation gap.
+      good: Identifies caching as the cause and suggests invalidating caches.
+      weak: Flushes every cache in production without finding which one was wrong.
+    followups:
+      - The cart should never charge a stale price. How would you guarantee that?
+      - Why might only some users see the old price?
+    common_errors:
+      - Assuming there is only one cache in the request path.
+
+  - external_key: problem_solving.production_troubleshooting.deploy_stuck_mixed_versions
+    competency_key: incident_response
+    topic: Rollout stuck halfway with mixed versions
+    difficulty: medium
+    text: >-
+      A rollout stalled halfway, so about half your instances run the new version and half the old one. Users
+      are reporting inconsistent behaviour, like a setting saved on one request disappearing on the next. What
+      do you do?
+    expected_concepts:
+      - recognise that mixed versions with incompatible behaviour cause the symptom
+      - choose to complete or roll back to get a single version quickly
+      - find why the rollout stalled (failing readiness, quota, errors)
+      - check for data written by the new version that the old one can't read
+      - backward and forward compatibility in future releases
+    rubric:
+      excellent: Moves quickly to a single version, picks rollback or roll-forward based on data compatibility, investigates why the rollout stalled, and discusses designing releases to tolerate mixed versions.
+      good: Rolls back or completes the rollout and looks into why it stalled.
+      weak: Investigates individual user reports while the fleet stays split.
+    followups:
+      - The new version already wrote data in a new format. Does that change your decision?
+      - How do you make releases safe when two versions run side by side?
+    common_errors:
+      - Rolling back without checking whether the old version can read newly written data.
+
+  - external_key: problem_solving.production_troubleshooting.queue_growing_workers_idle
+    competency_key: distributed_systems
+    topic: Backlog growing while workers sit idle
+    difficulty: medium
+    text: >-
+      Your job queue backlog has been growing for an hour, but the workers' CPU is near zero and they report no
+      errors. How would you figure out why work isn't getting done?
+    expected_concepts:
+      - check whether workers are connected and consuming at all
+      - workers blocked on a slow or hung downstream call
+      - visibility timeouts, leases or locks preventing pickup
+      - consumers subscribed to the wrong queue or partition after a change
+      - thread dumps or traces from a worker to see what it waits on
+    rubric:
+      excellent: Treats low CPU as a sign that workers are waiting, checks consumption rates and connections, inspects what a worker is blocked on, and considers config or routing changes that disconnected them from the queue.
+      good: Checks worker connectivity and logs and suspects a blocked dependency.
+      weak: Adds more workers without asking why the existing ones are idle.
+    followups:
+      - Adding workers made no difference. What does that tell you?
+      - How would you alert on this before the backlog becomes large?
+    common_errors:
+      - Equating no errors with healthy workers.
+
+  - external_key: problem_solving.production_troubleshooting.websocket_disconnect_fixed_interval
+    competency_key: networking
+    topic: Long-lived connections dropping on a fixed interval
+    difficulty: medium
+    text: >-
+      Clients of your real-time feature are being disconnected almost exactly every sixty seconds, then
+      reconnecting. It started after an infrastructure migration. How would you approach this?
+    expected_concepts:
+      - a fixed interval suggests a timeout somewhere in the path
+      - idle timeouts on load balancers, proxies or NAT
+      - compare old and new infrastructure settings
+      - application-level heartbeats or pings to keep connections active
+      - confirm which hop closes the connection (logs, packet capture, close codes)
+    rubric:
+      excellent: Recognises the fixed interval as a timeout, identifies which hop closes the connection using close codes or captures, compares timeouts between old and new infrastructure, and fixes it with configuration or heartbeats.
+      good: Suspects a load balancer idle timeout and suggests increasing it.
+      weak: Looks for application bugs or memory issues without using the timing clue.
+    followups:
+      - How can you tell which side closed the connection?
+      - Why are heartbeats useful even after you raise the timeout?
+    common_errors:
+      - Ignoring that the exact sixty-second period is the strongest clue.
+
+  - external_key: problem_solving.production_troubleshooting.nightly_batch_creeping_runtime
+    competency_key: problem_solving
+    topic: Batch runtime creeping into business hours
+    difficulty: medium
+    text: >-
+      A nightly data job used to take one hour. Over the past three months it has crept up to five hours and is
+      now overlapping with morning traffic. How would you investigate and decide what to do?
+    expected_concepts:
+      - plot runtime against input volume to see if growth explains it
+      - break the job into stages and time each one
+      - look for non-linear steps (full scans, growing joins, missing indexes)
+      - contention with other workloads during the run
+      - short-term options (move window, throttle) versus structural fixes (incremental processing)
+    rubric:
+      excellent: Measures runtime per stage against data growth, finds the step that scales badly, considers contention, and proposes both an immediate mitigation and a structural fix such as incremental processing.
+      good: Profiles the job's stages and suggests optimizations.
+      weak: Suggests bigger hardware or starting earlier without measuring.
+    followups:
+      - Runtime grew much faster than the data. What could cause that?
+      - How would you protect morning traffic while you fix it?
+    common_errors:
+      - Optimizing the slowest-looking query without checking which stage actually grew.
+
+  - external_key: problem_solving.production_troubleshooting.daylight_saving_job_anomalies
+    competency_key: debugging
+    topic: Daylight saving time anomalies
+    difficulty: medium
+    text: >-
+      The morning after the clocks changed for daylight saving time, you find that some scheduled reports ran
+      twice and one hourly report is missing an hour of data. How would you investigate and fix this?
+    expected_concepts:
+      - schedulers interpreting local time across a repeated or skipped hour
+      - check which timezone each scheduler, job and database uses
+      - data windows computed in local time versus UTC
+      - repair affected reports and deduplicate outputs
+      - standardize on UTC for scheduling and storage
+    rubric:
+      excellent: Explains how a repeated or skipped local hour causes double runs and missing windows, audits timezones across components, repairs the affected data, and moves scheduling and windows to UTC.
+      good: Identifies DST as the cause and suggests using UTC.
+      weak: Reruns the reports manually without understanding why it happened.
+    followups:
+      - Some business reports genuinely need local time. How do you handle those?
+      - How would you test for this before the next clock change?
+    common_errors:
+      - Fixing the scheduler but leaving date-range calculations in local time.
+
+  - external_key: problem_solving.production_troubleshooting.db_failover_app_still_failing
+    competency_key: databases
+    topic: Application still failing after a database failover
+    difficulty: medium
+    text: >-
+      Your managed database failed over to its standby at three in the morning. The new primary is healthy and
+      accepting connections, but the application is still throwing errors twenty minutes later. What's your
+      reasoning?
+    expected_concepts:
+      - application pools holding dead connections to the previous primary
+      - cached DNS or resolved IPs pointing at the old host
+      - connections landing on a read-only node and failing writes
+      - recycle connections or restart to restore service
+      - connection validation, DNS TTL handling and failover testing
+    rubric:
+      excellent: Focuses on the client side (stale pooled connections, cached DNS, writes to a now-read-only node), restores service by recycling connections, and proposes validation settings and regular failover drills.
+      good: Suspects stale connections and restarts the application.
+      weak: Keeps investigating the database even though it is healthy.
+    followups:
+      - The errors say the database is read-only. What happened?
+      - How would you test that the application survives a failover?
+    common_errors:
+      - Assuming a successful failover on the database side means clients recovered too.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: problem_solving.production_troubleshooting.conntrack_new_connections_timeout
+    competency_key: networking
+    topic: New connections failing on a busy host
+    difficulty: hard
+    text: >-
+      On a busy proxy host, new connections intermittently time out while existing connections keep working
+      fine. CPU, memory and bandwidth all look normal. How would you dig into this?
+    expected_concepts:
+      - suspect kernel-level tables or queues rather than application resources
+      - connection tracking table full or SYN or accept backlog overflow
+      - check kernel logs and counters (dropped packets, listen overflows)
+      - compare connection counts against configured limits
+      - raise limits or reduce tracked or idle connections, and monitor the counters
+    rubric:
+      excellent: Reasons that only new connections failing points to kernel connection handling, checks kernel logs and drop counters for conntrack or backlog exhaustion, and fixes limits while addressing why connection counts grew.
+      good: Suspects a kernel or OS limit and checks logs and connection counts.
+      weak: Restarts the proxy or adds hosts without finding the bottleneck.
+    followups:
+      - Which counters would show that the listen backlog is overflowing?
+      - Why might connection counts have grown in the first place?
+    common_errors:
+      - Assuming the problem is the application because CPU and memory are fine.
+
+  - external_key: problem_solving.production_troubleshooting.kernel_patch_throughput_drop
+    competency_key: linux
+    topic: Throughput regression after OS patching
+    difficulty: hard
+    text: >-
+      After a routine operating system patch rolled across the fleet, network-heavy services lost about thirty
+      percent of their throughput. Nothing in the application changed. How would you find the cause?
+    expected_concepts:
+      - confirm by comparing patched and unpatched hosts under the same load
+      - diff kernel versions, drivers, sysctl defaults and offload settings
+      - security mitigations that add overhead to syscalls or context switches
+      - system-level profiling (perf, interrupt and softirq distribution)
+      - decide between rollback, tuning and accepting the cost
+    rubric:
+      excellent: Uses unpatched hosts as a control, diffs kernel and driver settings, profiles at the system level to locate overhead, considers security mitigations, and weighs rollback against tuning with security in mind.
+      good: Compares patched and unpatched hosts and looks at kernel changes.
+      weak: Tunes the application or adds hosts without isolating the patch's effect.
+    followups:
+      - The slowdown comes from a security mitigation. How do you decide what to do?
+      - How would you catch this before the patch reaches every host?
+    common_errors:
+      - Disabling security mitigations without weighing the risk.
+
+  - external_key: problem_solving.production_troubleshooting.rss_growth_stable_heap
+    competency_key: debugging
+    topic: Process memory growing while the heap stays flat
+    difficulty: hard
+    text: >-
+      A service's resident memory keeps climbing until it's killed every couple of days, but your
+      language-level heap metrics stay flat the whole time. How would you track down where that memory is
+      going?
+    expected_concepts:
+      - memory outside the managed heap (off-heap buffers, thread stacks, compiled code)
+      - allocator fragmentation in a C library or extension
+      - growth in thread count or memory-mapped files
+      - process-level tools (pmap, smaps) and allocator statistics
+      - experiments such as a different allocator or capping buffers
+    rubric:
+      excellent: Explains that resident memory includes much more than the heap, uses process memory maps and allocator stats to locate the growth, and tests hypotheses such as fragmentation or leaking off-heap buffers with controlled experiments.
+      good: Suspects off-heap memory or a C extension leak and suggests tools to inspect it.
+      weak: Keeps tuning heap size or adds memory without explaining the gap.
+    followups:
+      - The memory map shows many anonymous regions of the same size. What might that mean?
+      - How would you keep the service stable while you investigate?
+    common_errors:
+      - Trusting heap metrics as the full picture of process memory.
+
+  - external_key: problem_solving.production_troubleshooting.cpu_throttling_below_limit
+    competency_key: kubernetes
+    topic: Latency from CPU throttling under the limit
+    difficulty: hard
+    text: >-
+      A containerized service has bad tail latency. Its average CPU usage sits at forty percent of its limit, so
+      the team says CPU can't be the problem. How would you test that assumption?
+    expected_concepts:
+      - averages hide short bursts that exceed the quota within a period
+      - check throttling metrics (throttled periods and time)
+      - multi-threaded runtimes consuming the quota early in each period
+      - correlate throttling with latency spikes
+      - adjust limits, thread pools or remove CPU limits with requests kept
+    rubric:
+      excellent: Explains how quota enforcement per period throttles bursty or multi-threaded workloads despite low averages, checks throttling counters, correlates them with tail latency, and proposes concrete changes with their trade-offs.
+      good: Mentions CPU throttling and checks container throttling metrics.
+      weak: Accepts the average-utilization argument and looks elsewhere.
+    followups:
+      - What are the risks of removing CPU limits entirely?
+      - How does thread pool sizing interact with the CPU quota?
+    common_errors:
+      - Reading average CPU utilization over minutes as proof there is headroom.
+
+  - external_key: problem_solving.production_troubleshooting.kafka_rebalance_loop
+    competency_key: distributed_systems
+    topic: Consumer group stuck rebalancing
+    difficulty: hard
+    text: >-
+      A consumer group on your event stream keeps rebalancing every few minutes, so throughput has collapsed and
+      lag is climbing fast. Nothing was deployed today. How would you work through it?
+    expected_concepts:
+      - consumers exceeding the poll interval or session timeout and being evicted
+      - slow processing of large batches or a slow downstream dependency
+      - instance restarts, OOM kills or GC pauses triggering rebalances
+      - consumer and coordinator logs for the reason for leaving
+      - mitigations such as smaller batches, adjusted timeouts or cooperative rebalancing
+    rubric:
+      excellent: Uses logs to find why members leave the group, links it to processing time versus poll or session timeouts or to crashing instances, and proposes mitigations while recognising the feedback loop that rebalancing creates.
+      good: Suspects timeouts or slow processing and checks consumer logs.
+      weak: Restarts consumers or adds more of them, which can make the rebalancing worse.
+    followups:
+      - Why can adding consumers make this worse?
+      - A downstream database got slower today. How would that cause rebalancing?
+    common_errors:
+      - Treating rebalancing as the root cause rather than a symptom.
+
+  - external_key: problem_solving.production_troubleshooting.cached_private_data_leak
+    competency_key: incident_response
+    topic: Users seeing other users' data
+    difficulty: hard
+    text: >-
+      A customer reports that their account page briefly showed another person's name and order history. Then a
+      second, unrelated customer reports the same thing. How would you respond and investigate?
+    expected_concepts:
+      - treat it as a severe privacy incident and escalate immediately, including security and privacy owners
+      - contain first (disable caching for personalised pages, turn off the suspect feature)
+      - suspects such as a shared cache key, CDN caching of personalised responses, or shared mutable state in the app
+      - preserve logs and cache data to establish which users and data were exposed
+      - scope the impact for notification obligations and add safeguards against caching personalised content
+    rubric:
+      excellent: Escalates it as a privacy incident, contains exposure before root-causing, investigates caching and shared-state hypotheses with preserved evidence, scopes exactly who saw what, and adds safeguards such as private cache headers and tests.
+      good: Recognises the severity, suspects caching and disables it while investigating.
+      weak: Treats it as a cosmetic bug, asks for reproduction steps first, or clears caches and destroys the evidence of who was affected.
+    followups:
+      - Your CDN logs keep only seven days. Why does that matter right now?
+      - How would you find every user whose data may have been shown to someone else?
+    common_errors:
+      - Fixing the bug quietly without determining the scope of exposure.

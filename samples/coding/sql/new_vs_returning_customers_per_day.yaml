@@ -1,0 +1,234 @@
+version: 1
+slug: new_vs_returning_customers_per_day
+title: New vs Returning Buyers per Day
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, product_manager]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## New vs Returning Buyers per Day
+
+  The growth team of an online store wants a daily chart that splits buyers into **new** and
+  **returning**. Every order is stored in table `orders`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | customer_id | INTEGER | buyer who placed the order; never NULL |
+  | order_date | VARCHAR(10) | calendar day in ISO format `YYYY-MM-DD` (zero-padded, so text order is date order) |
+
+  For every `order_date` that has at least one order, count the **distinct** buyers who ordered that
+  day and split them:
+
+  - `new_customers`: buyers whose **first-ever order date** is this day.
+  - `returning_customers`: buyers who ordered this day and whose first order date is **earlier**.
+
+  A buyer counts at most once per day, no matter how many orders they placed that day (a buyer with
+  three orders on their first day is one new customer). Order ids are not guaranteed to follow dates,
+  so the first order is decided by `order_date`, not by `id`. Days without orders are not listed.
+
+  Return `order_date`, `new_customers` and `returning_customers`, ordered by `order_date` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  orders
+  +----+-------------+------------+
+  | id | customer_id | order_date |
+  +----+-------------+------------+
+  | 1  | 101         | 2026-03-01 |
+  | 2  | 102         | 2026-03-01 |
+  | 3  | 101         | 2026-03-01 |
+  | 4  | 101         | 2026-03-02 |
+  | 5  | 103         | 2026-03-02 |
+  | 6  | 102         | 2026-03-04 |
+  | 7  | 104         | 2026-03-04 |
+  +----+-------------+------------+
+
+  Output
+  +------------+---------------+---------------------+
+  | order_date | new_customers | returning_customers |
+  +------------+---------------+---------------------+
+  | 2026-03-01 | 2             | 0                   |
+  | 2026-03-02 | 1             | 1                   |
+  | 2026-03-04 | 1             | 1                   |
+  +------------+---------------+---------------------+
+  Buyer 101 ordered twice on 2026-03-01 but counts once; on 2026-03-02 they are returning.
+  ```
+
+  ### Example 2
+  ```
+  orders
+  +----+-------------+------------+
+  | id | customer_id | order_date |
+  +----+-------------+------------+
+  | 1  | 7           | 2025-12-31 |
+  | 2  | 7           | 2026-01-01 |
+  | 3  | 7           | 2026-01-01 |
+  | 4  | 7           | 2026-01-05 |
+  +----+-------------+------------+
+
+  Output
+  +------------+---------------+---------------------+
+  | order_date | new_customers | returning_customers |
+  +------------+---------------+---------------------+
+  | 2025-12-31 | 1             | 0                   |
+  | 2026-01-01 | 0             | 1                   |
+  | 2026-01-05 | 0             | 1                   |
+  +------------+---------------+---------------------+
+  ```
+
+  ### Constraints
+  - `0 <= rows in orders <= 10^6`
+  - `order_date` is always a valid, zero-padded `YYYY-MM-DD` string.
+  - A buyer may place any number of orders on the same day.
+languages: [sql]
+starter_code:
+  sql: |
+    -- For each order_date: distinct buyers whose first order is that day vs. buyers who ordered before.
+    SELECT order_date, COUNT(DISTINCT customer_id) AS new_customers, 0 AS returning_customers
+    FROM orders
+    GROUP BY order_date
+    ORDER BY order_date;
+reference_solutions:
+  sql: |
+    WITH first_orders AS (
+      SELECT customer_id, MIN(order_date) AS first_date
+      FROM orders
+      GROUP BY customer_id
+    ),
+    buyer_days AS (
+      SELECT DISTINCT order_date, customer_id
+      FROM orders
+    )
+    SELECT
+      b.order_date,
+      SUM(CASE WHEN b.order_date = f.first_date THEN 1 ELSE 0 END) AS new_customers,
+      SUM(CASE WHEN b.order_date > f.first_date THEN 1 ELSE 0 END) AS returning_customers
+    FROM buyer_days b
+    JOIN first_orders f ON f.customer_id = b.customer_id
+    GROUP BY b.order_date
+    ORDER BY b.order_date;
+sql_setup: |
+  CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL,
+    order_date VARCHAR(10) NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - repeat order on the first day counts once"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, customer_id, order_date) VALUES
+        (1, 101, '2026-03-01'), (2, 102, '2026-03-01'), (3, 101, '2026-03-01'), (4, 101, '2026-03-02'),
+        (5, 103, '2026-03-02'), (6, 102, '2026-03-04'), (7, 104, '2026-03-04');
+    expected_rows: [["2026-03-01", 2, 0], ["2026-03-02", 1, 1], ["2026-03-04", 1, 1]]
+  - id: t2
+    description: "Example 2 - days with only a returning buyer across a year boundary"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, customer_id, order_date) VALUES
+        (1, 7, '2025-12-31'), (2, 7, '2026-01-01'), (3, 7, '2026-01-01'), (4, 7, '2026-01-05');
+    expected_rows: [["2025-12-31", 1, 0], ["2026-01-01", 0, 1], ["2026-01-05", 0, 1]]
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single order is one new buyer"
+    ordered: true
+    setup_sql: "INSERT INTO orders (id, customer_id, order_date) VALUES (1, 42, '2026-06-15');"
+    expected_rows: [["2026-06-15", 1, 0]]
+  - id: t5
+    hidden: true
+    description: "Order ids not in date order - the first order is decided by date, not by MIN(id)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, customer_id, order_date) VALUES
+        (1, 5, '2026-04-10'), (2, 5, '2026-04-02'), (3, 6, '2026-04-10'), (4, 6, '2026-04-11'), (5, 5, '2026-04-11');
+    expected_rows: [["2026-04-02", 1, 0], ["2026-04-10", 1, 1], ["2026-04-11", 0, 2]]
+  - id: t6
+    hidden: true
+    description: "Several orders by the same returning buyer on one day count once (COUNT without DISTINCT fails)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, customer_id, order_date) VALUES
+        (1, 1, '2026-02-01'), (2, 2, '2026-02-01'),
+        (3, 1, '2026-02-03'), (4, 1, '2026-02-03'), (5, 1, '2026-02-03'), (6, 2, '2026-02-03'), (7, 3, '2026-02-03'), (8, 3, '2026-02-03');
+    expected_rows: [["2026-02-01", 2, 0], ["2026-02-03", 1, 2]]
+  - id: t7
+    hidden: true
+    description: "Month and year boundaries with gaps - days without orders are not listed"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, customer_id, order_date) VALUES
+        (1, 10, '2025-11-30'), (2, 11, '2026-02-01'), (3, 10, '2026-02-01'), (4, 12, '2026-10-05'),
+        (5, 11, '2026-10-05'), (6, 10, '2026-10-05'), (7, 13, '2026-09-30');
+    expected_rows:
+      - ["2025-11-30", 1, 0]
+      - ["2026-02-01", 1, 1]
+      - ["2026-09-30", 1, 0]
+      - ["2026-10-05", 1, 2]
+  - id: t8
+    hidden: true
+    description: "Every buyer orders on the same single day - all new, none returning"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, customer_id, order_date) VALUES
+        (1, 1, '2026-05-05'), (2, 2, '2026-05-05'), (3, 3, '2026-05-05'), (4, 1, '2026-05-05'), (5, 4, '2026-05-05');
+    expected_rows: [["2026-05-05", 4, 0]]
+  - id: t9
+    hidden: true
+    description: "Mixed month of traffic - ten buyers over seven days with repeats and interleaved ids"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, customer_id, order_date) VALUES
+        (1, 201, '2026-07-01'), (2, 202, '2026-07-01'), (3, 203, '2026-07-02'), (4, 201, '2026-07-02'),
+        (5, 204, '2026-07-03'), (6, 205, '2026-07-03'), (7, 202, '2026-07-03'), (8, 202, '2026-07-03'),
+        (9, 206, '2026-07-05'), (10, 203, '2026-07-05'), (11, 201, '2026-07-05'), (12, 207, '2026-07-06'),
+        (13, 208, '2026-07-06'), (14, 204, '2026-07-06'), (15, 209, '2026-07-08'), (16, 210, '2026-07-08'),
+        (17, 205, '2026-07-08'), (18, 206, '2026-07-08'), (19, 207, '2026-07-08'), (20, 210, '2026-07-08'),
+        (21, 211, '2026-06-30'), (22, 211, '2026-07-08');
+    expected_rows:
+      - ["2026-06-30", 1, 0]
+      - ["2026-07-01", 2, 0]
+      - ["2026-07-02", 1, 1]
+      - ["2026-07-03", 2, 1]
+      - ["2026-07-05", 1, 2]
+      - ["2026-07-06", 2, 1]
+      - ["2026-07-08", 2, 4]
+expected_concepts:
+  - first event per entity with MIN and GROUP BY
+  - de-duplicating to one row per buyer and day before counting
+  - conditional aggregation with SUM(CASE ...)
+  - joining a per-buyer summary back to daily activity
+  - deterministic ORDER BY of the final result
+optimal_complexity: {time: "O(n log n) for grouping by customer and by day", space: O(n)}
+rubric:
+  excellent: Computes each buyer's first order date, de-duplicates buyer-days, splits them with conditional aggregation and orders by date; explains why the first order must come from MIN(order_date) rather than MIN(id) and how an index on (customer_id, order_date) helps.
+  good: Reaches a correct query after a hint about counting a buyer once per day or about deciding the first order by date.
+  weak: Counts orders instead of distinct buyers, decides "new" by the smallest order id, or classifies buyers globally instead of per day.
+  criteria:
+    correctness: All tests pass, including repeat orders on the same day and ids that are not in date order.
+    efficiency: Two set-based aggregations (or one window) rather than a correlated subquery per order; mentions indexing.
+    code_quality: Named CTEs, clear CASE expressions and output aliases that match the contract.
+    edge_cases: Empty table, a single order, days with only returning buyers and month or year boundaries.
+    communication: Explains the difference between counting orders and counting distinct buyers per day.
+hints:
+  - Whether a buyer is new on a given day depends on a single fact about that buyer; what is it, and how would you compute it once per buyer?
+  - Work out each buyer's earliest order date, then look at each distinct pair of day and buyer and compare that day with the buyer's earliest date.
+  - Build one CTE with MIN(order_date) per customer_id and another with DISTINCT (order_date, customer_id); join them on customer_id, group by order_date, and use SUM(CASE ...) to count rows where the day equals the first date versus rows where it is later; finish with ORDER BY order_date.
+followups:
+  - How would you include days with no orders at all, showing zeros?
+  - How would the query change if "returning" meant the buyer had ordered within the previous 30 days?
+  - How would you compute the same split with a window function instead of a join?
+  - Which index supports this query on a table with hundreds of millions of orders?
+common_errors:
+  - Counting orders instead of distinct buyers, so a buyer with several orders on one day is counted several times.
+  - Deciding the first order with MIN(id), which breaks when ids are not assigned in date order.
+  - Using COUNT(DISTINCT customer_id) for both columns without splitting by first order date.
+  - Forgetting the final ORDER BY, so the days come back in an unspecified order.

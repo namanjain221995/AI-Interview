@@ -1,0 +1,618 @@
+# Curated questions: system design for backend services (part 1 of 4).
+# Link shorteners and identifiers, feeds, counters, rankings and social graphs.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend, fullstack]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # ------------------------------------------------------- link shorteners and identifiers
+  - external_key: system_design.backend_services.short_code_generation
+    competency_key: system_design
+    topic: Generating short codes for a link shortener
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      In a link shortener, every long URL needs a short code of maybe seven characters. Talk me through the
+      different ways you could generate those codes and which one you'd pick for a first version.
+    expected_concepts:
+      - hashing the URL and truncating, with collision handling
+      - a counter or database sequence encoded in base62
+      - random codes checked for uniqueness on insert
+      - predictability of sequential codes as a privacy concern
+      - unique constraint in the store as the final guard
+    rubric:
+      excellent: Compares hashing, counter-based and random generation with their collision, coordination and guessability trade-offs, picks one with a clear reason and relies on a unique constraint as the final guard.
+      good: Describes one or two workable schemes and handles collisions sensibly.
+      weak: Proposes a scheme with no collision handling or cannot estimate how many codes seven characters allow.
+    followups:
+      - Roughly how many codes does seven base62 characters give you, and when would you run out?
+      - What happens if two servers generate the same random code at the same moment?
+    common_errors:
+      - Truncating a hash without any plan for collisions.
+      - Ignoring that sequential codes let anyone enumerate every link.
+
+  - external_key: system_design.backend_services.redirect_semantics
+    competency_key: system_design
+    topic: Redirect behaviour and its effect on analytics
+    difficulty: medium
+    text: >-
+      For the redirect itself in a link shortener, how would you decide between a permanent and a temporary
+      redirect, and how does that choice affect your traffic, caching and click analytics?
+    expected_concepts:
+      - 301 cached by browsers and intermediaries, reducing server load
+      - 302 or 307 keeps every click reaching the service
+      - analytics accuracy depends on seeing each click
+      - ability to change or disable a link later
+      - Cache-Control headers to tune behaviour
+    rubric:
+      excellent: Explains how caching of permanent redirects removes later clicks from view, ties the choice to business needs such as analytics and link editing, and mentions controlling it with cache headers.
+      good: Knows the difference between permanent and temporary redirects and links it to analytics.
+      weak: Treats the status code as irrelevant or cannot say what browsers do with a permanent redirect.
+    followups:
+      - A customer wants to edit where a link points after it has been shared. What does that mean for your choice?
+      - How would you keep the redirect fast if analytics recording is slow?
+    common_errors:
+      - Using permanent redirects and then being surprised that click counts are low.
+
+  - external_key: system_design.backend_services.custom_alias_links
+    competency_key: system_design
+    topic: Custom aliases and reserved names
+    difficulty: medium
+    text: >-
+      Your link shortener now lets paying customers choose their own alias, like a brand name, alongside the
+      generated codes. How would you design that so aliases and generated codes never clash and the feature
+      can't be abused?
+    expected_concepts:
+      - shared namespace with a unique constraint, or separate namespaces
+      - reserved words and routes blocked from aliases
+      - case sensitivity and normalisation rules
+      - race between two customers claiming the same alias
+      - abuse such as impersonation or offensive aliases
+      - generated codes skipping already-claimed aliases
+    rubric:
+      excellent: Designs a single source of truth for uniqueness, handles reserved routes, normalisation and concurrent claims atomically, and considers abuse and trademark-style squatting with a review or blocklist process.
+      good: Handles uniqueness with a constraint and reserves system paths.
+      weak: Checks for an existing alias then inserts without atomicity, or ignores collisions with generated codes.
+    followups:
+      - How would you handle a customer who wants to release an alias and another who wants to take it?
+      - Would you treat uppercase and lowercase aliases as the same? Why?
+    common_errors:
+      - Check-then-insert logic that lets two customers claim the same alias.
+
+  - external_key: system_design.backend_services.click_analytics
+    competency_key: system_design
+    topic: Click analytics without slowing redirects
+    difficulty: medium
+    text: >-
+      Suppose the link shortener serves fifty thousand redirects a second and customers want dashboards of clicks
+      by hour, country and referrer. How would you capture and aggregate that data without adding latency to the
+      redirect?
+    expected_concepts:
+      - asynchronous event emission to a log or queue
+      - redirect path never waits on analytics writes
+      - stream or batch aggregation into rollup tables
+      - time-bucketed pre-aggregates for dashboards
+      - handling bot traffic and duplicate events
+      - retention of raw events versus aggregates
+    rubric:
+      excellent: Decouples capture from the redirect with a durable buffer, aggregates into time-bucketed rollups sized for the query patterns, and discusses loss tolerance, bots and raw-data retention.
+      good: Sends click events asynchronously to a queue and aggregates them for dashboards.
+      weak: Writes a row per click synchronously into the main database or increments counters inline.
+    followups:
+      - How much click data loss is acceptable here, and how does that change your design?
+      - A customer asks for unique visitors per day. What changes?
+    common_errors:
+      - Incrementing a database counter on every redirect.
+      - Querying raw events for every dashboard load.
+
+  - external_key: system_design.backend_services.link_expiry_cleanup
+    competency_key: databases
+    topic: Expiring and purging links at scale
+    difficulty: medium
+    text: >-
+      Many links in the shortener should expire after a set time, and you have several billion rows. How would
+      you design expiry so expired links stop working immediately but the cleanup doesn't hurt the database?
+    expected_concepts:
+      - check expiry at read time for correctness
+      - background purge in small batches
+      - partitioning by creation or expiry time to drop whole partitions
+      - TTL features of the datastore
+      - cache entries respecting the expiry
+      - whether expired codes may be reused
+    rubric:
+      excellent: Separates correctness (check on read, cache TTL capped at expiry) from storage cleanup, proposes batched or partition-based deletion that avoids lock and vacuum pressure, and decides deliberately about code reuse.
+      good: Checks expiry on read and runs a periodic cleanup job.
+      weak: Relies only on a nightly mass delete or forgets that cached redirects outlive expiry.
+    followups:
+      - Would you ever let an expired short code be reissued? What could go wrong?
+      - What does a single large DELETE do to your primary database?
+    common_errors:
+      - Caching redirects longer than the link's remaining lifetime.
+
+  - external_key: system_design.backend_services.multi_region_shortener
+    competency_key: distributed_systems
+    topic: Multi-region link shortener
+    difficulty: hard
+    text: >-
+      The link shortener now has to serve redirects from three regions with low latency, and new links can be
+      created in any region. How would you make sure codes stay globally unique and a link created in one region
+      works everywhere almost immediately?
+    expected_concepts:
+      - partitioning the code space per region or pre-allocated ID ranges
+      - asynchronous replication of the mapping
+      - fallback read to the origin region on a local miss
+      - edge or regional caches for hot links
+      - behaviour during a region outage or partition
+      - read-after-create expectations for the creator
+    rubric:
+      excellent: Avoids cross-region coordination on create through partitioned code space, replicates asynchronously with a miss fallback to cover replication lag, and reasons about region failure and conflict-free writes.
+      good: Uses region-prefixed or range-allocated codes and replicates the mapping.
+      weak: Proposes a single global lock or synchronous cross-region writes without discussing latency.
+    followups:
+      - A user creates a link in Europe and a friend in Asia clicks it two seconds later. Walk me through that click.
+      - What happens to link creation if one region is cut off for an hour?
+    common_errors:
+      - Assuming replication is instantaneous so a fresh link is visible everywhere.
+
+  - external_key: system_design.backend_services.malicious_link_screening
+    competency_key: system_design
+    topic: Screening shortened links for abuse
+    difficulty: medium
+    text: >-
+      Attackers start using your public link shortener to hide phishing and malware URLs. How would you design
+      screening into the create and redirect paths without making normal use painful?
+    expected_concepts:
+      - synchronous checks against known-bad URL and domain lists at creation
+      - asynchronous deeper scanning after creation
+      - re-checking existing links as lists update
+      - interstitial warning pages and disabling links
+      - rate limits and reputation for anonymous creators
+      - appeal or review workflow
+    rubric:
+      excellent: Layers fast checks at creation with asynchronous scanning and periodic rescans, can disable or warn at redirect time, and adds creator reputation and rate limits with a review path for false positives.
+      good: Checks URLs against a blocklist on creation and can disable bad links.
+      weak: Only checks at creation time and never revisits links that become malicious later.
+    followups:
+      - A link was clean when created and turns malicious a week later. How do you catch it?
+      - How would you keep the blocklist check fast at creation time?
+    common_errors:
+      - Treating a one-time check at creation as sufficient.
+
+  - external_key: system_design.backend_services.id_generation_options
+    competency_key: distributed_systems
+    topic: Choosing an ID scheme across services
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your team is splitting a monolith into services, and each one needs to create its own order, user and
+      payment IDs. What options would you consider for generating those IDs, and how would you choose?
+    expected_concepts:
+      - database auto-increment and its single-writer limits
+      - random UUIDs and index locality
+      - time-ordered IDs such as UUIDv7, ULID or Snowflake-style
+      - exposing guessable IDs publicly
+      - size and sortability requirements
+    rubric:
+      excellent: Compares sequences, random UUIDs and time-ordered IDs on coordination, index performance, size, sortability and guessability, and chooses based on stated needs.
+      good: Names two or three options with a sensible reason for one.
+      weak: Assumes auto-increment works unchanged across services or cannot explain any trade-off.
+    followups:
+      - Why can fully random UUIDs hurt insert performance in a B-tree index?
+      - Would you expose the same ID in public URLs? Why or why not?
+    common_errors:
+      - Ignoring the write locality cost of random keys in large tables.
+
+  - external_key: system_design.backend_services.time_ordered_id_service
+    competency_key: distributed_systems
+    topic: Time-ordered 64-bit ID generator
+    difficulty: hard
+    text: >-
+      Design a service, or a library, that hands out roughly time-ordered 64-bit IDs at a hundred thousand per
+      second across many machines with no central coordination per ID. How would you lay out the bits and what
+      can go wrong?
+    expected_concepts:
+      - timestamp, worker ID and sequence bit layout
+      - assigning unique worker IDs safely (lease or coordination service)
+      - clock moving backwards and how to handle it
+      - sequence exhaustion within one millisecond
+      - epoch choice and lifetime of the scheme
+      - ordering is only approximate across workers
+    rubric:
+      excellent: Proposes a concrete bit layout with lifetime and throughput maths, assigns worker IDs safely with leases, handles clock regression and sequence overflow explicitly, and is clear that ordering is only rough across machines.
+      good: Describes timestamp plus worker plus sequence and mentions clock issues.
+      weak: Relies on wall-clock time alone or ignores how workers get unique identifiers.
+    followups:
+      - NTP steps the clock back two seconds on one host. What does your generator do?
+      - How would you reclaim worker IDs from machines that died?
+    common_errors:
+      - Hard-coding worker IDs in config so two containers share one after a redeploy.
+
+  # -------------------------------------------------------------------------------- feeds
+  - external_key: system_design.backend_services.feed_fanout_choice
+    competency_key: system_design
+    topic: Fan-out on write versus fan-out on read
+    difficulty: medium
+    text: >-
+      Let's design the home feed for a social app where people follow each other and see recent posts from the
+      accounts they follow. Would you build each feed when a post is written or when the feed is read, and why?
+    expected_concepts:
+      - push model writes post IDs into followers' feed lists
+      - pull model merges recent posts of followed accounts at read time
+      - read and write ratios and follower distribution
+      - storage cost of precomputed feeds
+      - latency of the read path
+      - inactive users and wasted fan-out
+    rubric:
+      excellent: Compares both models with numbers for reads, writes and follower counts, picks one for the stated product and explains where it breaks, such as very large accounts or inactive users.
+      good: Explains both models and makes a reasonable choice.
+      weak: Picks one without considering read and write volume or follower skew.
+    followups:
+      - How would you avoid fanning out to users who haven't opened the app in months?
+      - What do you store in each feed entry, and why not the whole post?
+    common_errors:
+      - Storing full post bodies in every follower's feed.
+
+  - external_key: system_design.backend_services.feed_celebrity_accounts
+    competency_key: system_design
+    topic: Very large accounts in a push-based feed
+    difficulty: hard
+    text: >-
+      Your feed uses fan-out on write, and it works well until an account with forty million followers posts and
+      the fan-out queue backs up for twenty minutes. How would you redesign the system to handle accounts like
+      that?
+    expected_concepts:
+      - hybrid model with pull for high-follower accounts
+      - merging pulled posts with the precomputed feed at read time
+      - follower-count threshold and how to tune it
+      - prioritising fan-out for active followers
+      - caching hot accounts' recent posts
+      - effect on read latency and ranking
+    rubric:
+      excellent: Proposes a hybrid push-pull design with a clear threshold, explains read-time merging and caching of large accounts' posts, and weighs added read cost against write amplification.
+      good: Suggests pulling posts from large accounts at read time instead of fanning out.
+      weak: Only suggests more queue workers without addressing the write amplification.
+    followups:
+      - How would you choose the follower threshold, and should it be fixed?
+      - What happens when an account crosses the threshold while posts are in flight?
+    common_errors:
+      - Scaling workers linearly without noticing the cost is per follower, per post.
+
+  - external_key: system_design.backend_services.feed_cursor_pagination
+    competency_key: api_design
+    topic: Paging a feed while new items arrive
+    difficulty: medium
+    text: >-
+      As users scroll the feed, new posts keep arriving at the top. How would you design the feed API so that
+      scrolling down never shows duplicates or skips posts, and the app can still show a "new posts" prompt?
+    expected_concepts:
+      - cursor-based pagination on a stable sort key
+      - offset pagination breaks as items are inserted
+      - tie-breaking on ID for equal timestamps
+      - separate fetch for items newer than the top cursor
+      - opaque cursors so the server can change the format
+      - handling deleted items between pages
+    rubric:
+      excellent: Uses opaque cursors on a stable composite key, explains why offsets drift, supports both older and newer directions, and handles deletions and ranking changes between pages.
+      good: Uses cursor pagination keyed on time and ID.
+      weak: Uses page numbers or offsets and doesn't see the duplication problem.
+    followups:
+      - How does this change if the feed is ranked instead of chronological?
+      - What would you put inside the cursor?
+    common_errors:
+      - Paging by timestamp alone, so posts with equal times are skipped.
+
+  - external_key: system_design.backend_services.ranked_feed_pipeline
+    competency_key: system_design
+    topic: Ranked feed serving pipeline
+    difficulty: hard
+    text: >-
+      Product wants the feed ranked by relevance instead of time, using a model that scores each candidate post,
+      and the whole feed must load in under two hundred milliseconds. How would you structure the serving path?
+    expected_concepts:
+      - candidate generation from several sources
+      - lightweight filtering before scoring
+      - feature fetching with a latency budget
+      - batched model scoring and timeouts
+      - fallback to chronological or cached ranking
+      - caching ranked results per session for pagination
+    rubric:
+      excellent: Breaks the request into candidate generation, filtering, feature lookup and scoring with a latency budget for each stage, defines fallbacks when scoring is slow, and keeps paging stable by caching the ranked list.
+      good: Describes candidate generation followed by scoring, with some caching.
+      weak: Scores every post from every followed account on each request without a latency plan.
+    followups:
+      - The scoring service's p99 doubles. What does the user see?
+      - How do you keep page two consistent with page one when scores change?
+    common_errors:
+      - Re-ranking from scratch on every page request, so items jump between pages.
+
+  - external_key: system_design.backend_services.activity_feed_aggregation
+    competency_key: system_design
+    topic: Aggregated activity feed in a work app
+    difficulty: medium
+    text: >-
+      In a collaboration tool, users see an activity feed like "Priya and four others commented on your
+      document." How would you design the storage and aggregation so related events group together and the feed
+      stays fast?
+    expected_concepts:
+      - raw activity events with actor, verb and object
+      - aggregation key such as object, verb and time window
+      - aggregating at write time versus read time
+      - permission filtering of activities
+      - updating an aggregate as new events arrive
+      - retention and compaction of old activity
+    rubric:
+      excellent: Defines an event model and aggregation key, chooses write-time or read-time grouping with reasons, and handles permission checks and updates to existing groups.
+      good: Stores events and groups them by object and type when reading.
+      weak: Stores pre-rendered strings and cannot update or permission-check them.
+    followups:
+      - A user loses access to the document. What happens to activity they've already seen?
+      - How would you handle one actor generating hundreds of events in a minute?
+    common_errors:
+      - Rendering final sentences at write time so they cannot be localised or regrouped.
+
+  # ------------------------------------------------------------------- counters and rankings
+  - external_key: system_design.backend_services.like_counts
+    competency_key: system_design
+    topic: Storing and showing like counts
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Every post in your app shows how many likes it has, and a user can like a post only once. How would you
+      store likes and serve the counts as traffic grows?
+    expected_concepts:
+      - likes table with a unique user and post pair
+      - denormalised count on the post or in a cache
+      - keeping the count in sync with the likes rows
+      - hot posts creating write contention
+      - showing approximate counts for very large numbers
+    rubric:
+      excellent: Separates the source of truth (unique like rows) from a denormalised counter, explains how they stay in sync, and spots contention on popular posts with a mitigation.
+      good: Uses a unique like record and a cached or stored count.
+      weak: Counts rows on every page view or stores only a counter that can't prevent double likes.
+    followups:
+      - A post goes viral and gets thousands of likes a second. Where does it hurt?
+      - How would you fix the count if it drifts from the real number?
+    common_errors:
+      - Running COUNT over the likes table on every feed render.
+
+  - external_key: system_design.backend_services.video_view_counting
+    competency_key: distributed_systems
+    topic: View counting at very high volume
+    difficulty: hard
+    text: >-
+      Design view counting for a video platform with millions of plays a minute. Creators want counts that are
+      close to real time, advertisers need numbers they can trust, and bots inflate views. How would you build
+      it?
+    expected_concepts:
+      - event ingestion into a durable log
+      - sharded or batched counter increments
+      - near-real-time approximate counts versus audited final counts
+      - de-duplication and bot filtering rules
+      - late events and recounting from raw data
+      - separate paths for display and billing
+    rubric:
+      excellent: Separates a fast approximate display counter from a slower audited pipeline built on raw events, handles duplicates and bot filtering, and can recompute counts when rules change.
+      good: Buffers events and aggregates counts in batches, with some fraud filtering.
+      weak: Increments a single database row per view or ignores trustworthiness.
+    followups:
+      - The bot filter is improved and last week's numbers must be corrected. How?
+      - Why might the public count and the billing count legitimately differ?
+    common_errors:
+      - Using one counter row per video, which becomes a write hotspot.
+
+  - external_key: system_design.backend_services.game_leaderboard
+    competency_key: system_design
+    topic: Real-time leaderboard for a game
+    difficulty: medium
+    text: >-
+      A mobile game has twenty million players and wants a global leaderboard that shows the top hundred and each
+      player's own rank, updated as scores change. How would you design it?
+    expected_concepts:
+      - sorted sets or an ordered index keyed by score
+      - top-N reads versus exact rank for an arbitrary player
+      - tie-breaking rules
+      - sharding when one sorted structure gets too large
+      - approximate rank for players far from the top
+      - persistence and rebuilding from the source of truth
+    rubric:
+      excellent: Uses an ordered structure suited to top-N and rank queries, sizes it, discusses tie-breaking and sharding limits, and offers approximate ranks for the long tail with a rebuild path.
+      good: Uses a sorted set or equivalent and explains top-N and rank queries.
+      weak: Sorts all players in the database on each request.
+    followups:
+      - The product adds weekly leaderboards that reset every Monday. What changes?
+      - How would you rebuild the leaderboard if the cache is lost?
+    common_errors:
+      - Computing exact rank for every player with a full table scan.
+
+  - external_key: system_design.backend_services.trending_topics
+    competency_key: distributed_systems
+    topic: Trending topics over a sliding window
+    difficulty: hard
+    text: >-
+      Design a service that shows the top trending hashtags over the last hour, updated every minute, from a
+      stream of a few hundred thousand posts per second. How would you compute it?
+    expected_concepts:
+      - stream processing with windowed counts
+      - partitioned counting then merging top-K
+      - approximate structures such as count-min sketch or heavy hitters
+      - sliding windows built from small time buckets
+      - trend scoring against a baseline, not raw volume
+      - spam and coordinated manipulation
+    rubric:
+      excellent: Builds windowed counts from minute buckets across partitions, merges partial top-K results, uses approximate counting where exact is too costly, and scores trends relative to normal volume.
+      good: Uses a stream processor with windows and computes top-K.
+      weak: Queries the posts table for the last hour every minute.
+    followups:
+      - Why might a simple top-K by count be a poor definition of trending?
+      - How does merging per-partition top-K results lose accuracy?
+    common_errors:
+      - Assuming merged per-partition top-K lists give the exact global top-K.
+
+  - external_key: system_design.backend_services.comment_threads
+    competency_key: databases
+    topic: Nested comment threads
+    difficulty: medium
+    text: >-
+      Design the backend for comments under articles, with nested replies, sorting by newest or most liked, and
+      some articles getting fifty thousand comments. How would you model and serve it?
+    expected_concepts:
+      - parent reference with root or thread ID
+      - path, closure table or depth-limited nesting
+      - paginating top-level comments and loading replies lazily
+      - sort keys and indexes per sort mode
+      - deleted comments that still have replies
+      - caching hot threads
+    rubric:
+      excellent: Chooses a tree representation with its query costs, paginates top-level comments with lazy reply loading, indexes each sort order and handles deleted parents and hot threads.
+      good: Uses parent IDs with pagination and an index for sorting.
+      weak: Loads the whole tree in one query for every page view.
+    followups:
+      - How would you show the first two replies under each top-level comment efficiently?
+      - What do you show when a parent comment is deleted?
+    common_errors:
+      - Recursive per-comment queries that explode on large threads.
+
+  - external_key: system_design.backend_services.feed_visibility_changes
+    competency_key: system_design
+    topic: Deletes and privacy changes in precomputed feeds
+    difficulty: medium
+    text: >-
+      Your feeds are precomputed. A user deletes a post, or blocks someone, or switches their account to private.
+      How do you make those changes take effect in other people's feeds quickly and reliably?
+    expected_concepts:
+      - read-time filtering against current visibility and blocks
+      - asynchronous removal from precomputed feeds
+      - tombstones and hydration that drops missing posts
+      - caches that must be invalidated
+      - ordering between the change and in-flight fan-out
+    rubric:
+      excellent: Combines an immediate read-time check with asynchronous cleanup, handles races with in-flight fan-out and covers caches and search indexes that also hold the content.
+      good: Filters deleted or blocked content at read time.
+      weak: Relies only on a background job to rewrite every feed.
+    followups:
+      - A fan-out job delivers the post after it was deleted. What prevents it from showing?
+      - Which of these changes would you treat as urgent, and why?
+    common_errors:
+      - Forgetting caches and search indexes that still contain the content.
+
+  - external_key: system_design.backend_services.feed_cache_rebuild
+    competency_key: distributed_systems
+    topic: Sizing and rebuilding feed caches
+    difficulty: hard
+    text: >-
+      Your precomputed home timelines live in an in-memory cluster for a hundred million users. Estimate how much
+      memory that needs, and tell me how you'd recover if a large part of that cluster were lost.
+    expected_concepts:
+      - per-entry size times entries per feed times active users
+      - storing only IDs and capping feed length
+      - only keeping active users' feeds in memory
+      - lazy rebuild from followed accounts on a miss
+      - throttling rebuilds to protect the backing stores
+      - replication of the cache tier
+    rubric:
+      excellent: Produces a reasoned estimate with explicit assumptions, cuts it down by storing IDs and caching only active users, and describes a throttled lazy rebuild that avoids a stampede on the databases.
+      good: Gives a rough estimate and a rebuild plan on cache miss.
+      weak: Cannot estimate the size or plans to rebuild every feed at once.
+    followups:
+      - What happens to the posts database if every user's feed misses at the same moment?
+      - Which users would you rebuild first?
+    common_errors:
+      - Rebuilding all feeds eagerly and overwhelming the source stores.
+
+  - external_key: system_design.backend_services.unread_badge_counts
+    competency_key: system_design
+    topic: Unread counts across devices
+    difficulty: medium
+    text: >-
+      Your app shows unread badges for messages and notifications on phone, tablet and web. How would you design
+      the backend so the counts stay correct as users read things on different devices?
+    expected_concepts:
+      - per-user read position or last-read markers
+      - counting unread from markers versus maintaining counters
+      - syncing changes to other devices
+      - idempotent mark-as-read operations
+      - drift correction by recomputing
+    rubric:
+      excellent: Uses read markers as the source of truth, derives or maintains counts with a recompute path, makes mark-as-read idempotent and pushes updates to other devices.
+      good: Keeps a server-side unread count and syncs it to devices.
+      weak: Keeps counts only on each device so they diverge.
+    followups:
+      - Two devices mark different items read at the same moment. What happens to the count?
+      - How would you detect and repair a wrong badge count?
+    common_errors:
+      - Increment and decrement counters with no way to recompute the true value.
+
+  - external_key: system_design.backend_services.follow_graph_storage
+    competency_key: databases
+    topic: Storing a large follow graph
+    difficulty: hard
+    text: >-
+      Design storage for the follow graph of a social network with a billion edges, where some accounts have tens
+      of millions of followers. It needs to answer who someone follows, who follows them, and whether one user
+      follows another.
+    expected_concepts:
+      - edge stored in both directions or two indexes
+      - partitioning by source user
+      - very large adjacency lists split across partitions
+      - point lookups for the follows check
+      - follower counts maintained separately
+      - consistency between both directions
+    rubric:
+      excellent: Stores forward and reverse edges partitioned by the owning user, handles huge follower lists by splitting them, keeps counts separate and explains how both directions stay consistent.
+      good: Uses a table of edges indexed in both directions with partitioning.
+      weak: Puts all edges in one unpartitioned table or stores follower lists as a single array field.
+    followups:
+      - The two directions disagree after a partial failure. How do you find and fix that?
+      - How would you return mutual follows for two users?
+    common_errors:
+      - Storing a user's followers as one ever-growing document.
+
+  - external_key: system_design.backend_services.saved_items_service
+    competency_key: api_design
+    topic: Save-for-later service
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Users want to save articles, products and videos to read later, from any device. How would you design the
+      API and data model for that saved-items service?
+    expected_concepts:
+      - polymorphic item reference with type and ID
+      - unique constraint per user and item
+      - idempotent save and unsave operations
+      - cursor pagination ordered by save time
+      - handling items that are later deleted
+    rubric:
+      excellent: Designs a clear resource model with idempotent save and remove calls, a uniqueness rule, paginated listing and a plan for items that disappear.
+      good: Sensible table and endpoints with pagination.
+      weak: Allows duplicate saves or returns the full list unpaginated.
+    followups:
+      - What should the API return if the user saves the same item twice?
+      - How would you show a saved product that has since been removed?
+    common_errors:
+      - Using a toggle endpoint that flips state, so a retry undoes the action.
+
+  - external_key: system_design.backend_services.feed_moderation_gate
+    competency_key: system_design
+    topic: Moderation before wide distribution
+    difficulty: hard
+    text: >-
+      Policy now says posts must pass automated content checks before they reach a wide audience, but authors
+      expect their posts to appear instantly. How would you fit moderation into the posting and fan-out pipeline?
+    expected_concepts:
+      - author sees the post immediately while distribution waits
+      - staged visibility, followers first then wider reach
+      - asynchronous classifiers with time limits
+      - human review queue for uncertain results
+      - retracting already-distributed content
+      - fail-safe behaviour when the moderation service is down
+    rubric:
+      excellent: Designs staged visibility with fast automated checks, a review queue for uncertain cases and a retraction path, and states explicitly what happens when moderation is slow or unavailable.
+      good: Holds wide distribution until a classifier approves the post.
+      weak: Blocks the posting request on every check or ignores content already distributed.
+    followups:
+      - The classifier is down for thirty minutes. Do posts go out or not?
+      - A post is flagged after it has reached a million feeds. What happens next?
+    common_errors:
+      - Ignoring how to pull back content that was already fanned out.

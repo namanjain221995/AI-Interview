@@ -1,0 +1,614 @@
+# Curated questions: DevOps CI/CD and infrastructure as code (part 3 of 4).
+# Container image hardening, secrets management and software supply chain.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [devops]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: technical.devops_ci_iac.non_root_containers
+    competency_key: docker
+    topic: Running containers as non-root
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Why does it matter whether a container runs as root, and how would you set up an image so the
+      application runs as an unprivileged user?
+    expected_concepts:
+      - root in the container can be close to root on the host after an escape
+      - create a dedicated user and switch with the USER instruction
+      - file ownership and permissions for the app directories
+      - binding to ports below 1024 without root
+      - enforcing it at runtime with runAsNonRoot or similar
+    rubric:
+      excellent: Explains the escape and blast-radius risk, sets a numeric non-root user in the image, deals with file permissions and port binding, and enforces it at the orchestrator level.
+      good: Adds a USER instruction and explains it limits damage if the app is compromised.
+      weak: Thinks containers fully isolate root so it doesn't matter.
+    followups:
+      - The app fails to start after switching users because it can't write a cache directory. What do you change?
+    common_errors:
+      - Switching to a non-root user by name only, which some orchestrator checks cannot verify.
+
+  - external_key: technical.devops_ci_iac.tags_versus_digests
+    competency_key: docker
+    topic: Image tags and digests
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What's the risk of deploying container images by a tag such as latest, and how would you reference
+      images instead?
+    expected_concepts:
+      - tags are mutable and can be moved to a different image
+      - different nodes may pull different images under the same tag
+      - rollback is ambiguous with moving tags
+      - unique immutable tags such as version or commit SHA
+      - pinning by digest for full immutability
+    rubric:
+      excellent: Explains tag mutability and its consequences for consistency, rollback and security, and uses unique tags plus digest pinning with registry tag immutability.
+      good: Uses versioned tags instead of latest and explains why.
+      weak: Sees no problem with latest as long as the pipeline pushes it.
+    followups:
+      - How would you get the readability of tags and the safety of digests at the same time?
+    common_errors:
+      - Pinning only the application image while base images in Dockerfiles still float.
+
+  - external_key: technical.devops_ci_iac.pipeline_credentials_basics
+    competency_key: security
+    topic: Credentials in CI pipelines
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you give a CI pipeline the credentials it needs to deploy, without exposing them in logs or
+      handing them to every job?
+    expected_concepts:
+      - CI secret store or external secret manager, never in the repository
+      - scoping secrets to specific jobs, branches or environments
+      - masking in logs and avoiding echoing values
+      - least-privilege deploy identities
+      - short-lived credentials where the platform supports it
+    rubric:
+      excellent: Scopes credentials to only the jobs and branches that deploy, uses least privilege and short-lived credentials, and is aware that log masking is not a full defence.
+      good: Stores secrets in the CI secret store and restricts their use to deploy jobs.
+      weak: Puts credentials in pipeline files or makes them available to every job including pull requests.
+    followups:
+      - Masking is on, but a secret still leaked into a log. How might that have happened?
+    common_errors:
+      - Exposing production secrets to jobs triggered by pull requests from forks.
+
+  - external_key: technical.devops_ci_iac.base_image_selection
+    competency_key: docker
+    topic: Choosing a base image
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you choose a base image for a production service, and what trade-offs come with full
+      distribution images, slim variants and distroless or scratch images?
+    expected_concepts:
+      - attack surface and vulnerability count
+      - debugging tools available or not
+      - libc compatibility issues, for example with Alpine and musl
+      - trusted, maintained sources with regular updates
+      - consistency across services for easier patching
+    rubric:
+      excellent: Weighs security, size, debuggability and compatibility with concrete examples, prefers maintained trusted images and considers fleet-wide standardisation.
+      good: Prefers smaller images for security and size and knows the debugging trade-off.
+      weak: Picks whatever image the tutorial used without considering trade-offs.
+    followups:
+      - A Python service gets much slower on Alpine. Why might that be?
+    common_errors:
+      - Using random community images from public registries without checking who maintains them.
+
+  - external_key: technical.devops_ci_iac.build_time_secrets
+    competency_key: docker
+    topic: Secrets needed during image builds
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Say a Docker build needs a token for a private package registry. How do you use it during the build
+      without it ending up in the final image?
+    expected_concepts:
+      - build arguments and ENV persist in image history or layers
+      - deleting the file in a later layer doesn't remove it
+      - BuildKit secret mounts
+      - multi-stage builds where the token only exists in a builder stage
+      - checking image history for leaks
+    rubric:
+      excellent: Explains why ARG, ENV and deleted files leak through layers and history, uses BuildKit secret mounts, and verifies the final image is clean.
+      good: Uses multi-stage builds or secret mounts to keep the token out of the final image.
+      weak: Passes the token as a build argument and deletes it at the end of the Dockerfile.
+    followups:
+      - How would you check an existing image to see whether it contains a secret?
+    common_errors:
+      - Believing a later RUN rm removes a secret copied in an earlier layer.
+
+  - external_key: technical.devops_ci_iac.secret_pushed_to_git
+    competency_key: security
+    topic: Secret committed to a repository
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A developer tells you they pushed an API key to a shared Git repository an hour ago, then removed it
+      in the next commit. What should happen now?
+    expected_concepts:
+      - the key is still in Git history and any clones or forks
+      - revoke and rotate the key first
+      - check the provider's logs for any misuse
+      - history rewrite is optional clean-up, not the fix
+      - prevent recurrence with pre-commit and server-side secret scanning
+    rubric:
+      excellent: Treats the key as compromised, rotates it immediately, checks for misuse, then deals with history and adds preventive scanning, while keeping the conversation blameless.
+      good: Rotates the key and adds secret scanning.
+      weak: Thinks deleting it in the next commit was enough.
+    followups:
+      - The key belongs to a third-party service with no rotation feature. What do you do?
+    common_errors:
+      - Rewriting Git history and considering the incident closed without rotating the key.
+
+  - external_key: technical.devops_ci_iac.env_var_secrets_review
+    competency_key: security
+    topic: Secrets as environment variables
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A teammate proposes passing every secret to containers as plain environment variables set in the
+      deployment manifest. What concerns would you raise, and what would you suggest instead?
+    expected_concepts:
+      - values visible in manifests, repositories and orchestrator APIs
+      - environment variables leak through crash dumps, debug pages and child processes
+      - reference secrets from a secret store rather than inline values
+      - mounted files with restricted permissions as an option
+      - rotation is harder with values baked into deployments
+    rubric:
+      excellent: Distinguishes where values are stored from how they are delivered, explains concrete leak paths, and proposes a secret store with references or mounted files plus a rotation story.
+      good: Objects to inline secrets in manifests and suggests a secret manager.
+      weak: Sees no issue because the repository is private.
+    followups:
+      - If environment variables are the only option the app supports, how would you reduce the risk?
+    common_errors:
+      - Treating base64-encoded values in manifests as if they were encrypted.
+
+  # ------------------------------------------------------------------ medium
+  - external_key: technical.devops_ci_iac.vulnerability_triage
+    competency_key: docker
+    topic: Triaging image scan results
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your image scanner reports 140 vulnerabilities in a service image the day before a release. How do
+      you decide what actually needs fixing now?
+    expected_concepts:
+      - severity combined with exploitability and known exploitation
+      - whether the vulnerable package is actually used or reachable
+      - fix available versus no fix yet
+      - many findings disappear with a base image update
+      - documented exceptions with expiry, such as VEX statements
+    rubric:
+      excellent: Prioritises by exploitability and reachability rather than raw counts, fixes most findings cheaply via base image updates, and records risk acceptance for the rest with review dates.
+      good: Focuses on critical and high findings with available fixes.
+      weak: Either blocks the release until the count is zero or ignores the report entirely.
+    followups:
+      - How would you reduce this noise for every service, not just this one?
+    common_errors:
+      - Treating every CVSS high as equally urgent regardless of whether the code path is reachable.
+
+  - external_key: technical.devops_ci_iac.container_runtime_hardening
+    competency_key: docker
+    topic: Runtime hardening for containers
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Beyond what's inside the image, which runtime settings would you apply to harden a container in
+      production, and why?
+    expected_concepts:
+      - drop all Linux capabilities and add back only what's needed
+      - read-only root filesystem with explicit writable mounts
+      - no privilege escalation and no privileged mode
+      - seccomp and AppArmor or SELinux profiles
+      - CPU and memory limits
+      - not mounting the container runtime socket
+    rubric:
+      excellent: Lists the key controls with the attack each one blocks, knows how to find which capabilities an app needs, and enforces these settings through admission policies.
+      good: Mentions dropping capabilities, read-only filesystems and no privileged containers.
+      weak: Relies only on the image being scanned.
+    followups:
+      - How would you enforce these settings across every team's deployments?
+    common_errors:
+      - Mounting the Docker socket into a container, which effectively grants root on the host.
+
+  - external_key: technical.devops_ci_iac.ci_oidc_federation
+    competency_key: security
+    topic: OIDC federation from CI to cloud
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How does OIDC federation between your CI system and your cloud provider change the way a pipeline
+      authenticates, and what do you have to configure to keep it tight?
+    expected_concepts:
+      - CI issues a signed identity token per job
+      - the cloud exchanges it for short-lived credentials, no stored keys
+      - trust policy conditions on repository, branch or environment claims
+      - separate roles for different repositories and environments
+      - audit trail tied to the specific workflow run
+    rubric:
+      excellent: Explains the token exchange, removes long-lived keys, and restricts trust by specific claims such as repository and branch, with an example of how a loose condition could be abused.
+      good: Knows it replaces stored keys with short-lived credentials and scopes roles.
+      weak: Doesn't know how it works or trusts any repository from the CI provider.
+    followups:
+      - What could happen if the trust policy only checks the organisation and not the repository?
+    common_errors:
+      - Using a wildcard subject condition, letting any branch or pull request assume the production role.
+
+  - external_key: technical.devops_ci_iac.shared_password_rotation
+    competency_key: security
+    topic: Rotating a shared credential without downtime
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You need to rotate the production database password that a dozen services share, without any
+      downtime. How would you plan it?
+    expected_concepts:
+      - dual credentials or a second user so old and new work at once
+      - update the secret store, then roll services gradually
+      - services reloading secrets without full redeploys where possible
+      - verify every consumer has switched before revoking the old one
+      - move towards per-service credentials
+    rubric:
+      excellent: Uses an overlap period with two valid credentials, rolls consumers safely, verifies via connection logs before revoking the old one and proposes per-service credentials going forward.
+      good: Creates the new password, updates services one by one and then removes the old one.
+      weak: Changes the password and restarts everything at once.
+    followups:
+      - How would you know that no forgotten batch job still uses the old password?
+    common_errors:
+      - Revoking the old password before confirming every consumer has picked up the new one.
+
+  - external_key: technical.devops_ci_iac.dynamic_secrets
+    competency_key: security
+    topic: Dynamic and short-lived secrets
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What are dynamic secrets, such as database credentials a tool like Vault generates on request, and
+      when are they worth the added complexity?
+    expected_concepts:
+      - credentials generated per client with a lease and expiry
+      - automatic revocation reduces the impact of leaks
+      - per-workload identity improves auditing
+      - applications must handle renewal and expiry
+      - dependency on the secret system's availability
+    rubric:
+      excellent: Explains leases, renewal and revocation, weighs the security benefit against application changes and availability dependency, and names where they pay off most.
+      good: Describes credentials that expire and are generated per application.
+      weak: Can't distinguish dynamic secrets from secrets stored in a vault.
+    followups:
+      - What happens to open database connections when a lease expires?
+    common_errors:
+      - Setting very long leases, which removes most of the benefit.
+
+  - external_key: technical.devops_ci_iac.external_secrets_kubernetes
+    competency_key: security
+    topic: Delivering external secrets to Kubernetes
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your team wants to stop keeping secrets in hand-written Kubernetes Secret manifests and use an
+      external secret store instead. How would you get those secrets into workloads, and how do the
+      approaches you'd consider compare?
+    expected_concepts:
+      - a sync operator such as External Secrets that creates native Secrets
+      - CSI secret store driver mounting secrets as files
+      - sidecar or agent injection
+      - etcd encryption and RBAC on Secret objects
+      - how each handles rotation and pod restarts
+    rubric:
+      excellent: Compares sync, CSI mount and injection approaches on rotation, security and operational complexity, and covers the remaining protections such as etcd encryption and RBAC.
+      good: Describes one working approach in detail and its rotation behaviour.
+      weak: Commits secrets into manifests in Git with base64 encoding.
+    followups:
+      - A secret rotates but the pod keeps using the old value. Why, and how would you fix it?
+    common_errors:
+      - Granting broad list and read access on Secrets across namespaces to many service accounts.
+
+  - external_key: technical.devops_ci_iac.base_image_cve_rollout
+    competency_key: docker
+    topic: Patching a base image across a fleet
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A critical vulnerability is announced in the OS base image used by about eighty of your services.
+      How would you get them all patched and redeployed quickly?
+    expected_concepts:
+      - inventory of which images and running workloads use that base
+      - a patched internal base image published centrally
+      - automated rebuilds and pull requests via dependency bots
+      - prioritise exposed and critical services
+      - track progress until running workloads, not just images, are fixed
+    rubric:
+      excellent: Uses an inventory or SBOM to find affected workloads, patches a central base image, automates rebuilds and redeploys by priority and tracks until production is clean.
+      good: Updates the base image and rebuilds affected services in priority order.
+      weak: Messages every team to update their Dockerfiles manually with no tracking.
+    followups:
+      - How would you know which running pods still use the vulnerable image a week later?
+    common_errors:
+      - Counting patched images in the registry as done while old images are still running.
+
+  - external_key: technical.devops_ci_iac.sbom_usage
+    competency_key: security
+    topic: Software bills of materials
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What's a software bill of materials, how would you generate one in your pipeline, and how would you
+      actually use it once it exists?
+    expected_concepts:
+      - inventory of components and versions in an artifact
+      - generated at build time with tools such as Syft
+      - standard formats such as SPDX or CycloneDX
+      - stored and attached to the artifact
+      - answering whether you are affected by a new vulnerability quickly
+    rubric:
+      excellent: Explains generation, format and storage alongside the artifact, and shows how the SBOM is queried in practice, for example to find affected services during a zero-day.
+      good: Knows what an SBOM contains and how to generate it in CI.
+      weak: Generates SBOMs to tick a box with no plan to use them.
+    followups:
+      - A new zero-day drops in a logging library. How would SBOMs speed up your response?
+    common_errors:
+      - Producing SBOMs from source manifests only, missing packages from the base image.
+
+  - external_key: technical.devops_ci_iac.image_signing_admission
+    competency_key: security
+    topic: Signing images and enforcing signatures
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you sign container images in your pipeline, and make sure your clusters only run images
+      that were signed by that pipeline?
+    expected_concepts:
+      - signing at build time with tools such as cosign
+      - keyless signing tied to CI identity, or managed keys
+      - admission controller verifying signatures by digest
+      - policy on which identities are trusted
+      - exceptions for third-party and system images
+    rubric:
+      excellent: Signs by digest in CI, verifies at admission with a policy that trusts specific pipeline identities, and has a plan for third-party images and a safe rollout.
+      good: Signs images and enforces verification in the cluster.
+      weak: Signs images but never verifies them anywhere.
+    followups:
+      - How would you roll out enforcement without breaking existing workloads?
+    common_errors:
+      - Verifying signatures by tag, which can be moved to an unsigned image.
+
+  - external_key: technical.devops_ci_iac.distroless_debugging
+    competency_key: docker
+    topic: Debugging minimal images
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You moved a service to a distroless image, and now the on-call engineers complain they can't get a
+      shell inside to debug anything. How would you handle that trade-off?
+    expected_concepts:
+      - ephemeral debug containers attached to the running pod
+      - debug image variants used only on demand
+      - better observability so shells are rarely needed
+      - access controls and auditing for debug sessions
+      - keeping production images minimal
+    rubric:
+      excellent: Keeps production images minimal, offers ephemeral debug containers with controlled access and invests in observability so engineers rarely need a shell.
+      good: Suggests ephemeral debug containers or separate debug images.
+      weak: Puts a full shell and tools back into the production image.
+    followups:
+      - How would you audit who attached debug containers in production?
+    common_errors:
+      - Shipping a debug variant to production permanently because it was easier.
+
+  - external_key: technical.devops_ci_iac.third_party_ci_actions
+    competency_key: security
+    topic: Third-party CI actions and plugins
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your pipelines use dozens of third-party CI actions and plugins pulled straight from public
+      repositories. How would you reduce the risk that one of them gets compromised and abused?
+    expected_concepts:
+      - pin to full commit SHAs, not moving tags
+      - allow-list of approved actions
+      - minimal token permissions per job
+      - mirroring or vendoring critical actions
+      - automated updates with review
+    rubric:
+      excellent: Pins by commit SHA, maintains an allow-list, limits job token permissions, mirrors critical dependencies and keeps updates flowing through review.
+      good: Pins versions and restricts which actions can be used.
+      weak: Trusts actions because they are popular.
+    followups:
+      - Pinning to SHAs means you miss security fixes. How do you keep them updated?
+    common_errors:
+      - Pinning to a version tag, which the action's owner can move to new code.
+
+  - external_key: technical.devops_ci_iac.secret_scanning_placement
+    competency_key: security
+    topic: Where secret scanning fits
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Where in the development and delivery flow would you put secret scanning, and what process kicks in
+      when it finds something?
+    expected_concepts:
+      - pre-commit hooks for fast local feedback
+      - server-side push protection that blocks the push
+      - scanning in CI and of existing history
+      - scanning images and logs, not just code
+      - triage, rotation and false-positive handling
+    rubric:
+      excellent: Layers scanning from developer machine to push protection to CI and artifacts, and defines a clear response path with rotation, ownership and tuning for false positives.
+      good: Scans in CI and on push and rotates detected secrets.
+      weak: Relies only on a pre-commit hook that developers can skip.
+    followups:
+      - How would you handle a high false-positive rate that makes developers ignore alerts?
+    common_errors:
+      - Scanning only new commits and never the existing repository history.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: technical.devops_ci_iac.build_provenance
+    competency_key: security
+    topic: Build provenance and supply-chain maturity
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How would you raise a build system's supply-chain maturity towards something like SLSA level three,
+      and what does build provenance actually prove?
+    expected_concepts:
+      - signed provenance describing source, builder and inputs
+      - isolated, ephemeral build environments the build cannot tamper with
+      - provenance generated by the platform, not the build script
+      - verification at deploy time against expected source and builder
+      - what provenance does not prove, such as code being free of bugs
+    rubric:
+      excellent: Explains the requirements for non-forgeable provenance from a hardened builder, how it is verified before deployment and the limits of what it guarantees.
+      good: Describes signed provenance and isolated builds with some verification.
+      weak: Equates provenance with signing the image or scanning it.
+    followups:
+      - What attack does verified provenance stop that image signing alone doesn't?
+    common_errors:
+      - Letting the build script produce its own provenance, which a compromised build can forge.
+
+  - external_key: technical.devops_ci_iac.secret_store_outage
+    competency_key: security
+    topic: Surviving a secret store outage
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your applications fetch secrets from a central Vault cluster at startup, and Vault goes down during
+      a big scaling event, so new instances can't start. How would you redesign things so this can't take
+      production down?
+    expected_concepts:
+      - high availability and capacity planning for the secret store
+      - caching agents or local caches with sensible expiry
+      - running instances keep working with existing credentials
+      - rate limiting and jittered retries on startup
+      - testing the failure mode regularly
+    rubric:
+      excellent: Treats the secret store as tier-zero infrastructure, adds resilient caching and graceful startup behaviour, handles thundering herds, and tests failure scenarios deliberately.
+      good: Adds redundancy to the secret store and some caching on the client side.
+      weak: Bakes secrets into images to avoid the dependency.
+    followups:
+      - How long should a cached secret be trusted if the store stays down?
+    common_errors:
+      - Sizing the secret store for steady state and not for mass restarts.
+
+  - external_key: technical.devops_ci_iac.unprivileged_image_builds
+    competency_key: docker
+    topic: Building images without privileged access
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How would you build container images inside CI jobs running on Kubernetes without giving those jobs
+      privileged mode or access to the node's container runtime socket?
+    expected_concepts:
+      - risks of Docker-in-Docker privileged mode and socket mounting
+      - rootless BuildKit or Buildah
+      - Kaniko-style userspace builders and their limits
+      - a separate isolated build service or remote builder
+      - caching and performance trade-offs of each option
+    rubric:
+      excellent: Explains why privileged builds and socket mounts are dangerous, compares rootless and remote-builder options with their performance and compatibility trade-offs, and picks one with reasons.
+      good: Proposes a rootless or daemonless builder and explains why.
+      weak: Uses privileged Docker-in-Docker without concern.
+    followups:
+      - Your rootless builds are much slower. What would you look at?
+    common_errors:
+      - Assuming running a builder rootless removes the need to isolate untrusted builds from each other.
+
+  - external_key: technical.devops_ci_iac.malicious_dependency_release
+    competency_key: security
+    topic: Responding to a malicious dependency release
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      It emerges that a popular open-source library you depend on shipped a malicious release last week.
+      How would you find out whether you're affected and respond?
+    expected_concepts:
+      - search lock files, SBOMs and artifact inventories for the bad version
+      - check whether it reached CI, developer machines or production
+      - assume CI secrets exposed if it ran during builds and rotate them
+      - pin to a safe version and rebuild
+      - longer-term controls such as package proxies and release cooldowns
+    rubric:
+      excellent: Rapidly scopes exposure across builds, developers and production, treats it as a security incident including secret rotation, remediates and adds supply-chain controls for the future.
+      good: Finds affected services and upgrades or pins away from the bad version.
+      weak: Only checks production and ignores that builds may already have leaked secrets.
+    followups:
+      - How could a package proxy or a minimum package age policy have helped here?
+    common_errors:
+      - Forgetting that install scripts run in CI, where they can read pipeline credentials.
+
+  - external_key: technical.devops_ci_iac.multi_cloud_secrets_design
+    competency_key: security
+    topic: Secrets management at organisational scale
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      If you were designing secrets management for hundreds of services running across several clouds,
+      how would you structure ownership, access policies and auditing?
+    expected_concepts:
+      - workload identity as the basis for access, not shared tokens
+      - path or namespace structure mapped to teams and environments
+      - policies managed as code and reviewed
+      - central audit logging and alerting on unusual access
+      - federation or a single control plane across clouds
+      - break-glass and recovery procedures
+    rubric:
+      excellent: Builds access on workload identity with a clear ownership hierarchy, manages policy as code, centralises auditing and alerting and explains how the design works across clouds and in emergencies.
+      good: Proposes a central secret store with team-scoped policies and audit logs.
+      weak: Suggests one shared secret store where every service can read every secret.
+    followups:
+      - How would you detect a service reading secrets it never used before?
+    common_errors:
+      - Designing access around human users and forgetting machine identities.
+
+  - external_key: technical.devops_ci_iac.vulnerability_sla_program
+    competency_key: docker
+    topic: Meeting vulnerability fix deadlines across a fleet
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Security wants every critical container vulnerability fixed within seven days across the whole
+      fleet, but teams keep missing the deadline. How would you build a process and tooling that makes it
+      achievable?
+    expected_concepts:
+      - find out why deadlines are missed, such as noise, toil or unclear ownership
+      - shared hardened base images maintained centrally
+      - automated rebuilds, pull requests and redeploys
+      - scanning of running workloads mapped to owners
+      - dashboards and escalation tied to real exploitability
+    rubric:
+      excellent: Diagnoses the causes, reduces toil through central base images and automation, maps findings to owners with risk-based priority and measures progress against the deadline.
+      good: Automates rebuilds and gives teams visibility of their findings.
+      weak: Escalates to managers more often without changing the tooling or process.
+    followups:
+      - How would you handle a team whose service can't take a new base image without code changes?
+    common_errors:
+      - Measuring success by vulnerability counts in the registry instead of in running workloads.

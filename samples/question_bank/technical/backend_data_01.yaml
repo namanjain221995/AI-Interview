@@ -1,0 +1,634 @@
+# Technical bank: backend data layer, part 1 (relational modelling, SQL and ORM pitfalls).
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend]
+questions:
+  # ------------------------------------------------------------ modelling
+  - external_key: technical.backend_data.normalization_tradeoffs
+    competency_key: databases
+    topic: Normalization versus deliberate denormalization
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you design a new schema, how do you decide how far to normalize it? Tell me about a time you
+      deliberately denormalized something and what it cost you later.
+    expected_concepts:
+      - removing redundancy so each fact lives in one place
+      - update anomalies caused by duplicated data
+      - denormalizing for read-heavy paths or reporting
+      - keeping denormalized copies in sync
+      - measuring the read pattern before changing the model
+    rubric:
+      excellent: Explains normalization in terms of update anomalies, gives a concrete denormalization they chose for a measured read need, and describes how they kept the copy consistent and what it cost.
+      good: Understands why normalization avoids duplication and can name a sensible reason to denormalize.
+      weak: Recites normal forms without practical meaning, or denormalizes by default without considering consistency.
+    followups:
+      - How did you keep the duplicated data correct when the source changed?
+      - Would you make the same call again with what you know now?
+    common_errors:
+      - Denormalizing before there is any evidence of a read problem.
+
+  - external_key: technical.backend_data.primary_key_choice
+    competency_key: databases
+    topic: Choosing primary keys
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you choose a primary key for a new table? I'm interested in how you weigh natural keys,
+      auto-increment integers and UUIDs.
+    expected_concepts:
+      - natural keys can change or turn out not to be unique
+      - sequential integers are compact and index-friendly but leak volume and ordering
+      - random UUIDs scatter inserts across the index
+      - time-ordered identifiers such as UUIDv7 or ULID
+      - keeping a unique constraint on the business key anyway
+    rubric:
+      excellent: Weighs stability, index locality, size, exposure in URLs and generation across services, and mentions time-ordered UUIDs plus a separate unique constraint for business keys.
+      good: Prefers surrogate keys with a sensible reason and knows UUIDs and integers each have trade-offs.
+      weak: Picks one option out of habit and cannot explain any downside.
+    followups:
+      - Why can random UUIDs slow down inserts on a large table?
+      - Would you ever expose your internal ids in a public API?
+    common_errors:
+      - Using an email address or other mutable value as the primary key.
+
+  - external_key: technical.backend_data.constraints_vs_app_checks
+    competency_key: databases
+    topic: Database constraints versus application validation
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How much data integrity do you push into the database itself, through foreign keys, unique and check
+      constraints, versus enforcing it in application code?
+    expected_concepts:
+      - constraints hold even with concurrent writers and other clients
+      - application checks race without a backing constraint
+      - foreign keys prevent orphaned rows
+      - translating constraint violations into clean API errors
+      - cost of foreign keys on very high write volumes or sharded data
+    rubric:
+      excellent: Treats the database as the last line of defence for invariants, explains why application-only checks race, handles violations gracefully and knows when foreign keys are dropped for scale.
+      good: Uses common constraints and validates in the application for user-friendly errors.
+      weak: Relies only on application code and sees constraints as unnecessary overhead.
+    followups:
+      - How do you turn a unique-constraint violation into a helpful error for the client?
+      - When have you seen a team remove foreign keys, and was it worth it?
+    common_errors:
+      - Assuming a check-then-insert in code guarantees uniqueness.
+
+  - external_key: technical.backend_data.n_plus_one_listing
+    competency_key: databases
+    topic: N+1 queries from an ORM
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A page that lists fifty orders with each customer's name turns out to run fifty-one queries. How would
+      you have spotted that, and how would you fix it?
+    expected_concepts:
+      - lazy loading of related objects inside a loop
+      - query logging or counting per request
+      - eager loading with a join or a second batched query
+      - selecting only the columns needed
+      - a test or check that fails when query counts grow
+    rubric:
+      excellent: Explains how lazy loading produces the pattern, finds it through query logs or APM traces, fixes it with the right eager-loading strategy, and adds a guard such as a query-count assertion.
+      good: Recognises N+1 and fixes it with eager loading or a join.
+      weak: Suggests caching or a bigger database without understanding why there are so many queries.
+    followups:
+      - When would you choose a separate batched query over a join?
+      - How would you stop this from coming back in a later change?
+    common_errors:
+      - Eager loading everything everywhere and creating huge joins instead.
+
+  - external_key: technical.backend_data.null_semantics
+    competency_key: sql
+    topic: NULL semantics in SQL
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Tell me about the ways NULL values have surprised you or your team in SQL, whether in comparisons,
+      aggregates or filters, and how you guard against them now.
+    expected_concepts:
+      - three-valued logic so NULL equals NULL is not true
+      - IS NULL and IS DISTINCT FROM instead of equals
+      - NOT IN with a NULL in the subquery returning no rows
+      - COUNT of a column skipping NULLs while COUNT star does not
+      - NOT NULL constraints and sensible defaults
+    rubric:
+      excellent: Gives concrete examples of three-valued logic biting, including NOT IN with NULLs and aggregates skipping them, and prevents them with NOT NULL constraints and null-safe comparisons.
+      good: Knows NULL comparisons need IS NULL and that aggregates treat NULL specially.
+      weak: Treats NULL like an empty string or zero.
+    followups:
+      - Why can a NOT IN subquery suddenly return nothing?
+      - When do you think a column should be nullable at all?
+    common_errors:
+      - Filtering with column = NULL and getting no rows.
+
+  - external_key: technical.backend_data.many_to_many_modelling
+    competency_key: databases
+    topic: Modelling many-to-many relationships
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Say you're modelling students enrolling in courses, where each enrolment also has a status and a grade.
+      How would you model that, and what would you index?
+    expected_concepts:
+      - a join table with two foreign keys
+      - the enrolment as its own entity with attributes
+      - unique constraint on the pair to prevent duplicates
+      - indexes for lookups from both sides
+      - avoiding arrays or comma-separated ids in a column
+    rubric:
+      excellent: Models the enrolment as a first-class table with its own attributes, adds a unique constraint on the pair, indexes both access directions and explains why list columns are a trap.
+      good: Proposes a join table with foreign keys and some indexing.
+      weak: Stores course ids as a delimited string or duplicates rows on both sides.
+    followups:
+      - How does the composite primary key or unique index affect queries from the course side?
+      - What changes if a student can enrol in the same course twice in different terms?
+    common_errors:
+      - Forgetting the unique constraint and ending up with duplicate enrolments.
+
+  - external_key: technical.backend_data.soft_delete_design
+    competency_key: databases
+    topic: Soft deletes and recoverable records
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Product asks that anything a user deletes can be restored for thirty days. How would you implement that
+      in the data model, and what problems would you watch out for?
+    expected_concepts:
+      - a deleted_at column or a separate archive table
+      - every query must exclude deleted rows
+      - unique constraints colliding with soft-deleted rows, solved with partial indexes
+      - cascading the delete to child records
+      - a purge job for permanent deletion
+    rubric:
+      excellent: Compares a flag column with an archive table, handles filtering consistently, fixes unique constraints with partial indexes, covers children and schedules a real purge for retention.
+      good: Uses a deleted_at column with default filtering and a cleanup job.
+      weak: Adds a flag but forgets that every query, constraint and related record is affected.
+    followups:
+      - A user deletes an account and signs up again with the same email. What happens?
+      - How do you make sure no query forgets to filter deleted rows?
+    common_errors:
+      - Unique indexes that block re-creating a record after a soft delete.
+
+  - external_key: technical.backend_data.orm_vs_raw_sql
+    competency_key: databases
+    topic: When to drop below the ORM
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you decide when to use your ORM and when to write raw SQL instead? Give me an example of a query
+      where you made that switch.
+    expected_concepts:
+      - ORM for routine CRUD and consistent mapping
+      - raw SQL for reporting, window functions or complex joins
+      - checking the SQL the ORM actually generates
+      - parameter binding to stay safe from injection
+      - keeping raw queries tested and close to the model
+    rubric:
+      excellent: Uses the ORM for everyday work, reads the generated SQL, switches to hand-written parameterized SQL for a concrete case and explains how they kept it maintainable and tested.
+      good: Has a sensible rule of thumb and a real example.
+      weak: Is dogmatic either way or builds raw SQL by string concatenation.
+    followups:
+      - How do you check what SQL your ORM generated for a given call?
+      - How do you keep raw SQL from drifting when the schema changes?
+    common_errors:
+      - Formatting user input directly into raw SQL strings.
+
+  - external_key: technical.backend_data.money_and_time_types
+    competency_key: databases
+    topic: Storing money and timestamps correctly
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you store monetary amounts and timestamps so they stay correct when you support several
+      currencies and users in different time zones?
+    expected_concepts:
+      - decimal or integer minor units, never floating point
+      - storing the currency code alongside the amount
+      - rounding rules applied at defined points
+      - timestamps stored in UTC with a time zone aware type
+      - keeping the user's zone for display and local-date logic
+    rubric:
+      excellent: Uses exact numeric types or minor units with a currency column, defines rounding, stores instants in UTC with zone-aware types and explains when the local zone still matters, such as billing days.
+      good: Avoids floats for money and stores timestamps in UTC.
+      weak: Uses floats for prices or stores local times without a zone.
+    followups:
+      - How would you handle a currency with three decimal places?
+      - A subscription renews on the first of the month for the user. Which time zone decides that?
+    common_errors:
+      - Summing floating point prices and getting off-by-a-cent totals.
+
+  - external_key: technical.backend_data.history_as_of_queries
+    competency_key: databases
+    topic: Keeping history for as-of queries
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Finance needs to know exactly which plan and price every customer was on for any date in the past, but
+      today you only store the current plan. How would you change the model?
+    expected_concepts:
+      - a history table with valid_from and valid_to
+      - append-only changes instead of updates in place
+      - preventing overlapping validity periods
+      - querying the row that was valid at a given instant
+      - backfilling history you never captured
+    rubric:
+      excellent: Designs an append-only history or temporal table with non-overlapping validity ranges, shows how an as-of query works, and states that history never captured can only be partly reconstructed.
+      good: Adds a history table with effective dates and updates it on every change.
+      weak: Relies on application logs or adds a single previous_plan column.
+    followups:
+      - How would you enforce that two periods for one customer never overlap?
+      - How would you correct a history row that was recorded wrongly?
+    common_errors:
+      - Updating history rows in place and losing the audit trail.
+
+  - external_key: technical.backend_data.polymorphic_associations
+    competency_key: databases
+    topic: Polymorphic associations
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Comments can be attached to tickets, invoices and projects. How would you model that relationship, and
+      what are the trade-offs of the options you considered?
+    expected_concepts:
+      - a type plus id pair with no real foreign key
+      - one nullable foreign key column per parent with a check constraint
+      - a separate comment table per parent type
+      - a shared parent or supertype table
+      - effect on integrity, indexing and query complexity
+    rubric:
+      excellent: Compares at least three designs, explains that the type-plus-id pattern loses referential integrity, and picks one with a justified view of integrity, query patterns and growth.
+      good: Knows two approaches and their main trade-off.
+      weak: Picks the generic type-plus-id pattern without seeing the integrity cost.
+    followups:
+      - How would you delete all comments when an invoice is deleted?
+      - What changes if a fourth parent type is added every quarter?
+    common_errors:
+      - Assuming the ORM's polymorphic helper gives database-level integrity.
+
+  - external_key: technical.backend_data.json_columns_tradeoffs
+    competency_key: databases
+    topic: JSON columns inside a relational schema
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When do you think it's right to put data in a JSON column of a relational table, and when has it come
+      back to bite you?
+    expected_concepts:
+      - flexible or sparse attributes and external payloads
+      - loss of type checking and constraints
+      - indexing JSON paths or using generated columns
+      - fields that are filtered or joined on belong in real columns
+      - migrating the shape of stored documents
+    rubric:
+      excellent: Uses JSON for genuinely variable or opaque data, promotes queried fields to columns or indexed expressions, and has a plan for validating and evolving the stored shape.
+      good: Gives a sensible use case and knows querying inside JSON can be slow.
+      weak: Uses JSON to avoid schema design altogether.
+    followups:
+      - A field inside the JSON is now used in every filter. What do you do?
+      - How do you validate what goes into the column?
+    common_errors:
+      - Storing core relational data as JSON and reimplementing joins in code.
+
+  - external_key: technical.backend_data.orm_detached_lazy_load
+    competency_key: databases
+    topic: Lazy loading outside the ORM session
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      After a refactor, serializing API responses has started throwing errors about detached or closed
+      sessions, and in other places it quietly fires extra queries. What's going on, and how would you fix it
+      properly?
+    expected_concepts:
+      - lazy attributes accessed after the session or transaction ended
+      - implicit queries triggered during serialization
+      - loading what the response needs explicitly in the data layer
+      - mapping entities to plain response objects
+      - disabling or raising on lazy loads in the API layer
+    rubric:
+      excellent: Explains how lazy loading ties attribute access to session lifetime, moves loading into the data layer with explicit eager options, maps to plain response models and makes stray lazy loads fail loudly.
+      good: Identifies lazy loading after the session closed and fixes it with eager loading.
+      weak: Keeps the session open longer or globally to make the error disappear.
+    followups:
+      - Why is keeping one session open for the whole request a risky fix?
+      - How would you make unexpected lazy loads visible in tests?
+    common_errors:
+      - Returning ORM entities straight from the API layer.
+
+  - external_key: technical.backend_data.upsert_semantics
+    competency_key: sql
+    topic: Upserts and insert-or-update races
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You need to record a user's latest settings, creating the row if it doesn't exist. How would you write
+      that so it stays correct when two requests arrive at the same time?
+    expected_concepts:
+      - select-then-insert races between requests
+      - insert on conflict do update, or merge
+      - a unique constraint that the upsert relies on
+      - deciding which write wins
+      - side effects such as triggers, sequences and returned rows
+    rubric:
+      excellent: Explains the race in select-then-insert, uses a native atomic upsert backed by a unique constraint, decides which concurrent write should win, and knows its side effects such as consumed sequence values.
+      good: Uses an upsert statement and knows it needs a unique constraint.
+      weak: Checks for existence in code and inserts, assuming it is safe.
+    followups:
+      - How would you make sure an older update never overwrites a newer one?
+      - What does your upsert return, and how do you know whether it inserted or updated?
+    common_errors:
+      - Catching the duplicate error and retrying without a clear winner rule.
+
+  - external_key: technical.backend_data.non_sargable_filter
+    competency_key: sql
+    topic: Filters that cannot use an index
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      There's an index on users' email, but a login query that compares the lowercased email against the
+      input does a full table scan. Why does that happen, and how would you fix it?
+    expected_concepts:
+      - wrapping an indexed column in a function hides it from the index
+      - an expression index on the lowercased value
+      - a case-insensitive column type or collation
+      - normalizing data on write
+      - similar traps with casts, leading wildcards and OR conditions
+    rubric:
+      excellent: Explains why a function on the column prevents index use, offers an expression index, a case-insensitive type or write-time normalization, and generalizes to casts, leading wildcards and implicit conversions.
+      good: Fixes the case with an expression index or normalized storage.
+      weak: Adds another plain index on email or blames the database.
+    followups:
+      - Why might comparing a text column to a numeric parameter also skip the index?
+      - How would you make sure emails are unique regardless of case?
+    common_errors:
+      - Assuming any index on the column is used no matter how the column appears in the filter.
+
+  - external_key: technical.backend_data.composite_index_for_endpoint
+    competency_key: databases
+    topic: Designing an index for a real endpoint
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      An endpoint lists a tenant's tickets filtered by status and sorted by newest first, twenty at a time.
+      How would you design the index for it, and how would you prove it's being used?
+    expected_concepts:
+      - equality columns first, then the sort column
+      - an index that satisfies the ORDER BY so no sort step is needed
+      - including columns to make the index covering where it pays off
+      - checking the plan with EXPLAIN ANALYZE on realistic data
+      - keyset pagination over the same order
+    rubric:
+      excellent: Orders tenant and status before created time, explains how that removes the sort and enables an early stop at the limit, considers covering columns and verifies with a plan on realistic data.
+      good: Proposes a sensible composite index and checks the plan.
+      weak: Creates three single-column indexes and expects the database to combine them efficiently.
+    followups:
+      - What changes if users can also filter by several statuses at once?
+      - Why might the plan look fine in development and poor in production?
+    common_errors:
+      - Testing the plan on a tiny development table.
+
+  - external_key: technical.backend_data.multi_tenant_isolation
+    competency_key: databases
+    topic: Multi-tenant data isolation
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      For a B2B product with a few thousand customer organisations, how would you separate tenants' data, and
+      what would make you choose one approach over another?
+    expected_concepts:
+      - shared tables with a tenant id column
+      - schema per tenant or database per tenant
+      - row-level security or mandatory tenant scoping in the data layer
+      - noisy neighbours and very large tenants
+      - migrations, backups and per-tenant deletion
+    rubric:
+      excellent: Compares shared tables, schema per tenant and database per tenant on isolation, operations and cost, and enforces scoping centrally with row-level security or a guarded query layer.
+      good: Chooses tenant id columns with consistent filtering and knows the alternatives exist.
+      weak: Relies on every developer remembering to add the tenant filter.
+    followups:
+      - How would you make it impossible to forget the tenant filter?
+      - One customer becomes fifty times larger than the rest. What do you do?
+    common_errors:
+      - Global unique constraints that ignore the tenant column.
+
+  - external_key: technical.backend_data.bulk_import_orm
+    competency_key: databases
+    topic: Bulk loading through an ORM
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A nightly import inserts about two million rows through the ORM, one object at a time, and now takes
+      four hours. How would you speed it up?
+    expected_concepts:
+      - per-row round trips and flushes are the bottleneck
+      - batching inserts or using the bulk API
+      - COPY or the database's native bulk loader
+      - committing in chunks instead of one huge transaction
+      - index and constraint cost during load, staging tables
+    rubric:
+      excellent: Measures where time goes, moves to batched or native bulk loading through a staging table, commits in chunks, and considers index maintenance, validation and restartability.
+      good: Switches to batched inserts and chunked commits with a clear speed-up.
+      weak: Adds more threads hammering the same row-by-row inserts.
+    followups:
+      - How would you make the import restartable if it fails halfway?
+      - Would you drop indexes before loading? When is that a bad idea?
+    common_errors:
+      - One transaction holding millions of rows and locks for hours.
+
+  - external_key: technical.backend_data.anti_join_patterns
+    competency_key: sql
+    topic: Finding rows with no match
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Say you need customers who haven't placed an order in the last ninety days. What are the different ways
+      you could write that query, and which would you choose?
+    expected_concepts:
+      - NOT EXISTS with a correlated subquery
+      - LEFT JOIN with a NULL check on the right side
+      - NOT IN and its NULL trap
+      - an index on the order table by customer and date
+      - checking the plan for an anti-join
+    rubric:
+      excellent: Writes it with NOT EXISTS or a left anti-join, explains the NOT IN NULL pitfall, puts the date condition in the right place and backs it with a suitable index.
+      good: Produces a correct query in one form and knows another.
+      weak: Pulls all customers and orders into the application and compares them in memory.
+    followups:
+      - Where does the ninety-day condition go in the left-join version, and why does it matter?
+      - What index would make this fast?
+    common_errors:
+      - Putting the date filter in WHERE instead of the join condition and losing the customers you wanted.
+
+  - external_key: technical.backend_data.slow_count_totals
+    competency_key: sql
+    topic: Expensive total counts
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      An admin dashboard shows the total number of events on every page load, and that count query now takes
+      several seconds on a large table. How would you approach it?
+    expected_concepts:
+      - exact counts require scanning under MVCC
+      - asking whether an exact number is needed at all
+      - planner estimates for approximate totals
+      - maintained counter tables or rollups
+      - caching the total with a refresh interval
+    rubric:
+      excellent: Explains why exact counts are costly, challenges the requirement, and offers estimates, pre-aggregated counters or cached totals with their accuracy and consistency trade-offs.
+      good: Proposes caching or a counter table.
+      weak: Adds an index and expects COUNT star on the whole table to become instant.
+    followups:
+      - How would you keep a counter table accurate under concurrent inserts and deletes?
+      - What would you show users if the number is approximate?
+    common_errors:
+      - A single counter row that every insert updates, creating a hot spot.
+
+  - external_key: technical.backend_data.hierarchical_data
+    competency_key: databases
+    topic: Trees and hierarchies in SQL
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      You need to store a product category tree that can be several levels deep, and the most common queries
+      are everything under a category and the path up to the root. How would you model it?
+    expected_concepts:
+      - adjacency list with recursive CTEs
+      - materialized path
+      - closure table
+      - nested sets and their expensive writes
+      - cost of moving a subtree under each model
+      - preventing cycles
+    rubric:
+      excellent: Compares adjacency lists, materialized paths and closure tables against the read and write patterns, explains subtree moves and cycle prevention, and picks one with a clear rationale.
+      good: Knows recursive CTEs over an adjacency list and one alternative.
+      weak: Loads the whole tree into memory on every request or hard-codes a fixed depth.
+    followups:
+      - What happens in your model when a category moves to a different parent?
+      - How would you stop someone from creating a cycle?
+    common_errors:
+      - A fixed number of parent columns that breaks at the next level of depth.
+
+  - external_key: technical.backend_data.prevent_double_booking
+    competency_key: databases
+    topic: Preventing overlapping bookings in the schema
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You're building room bookings, and under load two people occasionally end up booking the same room for
+      overlapping times. How would you make that impossible at the database level?
+    expected_concepts:
+      - the overlap check in code races between transactions
+      - exclusion constraints on a time range
+      - discrete slot rows with a unique constraint
+      - locking the room row before checking
+      - serializable isolation with retries as an alternative
+    rubric:
+      excellent: Shows why read-then-insert races, enforces non-overlap with an exclusion constraint or slot rows plus a unique constraint, compares that with locking or serializable isolation, and handles the conflict error cleanly.
+      good: Locks the room row or uses serializable isolation correctly.
+      weak: Adds an application check or a cache lock and believes the race is gone.
+    followups:
+      - What does the user see when their booking loses the race?
+      - How would your design change if bookings span many rooms at once?
+    common_errors:
+      - Checking for overlaps with a SELECT and inserting in a separate statement without any lock.
+
+  - external_key: technical.backend_data.orm_cartesian_explosion
+    competency_key: databases
+    topic: Eager loading that multiplies rows
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Someone fixed an N plus one problem by eager loading a user's orders and addresses in a single joined
+      query, and now that endpoint is much slower and uses lots of memory. Explain what happened and how you'd
+      fix it.
+    expected_concepts:
+      - joining two independent collections multiplies rows
+      - duplicated parent data transferred and de-duplicated in memory
+      - separate select-in style queries per collection
+      - limits and pagination broken by joined collections
+      - measuring rows returned, not just query count
+    rubric:
+      excellent: Explains the cartesian product from joining sibling collections, switches to per-collection batched loading, notes how joins interfere with limits, and measures row volume as well as query count.
+      good: Recognises the row multiplication and splits the loading.
+      weak: Only counts queries and assumes fewer queries is always faster.
+    followups:
+      - How does a LIMIT behave when the query joins a one-to-many collection?
+      - What metric would have caught this before production?
+    common_errors:
+      - Optimizing for the lowest possible number of queries regardless of rows returned.
+
+  - external_key: technical.backend_data.time_series_retention
+    competency_key: databases
+    topic: Retention on a huge append-only table
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      An events table has grown to two billion rows. Deleting data older than a year takes all night, bloats
+      the table and slows everything else down. How would you redesign this?
+    expected_concepts:
+      - time-based partitioning
+      - dropping or detaching whole partitions instead of row deletes
+      - partition pruning and keeping the partition key in queries
+      - migrating existing data into the partitioned layout
+      - rollups or cold storage for older data
+    rubric:
+      excellent: Moves to time-range partitions so retention becomes a cheap metadata operation, explains pruning and its query requirements, plans an online migration of existing data and considers aggregates or archiving.
+      good: Proposes partitioning by time and dropping old partitions.
+      weak: Runs the same deletes in smaller batches and leaves the design as it is.
+    followups:
+      - Which queries stop benefiting from partitioning, and why?
+      - How would you move existing rows into partitions without downtime?
+    common_errors:
+      - Partitioning on a key that common queries never filter by.
+
+  - external_key: technical.backend_data.denormalized_counter_drift
+    competency_key: databases
+    topic: Keeping derived values correct
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your orders table stores a denormalized total and your projects table stores a task count. How do you
+      keep values like these correct over time, and how would you find out if they've drifted?
+    expected_concepts:
+      - updating derived values in the same transaction as the source
+      - triggers versus application code versus asynchronous recomputation
+      - concurrent updates and atomic increments
+      - reconciliation jobs that compare with the source of truth
+      - alerting and repairing drift
+    rubric:
+      excellent: Chooses where the derived value is maintained with clear consistency reasoning, makes updates atomic, and adds a reconciliation job with alerting and a safe repair path.
+      good: Updates the value transactionally and knows drift can still happen.
+      weak: Updates it in some code paths and trusts it forever.
+    followups:
+      - A bulk admin script bypassed your application code. How would you know?
+      - When would you drop the stored value and compute it on read instead?
+    common_errors:
+      - Read-modify-write increments in application code that lose concurrent updates.

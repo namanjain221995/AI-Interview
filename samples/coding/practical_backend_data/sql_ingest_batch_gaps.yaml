@@ -1,0 +1,242 @@
+version: 1
+slug: sql_ingest_batch_gaps
+title: Missing Batch Number Ranges (SQL)
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data, dba, backend, sre]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Missing Batch Number Ranges
+
+  Upstream systems deliver data in numbered batches, and each source numbers its own batches
+  `..., 41, 42, 43, ...` without skipping. The ingestion service records every batch it loaded in
+  table `ingested_batches`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | source | VARCHAR(40) | lowercase source name |
+  | batch_no | INTEGER | batch number, `>= 0` |
+
+  When a batch is re-ingested after a retry, the same `(source, batch_no)` appears more than once.
+
+  For each source, find every range of batch numbers that is **missing** between the source's
+  smallest and largest recorded `batch_no`. Return one row per maximal missing range with columns
+  `source`, `gap_start` and `gap_end` (both **inclusive**), ordered by `source` ascending and then by
+  `gap_start` ascending. Numbers below a source's smallest or above its largest batch are not gaps,
+  and a source without gaps produces no rows.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  ingested_batches
+  +----+---------+----------+
+  | id | source  | batch_no |
+  +----+---------+----------+
+  | 1  | billing | 1        |
+  | 2  | billing | 2        |
+  | 3  | billing | 3        |
+  | 4  | billing | 6        |
+  | 5  | billing | 7        |
+  | 6  | billing | 10       |
+  | 7  | crm     | 5        |
+  | 8  | crm     | 5        |
+  | 9  | crm     | 6        |
+  | 10 | crm     | 9        |
+  | 11 | ledger  | 4        |
+  +----+---------+----------+
+
+  Output
+  +---------+-----------+---------+
+  | source  | gap_start | gap_end |
+  +---------+-----------+---------+
+  | billing | 4         | 5       |
+  | billing | 8         | 9       |
+  | crm     | 7         | 8       |
+  +---------+-----------+---------+
+  ```
+
+  ### Example 2
+  ```
+  ingested_batches
+  +----+--------+----------+
+  | id | source | batch_no |
+  +----+--------+----------+
+  | 1  | orders | 3        |
+  | 2  | orders | 4        |
+  | 3  | orders | 4        |
+  | 4  | orders | 5        |
+  +----+--------+----------+
+
+  Output: no rows (3, 4 and 5 are all present; the duplicate 4 is a retry).
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return source, gap_start and gap_end for every missing range of batch numbers,
+    -- ordered by source, then gap_start.
+    SELECT source, MIN(batch_no) AS gap_start, MAX(batch_no) AS gap_end
+    FROM ingested_batches
+    GROUP BY source
+    ORDER BY source;
+reference_solutions:
+  sql: |
+    WITH distinct_batches AS (
+      SELECT DISTINCT source, batch_no
+      FROM ingested_batches
+    ),
+    with_next AS (
+      SELECT source,
+             batch_no,
+             LEAD(batch_no) OVER (PARTITION BY source ORDER BY batch_no) AS next_no
+      FROM distinct_batches
+    )
+    SELECT source, batch_no + 1 AS gap_start, next_no - 1 AS gap_end
+    FROM with_next
+    WHERE next_no > batch_no + 1
+    ORDER BY source, gap_start;
+sql_setup: |
+  CREATE TABLE ingested_batches (
+    id INTEGER PRIMARY KEY,
+    source VARCHAR(40) NOT NULL,
+    batch_no INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - two gaps in one source, a duplicate batch, a source with one batch"
+    setup_sql: |
+      INSERT INTO ingested_batches (id, source, batch_no) VALUES
+        (1, 'billing', 1), (2, 'billing', 2), (3, 'billing', 3), (4, 'billing', 6), (5, 'billing', 7), (6, 'billing', 10), (7, 'crm', 5), (8, 'crm', 5), (9, 'crm', 6), (10, 'crm', 9), (11, 'ledger', 4);
+    expected_rows: [["billing", 4, 5], ["billing", 8, 9], ["crm", 7, 8]]
+    ordered: true
+  - id: t2
+    description: "Example 2 - contiguous batches with re-ingested duplicates produce no rows"
+    setup_sql: |
+      INSERT INTO ingested_batches (id, source, batch_no) VALUES
+        (1, 'orders', 3), (2, 'orders', 4), (3, 'orders', 4), (4, 'orders', 5);
+    expected_rows: []
+    ordered: true
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    expected_rows: []
+    ordered: true
+  - id: t4
+    hidden: true
+    description: "Single missing number gives gap_start = gap_end; rows inserted out of order"
+    setup_sql: |
+      INSERT INTO ingested_batches (id, source, batch_no) VALUES
+        (1, 'audit', 12), (2, 'audit', 10), (3, 'audit', 13), (4, 'audit', 9);
+    expected_rows: [["audit", 11, 11]]
+    ordered: true
+  - id: t5
+    hidden: true
+    description: "Duplicates on both sides of a gap must not create extra or zero-length gaps"
+    setup_sql: |
+      INSERT INTO ingested_batches (id, source, batch_no) VALUES
+        (1, 'feed', 1), (2, 'feed', 1), (3, 'feed', 3), (4, 'feed', 3), (5, 'feed', 3), (6, 'feed', 4), (7, 'feed', 4);
+    expected_rows: [["feed", 2, 2]]
+    ordered: true
+  - id: t6
+    hidden: true
+    description: "Huge gap with large batch numbers (no row-per-number generation)"
+    setup_sql: |
+      INSERT INTO ingested_batches (id, source, batch_no) VALUES
+        (1, 'archive', 1), (2, 'archive', 1000000000), (3, 'archive', 2000000000);
+    expected_rows: [["archive", 2, 999999999], ["archive", 1000000001, 1999999999]]
+    ordered: true
+  - id: t7
+    hidden: true
+    description: "Gaps never cross sources; sources ordered alphabetically regardless of insertion order"
+    setup_sql: |
+      INSERT INTO ingested_batches (id, source, batch_no) VALUES
+        (1, 'zeta', 1), (2, 'alpha', 10), (3, 'zeta', 4), (4, 'alpha', 12), (5, 'beta', 2), (6, 'alpha', 11), (7, 'beta', 3), (8, 'zeta', 5), (9, 'alpha', 20);
+    expected_rows: [["alpha", 13, 19], ["zeta", 2, 3]]
+    ordered: true
+  - id: t8
+    hidden: true
+    description: "Batch numbering starting at 0 and every other number missing"
+    setup_sql: |
+      INSERT INTO ingested_batches (id, source, batch_no) VALUES
+        (1, 'sensor', 0), (2, 'sensor', 2), (3, 'sensor', 4), (4, 'sensor', 6), (5, 'sensor', 8), (6, 'sensor', 10), (7, 'sensor', 12), (8, 'sensor', 14);
+    expected_rows:
+      - ["sensor", 1, 1]
+      - ["sensor", 3, 3]
+      - ["sensor", 5, 5]
+      - ["sensor", 7, 7]
+      - ["sensor", 9, 9]
+      - ["sensor", 11, 11]
+      - ["sensor", 13, 13]
+    ordered: true
+  - id: t9
+    hidden: true
+    description: "Two sources with about 50 rows each, random gaps and re-ingested duplicates"
+    setup_sql: |
+      INSERT INTO ingested_batches (id, source, batch_no) VALUES
+        (1, 'metrics', 42), (2, 'metrics', 50), (3, 'metrics', 3), (4, 'metrics', 10), (5, 'metrics', 9), (6, 'metrics', 56), (7, 'metrics', 36), (8, 'metrics', 65), (9, 'metrics', 65), (10, 'metrics', 75), (11, 'metrics', 52), (12, 'metrics', 12), (13, 'metrics', 19), (14, 'metrics', 35), (15, 'metrics', 51), (16, 'metrics', 4), (17, 'metrics', 41), (18, 'metrics', 78), (19, 'metrics', 78), (20, 'metrics', 71), (21, 'metrics', 61), (22, 'metrics', 66), (23, 'metrics', 28), (24, 'metrics', 19), (25, 'metrics', 5), (26, 'metrics', 59), (27, 'metrics', 13), (28, 'metrics', 26), (29, 'metrics', 69), (30, 'metrics', 15), (31, 'metrics', 54), (32, 'metrics', 67), (33, 'metrics', 71), (34, 'metrics', 8), (35, 'metrics', 47), (36, 'metrics', 16), (37, 'metrics', 27), (38, 'metrics', 37), (39, 'metrics', 47), (40, 'metrics', 74), (41, 'metrics', 67), (42, 'metrics', 55), (43, 'metrics', 38), (44, 'metrics', 53), (45, 'metrics', 64), (46, 'metrics', 77), (47, 'metrics', 57), (48, 'metrics', 20), (49, 'metrics', 70), (50, 'metrics', 6), (51, 'metrics', 66), (52, 'metrics', 7), (53, 'metrics', 9), (54, 'events', 19), (55, 'events', 53), (56, 'events', 22), (57, 'events', 25), (58, 'events', 53), (59, 'events', 12), (60, 'events', 77), (61, 'events', 27), (62, 'events', 48), (63, 'events', 46), (64, 'events', 18), (65, 'events', 26), (66, 'events', 35), (67, 'events', 36), (68, 'events', 26), (69, 'events', 18), (70, 'events', 74), (71, 'events', 9), (72, 'events', 28), (73, 'events', 28), (74, 'events', 39), (75, 'events', 75), (76, 'events', 29), (77, 'events', 16), (78, 'events', 71), (79, 'events', 10), (80, 'events', 23), (81, 'events', 74), (82, 'events', 6), (83, 'events', 56), (84, 'events', 4), (85, 'events', 61), (86, 'events', 50), (87, 'events', 11), (88, 'events', 64), (89, 'events', 23), (90, 'events', 61), (91, 'events', 40), (92, 'events', 59), (93, 'events', 49), (94, 'events', 8), (95, 'events', 73), (96, 'events', 3), (97, 'events', 55), (98, 'events', 14), (99, 'events', 32), (100, 'events', 60), (101, 'events', 65), (102, 'events', 37), (103, 'events', 58), (104, 'events', 45), (105, 'events', 15), (106, 'events', 3);
+    expected_rows:
+      - ["events", 5, 5]
+      - ["events", 7, 7]
+      - ["events", 13, 13]
+      - ["events", 17, 17]
+      - ["events", 20, 21]
+      - ["events", 24, 24]
+      - ["events", 30, 31]
+      - ["events", 33, 34]
+      - ["events", 38, 38]
+      - ["events", 41, 44]
+      - ["events", 47, 47]
+      - ["events", 51, 52]
+      - ["events", 54, 54]
+      - ["events", 57, 57]
+      - ["events", 62, 63]
+      - ["events", 66, 70]
+      - ["events", 72, 72]
+      - ["events", 76, 76]
+      - ["metrics", 11, 11]
+      - ["metrics", 14, 14]
+      - ["metrics", 17, 18]
+      - ["metrics", 21, 25]
+      - ["metrics", 29, 34]
+      - ["metrics", 39, 40]
+      - ["metrics", 43, 46]
+      - ["metrics", 48, 49]
+      - ["metrics", 58, 58]
+      - ["metrics", 60, 60]
+      - ["metrics", 62, 63]
+      - ["metrics", 68, 68]
+      - ["metrics", 72, 73]
+      - ["metrics", 76, 76]
+    ordered: true
+expected_concepts:
+  - gaps-and-islands pattern
+  - LEAD or LAG window function partitioned by source
+  - removing duplicates before comparing neighbours
+  - inclusive range arithmetic
+  - deterministic ORDER BY
+optimal_complexity: {time: "O(n log n) for the per-source sort", space: O(n)}
+rubric:
+  excellent: De-duplicates batch numbers, compares each number with the next one per source using LEAD (or a correlated MIN of larger numbers), emits gap_start = current + 1 and gap_end = next - 1 when the difference exceeds one, orders deterministically and explains why generating every missing number is a bad idea for large gaps.
+  good: Correct result with a hint about duplicates, the inclusive bounds or partitioning by source.
+  weak: Returns only per-source min and max, generates a row per missing number, compares neighbours across sources, or reports zero-length gaps caused by duplicates.
+  criteria:
+    correctness: All tests pass, including duplicates, single-number gaps, huge gaps and several sources.
+    efficiency: One window pass over distinct rows; no number series or self-join per number.
+    code_quality: Named CTEs and clear arithmetic for the inclusive bounds.
+    edge_cases: Empty table, single-batch sources, re-ingested duplicates and batch numbers starting at 0.
+    communication: Names the gaps-and-islands pattern and contrasts it with generating a full number series.
+hints:
+  - A gap shows up between two recorded numbers that are next to each other in sorted order but differ by more than one.
+  - For each source, look at every distinct batch number together with the next larger one; a window function partitioned by source and ordered by batch number gives you that neighbour without a self-join.
+  - Remove duplicates with DISTINCT on source and batch number, attach the next number with LEAD over a partition by source ordered by batch number, keep rows where the next number is more than one larger, output current plus one and next minus one as the inclusive range, and order by source then gap start.
+followups:
+  - How would you return the islands (present ranges) instead of the gaps?
+  - How would you also flag missing batches after the largest number when you know the expected latest batch per source?
+  - How would you write this without window functions?
+  - Which index helps this query on a table with hundreds of millions of rows?
+common_errors:
+  - Comparing neighbours without removing duplicates, so a repeated batch looks like a gap of length zero or hides a real gap.
+  - Forgetting to partition by source, which creates gaps between the last batch of one source and the first of the next.
+  - Off-by-one bounds, such as returning the present numbers instead of the first and last missing ones.
+  - Generating every integer between min and max, which is far too slow for large gaps.

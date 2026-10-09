@@ -1,0 +1,180 @@
+version: 1
+slug: hot_item_frequency_stack
+title: Hot Item Promotion Queue
+difficulty: medium
+competency_keys: [data_structures, code_quality]
+role_tags: [backend, fullstack, platform]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Hot Item Promotion Queue
+
+  A content delivery network notices requests for items that are not yet cached at the edge and
+  records them as **pending**. A background job repeatedly promotes the hottest pending item to the
+  edge cache. You receive the operations `operations` in order; each one is either:
+
+  - `"push x"`: a request for item `x` arrived. The item's **pending count** grows by 1 (an item that
+    is not pending starts at 1) and this becomes the item's **latest request**;
+  - `"pop"`: promote one item. Pick the pending item with the **largest pending count**; if several
+    items share that count, pick the one whose latest request is the **most recent**. Remove that item
+    from the pending set completely (all of its pending requests are served at once, so a later
+    `"push"` of the same item starts again at count 1) and output its id. If nothing is pending,
+    output `-1` and change nothing.
+
+  Return the outputs of all `"pop"` operations, in order.
+
+  ### Example 1
+  ```
+  Input:  operations = ["push 7", "push 3", "push 7", "push 5", "push 3", "pop", "push 5", "pop", "pop", "pop"]
+  Output: [3, 5, 7, -1]
+  Explanation: before the first pop, 7 and 3 both have 2 pending requests and 3 was requested last, so 3
+  goes first. The second push of 5 gives it count 2 with a more recent request than 7, so 5 is next,
+  then 7; the last pop finds nothing pending.
+  ```
+
+  ### Example 2
+  ```
+  Input:  operations = ["pop", "push 42", "pop", "push 42", "push 8", "pop"]
+  Output: [-1, 42, 8]
+  Explanation: after 42 is promoted its count is reset, so the new request for 42 and the request for 8
+  both have count 1, and 8 is the more recent one.
+  ```
+
+  ### Constraints
+  - `1 <= operations.length <= 2 * 10^4`
+  - Every operation is exactly `"pop"` or `"push x"` with a single space, where `x` is an integer with
+    `0 <= x <= 10^9` written without leading zeros.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: run_tracker
+  params:
+    - {name: operations, type: "string[]"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import heapq
+
+
+    def run_tracker(operations: list[str]) -> list[int]:
+        count: dict[int, int] = {}
+        last: dict[int, int] = {}
+        # Entries (-count, -request_time, item): the smallest tuple is the hottest, freshest item.
+        heap: list[tuple[int, int, int]] = []
+        output: list[int] = []
+        for time, op in enumerate(operations):
+            if op.startswith("push"):
+                item = int(op.split()[1])
+                count[item] = count.get(item, 0) + 1
+                last[item] = time
+                heapq.heappush(heap, (-count[item], -time, item))
+                continue
+            promoted = -1
+            while heap:
+                neg_count, neg_time, item = heapq.heappop(heap)
+                # Valid only if it describes the item's current state (lazy deletion).
+                if count.get(item) == -neg_count and last.get(item) == -neg_time:
+                    promoted = item
+                    del count[item]
+                    del last[item]
+                    break
+            output.append(promoted)
+        return output
+  javascript: |
+    function runTracker(operations) {
+      const count = new Map();
+      const last = new Map();
+      // Max-heap of [count, time, item]: higher count first, then more recent time.
+      const h = [];
+      const less = (a, b) => (a[0] !== b[0] ? a[0] > b[0] : a[1] > b[1]);
+      const push = (e) => {
+        h.push(e);
+        let i = h.length - 1;
+        while (i > 0) {
+          const p = (i - 1) >> 1;
+          if (!less(h[i], h[p])) break;
+          [h[i], h[p]] = [h[p], h[i]];
+          i = p;
+        }
+      };
+      const pop = () => {
+        const top = h[0];
+        const tail = h.pop();
+        if (h.length > 0) {
+          h[0] = tail;
+          let i = 0;
+          for (;;) {
+            const l = 2 * i + 1, r = l + 1;
+            let m = i;
+            if (l < h.length && less(h[l], h[m])) m = l;
+            if (r < h.length && less(h[r], h[m])) m = r;
+            if (m === i) break;
+            [h[i], h[m]] = [h[m], h[i]];
+            i = m;
+          }
+        }
+        return top;
+      };
+      const output = [];
+      operations.forEach((op, time) => {
+        if (op.startsWith("push")) {
+          const item = Number(op.split(" ")[1]);
+          const c = (count.get(item) || 0) + 1;
+          count.set(item, c);
+          last.set(item, time);
+          push([c, time, item]);
+          return;
+        }
+        let promoted = -1;
+        while (h.length > 0) {
+          const [c, t, item] = pop();
+          if (count.get(item) === c && last.get(item) === t) {
+            promoted = item;
+            count.delete(item);
+            last.delete(item);
+            break;
+          }
+        }
+        output.push(promoted);
+      });
+      return output;
+    }
+tests:
+  - {id: t1, args: [["push 7", "push 3", "push 7", "push 5", "push 3", "pop", "push 5", "pop", "pop", "pop"]], expected: [3, 5, 7, -1], description: "Example 1"}
+  - {id: t2, args: [["pop", "push 42", "pop", "push 42", "push 8", "pop"]], expected: [-1, 42, 8], description: "Example 2 - count resets after promotion"}
+  - {id: t3, hidden: true, args: [["push 1", "push 2", "push 1"]], expected: [], description: "Only pushes - no output"}
+  - {id: t4, hidden: true, args: [["pop", "pop", "pop"]], expected: [-1, -1, -1], description: "Only pops on an empty set"}
+  - {id: t5, hidden: true, args: [["push 1", "push 1", "push 1", "pop", "push 2", "push 2", "push 1", "pop", "pop"]], expected: [1, 2, 1], description: "Item 1 restarts at 1 after promotion; not resetting would pick it first"}
+  - {id: t6, hidden: true, args: [["push 4", "push 9", "push 4", "push 9", "push 6", "push 6", "pop", "pop", "pop"]], expected: [6, 9, 4], description: "Three-way tie at count 2 resolved by most recent request (6, 9, 4)"}
+  - {id: t7, hidden: true, args: [["push 5", "push 6", "push 5", "pop", "push 6", "push 6", "pop", "pop"]], expected: [5, 6, -1], description: "Stale entries for 6 with old counts must be skipped"}
+  - {id: t8, hidden: true, args: [["push 1000000000", "push 0", "push 1000000000", "pop", "pop", "pop"]], expected: [1000000000, 0, -1], description: "Smallest and largest ids"}
+  - {id: t9, hidden: true, args: [["push 21000063", "push 3000009", "push 5000015", "push 15000045", "push 0", "pop", "push 23000069", "push 2000006", "push 10000030", "push 20000060", "push 9000027", "push 10000030", "push 2000006", "push 1000003", "push 18000054", "push 21000063", "push 24000072", "push 4000012", "push 6000018", "pop", "push 8000024", "push 23000069", "push 20000060", "push 24000072", "push 1000003", "push 12000036", "push 12000036", "push 1000003", "push 5000015", "push 21000063", "push 19000057", "push 3000009", "push 4000012", "push 21000063", "push 0", "push 1000003", "push 13000039", "push 1000003", "pop", "push 22000066", "push 16000048", "push 1000003", "push 20000060", "push 12000036", "push 6000018", "pop", "push 7000021", "push 23000069", "push 18000054", "pop", "pop", "pop", "push 24000072", "pop", "push 3000009", "push 24000072", "push 11000033", "push 3000009", "pop", "push 0", "push 13000039", "push 5000015", "pop", "push 10000030", "push 6000018", "push 4000012", "push 6000018", "push 6000018", "push 7000021", "push 12000036", "push 24000072", "push 0", "push 21000063", "push 21000063", "push 21000063", "push 8000024", "pop", "pop", "pop", "push 10000030", "push 20000060", "push 21000063", "push 1000003", "pop", "push 11000033", "push 0", "pop", "push 23000069", "push 10000030", "push 16000048", "push 24000072", "pop", "pop", "push 15000045", "push 7000021", "pop", "push 8000024", "pop", "pop", "push 5000015", "push 24000072", "push 8000024", "pop", "push 7000021", "push 4000012", "pop", "push 7000021", "pop", "push 24000072", "push 11000033", "push 6000018", "pop", "push 13000039", "push 1000003", "pop", "pop", "push 2000006", "pop", "push 7000021", "push 22000066", "pop", "pop", "push 0", "pop", "push 18000054", "pop", "push 1000003", "push 1000003", "push 8000024", "push 2000006", "pop", "push 3000009", "push 23000069", "pop", "push 3000009", "pop", "push 2000006", "push 21000063", "push 19000057", "push 8000024", "push 18000054", "push 19000057", "pop", "push 16000048", "push 6000018", "push 23000069", "pop", "pop", "push 16000048", "pop", "push 2000006", "pop", "pop", "push 23000069", "push 7000021", "push 15000045", "push 23000069", "push 12000036", "push 9000027", "push 21000063", "push 22000066", "pop", "push 1000003", "push 1000003", "push 1000003", "push 3000009", "push 23000069", "push 14000042", "push 5000015", "push 0", "push 12000036", "push 0", "pop", "push 14000042", "pop", "push 5000015", "push 4000012", "push 13000039", "pop", "pop", "push 2000006", "push 21000063", "push 23000069", "push 9000027", "pop", "push 2000006", "pop", "push 10000030", "push 6000018", "push 14000042", "pop", "pop", "push 7000021", "push 13000039", "push 1000003", "push 11000033", "pop", "push 19000057", "push 1000003", "pop", "pop", "push 5000015", "push 0", "push 5000015", "push 6000018", "pop", "push 16000048", "push 10000030", "push 6000018", "push 12000036", "push 22000066", "push 18000054", "push 8000024", "push 17000051", "push 4000012", "push 23000069", "push 20000060", "push 20000060", "push 19000057", "push 9000027", "push 9000027", "push 20000060", "pop", "push 19000057", "push 0", "push 2000006", "push 24000072", "push 17000051", "pop", "push 2000006", "push 13000039", "push 13000039", "push 19000057", "push 15000045", "push 2000006", "push 10000030", "push 13000039", "push 7000021", "push 9000027", "push 9000027", "push 10000030", "pop", "push 10000030", "push 24000072", "push 4000012", "push 21000063", "push 19000057", "push 11000033", "push 12000036", "pop", "pop", "push 4000012", "pop", "push 24000072", "push 12000036", "push 7000021", "push 9000027", "push 12000036", "pop", "push 7000021", "push 19000057", "push 13000039", "pop", "pop", "push 2000006", "push 15000045", "push 21000063", "push 17000051", "push 12000036", "push 2000006", "push 8000024", "push 16000048", "push 6000018", "pop", "pop", "pop", "push 1000003", "pop", "pop", "push 0", "push 8000024", "pop", "pop", "pop", "push 21000063", "push 10000030", "push 16000048", "pop", "push 9000027", "push 6000018", "push 5000015", "push 23000069", "push 20000060", "push 24000072", "pop", "pop", "pop", "push 6000018", "pop", "push 12000036", "push 21000063", "push 2000006", "push 21000063", "pop", "push 9000027", "push 19000057", "push 13000039", "pop", "push 13000039", "push 19000057", "push 7000021", "push 17000051", "push 18000054", "push 24000072", "push 24000072", "pop", "pop", "pop", "pop", "pop", "pop", "push 14000042", "push 2000006", "pop", "push 22000066", "push 15000045", "push 9000027", "push 12000036", "push 5000015", "push 4000012", "push 14000042", "push 2000006", "pop", "push 18000054", "push 23000069", "pop", "push 5000015", "pop", "push 19000057", "pop", "push 5000015", "push 21000063", "push 20000060", "push 23000069", "push 12000036", "pop", "push 4000012", "push 14000042", "pop", "push 21000063", "pop", "push 7000021", "push 24000072", "push 20000060", "push 1000003", "push 2000006", "push 3000009", "push 7000021", "push 11000033", "push 19000057", "push 12000036", "push 24000072", "push 2000006", "pop", "push 4000012", "push 24000072", "push 13000039", "push 7000021", "push 8000024", "push 5000015", "pop", "pop", "push 15000045", "pop", "push 20000060", "push 22000066", "push 4000012", "push 19000057", "push 9000027", "pop", "push 21000063", "push 5000015", "pop", "push 14000042", "push 11000033", "push 20000060", "push 11000033", "pop", "push 23000069", "push 15000045", "pop", "push 6000018", "push 17000051", "push 0", "push 21000063", "pop", "push 9000027", "push 11000033", "push 14000042", "pop", "push 4000012", "push 7000021", "pop", "push 20000060", "push 3000009", "push 4000012", "push 10000030", "push 24000072", "pop", "push 6000018", "push 9000027", "push 5000015", "push 20000060", "push 23000069", "pop", "push 20000060", "pop", "pop", "push 5000015", "push 0", "push 2000006", "pop", "push 9000027", "push 13000039", "pop", "push 5000015", "push 16000048", "push 19000057", "push 1000003", "pop", "pop", "push 23000069", "push 24000072", "push 13000039", "push 23000069", "push 19000057", "push 24000072", "pop", "push 6000018", "push 9000027", "push 18000054", "pop", "push 24000072", "push 9000027", "push 13000039", "push 20000060", "push 12000036", "push 21000063", "push 17000051", "pop", "push 16000048", "push 16000048", "push 2000006", "push 0", "push 24000072", "push 3000009", "pop", "pop", "push 24000072", "pop", "push 15000045", "push 22000066", "push 19000057", "push 18000054", "push 16000048", "push 10000030", "push 20000060", "push 20000060", "push 2000006", "push 7000021", "push 14000042", "pop", "push 11000033", "push 8000024", "pop", "push 22000066", "push 12000036", "push 21000063", "push 9000027", "push 22000066", "push 19000057", "push 16000048", "push 23000069", "push 15000045", "push 8000024", "push 23000069", "push 21000063", "pop", "pop", "pop", "push 23000069", "push 7000021", "push 19000057", "pop", "push 4000012", "push 5000015", "push 24000072", "pop", "push 7000021", "push 20000060"]], expected: [0, 21000063, 1000003, 12000036, 23000069, 20000060, 18000054, 24000072, 3000009, 5000015, 21000063, 6000018, 0, 10000030, 4000012, 24000072, 16000048, 7000021, 8000024, 15000045, 11000033, 1000003, 7000021, 24000072, 13000039, 2000006, 2000006, 22000066, 7000021, 0, 18000054, 1000003, 23000069, 3000009, 19000057, 8000024, 6000018, 16000048, 2000006, 21000063, 23000069, 12000036, 1000003, 5000015, 4000012, 9000027, 2000006, 14000042, 10000030, 11000033, 1000003, 13000039, 0, 20000060, 19000057, 9000027, 10000030, 21000063, 4000012, 12000036, 7000021, 13000039, 2000006, 6000018, 17000051, 15000045, 19000057, 8000024, 24000072, 23000069, 16000048, 5000015, 9000027, 21000063, 6000018, 21000063, 12000036, 24000072, 18000054, 19000057, 13000039, 0, 22000066, 2000006, 14000042, 23000069, 5000015, 9000027, 12000036, 4000012, 21000063, 2000006, 7000021, 24000072, 20000060, 19000057, 5000015, 11000033, 15000045, 21000063, 14000042, 4000012, 3000009, 20000060, 23000069, 9000027, 0, 13000039, 1000003, 5000015, 24000072, 6000018, 17000051, 16000048, 9000027, 24000072, 20000060, 2000006, 22000066, 23000069, 19000057, 7000021, 21000063], description: "500 operations over 25 large ids with frequent pops"}
+expected_concepts:
+  - priority queue ordered by (count, latest request time)
+  - lazy deletion of outdated heap entries
+  - hash maps for the current count and latest request of each item
+  - resetting state when an item is removed
+  - parsing simple command strings
+optimal_complexity: {time: O(n log n), space: O(n)}
+rubric:
+  excellent: Keeps per-item count and latest-request maps with a heap keyed by (count, latest request), skips outdated entries lazily (or uses an ordered set with explicit removal), resets an item fully on promotion and explains why each heap entry is popped at most once.
+  good: Correct solution with a heap or ordered structure after a hint about stale entries or the tie-breaking rule.
+  weak: Scans every pending item on each pop, breaks ties by first request instead of latest, or keeps an item's old count after it is promoted.
+  criteria:
+    correctness: All tests pass, including ties, re-requests after promotion and pops on an empty set.
+    efficiency: O(log n) amortised per operation; no full scan per pop.
+    code_quality: Parsing, state updates and the selection rule are separated clearly with readable names.
+    edge_cases: Pop on an empty set, a single item pushed many times, and large item ids.
+    communication: States the ordering key and the validity check for heap entries before coding.
+hints:
+  - Each pop needs the item with the largest count, breaking ties by the most recent request - think about which structure gives you that maximum quickly while counts keep changing.
+  - Instead of updating an item's heap entry when it is pushed again, push a fresh entry and recognise old entries later by comparing them with the item's current count and latest request.
+  - Store count and latest request time per item in maps; on push, update them and push (count, time, item) into a max-heap; on pop, discard top entries that no longer match the maps, output the first valid item and delete it from both maps.
+followups:
+  - How would you support a "pop" that serves only one pending request of the hottest item instead of all of them?
+  - Can you make every operation O(1) using buckets of items per count?
+  - How would you bound memory if the heap collects many outdated entries?
+common_errors:
+  - Breaking ties by the item's first request instead of its most recent one.
+  - Not resetting the count when an item is promoted, so a later request continues from the old count.
+  - Returning an outdated heap entry for an item that was already promoted.
+  - Scanning all pending items on every pop, which is quadratic in the worst case.

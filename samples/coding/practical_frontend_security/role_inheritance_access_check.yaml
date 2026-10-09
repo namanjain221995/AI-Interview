@@ -1,0 +1,207 @@
+version: 1
+slug: role_inheritance_access_check
+title: Role-Based Access Check with Inheritance
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [security, backend, fullstack, platform]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Role-Based Access Check with Inheritance
+
+  The admin console of an internal document service decides who may do what with role-based rules.
+  Roles can inherit from other roles, and an explicit deny must always win so that a broad grant can
+  never silently override a restriction. Write `check_access(rules, inherits, requests)`.
+
+  - Each rule is a string `"effect role resource_pattern action_pattern"` (single spaces), where
+    `effect` is `allow` or `deny`, for example `"allow editor docs/* write"`.
+  - Each pair in `inherits` is `[child, parent]`: the child role gets every rule of the parent, and
+    transitively of the parent's ancestors. A role may have several parents; there are no cycles.
+    Inheritance is one-way: a parent never gets its children's rules.
+  - Each request is `"role resource action"`.
+
+  A **resource pattern** matches a resource as follows:
+
+  - `*` matches every resource.
+  - `prefix/*` matches resources that start with `prefix/` **and** have at least one more character
+    after it, so `docs/*` matches `docs/a` and `docs/a/b`, but not `docs`, `docs/` or `docsx/a`.
+  - Any other pattern matches only the identical resource.
+
+  An **action pattern** matches when it equals the action or is `*`. Comparisons are case-sensitive.
+
+  A rule **applies** to a request when it belongs to the request's role or to one of its ancestors and
+  both its patterns match. For each request: if any applying rule is a **deny**, the answer is `false`;
+  otherwise, if any applying rule is an **allow**, the answer is `true`; otherwise it is `false`. Roles
+  that appear nowhere else are valid and simply have no rules. Return one boolean per request, in
+  order.
+
+  ### Example 1
+  ```
+  Input:  rules = ["allow viewer docs/* read", "allow editor docs/* write", "deny intern docs/payroll/* *"], inherits = [["editor", "viewer"], ["intern", "editor"]], requests = ["intern docs/handbook read", "intern docs/payroll/2026 read", "editor docs/payroll/2026 read", "viewer docs/handbook write"]
+  Output: [true, false, true, false]
+  Explanation: intern inherits from editor, which inherits from viewer. The intern's own deny
+  blocks payroll documents for every action; editor has no deny, so it may read them. viewer has
+  no write rule, so the last request is denied by default.
+  ```
+
+  ### Example 2
+  ```
+  Input:  rules = ["allow ops logs/* read", "allow ops status read", "allow admin * *"], inherits = [["admin", "ops"]], requests = ["ops logs read", "ops logs/ read", "ops logs/api/1 read", "ops logsx/1 read", "ops status/x read", "ops status read", "admin logs delete"]
+  Output: [false, false, true, false, false, true, true]
+  Explanation: "logs/*" matches neither "logs" nor "logs/" nor "logsx/1", and the exact pattern
+  "status" does not match "status/x". admin inherits the rules of ops, but ops does not get
+  admin's broad allow.
+  ```
+
+  ### Constraints
+  - `0 <= rules.length <= 1000`, `0 <= inherits.length <= 1000`, `0 <= requests.length <= 1000`
+  - Roles, resources and actions are 1-60 characters without spaces; `*` appears in a resource pattern
+    only as the whole pattern or as a final `/*`
+  - The inheritance graph has no cycles and no duplicate pairs
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: check_access
+  params:
+    - {name: rules, type: "string[]"}
+    - {name: inherits, type: "string[][]"}
+    - {name: requests, type: "string[]"}
+  return_type: "bool[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def _resource_matches(pattern: str, resource: str) -> bool:
+        if pattern == "*":
+            return True
+        if pattern.endswith("/*"):
+            prefix = pattern[:-1]  # keeps the trailing "/"
+            return resource.startswith(prefix) and len(resource) > len(prefix)
+        return pattern == resource
+
+
+    def check_access(rules: list[str], inherits: list[list[str]], requests: list[str]) -> list[bool]:
+        rules_by_role: dict[str, list[tuple[bool, str, str]]] = {}
+        for rule in rules:
+            effect, role, resource, action = rule.split(" ")
+            rules_by_role.setdefault(role, []).append((effect == "allow", resource, action))
+
+        parents: dict[str, list[str]] = {}
+        for child, parent in inherits:
+            parents.setdefault(child, []).append(parent)
+
+        closure_cache: dict[str, set[str]] = {}
+
+        def closure(role: str) -> set[str]:
+            # The role itself plus all of its ancestors (the graph is acyclic).
+            if role not in closure_cache:
+                roles = {role}
+                for parent in parents.get(role, []):
+                    roles |= closure(parent)
+                closure_cache[role] = roles
+            return closure_cache[role]
+
+        results: list[bool] = []
+        for request in requests:
+            role, resource, action = request.split(" ")
+            allowed = False
+            denied = False
+            for r in closure(role):
+                for is_allow, res_pattern, act_pattern in rules_by_role.get(r, []):
+                    if (act_pattern == "*" or act_pattern == action) and _resource_matches(res_pattern, resource):
+                        if is_allow:
+                            allowed = True
+                        else:
+                            denied = True
+            results.append(allowed and not denied)
+        return results
+  javascript: |
+    function resourceMatches(pattern, resource) {
+      if (pattern === '*') return true;
+      if (pattern.endsWith('/*')) {
+        const prefix = pattern.slice(0, -1); // keeps the trailing "/"
+        return resource.startsWith(prefix) && resource.length > prefix.length;
+      }
+      return pattern === resource;
+    }
+
+    function checkAccess(rules, inherits, requests) {
+      const rulesByRole = new Map();
+      for (const rule of rules) {
+        const [effect, role, resource, action] = rule.split(' ');
+        if (!rulesByRole.has(role)) rulesByRole.set(role, []);
+        rulesByRole.get(role).push([effect === 'allow', resource, action]);
+      }
+
+      const parents = new Map();
+      for (const [child, parent] of inherits) {
+        if (!parents.has(child)) parents.set(child, []);
+        parents.get(child).push(parent);
+      }
+
+      // The role itself plus all of its ancestors (the graph is acyclic).
+      const cache = new Map();
+      const closure = (role) => {
+        if (!cache.has(role)) {
+          const roles = new Set([role]);
+          for (const parent of parents.get(role) || []) {
+            for (const r of closure(parent)) roles.add(r);
+          }
+          cache.set(role, roles);
+        }
+        return cache.get(role);
+      };
+
+      return requests.map((request) => {
+        const [role, resource, action] = request.split(' ');
+        let allowed = false;
+        let denied = false;
+        for (const r of closure(role)) {
+          for (const [isAllow, resPattern, actPattern] of rulesByRole.get(r) || []) {
+            if ((actPattern === '*' || actPattern === action) && resourceMatches(resPattern, resource)) {
+              if (isAllow) allowed = true;
+              else denied = true;
+            }
+          }
+        }
+        return allowed && !denied;
+      });
+    }
+tests:
+  - {id: t1, args: [["allow viewer docs/* read", "allow editor docs/* write", "deny intern docs/payroll/* *"], [["editor", "viewer"], ["intern", "editor"]], ["intern docs/handbook read", "intern docs/payroll/2026 read", "editor docs/payroll/2026 read", "viewer docs/handbook write"]], expected: [true, false, true, false], description: "Example 1"}
+  - {id: t2, args: [["allow ops logs/* read", "allow ops status read", "allow admin * *"], [["admin", "ops"]], ["ops logs read", "ops logs/ read", "ops logs/api/1 read", "ops logsx/1 read", "ops status/x read", "ops status read", "admin logs delete"]], expected: [false, false, true, false, false, true, true], description: "Example 2 - prefix patterns need at least one character after the slash; exact patterns do not match children; inheritance is one-way"}
+  - {id: t3, hidden: true, args: [["allow a * *"], [], []], expected: [], description: "No requests"}
+  - {id: t4, hidden: true, args: [["allow viewer * read"], [["editor", "viewer"]], ["guest docs read", "viewer docs read", "editor docs read"]], expected: [false, true, true], description: "Unknown role is denied; a role with no own rules still gets inherited allows"}
+  - {id: t5, hidden: true, args: [["allow b files/* read", "deny c files/secret/* read", "allow d files/* write"], [["a", "b"], ["a", "c"], ["b", "d"], ["c", "d"]], ["a files/secret/x read", "a files/public read", "a files/secret/x write", "b files/secret/x read", "c files/public read", "d files/x read"]], expected: [false, true, true, true, false, false], description: "Diamond inheritance - a deny from one branch overrides an allow from the other; parents never get child rules"}
+  - {id: t6, hidden: true, args: [["allow lead repo/* *", "deny dev repo/main/* write", "allow dev repo/main/* write"], [["lead", "dev"]], ["lead repo/main/src write", "dev repo/main/src write", "lead repo/feature/x write", "dev repo/feature/x write"]], expected: [false, false, true, false], description: "Inherited deny beats the child's own allow; own deny beats own allow regardless of rule order"}
+  - {id: t7, hidden: true, args: [["allow svc api/* GET", "allow svc api/health *", "deny svc * DELETE"], [], ["svc api/users GET", "svc api/users get", "svc api/users POST", "svc api/health POST", "svc api/health DELETE", "svc api GET"]], expected: [true, false, false, true, false, false], description: "Actions are case-sensitive; action wildcard; global resource wildcard deny"}
+  - {id: t8, hidden: true, args: [["allow level0 vault/* read", "deny level15 vault/keys/* read"], [["level1", "level0"], ["level2", "level1"], ["level3", "level2"], ["level4", "level3"], ["level5", "level4"], ["level6", "level5"], ["level7", "level6"], ["level8", "level7"], ["level9", "level8"], ["level10", "level9"], ["level11", "level10"], ["level12", "level11"], ["level13", "level12"], ["level14", "level13"], ["level15", "level14"], ["level16", "level15"], ["level17", "level16"], ["level18", "level17"], ["level19", "level18"], ["level20", "level19"], ["level21", "level20"], ["level22", "level21"], ["level23", "level22"], ["level24", "level23"], ["level25", "level24"], ["level26", "level25"], ["level27", "level26"], ["level28", "level27"], ["level29", "level28"], ["level30", "level29"]], ["level30 vault/keys/k1 read", "level14 vault/keys/k1 read", "level15 vault/data read", "level0 vault/keys/k1 read", "level31 vault/data read", "level30 vault/keys read"]], expected: [false, true, true, true, false, true], description: "31-level inheritance chain - deny in the middle applies only to descendants; unknown deeper role denied"}
+  - {id: t9, hidden: true, args: [["allow r a/b/* read", "deny r a/b/c read", "allow r x read"], [], ["r a/b/c read", "r a/b/c/d read", "r a/b read", "r x read", "r x/y read"]], expected: [false, true, false, true, false], description: "Exact deny pattern does not cover descendants of that path; exact allow does not cover children"}
+  - {id: t10, hidden: true, args: [["allow r8 reports/* *", "allow r2 admin delete", "allow r16 billing/* delete", "deny r3 reports/q1 *", "deny r12 billing/invoices/* read", "allow r0 admin write", "deny r15 * *", "allow r13 reports/* read", "allow r8 billing/* delete", "deny r0 billing/invoices/* *", "allow r4 * write", "allow r1 * *", "allow r17 billing/* write", "allow r4 billing/* *", "allow r12 * *", "allow r8 * delete", "allow r6 * write", "allow r19 admin read", "deny r6 billing/* *", "deny r19 admin delete", "allow r2 reports/* read", "deny r7 reports/q1 read", "allow r19 billing/invoices/* *", "deny r15 reports/q1 write", "allow r4 billing/* delete", "allow r19 admin write", "allow r17 billing/* write", "allow r15 reports/* read", "allow r3 * read", "allow r7 billing/invoices/* *", "deny r19 admin *", "deny r2 billing/* write", "deny r19 reports/q1 read", "deny r0 billing/* read", "deny r7 reports/* read", "deny r11 billing/invoices/* write", "deny r14 billing/* delete", "allow r16 admin/* write", "allow r15 * delete", "allow r0 * read", "allow r9 admin/* delete", "deny r2 * *", "allow r1 admin/* write", "allow r11 billing/invoices/* read", "allow r13 * read"], [["r1", "r0"], ["r2", "r0"], ["r3", "r2"], ["r4", "r1"], ["r5", "r3"], ["r6", "r1"], ["r7", "r4"], ["r8", "r0"], ["r8", "r4"], ["r9", "r7"], ["r10", "r9"], ["r10", "r2"], ["r11", "r0"], ["r11", "r8"], ["r12", "r0"], ["r13", "r3"], ["r14", "r9"], ["r15", "r12"], ["r16", "r10"], ["r17", "r6"], ["r18", "r7"], ["r18", "r9"], ["r19", "r0"]], ["r18 other/a read", "r12 billing delete", "r19 billing/invoices/7 read", "r2 billing/x delete", "r8 billing/x write", "r12 admin/users delete", "r14 other/a write", "r16 billing/x delete", "r9 billing/invoices/7 delete", "r15 billing/x read", "r3 reports/q2 write", "r8 other/a read", "r9 admin/users read", "r16 reports/q2 read", "r14 admin/users write", "r10 reports/q2 write", "r6 admin delete", "r6 billing read", "r7 billing delete", "r6 admin/users read", "r15 reports/q1 write", "r2 billing/invoices/7 write", "r3 reports/q1 write", "r8 other/a read", "r12 billing delete", "r10 other/a delete", "r10 other/a read", "r8 billing/invoices/7 delete", "r8 billing/invoices/7 delete", "r9 admin/users delete", "guest billing/invoices/7 read", "r14 billing read", "r8 billing/invoices/7 read", "r1 reports/q1 delete", "r14 billing/x read", "r2 admin/users delete", "r6 reports/q2 write", "r5 admin delete", "r15 billing/invoices/7 delete", "r5 billing/invoices/7 read", "r11 admin delete", "r12 reports/q1 delete", "r2 reports/q2 write", "r4 billing write", "r6 other/a delete", "r12 billing/invoices/7 delete", "r14 admin/users write", "r3 reports/q2 delete", "r6 billing/x read", "r2 billing write", "r8 admin/users delete", "r11 billing/invoices/7 delete", "r1 billing/x write", "r17 admin/users write", "r15 admin read", "r2 reports/q2 write", "r5 billing/invoices/7 delete", "r4 admin/users write", "r16 reports/q1 delete", "r15 other/a delete"]], expected: [true, true, false, false, true, true, true, false, false, false, false, true, true, false, true, false, true, true, true, true, false, false, false, true, true, false, false, false, false, true, false, true, false, true, false, false, true, false, false, false, true, true, false, true, true, false, true, false, false, false, true, false, true, true, false, false, false, true, false, false], description: "Stress - 20 roles in a random DAG with multiple parents, 45 mixed rules, 60 requests including an unknown role"}
+expected_concepts:
+  - transitive closure over a DAG with memoised DFS
+  - deny-overrides policy combination
+  - default deny
+  - wildcard and prefix pattern matching with boundary checks
+  - indexing rules by role
+optimal_complexity: {time: O(V + E) per distinct role for ancestors plus O(applicable rules) per request, space: O(V^2 + rules) in the worst case for cached ancestor sets}
+rubric:
+  excellent: Indexes rules by role, computes each role's ancestor set once with memoised DFS over the DAG (handling diamonds), evaluates deny-overrides with default deny, implements the prefix pattern with the at-least-one-character rule, and discusses caching, cycle detection and auditability of decisions.
+  good: Correct decisions with a per-request BFS over ancestors, possibly after a hint about diamonds or the docs versus docs/ boundary.
+  weak: Lets the first matching rule decide, ignores inherited denies, follows inheritance in the wrong direction, or uses a plain startsWith that lets docs/* match docsx or docs itself.
+  criteria:
+    correctness: All tests pass, including diamond inheritance, inherited denies, case-sensitive actions and pattern boundaries.
+    efficiency: Ancestor sets computed once per role and reused across requests; rules looked up by role.
+    code_quality: Parsing, ancestor computation, pattern matching and the decision are separate small functions.
+    edge_cases: Unknown roles, no requests, deep chains, exact patterns versus children, global wildcards.
+    communication: States the policy (deny overrides, default deny) and explains why order of rules does not matter.
+hints:
+  - Separate the problem into three parts - finding every role whose rules apply, deciding whether one rule matches a request, and combining the matching rules into one decision.
+  - The inheritance pairs form a directed acyclic graph from child to parent; collect a role together with all ancestors by depth-first search and remember the result per role, because roles repeat across requests.
+  - Group rules by role, compute each role's ancestor set once (memoised DFS that unions the parents' sets), then for a request scan the rules of every role in that set, track whether any matching deny or allow was seen, and return allow-and-not-deny; for prefix/* compare against the prefix including the slash and require a longer resource.
+followups:
+  - How would you return the rule that decided each request so administrators can audit access?
+  - How would you detect and report a cycle if the inheritance data were not guaranteed to be acyclic?
+  - With millions of resources and frequent checks, how would you index patterns instead of scanning every applicable rule?
+common_errors:
+  - Letting the first matching rule decide, so rule order changes the outcome.
+  - Following inherits from parent to child, giving parents the rules of their children.
+  - Matching docs/* with a plain prefix check on docs, which also matches docs and docsx/a.
+  - Recomputing ancestors with no memoisation or visiting a shared ancestor repeatedly in large diamonds.

@@ -1,0 +1,243 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ComponentType } from "react";
+import { createMemoryRouter, RouterProvider } from "react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { CandidateShellLayout } from "@/components/layout/CandidateShell";
+import { TooltipProvider } from "@/components/ui/Tooltip";
+import { api, ApiError } from "@/lib/api";
+
+import CandidateReportPage from "../pages/CandidateReportPage";
+import CompletePage from "../pages/CompletePage";
+import ConsentPage from "../pages/ConsentPage";
+import InviteEntryPage from "../pages/InviteEntryPage";
+import ResumePage from "../pages/ResumePage";
+import WelcomePage from "../pages/WelcomePage";
+
+const INTERVIEW = {
+  id: "i1",
+  status: "invited",
+  organization: { name: "Demo Corp" },
+  job: { id: "j1", title: "Senior DevOps Engineer" },
+  rounds_offered: [{ id: "r1", name: "Combined AI Round", round_type: "combined", duration_minutes: 30, expected_difficulty: "medium", coding_enabled: true }],
+  selected_round_id: "r1",
+  allow_round_selection: false,
+  policy: { candidate_report_mode: "immediate", integrity: { enabled: true, require_fullscreen: true, monitor_focus: true } },
+  steps_completed: [] as string[],
+  expires_at: "2026-10-09T12:00:00Z",
+  interviewer_name: "Maya",
+};
+
+const DISCLOSURE = {
+  policy_version: "2026-10-01",
+  policy_hash: "hash-1",
+  title: "Before you begin",
+  intro: "Here is exactly what happens during your interview.",
+  items: [
+    { key: "microphone", title: "Microphone", description: "Your voice is transcribed.", required: true, enabled: true },
+    { key: "integrity_monitoring", title: "Monitoring", description: "Tab and window changes are noted.", required: true, enabled: true },
+    { key: "camera_frames", title: "Camera checks", description: "A still image every 10 seconds.", required: false, enabled: true },
+  ],
+  required_items: ["microphone", "integrity_monitoring"],
+  consent_items: { microphone: true, integrity_monitoring: true, camera_frames: true },
+  retention_summary: "Audio is kept for 90 days.",
+  purpose: "To assess your answers for this role.",
+  human_review_statement: "A person makes every hiring decision.",
+  limitations_statement: "A browser can't lock your computer.",
+};
+
+let interviewState = { ...INTERVIEW };
+
+function renderAt(path: string, routes: Array<{ path: string; Component: ComponentType }>) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const router = createMemoryRouter(
+    [
+      { path: "/i/:token", element: <CandidateShellLayout />, children: [{ index: true, Component: InviteEntryPage }] },
+      { path: "/candidate", element: <CandidateShellLayout />, children: routes.map((r) => ({ path: r.path, Component: r.Component })) },
+      { path: "*", element: <p>elsewhere</p> },
+    ],
+    { initialEntries: [path] },
+  );
+  render(
+    <QueryClientProvider client={client}>
+      <TooltipProvider>
+        <RouterProvider router={router} />
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+  return router;
+}
+
+beforeEach(() => {
+  interviewState = { ...INTERVIEW, steps_completed: [] };
+  sessionStorage.clear();
+  vi.spyOn(api, "get").mockImplementation(async (path: string) => {
+    if (path.startsWith("/candidate-access/")) return { organization_name: "Demo Corp", job_title: "Senior DevOps Engineer", round_name: "Combined AI Round", candidate_first_name: "Jane", requires_access_code: false, expires_at: "2026-10-09T12:00:00Z", status: "invited" } as never;
+    if (path === "/portal/me") return { candidate: { id: "c1", full_name: "Jane Doe", email: "jane@example.com" }, interview_id: "i1", organization: { name: "Demo Corp" } } as never;
+    if (path === "/portal/interviews/i1") return interviewState as never;
+    if (path === "/portal/interviews/i1/disclosure") return DISCLOSURE as never;
+    if (path === "/portal/interviews/i1/resume") throw new ApiError({ status: 404, code: "not_found", message: "No resume" });
+    if (path === "/portal/sessions/s1") return { id: "s1", interview_id: "i1", status: "completed", candidate_report_available: true } as never;
+    if (path === "/portal/sessions/s1/report")
+      return {
+        status: "ready",
+        overall_score: 74,
+        content: {
+          narrative: {
+            overall_summary: "You explained Kubernetes operations clearly.",
+            technical_strengths: [{ title: "Incident response", detail: "Clear timeline and ownership.", evidence_ids: [], competency_key: null }],
+            areas_to_improve: [{ title: "Cost measurement", detail: "Numbers were missing.", learning_guidance: "Practise quoting baselines.", evidence_ids: [], competency_key: null }],
+            strong_answers: [],
+            incomplete_answers: [],
+            recommended_study_areas: [{ topic: "FinOps", why: "Cost questions came up.", next_steps: ["Read the FinOps framework"] }],
+            next_steps: ["Review the study areas"],
+          },
+          competencies: [{ key: "kubernetes", name: "Kubernetes", score: 7.8 }],
+        },
+      } as never;
+    throw new ApiError({ status: 404, code: "not_found", message: `unexpected ${path}` });
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe("InviteEntryPage", () => {
+  it("verifies the candidate and resumes at the first step", async () => {
+    const post = vi.spyOn(api, "post").mockResolvedValue({ interview_id: "i1" } as never);
+    const router = renderAt("/i/tok123", [{ path: ":interviewId/welcome", Component: WelcomePage }]);
+    expect(await screen.findByText(/Hi Jane, welcome/)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("invite-verify-button"));
+    expect(await screen.findByText(/Enter the email address/)).toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId("invite-email-input"), { target: { value: "jane@example.com" } });
+    fireEvent.click(screen.getByTestId("invite-verify-button"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/candidate/i1/welcome"));
+    expect(post).toHaveBeenCalledWith("/candidate-access/tok123/verify", { email: "jane@example.com" }, { skipAuthRefresh: true });
+    expect(await screen.findByTestId("welcome-continue")).toBeInTheDocument();
+  });
+
+  it("explains a mismatched email and a locked invitation", async () => {
+    const post = vi.spyOn(api, "post").mockRejectedValueOnce(new ApiError({ status: 401, code: "invalid_credentials", message: "Invalid" }));
+    renderAt("/i/tok123", []);
+    fireEvent.change(await screen.findByTestId("invite-email-input"), { target: { value: "other@example.com" } });
+    fireEvent.click(screen.getByTestId("invite-verify-button"));
+    expect(await screen.findByTestId("invite-error")).toHaveTextContent(/doesn't match this invitation/);
+    post.mockRejectedValueOnce(new ApiError({ status: 423, code: "account_locked", message: "Locked", retryAfterSeconds: 600 }));
+    fireEvent.click(screen.getByTestId("invite-verify-button"));
+    await waitFor(() => expect(screen.getByTestId("invite-error")).toHaveTextContent(/about 10 minutes/));
+  });
+});
+
+describe("ConsentPage", () => {
+  it("requires every required item, then posts the consent map with the policy hash", async () => {
+    const post = vi.spyOn(api, "post").mockImplementation(async () => {
+      interviewState = { ...interviewState, steps_completed: ["consent"] };
+      return {} as never;
+    });
+    const router = renderAt("/candidate/i1/consent", [
+      { path: ":interviewId/consent", Component: ConsentPage },
+      { path: ":interviewId/resume", Component: ResumePage },
+    ]);
+    const accept = await screen.findByTestId("consent-accept-button");
+    expect(screen.getByTestId("consent-item-microphone")).toBeInTheDocument();
+    expect(screen.getByTestId("consent-item-camera_frames")).toBeInTheDocument();
+    expect(screen.getByText("A browser can't lock your computer.")).toBeInTheDocument();
+    expect(accept).toBeDisabled();
+    fireEvent.click(screen.getByTestId("consent-item-microphone"));
+    expect(accept).toBeDisabled();
+    fireEvent.click(screen.getByTestId("consent-item-integrity_monitoring"));
+    expect(accept).toBeEnabled();
+    fireEvent.click(accept);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/candidate/i1/resume"));
+    expect(post).toHaveBeenCalledWith("/portal/interviews/i1/consent", {
+      policy_hash: "hash-1",
+      items: { microphone: true, integrity_monitoring: true, camera_frames: false },
+    });
+  });
+
+  it("sends the candidate back to consent before the résumé step", async () => {
+    const router = renderAt("/candidate/i1/resume", [
+      { path: ":interviewId/consent", Component: ConsentPage },
+      { path: ":interviewId/resume", Component: ResumePage },
+    ]);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/candidate/i1/consent"));
+  });
+});
+
+describe("ResumePage", () => {
+  it("tags the file input, uploads with progress and unlocks continue once ready", async () => {
+    interviewState = { ...INTERVIEW, steps_completed: ["consent"] };
+    const upload = vi.spyOn(api, "upload").mockResolvedValue({
+      resume_id: "r1",
+      status: "ready",
+      profile_ready: true,
+      summary: { name: "Jane Doe", headline: "DevOps engineer, Kubernetes and AWS", experience_years: 8, skills: ["Kubernetes", "AWS"], roles: [{ title: "Senior SRE", company: "Acme" }] },
+    } as never);
+    renderAt("/candidate/i1/resume", [{ path: ":interviewId/resume", Component: ResumePage }]);
+    const input = (await screen.findByTestId("resume-file-input")) as HTMLInputElement;
+    expect(screen.getByTestId("resume-continue")).toBeDisabled();
+    // The upload response is ready immediately; subsequent polls read the same state.
+    vi.mocked(api.get).mockImplementation(async (path: string) => {
+      if (path === "/portal/interviews/i1/resume") return { resume_id: "r1", status: "ready", profile_ready: true, summary: { name: "Jane Doe", headline: "DevOps engineer, Kubernetes and AWS", skills: ["Kubernetes"] } } as never;
+      return interviewState as never;
+    });
+    const file = new File(["%PDF-1.4 resume"], "jane_doe_devops.pdf", { type: "application/pdf" });
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => expect(upload).toHaveBeenCalled());
+    expect(await screen.findByTestId("resume-summary")).toHaveTextContent(/Kubernetes/);
+    expect(screen.getByTestId("resume-status")).toHaveTextContent(/ready/i);
+    expect(screen.getByTestId("resume-continue")).toBeEnabled();
+  });
+
+  it("lets the candidate continue while the interview is tailored in the background", async () => {
+    interviewState = { ...INTERVIEW, steps_completed: ["consent"] };
+    const at = new Date(Date.now() - 70_000).toISOString();
+    vi.mocked(api.get).mockImplementation(async (path: string) => {
+      if (path === "/portal/interviews/i1/resume")
+        return {
+          resume: {
+            id: "r1",
+            original_filename: "cv.pdf",
+            size_bytes: 10,
+            status: "analyzing",
+            profile_ready: false,
+            created_at: at,
+            steps: [
+              { key: "extracting", label: "Reading the document", state: "done", at },
+              { key: "analyzing", label: "Analyzing experience and skills", state: "active", at },
+              { key: "ready", label: "Ready", state: "pending" },
+            ],
+          },
+          profile_summary: null,
+        } as never;
+      return interviewState as never;
+    });
+    renderAt("/candidate/i1/resume", [{ path: ":interviewId/resume", Component: ResumePage }]);
+    expect(await screen.findByText("You can continue now")).toBeInTheDocument();
+    expect(screen.getByTestId("resume-status")).toHaveTextContent("Understanding your experience");
+    expect(screen.getByText(/About a minute so far · usually less than a minute/)).toBeInTheDocument();
+    expect(screen.getByTestId("resume-continue")).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Upload a different file/ })).toBeInTheDocument();
+  });
+});
+
+describe("Completion and report", () => {
+  it("shows the report link once the candidate report is released", async () => {
+    interviewState = { ...INTERVIEW, status: "completed", steps_completed: ["consent", "resume", "system_check"] };
+    renderAt("/candidate/i1/complete?session=s1", [
+      { path: ":interviewId/complete", Component: CompletePage },
+      { path: ":interviewId/report", Component: CandidateReportPage },
+    ]);
+    expect(await screen.findByTestId("complete-page")).toBeInTheDocument();
+    const link = await screen.findByTestId("report-link");
+    fireEvent.click(link);
+    expect(await screen.findByTestId("candidate-report")).toBeInTheDocument();
+    expect(screen.getByTestId("report-overall-score")).toHaveTextContent("74 out of 100");
+    expect(screen.getByText("Practise quoting baselines.")).toBeInTheDocument();
+    expect(screen.getByText("FinOps")).toBeInTheDocument();
+  });
+});

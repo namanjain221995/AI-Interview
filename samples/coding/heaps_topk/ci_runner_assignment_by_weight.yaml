@@ -1,0 +1,197 @@
+version: 1
+slug: ci_runner_assignment_by_weight
+title: Assign CI Jobs to Weighted Runners
+difficulty: medium
+competency_keys: [data_structures, algorithms, problem_solving]
+role_tags: [devops, platform, backend]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Assign CI Jobs to Weighted Runners
+
+  A CI system has a pool of build runners. `weights[r]` is the cost weight of runner `r` (a smaller
+  weight means a cheaper runner). Jobs arrive one per second: job `j` becomes **ready at second `j`**
+  and needs `durations[j]` seconds on a runner.
+
+  The scheduler works like this at every second `t`:
+
+  1. Every runner whose current job finishes at or before second `t` becomes free.
+  2. Ready jobs that have not started yet are taken **in index order**. Each one is given to the free
+     runner with the **smallest weight**; ties go to the **smaller runner index**. A job given to a runner
+     at second `t` occupies it until second `t + durations[j]`.
+  3. If ready jobs are still waiting and no runner is free, they wait (keeping their order) until a
+     runner frees up.
+
+  Return a list where element `j` is the index of the runner that runs job `j`.
+
+  ### Example 1
+  ```
+  Input:  weights = [3, 3, 2], durations = [1, 2, 3, 2, 1, 2]
+  Output: [2, 2, 0, 2, 1, 2]
+  Explanation: Runner 2 (weight 2) takes job 0 at t=0 and job 1 at t=1 (busy until t=3). Job 2 at t=2
+  gets runner 0 (weight 3, smaller index than runner 1). Runner 2 is free again at t=3 for job 3. Job 4
+  at t=4 gets runner 1. At t=5 every runner is free and job 5 gets runner 2.
+  ```
+
+  ### Example 2
+  ```
+  Input:  weights = [5, 1], durations = [3, 3, 1, 2, 1]
+  Output: [1, 0, 1, 1, 0]
+  Explanation: Jobs 0 and 1 occupy both runners. Job 2 waits until runner 1 frees at t=3. At t=4 both
+  runners are free: job 3 takes runner 1 (lighter) and job 4 takes runner 0.
+  ```
+
+  ### Constraints
+  - `1 <= weights.length <= 2 * 10^5`
+  - `1 <= durations.length <= 2 * 10^5`
+  - `1 <= weights[r] <= 2 * 10^5`
+  - `1 <= durations[j] <= 2 * 10^5`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: assign_runners
+  params:
+    - {name: weights, type: "int[]"}
+    - {name: durations, type: "int[]"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import heapq
+
+
+    def assign_runners(weights: list[int], durations: list[int]) -> list[int]:
+        free = [(weight, runner) for runner, weight in enumerate(weights)]
+        heapq.heapify(free)
+        busy: list[tuple[int, int, int]] = []  # (free_at, weight, runner)
+        result: list[int] = []
+        now = 0
+
+        def release(until: int) -> None:
+            while busy and busy[0][0] <= until:
+                _, weight, runner = heapq.heappop(busy)
+                heapq.heappush(free, (weight, runner))
+
+        for job, duration in enumerate(durations):
+            now = max(now, job)
+            release(now)
+            if not free:
+                now = busy[0][0]
+                release(now)
+            weight, runner = heapq.heappop(free)
+            result.append(runner)
+            heapq.heappush(busy, (now + duration, weight, runner))
+        return result
+  javascript: |
+    class MinHeap {
+      constructor(less) {
+        this.items = [];
+        this.less = less;
+      }
+      get size() {
+        return this.items.length;
+      }
+      peek() {
+        return this.items[0];
+      }
+      push(item) {
+        const a = this.items;
+        a.push(item);
+        let i = a.length - 1;
+        while (i > 0) {
+          const p = (i - 1) >> 1;
+          if (!this.less(a[i], a[p])) break;
+          [a[i], a[p]] = [a[p], a[i]];
+          i = p;
+        }
+      }
+      pop() {
+        const a = this.items;
+        const top = a[0];
+        const last = a.pop();
+        if (a.length > 0) {
+          a[0] = last;
+          let i = 0;
+          for (;;) {
+            const l = 2 * i + 1;
+            const r = l + 1;
+            let m = i;
+            if (l < a.length && this.less(a[l], a[m])) m = l;
+            if (r < a.length && this.less(a[r], a[m])) m = r;
+            if (m === i) break;
+            [a[i], a[m]] = [a[m], a[i]];
+            i = m;
+          }
+        }
+        return top;
+      }
+    }
+
+    function assignRunners(weights, durations) {
+      const lexLess = (a, b) => {
+        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i];
+        return false;
+      };
+      const free = new MinHeap(lexLess); // [weight, runner]
+      const busy = new MinHeap(lexLess); // [freeAt, weight, runner]
+      weights.forEach((w, r) => free.push([w, r]));
+      const release = (until) => {
+        while (busy.size > 0 && busy.peek()[0] <= until) {
+          const [, w, r] = busy.pop();
+          free.push([w, r]);
+        }
+      };
+      const result = [];
+      let now = 0;
+      for (let job = 0; job < durations.length; job++) {
+        now = Math.max(now, job);
+        release(now);
+        if (free.size === 0) {
+          now = busy.peek()[0];
+          release(now);
+        }
+        const [w, r] = free.pop();
+        result.push(r);
+        busy.push([now + durations[job], w, r]);
+      }
+      return result;
+    }
+tests:
+  - {id: t1, args: [[3, 3, 2], [1, 2, 3, 2, 1, 2]], expected: [2, 2, 0, 2, 1, 2], description: "Example 1 - lightest runner first, equal weights by index"}
+  - {id: t2, args: [[5, 1], [3, 3, 1, 2, 1]], expected: [1, 0, 1, 1, 0], description: "Example 2 - jobs wait while every runner is busy, then two runners free at once"}
+  - {id: t3, hidden: true, args: [[7], [3, 1, 2]], expected: [0, 0, 0], description: "Single runner - every job uses runner 0"}
+  - {id: t4, hidden: true, args: [[4, 2, 9], [5]], expected: [1], description: "Single job goes to the lightest runner"}
+  - {id: t5, hidden: true, args: [[1, 1, 1, 1], [10, 10, 10, 10, 10, 10]], expected: [0, 1, 2, 3, 0, 1], description: "All weights equal - ties broken by runner index, waiting jobs take runners freed at the same time"}
+  - {id: t6, hidden: true, args: [[10, 20, 30], [5, 5, 5, 1, 1, 1, 1, 1]], expected: [0, 1, 2, 0, 0, 1, 0, 1], description: "Several runners free at the same moment - choose by weight, not by which finished first"}
+  - {id: t7, hidden: true, args: [[2, 3], [1, 1, 1, 1, 1, 1]], expected: [0, 0, 0, 0, 0, 0], description: "Unit durations - the lightest runner is free again every second"}
+  - {id: t8, hidden: true, args: [[5, 1, 4], [2, 1, 2, 4, 5, 2]], expected: [1, 2, 1, 2, 1, 0], description: "Lightest runner is reused as soon as it frees; heavier runners only when it is busy"}
+  - {id: t9, hidden: true, args: [[200000, 1], [200000, 200000, 200000, 1, 1]], expected: [1, 0, 1, 0, 0], description: "Maximum durations - long waits, queue drains in index order"}
+  - {id: t10, hidden: true, args: [[6, 3, 8, 3, 1], [4, 9, 2, 7, 1, 8, 3, 3, 6, 2, 5, 1, 9, 4, 4, 2, 7, 3]], expected: [4, 1, 3, 0, 4, 4, 3, 2, 3, 1, 0, 2, 1, 4, 2, 3, 0, 4], description: "Mixed weights with duplicates and a busy queue"}
+  - {id: t11, hidden: true, args: [[137414, 30444, 36636, 181483, 96412, 36985, 96810, 29235, 104062, 31439, 82261, 90344, 155526, 68490, 73695, 81144, 53035, 161291, 60696, 174219, 79150, 191744, 160871, 194690, 111948, 100017, 194266, 153840, 199470, 2215], [407, 369, 131, 93, 441, 442, 437, 10, 103, 108, 21, 142, 203, 241, 193, 364, 441, 338, 79, 182, 210, 64, 363, 8, 44, 24, 117, 292, 390, 280, 446, 209, 493, 60, 292, 178, 27, 108, 406, 422, 404, 132, 459, 9, 422, 473, 139, 294, 309, 419, 111, 65, 275, 106, 494, 482, 434, 123, 408, 424, 305, 1, 372, 130, 163, 105, 460, 155, 143, 240, 39, 396, 277, 300, 123, 304, 365, 80, 380, 349, 409, 329, 148, 208, 356, 346, 418, 51, 145, 337, 266, 136, 378, 24, 428, 418, 262, 281, 374, 403, 169, 277, 420, 20, 29, 411, 139, 64, 30, 404, 278, 342, 306, 165, 276, 138, 434, 311, 340, 125, 390, 145, 398, 452, 118, 185, 163, 227, 387, 2, 308, 165, 150, 327, 11, 474, 357, 30, 246, 414, 236, 441, 412, 340, 248, 391, 451, 320, 356, 247, 31, 406, 278, 447, 178, 487, 349, 71, 486, 58, 434, 269, 1, 9, 155, 267, 192, 89, 280, 494, 306, 421, 85, 481, 54, 294, 429, 319, 411, 261, 123, 306, 125, 165, 406, 197, 105, 329, 49, 334, 225, 346, 161, 291, 118, 64, 79, 264, 368, 498, 169, 3, 215, 107, 219, 336, 146, 17, 97, 364, 408, 365, 470, 252, 225, 458, 129, 409, 265, 250, 52, 277, 439, 44, 160, 489, 306, 423, 75, 68, 47, 414, 143, 330, 422, 129, 60, 385, 341, 14, 401, 218, 32, 191, 233, 322, 385, 431, 301, 373, 24, 358, 104, 176, 477, 294, 454, 446, 285, 53, 191, 422, 157, 222, 413, 389, 55, 68, 433, 332, 68, 136, 388, 140, 375, 300, 409, 117, 335, 249, 306, 381, 227, 19, 470, 137, 442, 169, 497, 31, 159, 415, 477, 296, 398, 204, 337, 61, 56, 256, 93, 451, 303, 434, 429, 412, 345, 93, 415, 404, 285, 252, 197, 26, 249, 14, 181, 142, 133, 65, 393, 118, 413, 65, 132, 356, 147, 448, 310, 96, 303, 469, 207, 96, 6, 274, 500, 7, 414, 274, 214, 190, 378, 63, 459, 279, 155, 48, 300, 62, 370, 96, 357, 138, 53, 109, 373, 184, 18, 128, 418, 468, 150, 462, 419, 482, 290, 484, 278, 54, 239, 6, 198, 344, 207, 383, 404, 392, 284, 74, 466, 263, 487, 230, 54, 431, 310, 392, 451, 395, 163, 355, 284, 96, 415, 99, 376, 222, 149, 196, 265, 126, 430, 443, 469, 327, 453, 132, 90, 38, 52, 162, 46, 194, 432, 32, 285, 182, 116, 265, 414, 301, 160, 298, 394, 245, 329, 88, 347, 304, 303, 265, 95, 221, 268, 302, 378, 182, 299, 279, 102, 372, 277, 99, 184, 354, 395, 42, 46, 411, 131, 468, 475, 50, 345, 478, 149, 315, 454, 280, 412, 124, 284, 213, 4, 493, 321, 380, 365, 14, 319, 320, 155, 179, 419, 142, 250, 181, 367, 342, 295, 217, 315, 280, 183, 118, 174, 298, 380, 464, 105, 210, 274, 218, 344, 51, 170, 155, 452, 283, 76, 105, 3, 238, 337, 396, 403, 384, 42, 138, 79, 301, 485, 319, 316, 270, 387, 426, 39, 43, 487, 50, 89, 443, 196, 199, 424, 472, 299, 215, 431, 309, 283, 385, 131, 51, 207, 431, 320, 130, 86, 256, 274, 42, 164, 293, 202, 248, 474, 2, 351, 495, 339, 316, 271, 260, 479, 468, 280, 324, 188, 296, 370, 464, 59, 99, 246, 242, 476, 373, 81, 137, 402, 87, 111, 412, 452, 58, 335, 472, 316, 497, 130, 494, 107, 132, 202, 410, 494, 180, 114, 488, 219, 99, 46, 412, 223, 463, 434, 465, 279, 446, 248, 367, 110, 484, 54, 479, 46, 239, 426, 44, 120, 322, 111, 18, 62, 433, 196, 336, 180, 320, 250, 334, 27, 465, 394, 98, 119, 250, 396, 430, 104, 348, 248, 437, 143, 46, 348, 339, 239, 319, 177, 465, 293, 396, 426, 167, 315, 444, 63, 128, 274, 108, 350, 477, 378, 347, 153, 3, 409, 41, 100, 256, 246, 444, 391, 251, 88, 28, 341, 473, 222, 195, 83, 188, 464, 265, 45, 144, 204, 495, 490, 376, 255, 232, 229, 214, 251, 433, 495, 315, 58, 327, 147, 86, 18, 267, 464, 463, 465, 40, 405, 391, 328, 7, 134, 43, 164, 271, 136, 74, 316, 151, 352, 59, 290, 87, 187, 426, 400, 279, 301, 417, 376, 120, 46, 412, 311, 417, 48, 497, 249, 8, 457, 239, 53, 264, 57, 421, 263, 399, 376, 299, 94, 427, 259, 485, 385, 55, 156, 178, 355, 93, 301, 90, 29, 75, 270, 479, 334, 434, 47, 355, 37, 93, 253, 128, 340, 384, 489, 70, 411, 454, 304, 166, 121, 52, 109, 307, 36, 235, 11, 178, 277, 402, 474, 90, 303, 478, 44, 494, 100, 392, 431, 292, 85, 295, 369, 128, 474, 27, 299, 430, 138, 9, 40, 210, 283, 155, 40, 300, 302, 426, 429, 307, 478, 389, 148, 162, 401, 430, 35, 47, 315, 428, 152, 423, 278, 23, 3, 306, 438, 33, 239, 206, 386, 495, 255, 404, 336, 369, 414, 436, 424, 431, 95, 225, 480, 399, 179, 363, 287, 395, 255, 162, 375, 196, 279, 200, 268, 359, 174, 64, 58, 444, 389, 51, 199, 67, 450, 404, 369, 353, 368, 306, 372, 137, 405, 465, 438, 195, 443, 293, 415, 256, 426, 450, 426, 318, 382, 472, 351, 53, 84, 200, 300, 222, 377, 93, 167, 396, 490, 234, 138, 25, 449, 35, 393, 98, 448, 306, 135, 84, 358, 198, 28, 478, 226, 307, 114, 423, 499, 186, 19, 102, 482, 82, 367, 249, 440, 477, 28, 330, 225, 32, 465, 9, 434, 94, 274, 94, 84, 4, 196, 30, 125, 470, 371, 163, 12, 111, 57, 309, 86, 45, 1, 311, 453, 345, 475, 98, 384, 417, 154, 359, 275, 471, 473, 136]], expected: [29, 7, 1, 9, 2, 5, 16, 18, 13, 14, 20, 15, 10, 11, 4, 6, 25, 18, 8, 24, 0, 27, 12, 22, 17, 19, 3, 21, 26, 23, 28, 20, 22, 19, 17, 27, 9, 8, 19, 13, 14, 9, 1, 3, 3, 15, 24, 8, 4, 10, 0, 20, 11, 9, 27, 20, 23, 21, 24, 0, 18, 17, 9, 17, 7, 6, 12, 29, 26, 21, 16, 2, 5, 25, 28, 16, 6, 17, 8, 19, 4, 14, 22, 11, 7, 13, 26, 29, 17, 3, 1, 28, 29, 15, 10, 15, 18, 22, 21, 17, 5, 9, 28, 11, 23, 24, 11, 25, 27, 0, 23, 16, 20, 27, 25, 2, 12, 6, 14, 1, 19, 13, 8, 7, 5, 11, 3, 18, 4, 27, 27, 22, 2, 26, 1, 29, 1, 9, 5, 13, 9, 23, 21, 10, 15, 3, 11, 20, 25, 22, 17, 16, 2, 18, 17, 28, 24, 6, 0, 14, 6, 14, 19, 19, 5, 27, 19, 9, 8, 12, 26, 4, 15, 17, 7, 1, 9, 22, 7, 15, 10, 2, 5, 20, 13, 25, 19, 29, 3, 21, 23, 24, 3, 14, 10, 27, 11, 16, 5, 8, 19, 20, 20, 27, 18, 11, 26, 28, 10, 1, 25, 0, 28, 15, 6, 3, 22, 27, 2, 23, 19, 4, 10, 26, 12, 19, 29, 9, 20, 16, 21, 26, 7, 14, 17, 22, 18, 13, 21, 24, 16, 24, 20, 18, 6, 20, 5, 15, 12, 22, 11, 7, 23, 11, 2, 1, 4, 0, 8, 25, 18, 23, 24, 29, 27, 25, 6, 28, 3, 14, 11, 6, 10, 21, 28, 11, 26, 9, 20, 13, 17, 12, 24, 18, 16, 19, 18, 5, 1, 7, 6, 22, 29, 21, 9, 7, 8, 15, 15, 19, 2, 5, 15, 4, 0, 14, 24, 6, 13, 23, 25, 11, 27, 17, 7, 2, 20, 2, 17, 6, 3, 10, 28, 12, 26, 21, 6, 19, 8, 12, 10, 17, 2, 18, 27, 27, 22, 9, 16, 9, 20, 26, 15, 11, 12, 6, 25, 7, 29, 1, 18, 24, 11, 7, 1, 14, 13, 0, 23, 4, 5, 2, 24, 23, 1, 25, 26, 20, 3, 7, 21, 28, 8, 10, 14, 28, 27, 9, 4, 7, 6, 24, 0, 29, 7, 19, 15, 16, 7, 17, 18, 8, 11, 14, 21, 22, 12, 3, 26, 13, 14, 4, 24, 5, 29, 22, 10, 1, 18, 28, 23, 2, 26, 27, 9, 28, 25, 23, 26, 4, 18, 20, 28, 15, 3, 13, 1, 11, 6, 8, 2, 16, 19, 26, 14, 11, 17, 0, 27, 28, 7, 23, 12, 21, 19, 22, 4, 13, 25, 7, 21, 20, 0, 13, 15, 25, 24, 26, 5, 10, 1, 29, 13, 16, 19, 19, 14, 9, 2, 8, 18, 3, 8, 11, 21, 6, 28, 12, 27, 24, 29, 17, 23, 22, 6, 8, 16, 11, 10, 12, 13, 26, 15, 4, 7, 8, 28, 14, 17, 18, 3, 8, 13, 13, 16, 6, 1, 20, 2, 29, 9, 0, 5, 25, 24, 3, 2, 27, 21, 8, 22, 26, 9, 23, 14, 28, 4, 19, 21, 8, 11, 26, 29, 15, 9, 13, 10, 18, 7, 13, 14, 28, 9, 3, 0, 16, 12, 8, 25, 24, 3, 24, 14, 6, 20, 17, 1, 13, 21, 29, 2, 10, 26, 0, 27, 5, 12, 4, 23, 27, 15, 28, 11, 22, 7, 9, 19, 8, 5, 16, 2, 15, 8, 20, 22, 17, 18, 28, 7, 21, 6, 3, 14, 10, 29, 22, 4, 8, 12, 17, 29, 6, 26, 25, 10, 24, 13, 21, 18, 1, 27, 18, 13, 2, 14, 5, 0, 10, 5, 11, 18, 9, 4, 0, 23, 19, 23, 13, 14, 26, 29, 16, 28, 1, 15, 13, 18, 20, 5, 14, 22, 25, 7, 3, 20, 28, 12, 8, 4, 2, 17, 6, 18, 11, 26, 9, 17, 24, 27, 0, 0, 21, 7, 15, 10, 6, 21, 8, 11, 22, 23, 22, 7, 1, 29, 20, 27, 11, 5, 19, 25, 14, 16, 5, 29, 4, 18, 13, 28, 10, 15, 12, 19, 8, 3, 1, 26, 20, 24, 26, 7, 17, 2, 19, 25, 17, 17, 1, 0, 11, 23, 21, 9, 1, 4, 13, 18, 3, 29, 6, 28, 13, 21, 17, 3, 23, 0, 22, 5, 1, 20, 12, 27, 0, 0, 8, 20, 14, 29, 16, 23, 11, 25, 20, 29, 10, 18, 19, 2, 9, 15, 13, 4, 26, 24, 7, 29, 21, 9, 29, 27, 8, 5, 21, 26, 7, 28, 6, 14, 3, 26, 5, 15, 23, 17, 13, 22, 7, 18, 20, 5, 1, 7, 5, 6, 7, 25, 0, 16, 11, 9, 12, 24, 22, 18, 13, 9, 10, 2, 4, 28, 0, 27, 0, 24, 9, 5, 9, 19, 21, 1, 17, 5, 14, 4, 1, 20, 3, 8, 29, 6, 24, 15, 15, 16, 23, 21, 26, 13, 15, 9, 9, 10, 7, 15, 8, 29, 7, 27, 22, 2, 19, 18, 25, 21, 17, 5, 11, 12, 1, 0, 28, 5, 8, 14, 15, 3, 13, 16, 4, 6, 9, 27, 24, 20, 11, 0, 23, 24, 20, 26, 2, 15, 29, 10, 23, 19, 13, 22, 20, 4, 27, 14, 5, 18, 25, 21, 7, 16, 17, 6, 28, 1, 24, 13, 8, 3, 12, 24, 9, 13, 27, 23, 9, 0, 29, 15, 25, 11, 5, 29, 10, 2, 19, 8, 25, 13, 26, 12, 17, 22, 13, 5, 0, 19, 1, 4, 19, 18, 6, 3, 20, 14, 2, 21, 16, 14, 22, 22, 7, 9, 16, 19, 1, 1, 24, 25, 28, 24, 27, 0, 12, 7, 19, 0, 16, 10, 10, 16, 7, 25, 17, 8, 6, 0, 11, 21, 12, 1, 15], description: "Stress - 30 runners and 970 jobs with random durations"}
+expected_concepts:
+  - min-heap of free runners keyed by (weight, index)
+  - min-heap of busy runners keyed by finish time
+  - jumping the clock to the next finish time instead of ticking second by second
+  - 64-bit time when many long jobs queue up
+optimal_complexity: {time: "O((n + m) log n) for n runners and m jobs", space: O(n + m)}
+rubric:
+  excellent: Uses two heaps (free by weight and index, busy by finish time), jumps the clock to the earliest finish when nothing is free, releases every runner that finishes by the current time before choosing, notes that time can exceed 32 bits and states O((n + m) log n).
+  good: Correct two-heap simulation with a hint about clock jumps or about releasing several runners at once.
+  weak: Simulates second by second, scans all runners for each job, or picks the runner that finished first instead of the lightest free one.
+  criteria:
+    correctness: All tests pass, including simultaneous releases, ties on weight and long waits.
+    efficiency: Each job does O(log n) heap work; no per-second loop over idle time.
+    code_quality: The two heaps and the clock variable have clear roles and names.
+    edge_cases: One runner, one job, equal weights, unit durations and maximum durations.
+    communication: Explains why the clock never moves backwards and why jobs keep index order.
+hints:
+  - Separate the runners into those that are free right now and those that are busy. What does each group need to answer quickly?
+  - Free runners must give you the smallest (weight, index); busy runners must tell you who finishes next. When nothing is free, you do not need to tick second by second.
+  - Keep a min-heap of free runners by (weight, index) and a min-heap of busy runners by (finish time, weight, index). For job j set the clock to max(clock, j), move every busy runner with finish time <= clock back to the free heap, and if the free heap is empty jump the clock to the earliest finish time and release again before assigning.
+followups:
+  - How would you also return the second at which each job starts?
+  - What changes if jobs have priorities and the highest-priority waiting job goes first?
+  - How would you handle runners that can be added or removed while jobs run?
+common_errors:
+  - Moving only one runner back to the free heap when several finish at the same time.
+  - Choosing the runner that becomes free first instead of the lightest runner among all free ones.
+  - Advancing the clock one second at a time, which is far too slow for long durations.
+  - Keeping the clock in a 32-bit integer when long queues push finish times past 2^31.

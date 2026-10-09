@@ -1,0 +1,446 @@
+version: 1
+slug: hourly_counts_with_zero_fill
+title: Hourly Calls with Zero Fill
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, sre, data]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Hourly Calls with Zero Fill
+
+  A partner API went live on **2026-06-01**. For the launch review, the platform team wants a bar
+  chart of that day's traffic with **one bar for every hour of the day**, including the quiet hours
+  in which nobody called the API. The gateway logs one row per call in table `api_calls`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | called_at | TEXT | call time in UTC, always formatted `YYYY-MM-DD HH:MM:SS` (24-hour clock, zero-padded) |
+
+  The table also holds calls from other days; they must be ignored.
+
+  Return **exactly 24 rows**, one for each hour `0` to `23` of 2026-06-01, with columns:
+
+  - `hour`: the hour of the day as an integer (`0` for `00:00:00`-`00:59:59`, ..., `23`).
+  - `call_count`: the number of calls whose `called_at` falls on 2026-06-01 within that hour; `0` (never
+    NULL) when there were none.
+
+  Order the rows by `hour` ascending. The hour of a call is the `HH` part of `called_at`; you can read
+  it with `CAST(SUBSTR(called_at, 12, 2) AS INTEGER)`. Avoid vendor-specific date functions.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  api_calls
+  +----+---------------------+
+  | id | called_at           |
+  +----+---------------------+
+  | 1  | 2026-06-01 00:15:02 |
+  | 2  | 2026-06-01 00:59:59 |
+  | 3  | 2026-06-01 09:00:00 |
+  | 4  | 2026-05-31 23:59:59 |
+  | 5  | 2026-06-01 23:30:10 |
+  | 6  | 2026-06-02 00:00:00 |
+  | 7  | 2026-06-01 09:41:27 |
+  +----+---------------------+
+
+  Output
+  +------+------------+
+  | hour | call_count |
+  +------+------------+
+  | 0    | 2          |
+  | 1    | 0          |
+  | 2    | 0          |
+  | 3    | 0          |
+  | 4    | 0          |
+  | 5    | 0          |
+  | 6    | 0          |
+  | 7    | 0          |
+  | 8    | 0          |
+  | 9    | 2          |
+  | 10   | 0          |
+  | 11   | 0          |
+  | 12   | 0          |
+  | 13   | 0          |
+  | 14   | 0          |
+  | 15   | 0          |
+  | 16   | 0          |
+  | 17   | 0          |
+  | 18   | 0          |
+  | 19   | 0          |
+  | 20   | 0          |
+  | 21   | 0          |
+  | 22   | 0          |
+  | 23   | 1          |
+  +------+------------+
+  Calls 4 and 6 are on other days and are not counted.
+  ```
+
+  ### Example 2
+  ```
+  api_calls
+  +----+---------------------+
+  | id | called_at           |
+  +----+---------------------+
+  | 1  | 2026-05-31 12:00:00 |
+  | 2  | 2026-06-02 08:15:00 |
+  +----+---------------------+
+
+  Output
+  +------+------------+
+  | hour | call_count |
+  +------+------------+
+  | 0    | 0          |
+  | 1    | 0          |
+  | 2    | 0          |
+  | 3    | 0          |
+  | 4    | 0          |
+  | 5    | 0          |
+  | 6    | 0          |
+  | 7    | 0          |
+  | 8    | 0          |
+  | 9    | 0          |
+  | 10   | 0          |
+  | 11   | 0          |
+  | 12   | 0          |
+  | 13   | 0          |
+  | 14   | 0          |
+  | 15   | 0          |
+  | 16   | 0          |
+  | 17   | 0          |
+  | 18   | 0          |
+  | 19   | 0          |
+  | 20   | 0          |
+  | 21   | 0          |
+  | 22   | 0          |
+  | 23   | 0          |
+  +------+------------+
+  No call falls on 2026-06-01, yet all 24 hours are still returned.
+  ```
+
+  ### Constraints
+  - `0 <= rows in api_calls <= 10^6`
+  - `called_at` is never NULL and always uses the `YYYY-MM-DD HH:MM:SS` format.
+  - Several calls may share the same `called_at` value; each one counts.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return 24 rows (hour 0-23 of 2026-06-01) with the number of calls in each hour, 0 for empty hours.
+    SELECT CAST(SUBSTR(called_at, 12, 2) AS INTEGER) AS hour, COUNT(*) AS call_count
+    FROM api_calls
+    GROUP BY CAST(SUBSTR(called_at, 12, 2) AS INTEGER)
+    ORDER BY hour;
+reference_solutions:
+  sql: |
+    WITH RECURSIVE hours (hour) AS (
+      SELECT 0
+      UNION ALL
+      SELECT hour + 1 FROM hours WHERE hour < 23
+    )
+    SELECT h.hour, COUNT(c.id) AS call_count
+    FROM hours h
+    LEFT JOIN api_calls c
+      ON SUBSTR(c.called_at, 1, 10) = '2026-06-01'
+     AND CAST(SUBSTR(c.called_at, 12, 2) AS INTEGER) = h.hour
+    GROUP BY h.hour
+    ORDER BY h.hour;
+sql_setup: |
+  CREATE TABLE api_calls (
+    id INTEGER PRIMARY KEY,
+    called_at VARCHAR(19) NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - calls on neighbouring days are ignored"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_calls (id, called_at) VALUES
+        (1, '2026-06-01 00:15:02'), (2, '2026-06-01 00:59:59'), (3, '2026-06-01 09:00:00'),
+        (4, '2026-05-31 23:59:59'), (5, '2026-06-01 23:30:10'), (6, '2026-06-02 00:00:00'),
+        (7, '2026-06-01 09:41:27');
+    expected_rows: 
+      - [0, 2]
+      - [1, 0]
+      - [2, 0]
+      - [3, 0]
+      - [4, 0]
+      - [5, 0]
+      - [6, 0]
+      - [7, 0]
+      - [8, 0]
+      - [9, 2]
+      - [10, 0]
+      - [11, 0]
+      - [12, 0]
+      - [13, 0]
+      - [14, 0]
+      - [15, 0]
+      - [16, 0]
+      - [17, 0]
+      - [18, 0]
+      - [19, 0]
+      - [20, 0]
+      - [21, 0]
+      - [22, 0]
+      - [23, 1]
+  - id: t2
+    description: "Example 2 - no call on the target day still yields 24 zero rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_calls (id, called_at) VALUES (1, '2026-05-31 12:00:00'), (2, '2026-06-02 08:15:00');
+    expected_rows: 
+      - [0, 0]
+      - [1, 0]
+      - [2, 0]
+      - [3, 0]
+      - [4, 0]
+      - [5, 0]
+      - [6, 0]
+      - [7, 0]
+      - [8, 0]
+      - [9, 0]
+      - [10, 0]
+      - [11, 0]
+      - [12, 0]
+      - [13, 0]
+      - [14, 0]
+      - [15, 0]
+      - [16, 0]
+      - [17, 0]
+      - [18, 0]
+      - [19, 0]
+      - [20, 0]
+      - [21, 0]
+      - [22, 0]
+      - [23, 0]
+  - id: t3
+    hidden: true
+    description: "Empty table - 24 rows of zeros, an inner join returns nothing"
+    ordered: true
+    expected_rows: 
+      - [0, 0]
+      - [1, 0]
+      - [2, 0]
+      - [3, 0]
+      - [4, 0]
+      - [5, 0]
+      - [6, 0]
+      - [7, 0]
+      - [8, 0]
+      - [9, 0]
+      - [10, 0]
+      - [11, 0]
+      - [12, 0]
+      - [13, 0]
+      - [14, 0]
+      - [15, 0]
+      - [16, 0]
+      - [17, 0]
+      - [18, 0]
+      - [19, 0]
+      - [20, 0]
+      - [21, 0]
+      - [22, 0]
+      - [23, 0]
+  - id: t4
+    hidden: true
+    description: "Hour boundaries - 00:00:00, 12:59:59, 13:00:00 and 23:59:59 land in the right buckets"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_calls (id, called_at) VALUES
+        (1, '2026-06-01 00:00:00'), (2, '2026-06-01 12:59:59'), (3, '2026-06-01 13:00:00'),
+        (4, '2026-06-01 23:59:59'), (5, '2026-06-01 13:59:59');
+    expected_rows: 
+      - [0, 1]
+      - [1, 0]
+      - [2, 0]
+      - [3, 0]
+      - [4, 0]
+      - [5, 0]
+      - [6, 0]
+      - [7, 0]
+      - [8, 0]
+      - [9, 0]
+      - [10, 0]
+      - [11, 0]
+      - [12, 1]
+      - [13, 2]
+      - [14, 0]
+      - [15, 0]
+      - [16, 0]
+      - [17, 0]
+      - [18, 0]
+      - [19, 0]
+      - [20, 0]
+      - [21, 0]
+      - [22, 0]
+      - [23, 1]
+  - id: t5
+    hidden: true
+    description: "Same hour on other dates (other year, month, and day 11) must not leak in; date filter must be in the join, not WHERE"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_calls (id, called_at) VALUES
+        (1, '2025-06-01 10:00:00'), (2, '2026-07-01 10:05:00'), (3, '2026-06-11 10:10:00'),
+        (4, '2026-06-01 10:20:00'), (5, '2026-06-10 03:00:00'), (6, '2026-06-01 03:30:00');
+    expected_rows: 
+      - [0, 0]
+      - [1, 0]
+      - [2, 0]
+      - [3, 1]
+      - [4, 0]
+      - [5, 0]
+      - [6, 0]
+      - [7, 0]
+      - [8, 0]
+      - [9, 0]
+      - [10, 1]
+      - [11, 0]
+      - [12, 0]
+      - [13, 0]
+      - [14, 0]
+      - [15, 0]
+      - [16, 0]
+      - [17, 0]
+      - [18, 0]
+      - [19, 0]
+      - [20, 0]
+      - [21, 0]
+      - [22, 0]
+      - [23, 0]
+  - id: t6
+    hidden: true
+    description: "Duplicate timestamps are separate calls and are all counted"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_calls (id, called_at) VALUES
+        (1, '2026-06-01 17:45:00'), (2, '2026-06-01 17:45:00'), (3, '2026-06-01 17:45:00'),
+        (4, '2026-06-01 05:05:05'), (5, '2026-06-01 05:05:05');
+    expected_rows: 
+      - [0, 0]
+      - [1, 0]
+      - [2, 0]
+      - [3, 0]
+      - [4, 0]
+      - [5, 2]
+      - [6, 0]
+      - [7, 0]
+      - [8, 0]
+      - [9, 0]
+      - [10, 0]
+      - [11, 0]
+      - [12, 0]
+      - [13, 0]
+      - [14, 0]
+      - [15, 0]
+      - [16, 0]
+      - [17, 3]
+      - [18, 0]
+      - [19, 0]
+      - [20, 0]
+      - [21, 0]
+      - [22, 0]
+      - [23, 0]
+  - id: t7
+    hidden: true
+    description: "Every hour busy with different counts - no row may be dropped or doubled"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_calls (id, called_at) VALUES
+        (1, '2026-06-01 00:01:00'), (2, '2026-06-01 01:02:00'), (3, '2026-06-01 02:03:00'), (4, '2026-06-01 03:04:00'),
+        (5, '2026-06-01 04:05:00'), (6, '2026-06-01 05:06:00'), (7, '2026-06-01 06:07:00'), (8, '2026-06-01 07:08:00'),
+        (9, '2026-06-01 08:09:00'), (10, '2026-06-01 09:10:00'), (11, '2026-06-01 10:11:00'), (12, '2026-06-01 11:12:00'),
+        (13, '2026-06-01 12:13:00'), (14, '2026-06-01 13:14:00'), (15, '2026-06-01 14:15:00'), (16, '2026-06-01 15:16:00'),
+        (17, '2026-06-01 16:17:00'), (18, '2026-06-01 17:18:00'), (19, '2026-06-01 18:19:00'), (20, '2026-06-01 19:20:00'),
+        (21, '2026-06-01 20:21:00'), (22, '2026-06-01 21:22:00'), (23, '2026-06-01 22:23:00'), (24, '2026-06-01 23:24:00'),
+        (25, '2026-06-01 08:30:00'), (26, '2026-06-01 08:31:00'), (27, '2026-06-01 08:32:00'), (28, '2026-06-01 20:59:59'),
+        (29, '2026-06-01 01:00:00'), (30, '2026-06-01 10:10:10');
+    expected_rows: 
+      - [0, 1]
+      - [1, 2]
+      - [2, 1]
+      - [3, 1]
+      - [4, 1]
+      - [5, 1]
+      - [6, 1]
+      - [7, 1]
+      - [8, 4]
+      - [9, 1]
+      - [10, 2]
+      - [11, 1]
+      - [12, 1]
+      - [13, 1]
+      - [14, 1]
+      - [15, 1]
+      - [16, 1]
+      - [17, 1]
+      - [18, 1]
+      - [19, 1]
+      - [20, 2]
+      - [21, 1]
+      - [22, 1]
+      - [23, 1]
+  - id: t8
+    hidden: true
+    description: "Hours 1, 10, 11 and 20 - text ordering of hours would put 10 before 2"
+    ordered: true
+    setup_sql: |
+      INSERT INTO api_calls (id, called_at) VALUES
+        (1, '2026-06-01 01:00:01'), (2, '2026-06-01 10:00:01'), (3, '2026-06-01 11:00:01'),
+        (4, '2026-06-01 20:00:01'), (5, '2026-06-01 02:00:01'), (6, '2026-06-01 10:30:00');
+    expected_rows: 
+      - [0, 0]
+      - [1, 1]
+      - [2, 1]
+      - [3, 0]
+      - [4, 0]
+      - [5, 0]
+      - [6, 0]
+      - [7, 0]
+      - [8, 0]
+      - [9, 0]
+      - [10, 2]
+      - [11, 1]
+      - [12, 0]
+      - [13, 0]
+      - [14, 0]
+      - [15, 0]
+      - [16, 0]
+      - [17, 0]
+      - [18, 0]
+      - [19, 0]
+      - [20, 1]
+      - [21, 0]
+      - [22, 0]
+      - [23, 0]
+expected_concepts:
+  - generating a dense series of keys (recursive CTE or a numbers table)
+  - LEFT JOIN from the generated series so empty buckets survive
+  - COUNT(column) versus COUNT(*) on outer-joined rows
+  - putting row filters in the ON clause of an outer join instead of WHERE
+  - extracting fields from fixed-format text timestamps portably
+optimal_complexity: {time: "O(n) over api_calls with a range filter on called_at (O(log n + k) with an index)", space: "O(24)"}
+rubric:
+  excellent: Generates the 24 hours with a recursive CTE (or a VALUES list), LEFT JOINs the day's calls with the date filter inside the ON clause, counts a column of the joined table so empty hours give 0, orders numerically and mentions a range predicate on called_at for index use.
+  good: Reaches a correct query after a hint about COUNT(*) returning 1 for empty hours or about the date filter in WHERE turning the outer join into an inner join.
+  weak: Groups only the existing calls (missing empty hours), counts calls from other days, uses COUNT(*) on the outer join, or relies on vendor-specific date functions.
+  criteria:
+    correctness: All tests pass, including the empty table, other days and hour boundaries.
+    efficiency: One pass over the day's calls joined to a 24-row series; no per-hour correlated scans of the whole table.
+    code_quality: Readable CTE, clear aliases and output column names, explicit ORDER BY.
+    edge_cases: Empty table, calls only on other days, duplicate timestamps and the first and last second of each hour.
+    communication: Explains why the date filter belongs in the ON clause and why COUNT(c.id) differs from COUNT(*).
+hints:
+  - The calls table cannot produce rows for hours that have no calls; where else could 24 rows come from?
+  - Build a small set of the numbers 0 to 23 (a recursive CTE works on both databases) and outer-join the calls onto it, so every hour keeps a row even without a match.
+  - Start from the generated hours, LEFT JOIN api_calls on "date part equals 2026-06-01 and hour part equals this hour" (both conditions in the ON clause), group by hour, count a column of the calls table rather than every row, and order by hour.
+followups:
+  - How would you make the day a parameter, and which predicate on called_at lets an index be used?
+  - How would you produce zero-filled buckets for every hour of a whole month?
+  - What changes if called_at were stored in local time with daylight-saving transitions?
+common_errors:
+  - Grouping only the existing rows, so hours without calls are missing.
+  - Using COUNT(*) after the outer join, which reports 1 instead of 0 for empty hours.
+  - Filtering the date in WHERE after a LEFT JOIN, which removes the empty hours again.
+  - Matching the date with a LIKE pattern that also matches other days such as 2026-06-10 or 2026-06-11.

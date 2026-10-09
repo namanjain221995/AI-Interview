@@ -1,0 +1,610 @@
+# Curated questions: DevOps CI/CD and infrastructure as code (part 2 of 4).
+# Terraform and infrastructure as code: state, modules, workflow, testing and scale.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [devops]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: technical.devops_ci_iac.plan_review_checklist
+    competency_key: terraform
+    topic: Reviewing a Terraform plan
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When a colleague asks you to review a Terraform plan in a pull request, what do you look for before
+      you approve it?
+    expected_concepts:
+      - resources marked for destroy or replace and why
+      - the attribute forcing a replacement
+      - changes outside the intended scope, a sign of drift
+      - security-sensitive changes such as IAM, security groups and public access
+      - that the plan matches what will actually be applied
+    rubric:
+      excellent: Scans first for destroys and replacements, explains how to find what forced them, spots unexpected drift and security-sensitive diffs, and checks that the reviewed plan is the one applied.
+      good: Looks for destroys and checks that the changes match the intent of the pull request.
+      weak: Only checks the summary count of adds, changes and destroys.
+    followups:
+      - The plan shows changes to resources nobody touched. What does that tell you?
+      - How do you make sure the plan you approved is exactly what gets applied?
+    common_errors:
+      - Approving a plan that was generated against an older commit than the one being merged.
+
+  - external_key: technical.devops_ci_iac.count_or_for_each
+    competency_key: terraform
+    topic: count versus for_each
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you need several similar resources, when would you reach for for_each instead of count, and
+      what problem does that choice help you avoid?
+    expected_concepts:
+      - count addresses resources by index
+      - removing an item from the middle shifts indexes and recreates resources
+      - for_each addresses resources by stable keys
+      - count still useful for simple on or off toggles
+    rubric:
+      excellent: Explains index shifting with a concrete example of unintended recreation, prefers stable keys with for_each and notes where count remains appropriate.
+      good: Knows for_each uses keys and avoids recreation when the list changes.
+      weak: Thinks they're interchangeable or chooses based on syntax preference only.
+    followups:
+      - How would you switch an existing resource from count to for_each without recreating it?
+    common_errors:
+      - Using for_each over values only known after apply, which fails at plan time.
+
+  - external_key: technical.devops_ci_iac.version_constraints
+    competency_key: terraform
+    topic: Pinning Terraform and provider versions
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you pin the Terraform version, provider versions and module versions in a project, and what
+      have you seen go wrong when they weren't pinned?
+    expected_concepts:
+      - required_version and required_providers constraints
+      - the dependency lock file committed to the repository
+      - module sources pinned to tags or versions
+      - deliberate upgrades through pull requests
+      - surprise behaviour changes when someone runs a newer version
+    rubric:
+      excellent: Uses version constraints plus a committed lock file, pins module refs, upgrades deliberately, and gives a real example of breakage caused by an unpinned version.
+      good: Pins provider and Terraform versions with sensible constraints.
+      weak: Leaves versions unpinned and lets whatever is installed run.
+    followups:
+      - What does the lock file protect you from that a version constraint doesn't?
+    common_errors:
+      - Adding the dependency lock file to gitignore so every machine resolves different provider builds.
+
+  - external_key: technical.devops_ci_iac.import_manual_resource
+    competency_key: terraform
+    topic: Bringing manual resources under Terraform
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A team created a storage bucket by hand months ago and now wants it managed by Terraform. How would
+      you bring it under Terraform without recreating it or losing data?
+    expected_concepts:
+      - write matching resource configuration
+      - import with terraform import or an import block
+      - run plan until it shows no changes
+      - protect it with prevent_destroy while migrating
+      - check related resources such as policies and lifecycle rules
+    rubric:
+      excellent: Writes configuration, imports the resource, iterates until the plan is clean, protects against accidental deletion and remembers attached resources like policies.
+      good: Imports the resource and fixes configuration until the plan is empty.
+      weak: Deletes and recreates it through Terraform or copies data into a new bucket.
+    followups:
+      - After the import, the plan still wants to change three attributes. What do you do?
+    common_errors:
+      - Applying immediately after import without checking that the plan shows no changes.
+
+  - external_key: technical.devops_ci_iac.state_sensitive_data
+    competency_key: terraform
+    topic: Sensitive data in state
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Why should Terraform state be treated as sensitive data, and how have you protected it in practice?
+    expected_concepts:
+      - state stores attribute values in plain text, including generated passwords
+      - sensitive marking only hides values from output, not from state
+      - encrypted remote backend with restricted access
+      - versioning for recovery and access logging
+      - avoid managing secrets in Terraform where possible
+    rubric:
+      excellent: Explains that secrets end up in state in plain text regardless of the sensitive flag, secures the backend with encryption, tight access and auditing, and reduces secrets in state by design.
+      good: Knows state can contain secrets and stores it in an encrypted, access-controlled backend.
+      weak: Believes marking a variable sensitive keeps it out of state, or keeps state on laptops.
+    followups:
+      - How would you create a database password without it ending up in state?
+    common_errors:
+      - Granting every developer read access to all state files because they need to run plan.
+
+  - external_key: technical.devops_ci_iac.stale_state_lock
+    competency_key: terraform
+    topic: Stuck state lock after a cancelled run
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A terraform apply running in CI was cancelled halfway, and now every run fails with a state lock
+      error. What do you do?
+    expected_concepts:
+      - confirm no other run is genuinely still active
+      - inspect the lock information to see who or what holds it
+      - force-unlock only once it is confirmed safe
+      - run a plan to see what the interrupted apply left behind
+      - make CI handle cancellation gracefully
+    rubric:
+      excellent: Verifies nothing is still running before force-unlocking, then plans to assess partial changes and adjusts CI so applies are not killed mid-flight.
+      good: Identifies the stale lock and releases it carefully, then re-runs plan.
+      weak: Force-unlocks immediately or deletes the lock entry without checking anything.
+    followups:
+      - What could go wrong if you force-unlock while another apply is genuinely running?
+    common_errors:
+      - Assuming the interrupted apply changed nothing and skipping the follow-up plan.
+
+  - external_key: technical.devops_ci_iac.iac_value_in_practice
+    competency_key: terraform
+    topic: Value of infrastructure as code
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Beyond saving time, what concrete benefits have you personally seen from managing infrastructure as
+      code rather than building it through a cloud console?
+    expected_concepts:
+      - review of infrastructure changes before they happen
+      - history of who changed what and why
+      - reproducing environments consistently
+      - recovering or rebuilding after a failure
+      - easier to spot drift and enforce standards
+    rubric:
+      excellent: Gives specific stories from their own work, such as rebuilding an environment or catching a risky change in review, and connects them to reliability and auditability.
+      good: Lists repeatability, review and history with a brief example.
+      weak: Gives only generic statements without any personal experience behind them.
+    followups:
+      - Tell me about a time infrastructure as code got in the way. How did you handle it?
+    common_errors:
+      - Describing infrastructure as code while still making most changes in the console.
+
+  - external_key: technical.devops_ci_iac.terraform_pr_checks
+    competency_key: terraform
+    topic: Automated checks on Terraform pull requests
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What checks would you run automatically on every Terraform pull request, before a human even looks
+      at the plan?
+    expected_concepts:
+      - formatting with terraform fmt
+      - terraform validate
+      - linters such as tflint
+      - static security scanners such as tfsec, checkov or trivy
+      - a plan posted to the pull request
+    rubric:
+      excellent: Lists formatting, validation, linting, security scanning and an automated plan, explains what each catches and keeps them fast enough to run on every change.
+      good: Runs format, validate and plan automatically.
+      weak: Relies only on manual review of the code.
+    followups:
+      - A security scanner flags a public bucket that's intentionally public. How should that be handled?
+    common_errors:
+      - Letting scanner warnings pile up unreviewed until everyone ignores them.
+
+  # ------------------------------------------------------------------ medium
+  - external_key: technical.devops_ci_iac.cross_stack_references
+    competency_key: terraform
+    topic: Sharing values between Terraform stacks
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When one Terraform stack needs something another stack created, like a VPC or a cluster, how do you
+      choose between data source lookups, remote state outputs or some other way of passing values?
+    expected_concepts:
+      - remote state reads couple stacks and require state access
+      - data source lookups by tags or names decouple stacks
+      - parameter stores or service discovery as a published interface
+      - minimising access to other teams' state
+      - dependency ordering when the producer changes
+    rubric:
+      excellent: Compares coupling, access and failure modes of each option, prefers a published contract over reading another team's full state, and explains how changes propagate safely.
+      good: Knows both remote state and data sources and picks one with a reason.
+      weak: Hard-codes IDs copied from the console into other stacks.
+    followups:
+      - The networking team renames a tag your data source depends on. What happens?
+    common_errors:
+      - Granting read access to an entire state file just to share one output.
+
+  - external_key: technical.devops_ci_iac.split_root_module
+    competency_key: terraform
+    topic: Refactoring without recreating resources
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You need to break a large Terraform configuration into smaller modules, but you can't afford to
+      destroy and recreate anything in production. How would you do it?
+    expected_concepts:
+      - moved blocks or terraform state mv to update addresses
+      - plan showing no destroys as the acceptance check
+      - splitting into separate states with import or state migration
+      - small incremental steps with backups of state
+      - coordination so nobody else applies mid-migration
+    rubric:
+      excellent: Uses moved blocks or state moves, treats a zero-destroy plan as the gate, handles moves across state files carefully with backups and does it in small steps with others paused.
+      good: Uses state mv or moved blocks and checks plans for destroys.
+      weak: Rewrites the code and applies, accepting whatever recreation happens.
+    followups:
+      - How would you move resources from one state file into a completely separate one?
+    common_errors:
+      - Running state commands without first backing up the state file.
+
+  - external_key: technical.devops_ci_iac.module_release_process
+    competency_key: terraform
+    topic: Versioning shared modules
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you version and release shared Terraform modules so that consuming teams can upgrade on their
+      own schedule without surprises?
+    expected_concepts:
+      - semantic versioning with tagged releases
+      - a private registry or pinned Git refs
+      - changelogs and upgrade notes for breaking changes
+      - tests and examples run before release
+      - automated upgrade pull requests for consumers
+    rubric:
+      excellent: Releases modules with semantic versions and changelogs, tests them before publishing, defines what counts as a breaking change and makes upgrades easy for consumers.
+      good: Tags module versions and has consumers pin them.
+      weak: Consumers reference the main branch directly so changes land everywhere immediately.
+    followups:
+      - What kinds of module changes would you treat as breaking?
+    common_errors:
+      - Renaming a resource inside a module in a minor release, which forces consumers to recreate it.
+
+  - external_key: technical.devops_ci_iac.lifecycle_meta_arguments
+    competency_key: terraform
+    topic: Lifecycle meta-arguments
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Tell me about a time you used Terraform lifecycle settings such as prevent_destroy,
+      create_before_destroy or ignore_changes. Why did you need them, and where can they backfire?
+    expected_concepts:
+      - prevent_destroy guards critical resources but blocks legitimate replacements
+      - create_before_destroy avoids downtime but can clash on unique names
+      - ignore_changes for attributes managed elsewhere, such as autoscaled counts
+      - overusing ignore_changes hides real drift
+    rubric:
+      excellent: Gives a real use for each setting they used, explains the specific failure mode such as name collisions or hidden drift, and uses them deliberately rather than as a blanket fix.
+      good: Explains what each does with a reasonable use case.
+      weak: Uses ignore_changes everywhere to silence noisy plans.
+    followups:
+      - create_before_destroy fails because the name must be unique. How would you fix that?
+    common_errors:
+      - Believing prevent_destroy protects a resource if its block is deleted from the code.
+
+  - external_key: technical.devops_ci_iac.provider_major_upgrade
+    competency_key: terraform
+    topic: Major provider upgrade across many stacks
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You need to move fifty Terraform stacks to a new major version of your cloud provider plugin. How
+      would you plan and roll that out?
+    expected_concepts:
+      - read the upgrade guide for removed and changed arguments
+      - upgrade lower environments and low-risk stacks first
+      - review plans for unexpected replacements on every stack
+      - automate the version bump and plan across repositories
+      - keep upgrades small and track progress
+    rubric:
+      excellent: Plans a staged rollout informed by the upgrade guide, uses automation to bump versions and collect plans, treats any replacement as a blocker and tracks completion across stacks.
+      good: Tests in non-production first and reviews plans before applying.
+      weak: Bumps the version everywhere at once and applies.
+    followups:
+      - One stack's plan wants to replace a load balancer after the upgrade. What now?
+    common_errors:
+      - Skipping intermediate major versions that contain required state migrations.
+
+  - external_key: technical.devops_ci_iac.state_granularity
+    competency_key: terraform
+    topic: Splitting infrastructure into states
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you decide how to split infrastructure across separate Terraform states, and what goes wrong
+      if you make them too big or too small?
+    expected_concepts:
+      - blast radius of a single apply
+      - plan time and lock contention in large states
+      - split by environment, lifecycle and ownership
+      - too many small states create dependency and orchestration overhead
+      - things that change together belong together
+    rubric:
+      excellent: Balances blast radius, speed and ownership against cross-state dependency overhead, and gives concrete splitting criteria from experience.
+      good: Splits by environment and component, with a reason.
+      weak: Keeps everything in one state or splits arbitrarily without criteria.
+    followups:
+      - What signs tell you a state has grown too large?
+    common_errors:
+      - Putting long-lived networking and frequently changed application resources in the same state.
+
+  - external_key: technical.devops_ci_iac.partial_apply_failure
+    competency_key: terraform
+    topic: Recovering from a partial apply
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A terraform apply fails partway through: some resources were created and others weren't, and the
+      error came back from the cloud API. How do you get back to a clean, consistent state?
+    expected_concepts:
+      - Terraform records what was created, so plan shows remaining work
+      - read the API error, such as quotas, permissions or eventual consistency
+      - check for orphaned resources created outside state
+      - tainted resources and how they are handled
+      - fix the cause and re-run rather than cleaning up by hand
+    rubric:
+      excellent: Understands what state records after a partial failure, diagnoses the API error, checks for orphans and tainted resources, and re-applies after fixing the root cause.
+      good: Re-runs plan to see what's left and fixes the error before re-applying.
+      weak: Deletes created resources by hand in the console and starts over.
+    followups:
+      - The error was a transient rate limit. Would you change anything about how you run applies?
+    common_errors:
+      - Manually deleting resources that Terraform still has in state, causing more drift.
+
+  - external_key: technical.devops_ci_iac.terraform_automation_workflow
+    competency_key: terraform
+    topic: Terraform in CI
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you set up the delivery workflow for Terraform: who or what runs plan and apply, how plans
+      get reviewed, and how the credentials are handled?
+    expected_concepts:
+      - plan on pull request, apply on merge or approval
+      - applying the saved plan that was reviewed
+      - pipeline identity with short-lived credentials instead of personal keys
+      - separate, more restricted credentials for apply than for plan
+      - tools such as Atlantis, Terraform Cloud or Spacelift
+    rubric:
+      excellent: Describes plan-on-PR and apply-from-saved-plan, separates plan and apply permissions, uses short-lived pipeline credentials and handles concurrency and locking.
+      good: Runs plan and apply in CI with review before apply.
+      weak: Engineers run apply from their laptops with long-lived admin keys.
+    followups:
+      - Two pull requests touching the same state are open. How do you avoid conflicts?
+    common_errors:
+      - Giving the plan job full write credentials, so any pull request can change production.
+
+  - external_key: technical.devops_ci_iac.policy_as_code
+    competency_key: terraform
+    topic: Policy as code for infrastructure
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you use policy as code, with something like OPA or Sentinel, to stop risky infrastructure
+      changes before they're applied?
+    expected_concepts:
+      - evaluate the plan output, not just the source code
+      - policies for encryption, public exposure, tagging and allowed regions
+      - advisory versus mandatory enforcement levels
+      - exceptions with an expiry and an owner
+      - testing the policies themselves
+    rubric:
+      excellent: Evaluates plans against tested policies, rolls them out advisory first, has a clear exception process and explains which risks are worth enforcing.
+      good: Describes checking plans against a set of rules that block bad changes.
+      weak: Relies only on code review to catch policy violations.
+    followups:
+      - A team needs a one-off exception for a public endpoint. How does that work?
+    common_errors:
+      - Turning on hard enforcement immediately, blocking every team's deploys on day one.
+
+  - external_key: technical.devops_ci_iac.state_rm_recovery
+    competency_key: terraform
+    topic: Accidental state removal
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A teammate ran terraform state rm on a production database by mistake, and the next plan now wants
+      to create a brand new one. How would you recover?
+    expected_concepts:
+      - do not apply the plan
+      - re-import the existing resource into state
+      - or restore an earlier state version from backend versioning
+      - check that the plan shows no changes afterwards
+      - restrict state manipulation commands in future
+    rubric:
+      excellent: Stops any apply, re-imports or restores from versioned state, confirms a clean plan and introduces guardrails such as restricted permissions for state commands.
+      good: Re-imports the database and confirms the plan.
+      weak: Applies the plan or hasn't heard that state can be restored or re-imported.
+    followups:
+      - Your backend doesn't have versioning enabled. What are your options?
+    common_errors:
+      - Restoring an old state version without checking for changes made since it was saved.
+
+  - external_key: technical.devops_ci_iac.resource_dependency_graph
+    competency_key: terraform
+    topic: Resource ordering and dependencies
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How does Terraform work out the order in which to create and destroy resources, and when have you
+      had to step in and influence that ordering yourself?
+    expected_concepts:
+      - implicit dependencies from references between resources
+      - explicit depends_on for hidden dependencies
+      - parallel execution of independent resources
+      - destroy order is the reverse of create order
+      - eventual consistency issues the graph cannot see
+    rubric:
+      excellent: Explains the graph built from references, gives a real case of a hidden dependency such as IAM propagation that needed depends_on, and knows the cost of overusing it.
+      good: Knows references create dependencies and depends_on exists for others.
+      weak: Thinks resources are created in the order they appear in the files.
+    followups:
+      - Why can depends_on on a module make plans noisier?
+    common_errors:
+      - Adding sleep resources everywhere instead of fixing the missing dependency.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: technical.devops_ci_iac.module_testing_strategy
+    competency_key: terraform
+    topic: Testing infrastructure code
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How would you test Terraform modules before they reach production, from quick static checks all the
+      way up to tests against real infrastructure?
+    expected_concepts:
+      - static checks and plan-based assertions
+      - the native terraform test framework or Terratest
+      - creating real resources in an isolated sandbox account and destroying them
+      - cost and time of real infrastructure tests, run selectively
+      - cleanup of leaked test resources
+    rubric:
+      excellent: Describes layered testing from static analysis to plan assertions to real ephemeral infrastructure, explains when each layer runs and how test environments are isolated and cleaned up.
+      good: Uses static checks and some real-infrastructure tests for important modules.
+      weak: Treats a successful plan as sufficient testing.
+    followups:
+      - Your tests leave resources behind when they fail. How would you deal with that?
+    common_errors:
+      - Running integration tests in a shared account where leftovers collide with other tests.
+
+  - external_key: technical.devops_ci_iac.multi_account_bootstrap
+    competency_key: terraform
+    topic: Bootstrapping Terraform across many accounts
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You're setting up Terraform from scratch for a company with around fifty cloud accounts across
+      several teams. How would you handle bootstrapping the state backends, credentials and the baseline
+      every account needs?
+    expected_concepts:
+      - the chicken-and-egg problem of the backend itself
+      - a small, separately managed bootstrap layer
+      - account vending with a standard baseline
+      - per-account or per-team state with scoped role assumption
+      - consistent structure so teams can self-serve
+    rubric:
+      excellent: Addresses the bootstrap problem explicitly, uses an account vending pattern with baselines, isolates state and credentials per account or team and explains how it scales to new accounts.
+      good: Creates central backends and roles per account with a repeatable process.
+      weak: Uses a single state and admin credentials for all fifty accounts.
+    followups:
+      - How do you manage the resources that hold the state for everything else?
+    common_errors:
+      - Storing all accounts' state in one bucket that every team's pipeline can read.
+
+  - external_key: technical.devops_ci_iac.backend_migration_at_scale
+    competency_key: terraform
+    topic: Migrating hundreds of states to a new backend
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your company has decided to move several hundred Terraform states from self-managed buckets to a
+      managed Terraform platform, without freezing infrastructure changes for weeks. How would you
+      approach it?
+    expected_concepts:
+      - inventory of states, owners and pipelines
+      - automated migration tooling with verification that plans are unchanged
+      - waves by team or risk, with short per-state freezes
+      - updating pipelines and credentials at the same time
+      - rollback path and keeping old state read-only
+    rubric:
+      excellent: Inventories everything, automates migration with a no-change plan check, runs in waves with brief locks per state, updates pipelines in step and keeps a clear rollback path.
+      good: Migrates in batches with verification and communicates freezes.
+      weak: Moves all states over a weekend with no verification.
+    followups:
+      - How would you detect a pipeline that still writes to the old backend?
+    common_errors:
+      - Leaving the old state writable, so a stale pipeline later applies against outdated state.
+
+  - external_key: technical.devops_ci_iac.iac_tool_selection
+    competency_key: terraform
+    topic: Choosing an infrastructure-as-code tool
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      If a platform team asked you to compare Terraform with alternatives such as Pulumi, CloudFormation
+      or Crossplane, how would you frame the comparison and what would drive your recommendation?
+    expected_concepts:
+      - declarative configuration versus general-purpose languages
+      - state handling and drift reconciliation models
+      - multi-cloud support versus single-cloud depth
+      - continuous reconciliation in Kubernetes-native tools
+      - team skills, ecosystem and migration cost
+    rubric:
+      excellent: Compares the tools on concrete axes such as language, state model, reconciliation and ecosystem, and ties the recommendation to the organisation's constraints rather than personal preference.
+      good: Describes the main differences and gives a reasoned choice.
+      weak: Recommends a tool based only on familiarity or popularity.
+    followups:
+      - What would it take to migrate an existing Terraform estate if you chose something else?
+    common_errors:
+      - Ignoring the cost of migrating existing infrastructure and retraining the team.
+
+  - external_key: technical.devops_ci_iac.slow_large_plans
+    competency_key: terraform
+    topic: Slow plans and API rate limits
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your largest Terraform stack now takes twenty minutes just to plan and often hits cloud API rate
+      limits. What would you do about it?
+    expected_concepts:
+      - refresh cost grows with the number of resources
+      - split the stack along ownership and change frequency
+      - tune parallelism and provider retry settings
+      - targeted or refresh-only runs as short-term tactics with their risks
+      - expensive data sources and large for_each sets
+    rubric:
+      excellent: Diagnoses where time goes, splits the state sensibly, tunes parallelism and retries, and treats targeting as a temporary measure with known risks.
+      good: Splits the state and adjusts parallelism.
+      weak: Relies on -target for every change indefinitely.
+    followups:
+      - Why is routinely using -target risky?
+    common_errors:
+      - Disabling refresh permanently, which hides drift.
+
+  - external_key: technical.devops_ci_iac.self_service_infrastructure
+    competency_key: terraform
+    topic: Self-service infrastructure with guardrails
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Product teams keep filing tickets and waiting days for the platform team to provision databases and
+      queues. How would you design a self-service setup on top of Terraform that still keeps security and
+      cost under control?
+    expected_concepts:
+      - opinionated modules with secure defaults
+      - a simple interface such as a catalog, template repository or developer portal
+      - policy checks and budgets enforced automatically
+      - ownership tags and cost visibility per team
+      - support model and versioned upgrades of the offering
+    rubric:
+      excellent: Designs golden-path modules behind a simple interface, enforces guardrails automatically through policy and budgets, gives teams ownership and visibility, and plans how the offering evolves.
+      good: Provides reusable modules teams can apply themselves with some guardrails.
+      weak: Hands teams admin access to write their own Terraform with no guardrails.
+    followups:
+      - How would you know if teams are working around the self-service path?
+    common_errors:
+      - Exposing every module variable, so the self-service interface is as complex as raw Terraform.

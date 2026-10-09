@@ -1,0 +1,172 @@
+version: 1
+slug: route_template_request_counts
+title: Route Template Request Counts
+difficulty: medium
+competency_keys: [data_structures, problem_solving]
+role_tags: [backend, sre, data_analyst]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Route Template Request Counts
+
+  An SRE dashboard groups access-log traffic by **route template** rather than by raw URL, so that
+  `/orders/1042` and `/orders/77` are counted together. Each entry of `lines` has the form
+  `METHOD PATH STATUS`, separated by single spaces, for example `GET /orders/1042/items?page=2 200`.
+
+  Normalise each `PATH` as follows:
+
+  1. Drop the query string: everything from the first `?` onwards.
+  2. If the remaining path is longer than `/` and ends with `/`, remove that one trailing slash.
+  3. Split the path on `/` and replace every segment that is an **identifier** with `:id`. A segment is
+     an identifier when it is
+     - one or more decimal digits, or
+     - exactly 32 hexadecimal characters, or
+     - a UUID: five groups of 8, 4, 4, 4 and 12 hexadecimal characters joined by `-`.
+
+     Hexadecimal characters are `0-9`, `a-f` and `A-F`. Any other segment (such as `v2` or `items`) is
+     kept unchanged.
+
+  The route key of a line is `METHOD` + a space + the normalised path; the status code is ignored. Count
+  the lines per route key and return one string `"<route key> <count>"` per distinct key, sorted by
+  **count descending**, ties broken by the route key in ascending character-code order.
+
+  ### Example 1
+  ```
+  Input:  lines = [
+            "GET /orders/1042/items?page=2 200",
+            "GET /orders/77/items 200",
+            "POST /orders 201",
+            "GET /orders/9/items/ 404",
+            "POST /orders/ 400"
+          ]
+  Output: [
+            "GET /orders/:id/items 3",
+            "POST /orders 2"
+          ]
+  ```
+
+  ### Example 2
+  ```
+  Input:  lines = [
+            "GET /users/3f2a9c1e-7b4d-4e8a-9c6f-0a1b2c3d4e5f/keys 200",
+            "GET /users/0A1B2C3D4E5F60718293A4B5C6D7E8F9/keys 200",
+            "GET /users/me/keys 200",
+            "DELETE /users/42 204",
+            "GET /v2/status 200"
+          ]
+  Output: [
+            "GET /users/:id/keys 2",
+            "DELETE /users/:id 1",
+            "GET /users/me/keys 1",
+            "GET /v2/status 1"
+          ]
+  Explanation: The UUID and the 32-character hex segment are both identifiers. The three routes seen once are
+               ordered by their keys; DELETE sorts before GET.
+  ```
+
+  ### Constraints
+  - `0 <= lines.length <= 10^4`
+  - `METHOD` is an uppercase word such as `GET`, `POST`, `PUT`, `PATCH` or `DELETE`.
+  - `PATH` starts with `/`, contains no spaces, and has no empty segments except possibly one trailing
+    `/` before the query string.
+  - `STATUS` is a three-digit number.
+
+  **Follow-up:** the dashboard only shows the top 10 routes of a very large log. How would you avoid sorting every distinct route?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: route_template_counts
+  params:
+    - {name: lines, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def route_template_counts(lines: list[str]) -> list[str]:
+        hex_digits = set("0123456789abcdefABCDEF")
+
+        def is_hex(s: str) -> bool:
+            return all(c in hex_digits for c in s)
+
+        def is_id(seg: str) -> bool:
+            if seg and all("0" <= c <= "9" for c in seg):
+                return True
+            if len(seg) == 32 and is_hex(seg):
+                return True
+            parts = seg.split("-")
+            return [len(p) for p in parts] == [8, 4, 4, 4, 12] and all(is_hex(p) for p in parts)
+
+        counts: dict[str, int] = {}
+        for line in lines:
+            method, target, _status = line.split(" ")
+            path = target.split("?", 1)[0]
+            if len(path) > 1 and path.endswith("/"):
+                path = path[:-1]
+            segments = [":id" if is_id(s) else s for s in path.split("/")]
+            key = method + " " + "/".join(segments)
+            counts[key] = counts.get(key, 0) + 1
+        ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        return [f"{key} {count}" for key, count in ordered]
+  javascript: |
+    function routeTemplateCounts(lines) {
+      const isHex = (s) => /^[0-9a-fA-F]*$/.test(s);
+      const isId = (seg) => {
+        if (/^[0-9]+$/.test(seg)) return true;
+        if (seg.length === 32 && isHex(seg)) return true;
+        const parts = seg.split("-");
+        const lens = [8, 4, 4, 4, 12];
+        return parts.length === 5 && parts.every((p, k) => p.length === lens[k] && isHex(p));
+      };
+      const counts = new Map();
+      for (const line of lines) {
+        const [method, target] = line.split(" ");
+        let path = target.split("?")[0];
+        if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+        const key = method + " " + path.split("/").map((s) => (isId(s) ? ":id" : s)).join("/");
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      const entries = [...counts.entries()];
+      entries.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+      return entries.map(([key, count]) => `${key} ${count}`);
+    }
+tests:
+  - {id: t1, args: [["GET /orders/1042/items?page=2 200", "GET /orders/77/items 200", "POST /orders 201", "GET /orders/9/items/ 404", "POST /orders/ 400"]], expected: ["GET /orders/:id/items 3", "POST /orders 2"], description: "Example 1 - numeric ids, query string and trailing slash collapse to two routes"}
+  - {id: t2, args: [["GET /users/3f2a9c1e-7b4d-4e8a-9c6f-0a1b2c3d4e5f/keys 200", "GET /users/0A1B2C3D4E5F60718293A4B5C6D7E8F9/keys 200", "GET /users/me/keys 200", "DELETE /users/42 204", "GET /v2/status 200"]], expected: ["GET /users/:id/keys 2", "DELETE /users/:id 1", "GET /users/me/keys 1", "GET /v2/status 1"], description: "Example 2 - UUID and 32-hex ids merge, named segments stay, ties ordered by key"}
+  - {id: t3, hidden: true, args: [[]], expected: [], description: "No lines"}
+  - {id: t4, hidden: true, args: [["GET / 200", "GET /?q=1 200", "GET /index 200"]], expected: ["GET / 2", "GET /index 1"], description: "Root path is never stripped; root with a query string still counts as /"}
+  - {id: t5, hidden: true, args: [["GET /a/0 200", "GET /a/007 200", "GET /a/12x 200", "GET /a/x12 200"]], expected: ["GET /a/:id 2", "GET /a/12x 1", "GET /a/x12 1"], description: "Digit-only segments including leading zeros become ids; mixed segments are kept"}
+  - {id: t6, hidden: true, args: [["GET /blobs/0123456789abcdef0123456789abcde 200", "GET /blobs/0123456789abcdef0123456789abcdef0 200", "GET /blobs/0123456789abcdef0123456789abcdeg 200", "GET /blobs/0123456789ABCDEF0123456789abcdef 200"]], expected: ["GET /blobs/0123456789abcdef0123456789abcde 1", "GET /blobs/0123456789abcdef0123456789abcdef0 1", "GET /blobs/0123456789abcdef0123456789abcdeg 1", "GET /blobs/:id 1"], description: "Hex segments of 31, 33 and 32-with-a-non-hex character are kept; mixed-case 32 hex is an id"}
+  - {id: t7, hidden: true, args: [["PUT /k/12345678-1234-1234-1234-1234567890ab 200", "PUT /k/12345678-1234-1234-1234-1234567890a 200", "PUT /k/12345678-1234-12341234-1234567890ab 200", "PUT /k/1234567g-1234-1234-1234-1234567890ab 200", "PUT /k/ABCDEF01-ABCD-ABCD-ABCD-ABCDEF012345 200"]], expected: ["PUT /k/:id 2", "PUT /k/12345678-1234-1234-1234-1234567890a 1", "PUT /k/12345678-1234-12341234-1234567890ab 1", "PUT /k/1234567g-1234-1234-1234-1234567890ab 1"], description: "UUID shape checks: wrong group length, missing dash and non-hex character are kept; uppercase UUID is an id"}
+  - {id: t8, hidden: true, args: [["GET /x 200", "POST /x 200", "GET /x/ 500", "PATCH /x 200", "POST /x?dry=1 200"]], expected: ["GET /x 2", "POST /x 2", "PATCH /x 1"], description: "Same path under different methods counts separately; status is ignored; tie between GET and POST ordered by key"}
+  - {id: t9, hidden: true, args: [["GET /s/1/t/2/u/3?x=/9/ 200", "GET /s/4/t/5/u/6/ 200", "GET /s/7/t/8/u?y=1 200"]], expected: ["GET /s/:id/t/:id/u/:id 2", "GET /s/:id/t/:id/u 1"], description: "Several ids in one path; slashes inside the query string are dropped with it"}
+  - {id: t10, hidden: true, args: [["GET /api/v1/orders/19773 200", "GET /api/v1/orders/6329 200", "GET /api/v1/orders/70240 200", "GET /api/v1/orders/76388 200", "GET /api/v1/orders/66511 200", "GET /api/v1/orders/11266 200", "POST /api/v1/orders/72/refunds 201", "GET /api/v1/orders/72227 200", "POST /api/v1/orders/847/refunds 201", "POST /api/v1/orders/971/refunds 201", "GET /api/v1/orders/82239 200", "POST /api/v1/orders/64/refunds 201", "POST /api/v1/orders/407/refunds 201", "GET /api/v1/orders/28978 200", "GET /api/v1/orders/17456 200", "GET /api/v1/orders/18908 200", "POST /api/v1/orders/585/refunds 201", "GET /api/v1/orders/89392 200", "GET /api/v1/orders/76232 200", "POST /api/v1/orders/193/refunds 201", "GET /api/v1/orders/71794 200", "GET /api/v1/users/34b9b5df9e7769b10f4205b4907a70c3/sessions?active=1 200", "POST /api/v1/orders/545/refunds 201", "POST /api/v1/orders/322/refunds 201", "POST /api/v1/orders/946/refunds 201", "POST /api/v1/orders/307/refunds 201", "GET /api/v1/orders/23563 200", "GET /api/v1/users/4cdd2055930d6eaf14f4733f3e7d1bfb/sessions?active=1 200", "POST /api/v1/orders/897/refunds 201", "GET /api/v1/orders/58830 200", "GET /api/v1/orders/9595 200", "GET /api/v1/orders/54805 200", "GET /api/v1/orders/44834 200", "GET /api/v1/orders/64090 200", "POST /api/v1/orders/986/refunds 201", "GET /api/v1/users/ca02135e92b1d3f28ede0d7ac3baea9e/sessions?active=1 200", "GET /healthz/ 200", "GET /api/v1/orders/91134 200", "GET /api/v1/orders/65101 200", "POST /api/v1/orders/468/refunds 201", "GET /api/v1/orders/12268 200", "DELETE /api/v1/carts/795E8229-1A2B-3C4D-5E6F-aa05b2715945 204", "GET /api/v1/orders/95835 200", "GET /api/v1/users/ae658f33fe3b890b93f448b3a5aa3c81/sessions?active=1 200", "GET /healthz/ 200", "GET /api/v1/orders/50567 200", "GET /healthz/ 200", "GET /api/v1/orders/60516 200", "GET /api/v1/orders/80075 200", "GET /api/v1/orders/7728 200", "GET /api/v1/orders/37675 200", "GET /api/v1/orders/32456 200", "GET /api/v1/orders/65079 200", "GET /api/v1/orders/58876 200", "POST /api/v1/orders/285/refunds 201", "GET /healthz/ 200", "GET /healthz/ 200", "GET /healthz/ 200", "GET /api/v1/orders/54434 200", "DELETE /api/v1/carts/AEC6F024-1A2B-3C4D-5E6F-6164e25a7605 204"]], expected: ["GET /api/v1/orders/:id 33", "POST /api/v1/orders/:id/refunds 15", "GET /healthz 6", "GET /api/v1/users/:id/sessions 4", "DELETE /api/v1/carts/:id 2"], description: "Sixty mixed lines with random numeric, 32-hex and uppercase UUID identifiers"}
+expected_concepts:
+  - "string normalisation pipeline (query, trailing slash, segments)"
+  - "segment classification for digits, 32-hex and UUID shapes"
+  - "hash map counting by normalised key"
+  - "sorting by count descending with a lexicographic tie-break"
+  - "O(L + k log k) time where k is the number of distinct routes"
+optimal_complexity: {time: "O(L + k log k)", space: "O(k)"}
+rubric:
+  excellent: "Breaks normalisation into small helpers (strip query, strip trailing slash, classify segment), validates the UUID shape group by group, counts with a map and sorts with a composite key; discusses the top-k follow-up with a heap."
+  good: "Correct counting and ordering with a reasonable identifier check that needs a nudge on one rule, such as the root path or the 32-hex length."
+  weak: "Uses a loose regex that turns any hex-looking or alphanumeric segment into :id, forgets the tie-break, or strips the slash from the root path."
+  criteria:
+    correctness: "All tests pass, including near-miss hex and UUID segments and the root path."
+    efficiency: "Single pass to count plus a sort of the distinct keys only."
+    code_quality: "Identifier rules expressed in a readable helper; no copy-pasted checks; comparator states both sort keys."
+    edge_cases: "Empty log, root path with and without a query, leading zeros, wrong-length hex, malformed UUIDs, different methods on the same path."
+    communication: "Explains why the trailing-slash rule must be applied after removing the query string."
+hints:
+  - "Turn each line into a route key first; once every line has a key, the rest is counting and sorting."
+  - "Normalise in a fixed order: cut the query, then remove a trailing slash unless the path is just the root, then look at each segment separately and decide whether it is an identifier."
+  - "Write a helper that says whether a segment is all digits, exactly thirty-two hex characters, or five dash-separated hex groups of lengths 8, 4, 4, 4 and 12. Rebuild the path with :id substitutions, prefix the method, count keys in a hash map, then sort the entries by count from high to low and by key from low to high."
+followups:
+  - "How would you return only the 10 busiest routes from a log with millions of distinct keys?"
+  - "What other identifier shapes (slugs, base64 tokens, dates) might a real service need, and how would you avoid over-merging?"
+  - "How would you compute the same counts over a sliding five-minute window?"
+  - "How would you group by route and by status class (2xx, 4xx, 5xx) at the same time?"
+common_errors:
+  - "Removing the trailing slash before dropping the query, so /orders/?page=2 keeps its slash."
+  - "Turning / into an empty path by stripping its slash."
+  - "Accepting any hex-looking segment of any length as an identifier."
+  - "Checking a UUID only by its total length or number of dashes."
+  - "Sorting by count only, so ties come out in insertion order."

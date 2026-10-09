@@ -1,0 +1,144 @@
+version: 1
+slug: safe_login_redirect_targets
+title: Safe Post-Login Redirects
+difficulty: easy
+competency_keys: [problem_solving, code_quality]
+role_tags: [security, backend, frontend, fullstack]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Safe Post-Login Redirects
+
+  After signing in, the login page sends the user to the address given in its `?next=` parameter. If any
+  address were accepted, an attacker could craft a login link that lands users on a look-alike site (an
+  **open redirect**). Write the check that decides, for each candidate target, whether it is safe.
+
+  A target is **safe** only if it contains no whitespace character (space, tab, carriage return, line
+  feed) and no backslash `\`, and one of the following holds:
+
+  1. **Relative path:** it starts with `/` and its second character, if there is one, is not `/`
+     (so `/` alone is safe but `//host/...` is not).
+  2. **Allowed HTTPS host:** it starts with `https://`, where the scheme is matched case-insensitively,
+     and its host is allowed. The host is the text after `https://` up to the first `/`, `?` or `#`
+     (or to the end). The target is unsafe if the host contains `@`. If the host ends with `:` followed
+     by one or more digits, that port is removed. The remaining host, lower-cased, is allowed when it
+     **equals** an entry of `allowed_hosts` or **ends with** `.` followed by an entry (a subdomain).
+
+  Everything else is unsafe, including `http://` targets, other schemes such as `javascript:`,
+  protocol-relative targets starting with `//`, and the empty string. Return one boolean per target, in
+  input order.
+
+  ### Example 1
+  ```
+  Input:  targets = ["/dashboard?tab=orders", "//evil.example/steal", "https://app.acme.io/home", "http://acme.io/"]
+          allowed_hosts = ["acme.io"]
+  Output: [true, false, true, false]
+  ```
+
+  ### Example 2
+  ```
+  Input:  targets = ["HTTPS://Billing.Acme.IO:8443/invoices#latest", "https://acme.io@evil.net/", "https://notacme.io/", "javascript:alert(1)", ""]
+          allowed_hosts = ["acme.io"]
+  Output: [true, false, false, false, false]
+  Explanation: the first host is billing.acme.io after removing the port; the second has user
+  information before the real host evil.net; notacme.io is not a subdomain of acme.io.
+  ```
+
+  ### Constraints
+  - `0 <= targets.length <= 100`, `0 <= targets[i].length <= 2048`
+  - Targets contain printable ASCII characters (codes `32` to `126`) and possibly tabs, carriage returns
+    or line feeds.
+  - `0 <= allowed_hosts.length <= 20`; every entry is a non-empty lower-case host name such as
+    `acme.io`, without a port.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: is_safe_redirect
+  params:
+    - {name: targets, type: "string[]"}
+    - {name: allowed_hosts, type: "string[]"}
+  return_type: "bool[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def is_safe_redirect(targets: list[str], allowed_hosts: list[str]) -> list[bool]:
+        def safe(target: str) -> bool:
+            if any(ch in " \t\r\n\\" for ch in target):
+                return False
+            if target.startswith("/"):
+                return not target.startswith("//")
+            if target[:8].lower() != "https://":
+                return False
+            rest = target[8:]
+            end = len(rest)
+            for k, ch in enumerate(rest):
+                if ch in "/?#":
+                    end = k
+                    break
+            host = rest[:end]
+            if "@" in host:
+                return False
+            colon = host.rfind(":")
+            port = host[colon + 1 :]
+            if colon >= 0 and port and all("0" <= ch <= "9" for ch in port):
+                host = host[:colon]
+            host = host.lower()
+            return any(host == allowed or host.endswith("." + allowed) for allowed in allowed_hosts)
+
+        return [safe(target) for target in targets]
+  javascript: |
+    function isSafeRedirect(targets, allowedHosts) {
+      const safe = (target) => {
+        if (/[ \t\r\n\\]/.test(target)) return false;
+        if (target.startsWith("/")) return !target.startsWith("//");
+        if (target.slice(0, 8).toLowerCase() !== "https://") return false;
+        const rest = target.slice(8);
+        const match = rest.match(/[\/?#]/);
+        let host = match ? rest.slice(0, match.index) : rest;
+        if (host.includes("@")) return false;
+        host = host.replace(/:[0-9]+$/, "").toLowerCase();
+        return allowedHosts.some((allowed) => host === allowed || host.endsWith("." + allowed));
+      };
+      return targets.map(safe);
+    }
+tests:
+  - {id: t1, args: [["/dashboard?tab=orders", "//evil.example/steal", "https://app.acme.io/home", "http://acme.io/"], ["acme.io"]], expected: [true, false, true, false], description: "Example 1 - relative path, protocol-relative, subdomain over https, plain http"}
+  - {id: t2, args: [["HTTPS://Billing.Acme.IO:8443/invoices#latest", "https://acme.io@evil.net/", "https://notacme.io/", "javascript:alert(1)", ""], ["acme.io"]], expected: [true, false, false, false, false], description: "Example 2 - case-insensitive scheme and host with port, userinfo trick, suffix trick, script scheme, empty"}
+  - {id: t3, hidden: true, args: [[], ["acme.io"]], expected: [], description: "No targets"}
+  - {id: t4, hidden: true, args: [["/", "/\\evil.net", "/ok path", "/tab\there", "/%2F%2Fevil.net"], ["acme.io"]], expected: [true, false, false, false, true], description: "Root path safe; backslash and whitespace unsafe; percent-encoded slashes are just a path"}
+  - {id: t5, hidden: true, args: [["https://acme.io.evil.net/", "https://evil-acme.io", "https://acme.io", "https://acme.io?next=/x", "https://acme.io#top"], ["acme.io"]], expected: [false, false, true, true, true], description: "Host ends at end, query or fragment; look-alike hosts rejected"}
+  - {id: t6, hidden: true, args: [["https://acme.io:", "https://acme.io:80x/", "https://ACME.io:80", "https://", "https:///path"], ["acme.io"]], expected: [false, false, true, false, false], description: "Port must be digits to be stripped; empty host rejected"}
+  - {id: t7, hidden: true, args: [["https://acme.io/profile?u=a@b", "https://user@acme.io/"], ["acme.io"]], expected: [true, false], description: "An @ after the host is fine; userinfo before the host is rejected"}
+  - {id: t8, hidden: true, args: [["https://shop.example.com/cart", "https://status.acme.io", "https://example.org/"], ["example.com", "acme.io"]], expected: [true, true, false], description: "Several allowed hosts"}
+  - {id: t9, hidden: true, args: [["https://acme.io/", "/home"], []], expected: [false, true], description: "Empty allow-list - only relative paths are safe"}
+  - {id: t10, hidden: true, args: [["ftp://acme.io/", "https:acme.io", " /home", "https://acme.io/\\x"], ["acme.io"]], expected: [false, false, false, false], description: "Other schemes, missing slashes, leading space and backslash in the path"}
+expected_concepts:
+  - allow-list validation instead of trying to block bad patterns
+  - protocol-relative and backslash tricks that browsers treat as another host
+  - extracting the host up to the first path, query or fragment delimiter
+  - rejecting user information and stripping only a numeric port
+  - exact or dot-prefixed suffix matching for subdomains
+optimal_complexity: {time: O(total length of targets * number of allowed hosts), space: O(1) extra per target}
+rubric:
+  excellent: Rejects whitespace and backslashes first, distinguishes single-slash paths from protocol-relative ones, extracts the host at the first delimiter, rejects user information, strips only a numeric port, matches hosts exactly or by a dot-prefixed suffix, and explains each rule in terms of the attack it blocks.
+  good: Correct for most targets with clear structure; needs a test run to fix one trick such as the userinfo form or the suffix match without the leading dot.
+  weak: Uses a plain substring or prefix check on the whole URL, accepts http or protocol-relative targets, matches notacme.io as acme.io, or forgets the case-insensitive scheme.
+  criteria:
+    correctness: All tests pass, including look-alike hosts, user information, ports, empty hosts and the empty allow-list.
+    efficiency: Linear in the length of each target times the small number of allowed hosts.
+    code_quality: One helper that validates a single target with early returns for each rejection rule.
+    edge_cases: Empty strings, the root path, tabs, a colon without digits, query or fragment immediately after the host.
+    communication: Explains what an open redirect enables (phishing, token leakage) and why allow-lists beat block-lists.
+hints:
+  - Decide each target independently, and look for reasons to reject it before looking for reasons to accept it - unsafe characters first, then the two accepted shapes.
+  - A target that begins with two slashes or contains a backslash can be interpreted by browsers as pointing to another host, and for absolute targets everything depends on the exact host, so isolate the host before comparing it with the allow-list.
+  - Reject targets containing whitespace or a backslash, accept those starting with one slash not followed by another, then require a case-insensitive https prefix, cut the host at the first slash, question mark or hash, reject it if it has an at sign, remove a trailing colon-and-digits port, lower-case it and accept only an exact match or a match that ends with a dot followed by an allowed host.
+followups:
+  - Why is it safer to store an opaque redirect id server-side than to accept a URL at all?
+  - How would URL parsing differences between your server and the browser lead to bypasses?
+  - Should subdomains be allowed by default, and what happens if one of them can host user content?
+  - How would you handle internationalised domain names in the allow-list?
+common_errors:
+  - Checking that the URL merely contains or starts with an allowed host string, so acme.io.evil.net passes.
+  - Matching subdomains with a plain suffix check, which accepts notacme.io.
+  - Accepting protocol-relative targets that begin with two slashes or paths with backslashes.
+  - Taking the host after the at sign or ignoring user information entirely.
+  - Comparing the scheme or host case-sensitively.

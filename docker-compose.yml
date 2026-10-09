@@ -1,0 +1,477 @@
+# AI Interview Platform — local / single-node deployment.
+#
+# Networking model (see DEPLOYMENT.md):
+#   * The local AI endpoints (vLLM on :8000/:8002/:8003/:8005, Whisper, OCR) are
+#     bound to the host loopback / docker bridge by another stack. The api,
+#     worker, edge and monitoring containers therefore use host networking so
+#     the configured endpoint URLs (http://localhost:8000/v1, ...) work
+#     unchanged inside and outside containers.
+#   * Stateful infrastructure (postgres, redis) and the tts / sandbox
+#     services run on an isolated bridge network and publish only on 127.0.0.1.
+#   * Only the edge proxy listens on a non-loopback interface (:3200 / :3443).
+#   * File storage is the local `appdata` volume (no S3/MinIO).
+#
+# Validate: docker compose config -q   (make compose-check)
+
+name: interview
+
+x-app-env: &app-env
+  env_file:
+    - path: .env
+      required: true
+  environment:
+    # Shared local file storage for api + worker (resumes, audio, frames, reports).
+    STORAGE_LOCAL_ROOT: /srv/interview-data/storage
+    # Catalog/demo content for `python -m app.seed` inside containers.
+    SAMPLES_DIR: /srv/interview/samples
+  volumes:
+    - appdata:/srv/interview-data
+    - ./samples:/srv/interview/samples:ro
+
+# Rotated JSON logs for every service (at most 5 x 20 MB per container).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+    compress: "true"
+
+# Containers whose images we control run without extra privileges.
+x-hardened: &hardened
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  # --------------------------------------------------------------------------
+  # Stateful infrastructure
+  # --------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg17-trixie
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-interview}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run make setup first}
+      POSTGRES_DB: ${POSTGRES_DB:-interview}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5442}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *default-logging
+    networks: [backend]
+
+  redis:
+    image: redis:8.8.3
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?run make setup first}
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6390:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    logging: *default-logging
+    networks: [backend]
+
+  # --------------------------------------------------------------------------
+  # Application
+  # --------------------------------------------------------------------------
+  migrate:
+    <<: *app-env
+    image: interview-api:local
+    build:
+      context: ./apps/api
+    command: ["alembic", "upgrade", "head"]
+    network_mode: host
+    restart: "no"
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app-env
+    image: interview-api:local
+    build:
+      context: ./apps/api
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - ${API_HOST:-127.0.0.1}
+      - --port
+      - "${API_PORT:-8200}"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - 127.0.0.1
+      - --ws-ping-interval
+      - "20"
+      - --ws-ping-timeout
+      - "20"
+      - --no-server-header
+    network_mode: host
+    restart: unless-stopped
+    # Lets in-flight WebSocket sessions pause cleanly (clients reconnect and resume).
+    stop_grace_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:${API_PORT:-8200}/healthz', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging: *default-logging
+
+  worker:
+    <<: *app-env
+    image: interview-api:local
+    build:
+      context: ./apps/api
+    command: ["python", "-m", "app.worker"]
+    network_mode: host
+    restart: unless-stopped
+    # The worker drains in-flight jobs for up to 30 s on SIGTERM.
+    stop_grace_period: 40s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:${WORKER_METRICS_PORT:-8201}/healthz', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    logging: *default-logging
+
+  tts:
+    image: interview-tts:local
+    build:
+      context: ./services/tts
+    restart: unless-stopped
+    environment:
+      TTS_PORT: "8210"
+      TTS_THREADS: ${TTS_THREADS:-4}
+      TTS_DEFAULT_VOICE: ${TTS_VOICE:-af_heart}
+    ports:
+      - "127.0.0.1:${TTS_PORT:-8210}:8210"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8210/health', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    # Kokoro synthesis is CPU-bound and the host is shared with another
+    # production AI stack: cap it at TTS_THREADS cores. RSS is ~1.5-2 GB
+    # (325 MB model + ONNX Runtime arenas).
+    deploy:
+      resources:
+        limits:
+          cpus: "${TTS_CPUS:-8}"
+          memory: ${TTS_MEMORY_LIMIT:-4g}
+        reservations:
+          memory: 1g
+    logging: *default-logging
+    networks: [backend]
+
+  sandbox:
+    image: interview-sandbox:local
+    build:
+      context: ./services/sandbox
+    restart: unless-stopped
+    environment:
+      SANDBOX_PORT: "8220"
+      SANDBOX_SHARED_SECRET: ${SANDBOX_SHARED_SECRET:?run make setup first}
+      SANDBOX_MAX_CONCURRENCY: ${SANDBOX_MAX_CONCURRENCY:-4}
+    # The runner creates one locked-down, network-less container per execution.
+    # Candidate code never reaches the Docker API; see CODING_INTERVIEW.md for
+    # hardening options (rootless Docker, gVisor, dedicated sandbox nodes).
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # The entrypoint starts as root only to read the docker.sock group id, then
+    # drops to uid 10002 (CapEff 0); everything else is locked down.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:${SANDBOX_PORT:-8220}:8220"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8220/health', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    # The controller only orchestrates; candidate code runs in per-execution
+    # containers whose limits the sandbox sets itself.
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1g
+          pids: 512
+    logging: *default-logging
+    networks: [backend]
+
+  edge:
+    <<: *hardened
+    image: interview-edge:local
+    build:
+      context: ./apps/web
+      # The image bakes in infra/caddy/Caddyfile (the bind mount below
+      # overrides it at runtime so `make edge-reload` needs no rebuild).
+      additional_contexts:
+        edgeconf: ./infra/caddy
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      EDGE_HTTP_PORT: "3200"
+      EDGE_HTTPS_PORT: "3443"
+      API_UPSTREAM: 127.0.0.1:${API_PORT:-8200}
+      # Extra DNS names (space separated) allowed to get on-demand internal
+      # TLS certificates on :3443, on top of loopback/private IPs and
+      # *.local/*.lan/*.internal/*.home.arpa/*.ts.net names.
+      EDGE_TLS_HOSTNAMES: ${EDGE_TLS_HOSTNAMES:-}
+      EDGE_HSTS: ${EDGE_HSTS:-max-age=31536000}
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    read_only: true
+    tmpfs:
+      - /config:mode=0700,uid=10001,gid=10001
+      - /run/caddy:mode=0700,uid=10001,gid=10001
+      - /tmp
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3200/__edge/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 512m
+    logging: *default-logging
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # --------------------------------------------------------------------------
+  # Sandbox runtime images (build only: `make sandbox-images`)
+  # --------------------------------------------------------------------------
+  runtime-python:
+    image: interview-sandbox-python:local
+    build: { context: ./services/sandbox/runtimes/python }
+    profiles: ["runtimes"]
+    entrypoint: ["true"]
+    logging: *default-logging
+  runtime-node:
+    image: interview-sandbox-node:local
+    build: { context: ./services/sandbox/runtimes/node }
+    profiles: ["runtimes"]
+    entrypoint: ["true"]
+    logging: *default-logging
+  runtime-java:
+    image: interview-sandbox-java:local
+    build: { context: ./services/sandbox/runtimes/java }
+    profiles: ["runtimes"]
+    entrypoint: ["true"]
+    logging: *default-logging
+  runtime-go:
+    image: interview-sandbox-go:local
+    build: { context: ./services/sandbox/runtimes/go }
+    profiles: ["runtimes"]
+    entrypoint: ["true"]
+    logging: *default-logging
+  runtime-cpp:
+    image: interview-sandbox-cpp:local
+    build: { context: ./services/sandbox/runtimes/cpp }
+    profiles: ["runtimes"]
+    entrypoint: ["true"]
+    logging: *default-logging
+
+  # --------------------------------------------------------------------------
+  # Observability
+  # --------------------------------------------------------------------------
+  prometheus:
+    <<: *hardened
+    image: prom/prometheus:v3.2.1
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.listen-address=127.0.0.1:9191
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=8GB
+      - --web.enable-lifecycle
+    volumes:
+      - ./infra/prometheus:/etc/prometheus:ro
+      - promdata:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9191/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2g
+    logging: *default-logging
+
+  grafana:
+    <<: *hardened
+    image: grafana/grafana:11.5.1
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_SERVER_HTTP_PORT: "3301"
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?run make setup first}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      # No outbound calls from the monitoring stack.
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/interview-overview.json
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3301/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1g
+    logging: *default-logging
+    depends_on:
+      - prometheus
+
+  # Exporters sit next to postgres/redis on the backend network and publish
+  # their metrics on loopback only (scraped by Prometheus on the host).
+  postgres-exporter:
+    <<: *hardened
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_URI: postgres:5432/${POSTGRES_DB:-interview}?sslmode=disable
+      DATA_SOURCE_USER: ${POSTGRES_USER:-interview}
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD:?run make setup first}
+    ports:
+      - "127.0.0.1:9192:9187"
+    read_only: true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9187/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128m
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [backend]
+
+  redis-exporter:
+    <<: *hardened
+    image: oliver006/redis_exporter:v1.92.1-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?run make setup first}
+      # Job streams + dead letters: redis_stream_length, consumer-group lag.
+      REDIS_EXPORTER_CHECK_STREAMS: db0=jobs:*
+    ports:
+      - "127.0.0.1:9193:9121"
+    read_only: true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9121/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128m
+    logging: *default-logging
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [backend]
+
+  # --------------------------------------------------------------------------
+  # Optional: ClamAV malware scanning for uploads (`--profile security`)
+  # --------------------------------------------------------------------------
+  clamav:
+    image: clamav/clamav:stable-debian13-slim
+    profiles: ["security"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3310:3310"
+    volumes:
+      - clamavdata:/var/lib/clamav
+    logging: *default-logging
+    networks: [backend]
+
+networks:
+  backend:
+    name: interview-backend
+
+volumes:
+  pgdata:
+  redisdata:
+  appdata:
+  caddydata:
+  promdata:
+  grafanadata:
+  clamavdata:

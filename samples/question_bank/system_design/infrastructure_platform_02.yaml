@@ -1,0 +1,615 @@
+# System design: infrastructure and platforms (2 of 4) — Kubernetes platforms across clusters and regions.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [devops, platform, sre]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.infrastructure_platform.cluster_layout_small_company
+    competency_key: kubernetes
+    topic: Laying out clusters for a growing company
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A company with about fifteen services is moving to Kubernetes and asks you how many clusters to run and
+      what goes in each. How would you lay it out, and what would make you change that layout later?
+    expected_concepts:
+      - separating production from non-production
+      - namespaces per team or service within a cluster
+      - blast radius versus operational overhead of more clusters
+      - managed control plane to reduce toil
+      - triggers for splitting such as compliance, region or scale
+    rubric:
+      excellent: Proposes a small number of clusters with production clearly separated, uses namespaces for isolation inside them, weighs blast radius against operating cost, and names concrete triggers for adding clusters.
+      good: Separates production from non-production with a reasonable justification.
+      weak: Puts everything including production in one shared cluster, or proposes a cluster per service without considering the cost.
+    followups:
+      - What would push you to give one team its own cluster?
+      - How would you keep the clusters configured the same way?
+    common_errors:
+      - Treating namespaces as a strong security boundary without extra controls.
+
+  - external_key: system_design.infrastructure_platform.two_region_exposure
+    competency_key: kubernetes
+    topic: Serving one service from two regions
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      You have the same web service running in clusters in two regions. Design how users reach it, and what
+      happens from their point of view when one region stops responding.
+    expected_concepts:
+      - DNS-based or anycast global load balancing
+      - health checks per region
+      - regional ingress and load balancer per cluster
+      - failover time driven by health check interval and DNS TTL
+      - capacity in the surviving region
+    rubric:
+      excellent: Describes a global entry point with health-checked regional backends, explains how failover timing depends on health checks and TTLs, and checks the surviving region can take the full load.
+      good: Uses global DNS or load balancing with health checks for failover.
+      weak: Expects users to switch hostnames or relies on manual DNS edits during an outage.
+    followups:
+      - Where does the service's data live in this picture?
+      - How long would users see errors during a failover, and why?
+    common_errors:
+      - Forgetting that the remaining region must have the capacity to absorb all traffic.
+
+  - external_key: system_design.infrastructure_platform.node_pool_design
+    competency_key: kubernetes
+    topic: Designing node pools for mixed workloads
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      One cluster needs to run web services, nightly batch jobs, a few memory-hungry caches and some GPU work.
+      How would you design the node pools and steer each workload to the right place?
+    expected_concepts:
+      - separate pools by instance shape and purpose
+      - taints and tolerations for specialised nodes
+      - node affinity or selectors
+      - resource requests and limits
+      - autoscaling per pool
+      - spot capacity for interruptible batch work
+    rubric:
+      excellent: Defines pools by workload shape, reserves expensive nodes with taints, steers pods with affinity and accurate requests, scales each pool independently and puts interruptible batch on cheaper capacity.
+      good: Splits pools sensibly and uses taints or selectors for placement.
+      weak: Uses one pool of large nodes for everything with no placement controls.
+    followups:
+      - How do you stop ordinary pods from landing on the GPU nodes?
+      - What happens to batch jobs when spot nodes disappear?
+    common_errors:
+      - Using node selectors alone, which does not keep other pods off specialised nodes.
+
+  - external_key: system_design.infrastructure_platform.cluster_baseline_addons
+    competency_key: kubernetes
+    topic: The standard set of cluster add-ons
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Every new cluster your platform team creates should come with the same baseline: ingress, DNS, metrics,
+      logging, certificates and policy. How would you design that baseline and get it installed the same way
+      every time?
+    expected_concepts:
+      - a defined list of add-ons with pinned versions
+      - installation from code via GitOps or a bootstrap pipeline
+      - ordering and dependencies between add-ons
+      - per-cluster values kept minimal
+      - verification that a new cluster is ready
+    rubric:
+      excellent: Defines a versioned baseline installed declaratively from code, handles ordering between components, keeps per-cluster differences small and explicit, and verifies readiness before handing the cluster over.
+      good: Uses code or GitOps to install a standard list of add-ons.
+      weak: Installs add-ons by hand from a checklist for each cluster.
+    followups:
+      - How would you upgrade one add-on across all clusters later?
+      - What would you check before telling a team a new cluster is ready?
+    common_errors:
+      - Letting each cluster drift to different add-on versions with no record of why.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.infrastructure_platform.cluster_provisioning_service
+    competency_key: kubernetes
+    topic: Self-service cluster provisioning
+    difficulty: medium
+    text: >-
+      Teams currently wait two weeks for a new Kubernetes cluster. Design a provisioning service that creates a
+      production-ready cluster in under an hour, consistently, in any of your regions.
+    expected_concepts:
+      - declarative cluster definition as the API
+      - infrastructure as code for network, control plane and node pools
+      - automatic bootstrap of baseline add-ons and identity
+      - registration with fleet management, monitoring and DNS
+      - IP range allocation without overlaps
+      - lifecycle including upgrade and deletion
+    rubric:
+      excellent: Exposes a declarative cluster spec, builds infrastructure and baseline from code, registers the cluster with every fleet system, allocates network ranges safely, and designs for upgrade and teardown as well as creation.
+      good: Automates creation with infrastructure as code and a standard baseline.
+      weak: Scripts the existing manual steps without addressing consistency or lifecycle.
+    followups:
+      - What would stop people from creating far more clusters than you can operate?
+      - How would you delete a cluster safely?
+    common_errors:
+      - Designing only for creation and leaving upgrades and decommissioning as manual work.
+
+  - external_key: system_design.infrastructure_platform.addon_version_management
+    competency_key: kubernetes
+    topic: Managing add-on versions across a fleet
+    difficulty: medium
+    text: >-
+      You run sixty clusters, each with about twenty platform add-ons, and you've lost track of which versions
+      are where. Design a system for managing and rolling out add-on versions across the fleet.
+    expected_concepts:
+      - desired versions declared centrally per cluster group
+      - observed versions reported back from each cluster
+      - compatibility matrix with Kubernetes versions
+      - staged rollout through cluster tiers
+      - automated health checks and halting
+      - drift reporting
+    rubric:
+      excellent: Declares versions centrally by cluster group, collects actual versions, checks compatibility with each cluster's Kubernetes version, rolls through tiers with automated health gates, and reports drift.
+      good: Uses GitOps or a central inventory with staged rollouts.
+      weak: Upgrades add-ons opportunistically when someone notices a problem.
+    followups:
+      - One cluster needs to stay on an older version for a month — how is that expressed?
+      - How would you know an add-on upgrade broke something?
+    common_errors:
+      - Assuming desired state in Git equals what is actually running without checking.
+
+  - external_key: system_design.infrastructure_platform.global_traffic_routing
+    competency_key: networking
+    topic: Global traffic management for a cluster fleet
+    difficulty: medium
+    text: >-
+      Your services run in clusters across five regions. Design the global traffic layer that sends users to
+      the closest healthy region and lets you shift traffic away from a region on purpose.
+    expected_concepts:
+      - latency or geography-based routing
+      - anycast or global load balancer versus DNS
+      - health signals beyond simple TCP checks
+      - weighted shifting for drains and gradual moves
+      - capacity awareness in the target regions
+      - session and data locality considerations
+    rubric:
+      excellent: Compares DNS and anycast approaches, routes on latency with meaningful health signals, supports weighted drains with capacity checks, and considers what happens to in-flight sessions and data locality.
+      good: Describes geo or latency routing with health-based failover and a manual drain mechanism.
+      weak: Uses round-robin DNS without health checks or a way to drain a region.
+    followups:
+      - How would you avoid overloading the neighbouring region when you drain one?
+      - Some clients cache DNS for far longer than the TTL — what does that mean for you?
+    common_errors:
+      - Health checks that only test the load balancer, not the service behind it.
+
+  - external_key: system_design.infrastructure_platform.cross_cluster_service_discovery
+    competency_key: kubernetes
+    topic: Service discovery across clusters
+    difficulty: medium
+    text: >-
+      Services are spread across several clusters, and some need to call services in another cluster or even
+      another region. Design how they discover and reach each other securely.
+    expected_concepts:
+      - multi-cluster service registry or mesh
+      - flat or routable pod network versus gateways
+      - preferring local endpoints with failover to remote
+      - mutual TLS with a shared trust domain
+      - DNS naming across clusters
+      - latency and cost of cross-region calls
+    rubric:
+      excellent: Picks between gateways and flat networking with reasons, prefers local endpoints with controlled failover, secures calls with mutual TLS under shared identity, and flags the latency and cost of cross-region traffic.
+      good: Proposes a mesh or multi-cluster discovery mechanism with encryption.
+      weak: Hardcodes IP addresses or exposes internal services publicly to make them reachable.
+    followups:
+      - When should a call fail over to another region instead of failing?
+      - How do overlapping pod IP ranges affect your options?
+    common_errors:
+      - Silently routing everything cross-region, adding latency and transfer costs.
+
+  - external_key: system_design.infrastructure_platform.multi_tenant_ingress_platform
+    competency_key: kubernetes
+    topic: Shared ingress as a platform service
+    difficulty: medium
+    text: >-
+      Design the ingress layer your platform offers to two hundred teams: they need hostnames, TLS
+      certificates and routing rules, and one team's mistake mustn't take down everyone else's traffic.
+    expected_concepts:
+      - self-service route definitions owned per team
+      - validation and conflict detection for hostnames and paths
+      - automated certificate issuance and renewal
+      - sharding ingress controllers to limit blast radius
+      - rate limits and resource isolation
+      - per-team observability of their routes
+    rubric:
+      excellent: Gives teams self-service routes with ownership of hostnames, validates and detects conflicts before admission, automates certificates, shards controllers to contain failures, and gives each team visibility.
+      good: Uses a shared controller with automated certificates and some validation.
+      weak: Has the platform team edit one shared config file for every request.
+    followups:
+      - Two teams claim the same hostname — how does the system resolve it?
+      - How would you test a new ingress controller version safely?
+    common_errors:
+      - A single shared controller reloading all routes, so one bad rule breaks every tenant.
+
+  - external_key: system_design.infrastructure_platform.node_image_pipeline
+    competency_key: kubernetes
+    topic: Patching node operating systems across the fleet
+    difficulty: medium
+    text: >-
+      A critical kernel vulnerability is announced and you need every node in forty clusters patched within a
+      week. Design the node image pipeline and rollout process you'd want to have in place for this.
+    expected_concepts:
+      - immutable node images built and tested in a pipeline
+      - replacing nodes rather than patching in place
+      - cordon and drain respecting disruption budgets
+      - staged rollout by cluster tier
+      - tracking which nodes run which image
+      - handling workloads that block draining
+    rubric:
+      excellent: Builds and tests immutable node images, replaces nodes through staged rollouts that respect disruption budgets, tracks image versions per node, and has a plan for workloads that block drains.
+      good: Automates image builds and node replacement with drains.
+      weak: Logs into nodes to run package updates by hand.
+    followups:
+      - A team's pod disruption budget blocks every drain — what do you do?
+      - How would you prove to security that every node is patched?
+    common_errors:
+      - Patching nodes in place so the fleet drifts away from the tested image.
+
+  - external_key: system_design.infrastructure_platform.control_plane_backup
+    competency_key: kubernetes
+    topic: Backing up and restoring cluster state
+    difficulty: medium
+    text: >-
+      Design the backup and restore strategy for the state of your Kubernetes clusters, including the control
+      plane data and the cluster resources teams have created. What exactly are you backing up and how would
+      you rebuild a lost cluster?
+    expected_concepts:
+      - etcd snapshots for self-managed control planes
+      - resource-level backups versus rebuilding from Git
+      - persistent volume data handled separately
+      - secrets and their encryption keys
+      - restore drills with measured time to recover
+    rubric:
+      excellent: Distinguishes control-plane snapshots, declarative state that can be rebuilt from Git and persistent data, covers secrets and keys, and treats regular timed restore drills as part of the design.
+      good: Backs up etcd or resources and has a restore plan.
+      weak: Relies on the cloud provider without knowing what is or isn't covered.
+    followups:
+      - If everything is in Git, what's still lost when a cluster disappears?
+      - How would you restore just one namespace that a team deleted by mistake?
+    common_errors:
+      - Backing up the cluster but not the key needed to decrypt the backed-up secrets.
+
+  - external_key: system_design.infrastructure_platform.cluster_ipam_service
+    competency_key: networking
+    topic: IP address management for many clusters
+    difficulty: medium
+    text: >-
+      You're about to grow from ten clusters to three hundred across several clouds and data centres, and IP
+      ranges already overlap in places. Design how network ranges are planned and allocated for clusters.
+    expected_concepts:
+      - central IP address management service as source of truth
+      - non-overlapping ranges for nodes, pods and services where routing is needed
+      - hierarchical allocation by region and environment
+      - sizing for growth and per-node pod limits
+      - automated allocation and release integrated with provisioning
+      - handling existing overlaps with gateways or migration
+    rubric:
+      excellent: Creates a central IPAM source of truth with hierarchical, non-overlapping allocations sized for growth, integrates it with cluster provisioning, and has a plan for the existing overlaps.
+      good: Plans ranges centrally and avoids overlaps for new clusters.
+      weak: Lets each cluster pick default ranges and deals with conflicts when they arise.
+    followups:
+      - How do you size pod ranges without wasting address space?
+      - What would you do with two existing clusters that overlap and now need to talk?
+    common_errors:
+      - Underestimating pod address consumption per node.
+
+  - external_key: system_design.infrastructure_platform.regional_logging_residency
+    competency_key: observability
+    topic: Central logging with data residency rules
+    difficulty: medium
+    text: >-
+      Your clusters run in Europe, the US and Asia, and some logs must never leave the region they were
+      produced in. Design the logging platform so engineers can still search across regions when they need to.
+    expected_concepts:
+      - regional log storage and processing
+      - classification and redaction at the source
+      - federated search that queries regions in place
+      - access controls and audit per region
+      - retention per data class
+      - cost controls on volume
+    rubric:
+      excellent: Keeps storage and processing regional, redacts or classifies at collection, uses federated queries rather than copying data, and applies region-specific access, audit and retention.
+      good: Keeps logs regional and offers some cross-region search with access control.
+      weak: Ships everything to one central cluster and filters later.
+    followups:
+      - An engineer in one region needs to debug an issue in another — what can they see?
+      - How would you catch personal data that slipped into a log line?
+    common_errors:
+      - Copying logs centrally and relying on access controls to satisfy residency.
+
+  - external_key: system_design.infrastructure_platform.scheduled_jobs_platform
+    competency_key: kubernetes
+    topic: Platform for scheduled jobs
+    difficulty: medium
+    text: >-
+      Hundreds of cron jobs live on random virtual machines, and nobody notices when one silently stops
+      running. Design a platform for scheduled jobs on your clusters.
+    expected_concepts:
+      - declarative job definitions with owners
+      - concurrency policy and missed-run handling
+      - monitoring on last success, not just failures
+      - timeouts, retries and idempotent jobs
+      - time zone and daylight saving behaviour
+      - high availability of the scheduler
+    rubric:
+      excellent: Defines owned, declarative jobs with explicit concurrency and missed-run behaviour, alerts on absence of success, handles retries, timeouts and time zones, and keeps scheduling highly available.
+      good: Uses Kubernetes CronJobs or a scheduler with monitoring and retries.
+      weak: Moves the crontabs into containers without monitoring or ownership.
+    followups:
+      - How would you detect a job that hasn't run at all?
+      - What should happen if yesterday's run is still going when today's should start?
+    common_errors:
+      - Alerting only on failures, so jobs that never start go unnoticed.
+
+  - external_key: system_design.infrastructure_platform.volume_backup_service
+    competency_key: kubernetes
+    topic: Backups for persistent volumes
+    difficulty: medium
+    text: >-
+      Some teams run stateful workloads with persistent volumes on your clusters. Design a backup service the
+      platform offers them, including restores into a different cluster or region.
+    expected_concepts:
+      - snapshot or file-level backup with application consistency
+      - pre and post hooks to quiesce writes
+      - copies stored in another region or account
+      - schedules and retention set per workload
+      - restore into another cluster with storage class mapping
+      - restore testing and reporting
+    rubric:
+      excellent: Offers consistent backups with hooks, stores copies off-region and in a separate account, lets teams set schedules and retention, supports cross-cluster restore with storage mapping, and verifies restores regularly.
+      good: Provides scheduled snapshots with off-site copies and a restore process.
+      weak: Relies on volume snapshots in the same region with no consistency or restore testing.
+    followups:
+      - Why does a crash-consistent snapshot sometimes produce an unusable database?
+      - How would you protect backups from someone who has deleted the cluster?
+    common_errors:
+      - Keeping backups in the same account and region as the data they protect.
+
+  - external_key: system_design.infrastructure_platform.fleet_capacity_planning
+    competency_key: kubernetes
+    topic: Capacity planning for a cluster fleet
+    difficulty: medium
+    text: >-
+      Finance says the Kubernetes fleet is too expensive while teams say they can't get capacity. Design how
+      the platform measures, plans and allocates capacity across clusters and regions.
+    expected_concepts:
+      - requests versus actual usage per team
+      - bin-packing efficiency and node utilisation
+      - headroom for failover and bursts
+      - cluster autoscaling and its limits
+      - forecasting from growth trends
+      - rightsizing feedback to teams
+    rubric:
+      excellent: Measures both requested and used resources, explains the gap between them, keeps deliberate headroom for failover, uses autoscaling plus forecasting, and feeds rightsizing data back to teams.
+      good: Tracks utilisation and requests and proposes autoscaling and some rightsizing.
+      weak: Proposes cutting nodes or buying more without measuring requests versus usage.
+    followups:
+      - How much spare capacity should a region keep, and how would you justify it?
+      - A team requests ten times what it uses — how do you handle that?
+    common_errors:
+      - Looking only at node CPU usage while scheduling is actually blocked by inflated requests.
+
+  - external_key: system_design.infrastructure_platform.service_mesh_rollout
+    competency_key: kubernetes
+    topic: Introducing a service mesh to the fleet
+    difficulty: medium
+    text: >-
+      You've decided to introduce a service mesh across the fleet for mutual TLS and traffic control. Design
+      the rollout so that hundreds of existing services adopt it without outages.
+    expected_concepts:
+      - incremental, per-namespace onboarding
+      - permissive then strict mutual TLS
+      - sidecar or ambient resource overhead
+      - mesh control plane availability and upgrades
+      - observability of mesh-level failures
+      - rollback path per service
+    rubric:
+      excellent: Onboards incrementally, moves from permissive to strict mutual TLS once traffic is verified, accounts for resource overhead and control-plane failure modes, and keeps a per-service rollback.
+      good: Plans a gradual rollout with permissive mode and monitoring.
+      weak: Enables strict mutual TLS everywhere at once.
+    followups:
+      - What happens to traffic if the mesh control plane goes down?
+      - Which workloads would you onboard last, and why?
+    common_errors:
+      - Ignoring the latency and memory overhead of sidecars on small services.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.infrastructure_platform.cell_based_platform
+    competency_key: system_design
+    topic: Cell-based architecture on Kubernetes
+    difficulty: hard
+    text: >-
+      Leadership wants to limit how many customers any single failure can affect, and you're asked to design a
+      cell-based platform where each cell is an independent copy of the stack. How would you build it?
+    expected_concepts:
+      - cell as a full independent stack with its own cluster and data
+      - routing layer mapping customers to cells
+      - cell size limits and adding new cells
+      - deploying changes cell by cell
+      - moving customers between cells
+      - shared global services kept minimal
+    rubric:
+      excellent: Defines cells as independent stacks, designs a thin, highly available routing layer, caps cell size, deploys cell by cell, handles customer migration and keeps cross-cell dependencies to a minimum.
+      good: Describes independent cells, routing and staged deploys.
+      weak: Describes multiple clusters sharing one database or global dependency, which does not contain failures.
+    followups:
+      - What does the routing layer depend on, and how do you keep it from becoming the shared failure?
+      - How would you move a large customer from one cell to another?
+    common_errors:
+      - Sharing a database or queue across cells, which defeats the isolation.
+
+  - external_key: system_design.infrastructure_platform.region_loss_failover
+    competency_key: system_design
+    topic: Surviving the loss of a region
+    difficulty: hard
+    text: >-
+      Your platform hosts services in three regions, and the business wants to survive losing any one of them
+      with at most fifteen minutes of disruption. Design the platform side of that, from traffic to state to
+      the people pressing the buttons.
+    expected_concepts:
+      - capacity headroom in surviving regions
+      - traffic failover mechanism and its timing
+      - data replication and recovery point per data store
+      - platform dependencies like registry, secrets and CI available outside the failed region
+      - automated versus human-triggered failover
+      - regular region evacuation drills
+    rubric:
+      excellent: Plans headroom, traffic failover, per-store replication with stated recovery points, makes platform dependencies themselves multi-region, decides what is automated, and proves it with drills.
+      good: Covers traffic failover, data replication and spare capacity.
+      weak: Focuses only on DNS failover and ignores state and platform dependencies.
+    followups:
+      - Which platform service would you worry most about being single-region?
+      - How would you run a drill without risking a real outage?
+    common_errors:
+      - Forgetting the container registry or secrets store lives only in the region that failed.
+
+  - external_key: system_design.infrastructure_platform.stateful_multi_region_on_k8s
+    competency_key: distributed_systems
+    topic: Running a database across regions on Kubernetes
+    difficulty: hard
+    text: >-
+      A team wants to run a replicated PostgreSQL deployment on your clusters across two regions, with
+      automatic failover. Design how the platform would support it, and tell me where you'd push back.
+    expected_concepts:
+      - operator managing replication and failover
+      - synchronous versus asynchronous replication and recovery point
+      - fencing to avoid split brain
+      - storage performance and topology constraints
+      - backups and point-in-time recovery off-cluster
+      - when a managed database is the better choice
+    rubric:
+      excellent: Uses an operator with explicit replication mode trade-offs, designs fencing against split brain, accounts for storage topology, adds off-cluster backups, and explicitly compares the operational cost with a managed service.
+      good: Proposes an operator with replication, backups and failover.
+      weak: Runs a StatefulSet stretched across regions and assumes Kubernetes handles failover.
+    followups:
+      - The network between regions partitions — what does each side do?
+      - What recovery point objective can you actually promise here?
+    common_errors:
+      - Automatic failover without fencing, risking two primaries accepting writes.
+
+  - external_key: system_design.infrastructure_platform.cluster_upgrade_automation
+    competency_key: kubernetes
+    topic: Continuous Kubernetes version upgrades
+    difficulty: hard
+    text: >-
+      Kubernetes releases a new minor version every few months, and your two hundred clusters are falling
+      behind. Design an upgrade system that keeps the fleet current with little human effort.
+    expected_concepts:
+      - detecting deprecated API use before upgrades
+      - canary clusters and tiers with soak periods
+      - control plane then node pool ordering
+      - automated pre and post upgrade checks
+      - add-on compatibility gates
+      - blocking and notifying owners of incompatible workloads
+    rubric:
+      excellent: Scans for deprecated API use in advance, rolls through canary tiers with soak time, orders control plane and nodes correctly, gates on add-on compatibility and automated checks, and works with owners to clear blockers.
+      good: Uses tiered upgrades with pre-checks and monitoring.
+      weak: Upgrades clusters manually as time permits.
+    followups:
+      - How would you find workloads still using removed API versions?
+      - What makes an upgrade stop automatically?
+    common_errors:
+      - Ignoring manifests in Git or Helm charts that still reference removed APIs.
+
+  - external_key: system_design.infrastructure_platform.hybrid_onprem_fleet
+    competency_key: kubernetes
+    topic: One platform across cloud and data centres
+    difficulty: hard
+    text: >-
+      Your company runs Kubernetes in two public clouds and in its own data centres, and wants one consistent
+      platform experience across all of them. Design the architecture and tell me what you would and wouldn't
+      try to make identical.
+    expected_concepts:
+      - common cluster API and baseline across providers
+      - provider-specific storage, load balancing and identity
+      - central fleet management and GitOps
+      - networking and connectivity between environments
+      - placement policy for workloads
+      - accepting differences where abstraction costs too much
+    rubric:
+      excellent: Standardises the developer-facing contract and fleet tooling while isolating provider-specific layers, plans connectivity and placement, and explains clearly where differences are accepted and why.
+      good: Proposes a common baseline and central management with some provider adapters.
+      weak: Tries to make every layer identical everywhere or ignores the differences entirely.
+    followups:
+      - How would you handle load balancers in the data centres?
+      - What would you tell a team who wants to use a cloud-only managed service?
+    common_errors:
+      - Building heavy abstractions over every provider feature instead of a thin common contract.
+
+  - external_key: system_design.infrastructure_platform.gpu_cluster_sharing
+    competency_key: kubernetes
+    topic: Sharing GPU capacity between teams
+    difficulty: hard
+    text: >-
+      Several teams compete for a limited pool of expensive GPUs across two regions, for both training jobs and
+      latency-sensitive inference. Design how the platform schedules and shares that capacity.
+    expected_concepts:
+      - separating training and inference pools or priorities
+      - gang scheduling for distributed training
+      - quotas with borrowing and preemption
+      - GPU partitioning or time slicing for small workloads
+      - checkpointing so preempted jobs can resume
+      - utilisation and queue metrics per team
+    rubric:
+      excellent: Protects inference capacity, schedules training with gang semantics and quota-based borrowing with preemption, uses partitioning for small workloads, requires checkpointing and measures utilisation per team.
+      good: Proposes quotas, priorities and separate handling for training and inference.
+      weak: Uses first-come scheduling with whole GPUs assigned permanently to teams.
+    followups:
+      - A training job grabs half its GPUs and waits for the rest — what goes wrong?
+      - How would you decide whether to buy more GPUs or improve utilisation?
+    common_errors:
+      - Ignoring partial allocation deadlocks for distributed training jobs.
+
+  - external_key: system_design.infrastructure_platform.large_cluster_vs_many
+    competency_key: kubernetes
+    topic: A few large clusters versus many small ones
+    difficulty: hard
+    text: >-
+      You're planning for fifty thousand pods. One camp wants a handful of very large clusters, the other wants
+      dozens of smaller ones. Design the topology you'd choose and walk me through the trade-offs that drove it.
+    expected_concepts:
+      - control plane and etcd scaling limits
+      - blast radius of a cluster-wide failure or bad change
+      - operational overhead and fleet tooling maturity
+      - bin-packing efficiency and capacity fragmentation
+      - tenancy and isolation requirements
+      - upgrade cadence per cluster
+    rubric:
+      excellent: Weighs control-plane limits, blast radius, operational overhead, packing efficiency and tenancy explicitly, chooses a topology tied to the organisation's tooling maturity, and explains what would change the decision.
+      good: Identifies blast radius versus overhead and makes a reasoned choice.
+      weak: Picks one option based on preference without discussing limits or failure impact.
+    followups:
+      - What would break first in one very large cluster?
+      - What fleet tooling must exist before many small clusters are manageable?
+    common_errors:
+      - Ignoring that a single cluster-wide add-on or API server problem affects every tenant at once.
+
+  - external_key: system_design.infrastructure_platform.fleet_management_plane
+    competency_key: system_design
+    topic: The management plane for a cluster fleet
+    difficulty: hard
+    text: >-
+      Design the management plane that your platform team uses to operate three hundred clusters across many
+      regions: inventory, configuration, access, and running operations against groups of clusters. How do you
+      keep it from becoming the thing that takes the whole fleet down?
+    expected_concepts:
+      - inventory with labels and cluster groups
+      - pull-based agents in each cluster
+      - clusters keep running if the management plane is down
+      - staged, rate-limited fleet-wide operations
+      - scoped credentials rather than admin to every cluster
+      - audit of every fleet-wide action
+    rubric:
+      excellent: Uses pull-based agents and label-driven grouping, ensures clusters run independently of the management plane, rate-limits and stages fleet operations, scopes credentials tightly and audits everything.
+      good: Describes central inventory and GitOps-style distribution with some staging.
+      weak: Proposes a central server holding admin credentials for every cluster and pushing changes everywhere at once.
+    followups:
+      - An engineer runs a fleet-wide command with a typo — what limits the damage?
+      - What happens to the clusters while the management plane is being upgraded?
+    common_errors:
+      - Centralising full admin credentials for every cluster in one place.

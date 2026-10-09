@@ -1,0 +1,635 @@
+# Kubernetes in depth (4/4): troubleshooting workloads, Helm, Kustomize, GitOps, extensions and multi-cluster.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [devops]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: technical.devops_kubernetes.image_pull_backoff
+    competency_key: kubernetes
+    topic: ImagePullBackOff
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A new deployment is stuck with its pods in ImagePullBackOff. Talk me through the likely causes and how
+      you'd confirm which one it is.
+    expected_concepts:
+      - read the pod events for the exact pull error
+      - wrong image name or tag that doesn't exist
+      - missing or wrong imagePullSecrets for a private registry
+      - node network or registry access and rate limits
+      - architecture mismatch such as an arm image on amd64 nodes
+    rubric:
+      excellent: Starts from the event message and maps each error text to a cause, covering naming, credentials, network, rate limiting and architecture.
+      good: Checks events and names wrong tag and missing credentials as causes.
+      weak: Restarts the pods hoping it resolves itself.
+    followups:
+      - How would you test whether the node itself can reach the registry?
+      - What would you do about public registry rate limits across the cluster?
+    common_errors:
+      - Not reading the event message, which usually names the cause directly.
+
+  - external_key: technical.devops_kubernetes.stuck_terminating
+    competency_key: kubernetes
+    topic: Pods or namespaces stuck terminating
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You deleted a namespace an hour ago and it's still showing as Terminating, along with a couple of pods
+      inside it. What would you look at, and what would you avoid doing?
+    expected_concepts:
+      - finalizers waiting on a controller that no longer runs
+      - namespace status conditions listing remaining resources
+      - unavailable aggregated APIs blocking namespace deletion
+      - pods on an unreachable node never confirming termination
+      - removing finalizers only after understanding what they protect
+    rubric:
+      excellent: Reads the namespace conditions to find what remains, explains finalizers and API discovery issues, and only removes finalizers once the external cleanup is handled.
+      good: Identifies finalizers as the usual cause.
+      weak: Immediately strips finalizers or force-deletes without understanding the side effects.
+    followups:
+      - What could be left behind if you remove a load balancer finalizer by force?
+      - Why would a broken metrics API block a namespace deletion?
+    common_errors:
+      - Force removing finalizers and leaking cloud resources.
+
+  - external_key: technical.devops_kubernetes.helm_fundamentals
+    competency_key: kubernetes
+    topic: What Helm gives you
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How have you used Helm, and how do you decide between writing your own chart and using a community
+      chart for something like a database or an ingress controller?
+    expected_concepts:
+      - charts, templates and values
+      - releases with revision history and rollback
+      - reviewing community chart defaults and maintenance
+      - pinning chart versions
+      - forking or wrapping as a subchart when customisation is heavy
+    rubric:
+      excellent: Explains how Helm packages and tracks releases, and gives a reasoned approach to community versus in-house charts covering trust, defaults, upgrades and pinning.
+      good: Describes charts and values and knows to pin versions.
+      weak: Uses Helm only as a copy-paste installer without understanding releases.
+    followups:
+      - How would you see what a chart will change before upgrading?
+      - What do you look for when reviewing a community chart?
+    common_errors:
+      - Installing community charts with defaults straight into production.
+
+  - external_key: technical.devops_kubernetes.kustomize_vs_helm
+    competency_key: kubernetes
+    topic: Kustomize versus Helm
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How would you explain the difference between Kustomize and Helm to a new teammate, and in what kind of
+      project would you choose one over the other?
+    expected_concepts:
+      - Kustomize patches plain YAML with bases and overlays
+      - Helm renders templates from values
+      - Helm handles packaging, versioning and distribution
+      - Kustomize keeps manifests readable without templating logic
+      - combining them, for example post-rendering Helm output
+    rubric:
+      excellent: Contrasts patching and templating clearly, ties each to real use cases such as internal apps versus distributed charts, and mentions combining them.
+      good: Explains overlays versus templates with one reason to pick each.
+      weak: Cannot describe how either tool works.
+    followups:
+      - How would you structure overlays for dev, staging and production?
+      - What makes heavily templated charts hard to maintain?
+    common_errors:
+      - Thinking Kustomize manages releases and rollbacks the way Helm does.
+
+  - external_key: technical.devops_kubernetes.debug_distroless
+    competency_key: kubernetes
+    topic: Debugging minimal containers
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You need to inspect a running pod that misbehaves, but its image is distroless, so there's no shell or
+      debugging tools inside. How would you investigate?
+    expected_concepts:
+      - ephemeral debug containers sharing the process namespace
+      - copying the pod with a debug image
+      - port-forward to hit the app directly
+      - node-level debugging when allowed
+      - logs, events and metrics first
+    rubric:
+      excellent: Uses ephemeral containers or a debug copy with the right namespaces shared, and combines that with logs, metrics and port-forward while respecting access controls.
+      good: Knows about kubectl debug or ephemeral containers.
+      weak: Rebuilds the image with a shell and redeploys to production.
+    followups:
+      - How would you see the target container's filesystem from the debug container?
+      - Who should be allowed to run debug containers in production?
+    common_errors:
+      - Adding debugging tools to the production image permanently.
+
+  - external_key: technical.devops_kubernetes.init_and_sidecar_containers
+    competency_key: kubernetes
+    topic: Init containers and sidecars
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Give me examples of when you've used init containers and sidecar containers, and explain how their
+      lifecycles differ from the main container.
+    expected_concepts:
+      - init containers run to completion in order before app containers
+      - typical init uses such as migrations, waiting for dependencies or fetching config
+      - sidecars run alongside, for example proxies or log shippers
+      - native sidecar support with restartPolicy Always on init containers
+      - shutdown ordering and resource accounting
+    rubric:
+      excellent: Gives concrete examples of both, explains ordering and lifecycle including native sidecars, and notes pitfalls such as jobs that never finish because of a sidecar.
+      good: Correctly describes both with an example each.
+      weak: Mixes the two up or has no practical example.
+    followups:
+      - Why could a Job never complete when it has a sidecar?
+      - Would you run database migrations in an init container? Why or why not?
+    common_errors:
+      - Running schema migrations in every replica's init container at once.
+
+  - external_key: technical.devops_kubernetes.rollout_stuck
+    competency_key: kubernetes
+    topic: Rollout that never completes
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Your pipeline is waiting on a rollout status check that never finishes. Some new pods are running, some
+      old ones remain. How would you work out what's holding it up and what to do next?
+    expected_concepts:
+      - new pods failing readiness so the rollout can't progress
+      - progress deadline and the ProgressDeadlineExceeded condition
+      - not enough capacity for surge pods
+      - inspect the new ReplicaSet and its pod events
+      - rollback with rollout undo if the release is bad
+    rubric:
+      excellent: Inspects the new ReplicaSet and pods, explains readiness and capacity blockers and the progress deadline, and decides between fixing forward and rolling back.
+      good: Finds the failing new pods and knows how to roll back.
+      weak: Deletes the old pods to force it through.
+    followups:
+      - How should a pipeline treat a rollout that exceeds its deadline?
+      - What would make the old pods stay even after the new ones are ready?
+    common_errors:
+      - Assuming Kubernetes will roll back automatically when the deadline passes.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: technical.devops_kubernetes.gitops_model
+    competency_key: ci_cd
+    topic: GitOps with Argo CD or Flux
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How does a GitOps tool such as Argo CD or Flux deploy to a cluster, and what changes for your team
+      compared with a CI pipeline that runs kubectl apply?
+    expected_concepts:
+      - pull-based reconciliation from Git as the source of truth
+      - drift detection and self-healing
+      - CI no longer needs cluster credentials
+      - promotion through commits and pull requests
+      - handling image tag updates and sync ordering
+    rubric:
+      excellent: Explains the reconciliation model and its security and audit benefits, and addresses practical concerns such as promotion, image updates, sync waves and emergency changes.
+      good: Describes pull-based sync and drift detection.
+      weak: Thinks GitOps just means keeping YAML in a repository.
+    followups:
+      - How do you handle an urgent hotfix someone applied by hand?
+      - How would you order a database migration before an app deploy?
+    common_errors:
+      - Leaving self-heal off and letting manual drift accumulate.
+
+  - external_key: technical.devops_kubernetes.helm_release_stuck
+    competency_key: kubernetes
+    topic: Helm release stuck after a failed upgrade
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A Helm upgrade timed out halfway, and now every new upgrade fails saying another operation is in
+      progress. How would you recover, and how would you make upgrades fail more cleanly?
+    expected_concepts:
+      - release stuck in a pending-upgrade state recorded in release secrets
+      - helm history and rollback to the last deployed revision
+      - checking which resources were actually changed
+      - atomic and wait flags, sensible timeouts
+      - avoiding hooks that hang
+    rubric:
+      excellent: Diagnoses the pending state from history, recovers with rollback or careful state repair, verifies live resources, and changes how upgrades run to fail atomically.
+      good: Uses helm history and rollback to recover.
+      weak: Uninstalls the release in production to start over.
+    followups:
+      - What could a hanging pre-upgrade hook do here?
+      - When would you avoid editing release secrets by hand?
+    common_errors:
+      - Uninstalling and reinstalling, which can delete persistent data or load balancers.
+
+  - external_key: technical.devops_kubernetes.chart_design_many_services
+    competency_key: kubernetes
+    topic: Helm charts for many services
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your organisation has sixty microservices, each with its own copied Helm chart that has drifted. How
+      would you restructure the charts so they stay consistent but still allow differences?
+    expected_concepts:
+      - a shared library or common chart with versioning
+      - per-service values only for real differences
+      - values schema validation
+      - chart testing and rendered diffs in CI
+      - gradual migration and release cadence for the shared chart
+    rubric:
+      excellent: Proposes a versioned shared chart with schema validation and CI tests, keeps escape hatches for special cases, and plans a gradual migration.
+      good: Suggests a common chart with per-service values.
+      weak: Proposes one giant chart for everything or keeps copying.
+    followups:
+      - How would you roll out a breaking change to the shared chart?
+      - Where do you draw the line on adding options to the shared chart?
+    common_errors:
+      - Turning the shared chart into an unreadable mass of conditionals.
+
+  - external_key: technical.devops_kubernetes.one_slow_replica
+    competency_key: kubernetes
+    topic: One replica slower than the rest
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Out of ten identical replicas, one is consistently twice as slow as the others. How would you figure
+      out whether it's the pod, the node or something else?
+    expected_concepts:
+      - compare per-pod metrics and identify its node
+      - node-level contention such as CPU steal, disk or noisy neighbours
+      - zone placement and network path to dependencies
+      - application state such as cache or connection pools
+      - cordoning or rescheduling to test the hypothesis
+    rubric:
+      excellent: Systematically compares pod, node and zone dimensions with data, tests hypotheses by moving the pod, and follows through to a lasting fix.
+      good: Checks the node the pod runs on and compares metrics with healthy replicas.
+      weak: Deletes the pod and moves on without learning anything.
+    followups:
+      - The pod is fast after moving to a new node. What do you do about the old node?
+      - How would you detect this automatically in future?
+    common_errors:
+      - Looking only at service-wide averages that hide a single bad replica.
+
+  - external_key: technical.devops_kubernetes.cluster_monitoring
+    competency_key: observability
+    topic: Monitoring cluster health
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      If you were setting up monitoring for a production Kubernetes cluster from scratch, which signals would
+      you collect and which conditions would actually page someone?
+    expected_concepts:
+      - node metrics and kube-state-metrics for object state
+      - control plane metrics such as API server latency and etcd health
+      - workload signals such as restarts, pending pods and failed rollouts
+      - capacity signals such as allocatable versus requested
+      - paging on user impact while routing the rest to tickets
+    rubric:
+      excellent: Covers node, control plane, workload and capacity signals with named sources, and separates paging alerts on symptoms from lower-urgency notifications.
+      good: Names the main metric sources and a few useful alerts.
+      weak: Pages on every pod restart or only watches node CPU.
+    followups:
+      - How would you monitor the monitoring stack itself?
+      - What would make you alert on pod restarts at all?
+    common_errors:
+      - Alerting on raw resource usage instead of impact or saturation trends.
+
+  - external_key: technical.devops_kubernetes.missing_logs
+    competency_key: observability
+    topic: Logs missing from central logging
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      During an incident review you notice that logs from some pods are missing in your central logging
+      system, especially from busy services and short-lived jobs. How would you track down where they were
+      lost?
+    expected_concepts:
+      - node log agent running as a DaemonSet and its health on every node
+      - log rotation outpacing the agent on busy pods
+      - short-lived pods removed before logs are shipped
+      - agent buffering, back-pressure and dropped records metrics
+      - backend ingestion limits or parsing failures
+    rubric:
+      excellent: Follows the pipeline from container output to node files to agent to backend, checking each stage's metrics, and fixes the specific bottleneck with rotation, buffering or capacity changes.
+      good: Checks the logging agent and suspects rotation or buffering.
+      weak: Blames the application without looking at the pipeline.
+    followups:
+      - How would you verify end-to-end that every node is shipping logs?
+      - What would you change for jobs that live only a few seconds?
+    common_errors:
+      - Not monitoring the agent's own dropped-record counters.
+
+  - external_key: technical.devops_kubernetes.gitops_secrets
+    competency_key: ci_cd
+    topic: Secrets in a GitOps workflow
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      If everything the cluster runs comes from Git, how do you handle secrets? Compare the approaches you've
+      used or considered.
+    expected_concepts:
+      - encrypted secrets in Git with Sealed Secrets or SOPS
+      - External Secrets Operator referencing a cloud secret manager
+      - key management and rotation for each approach
+      - access control on who can decrypt
+      - avoiding plaintext in rendered manifests and CI logs
+    rubric:
+      excellent: Compares encrypted-in-Git and reference-based approaches on rotation, access, auditing and disaster recovery, and picks one with clear reasoning.
+      good: Names a valid tool and explains how it keeps plaintext out of Git.
+      weak: Commits base64 Secrets to the repository.
+    followups:
+      - What happens if the Sealed Secrets controller key is lost?
+      - How would you rotate a database password end to end?
+    common_errors:
+      - Forgetting to back up the decryption key needed to rebuild a cluster.
+
+  - external_key: technical.devops_kubernetes.sidecar_startup_order
+    competency_key: kubernetes
+    topic: App starts before its proxy sidecar
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      After adding a mesh proxy sidecar, a service fails its first database connections at startup and
+      sometimes drops requests on shutdown. What's happening, and how would you fix it?
+    expected_concepts:
+      - containers in a pod start concurrently by default
+      - the app tries to connect before the proxy is ready
+      - native sidecars or hold-application-until-proxy-starts options
+      - shutdown ordering and preStop hooks
+      - retries in the application for robustness
+    rubric:
+      excellent: Explains startup and shutdown ordering problems, applies native sidecars or mesh options, handles termination order, and still keeps application retries.
+      good: Recognises the startup race and suggests a fix for it.
+      weak: Adds a fixed sleep to the app and calls it done.
+    followups:
+      - How does the proxy behave when the pod receives a termination signal?
+      - Why are application-level retries still worth having?
+    common_errors:
+      - Assuming containers in a pod start in the order they are listed.
+
+  - external_key: technical.devops_kubernetes.progressive_delivery
+    competency_key: kubernetes
+    topic: Automated canaries on Kubernetes
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you implement automated canary releases on Kubernetes, where a bad version is rolled back
+      without anyone watching dashboards?
+    expected_concepts:
+      - Argo Rollouts or Flagger managing traffic steps
+      - traffic splitting through ingress, Gateway API or mesh weights
+      - analysis against error rate and latency metrics
+      - automatic abort and rollback thresholds
+      - handling low traffic and database compatibility
+    rubric:
+      excellent: Describes the controller, traffic shifting mechanism and metric analysis, chooses meaningful thresholds, and calls out limits such as low traffic and schema changes.
+      good: Names a tool and explains metric-based promotion.
+      weak: Equates a canary with scaling up a second deployment manually.
+    followups:
+      - How would you canary a service that only gets a few requests a minute?
+      - Why is replica count a poor way to control canary traffic?
+    common_errors:
+      - Using metrics that don't separate canary traffic from the stable version.
+
+  - external_key: technical.devops_kubernetes.one_vs_many_clusters
+    competency_key: kubernetes
+    topic: One large cluster versus many
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your company is debating one large shared cluster against many smaller clusters per team or
+      environment. How would you frame that decision?
+    expected_concepts:
+      - blast radius and failure isolation
+      - security and compliance boundaries
+      - operational overhead of managing many clusters
+      - resource efficiency and bin packing
+      - upgrade coordination and scaling limits
+    rubric:
+      excellent: Weighs isolation, compliance, efficiency and operational cost explicitly, and lands on a reasoned structure such as per-environment clusters with shared tooling.
+      good: Lists trade-offs on both sides.
+      weak: Picks one option dogmatically.
+    followups:
+      - What tooling becomes necessary once you have twenty clusters?
+      - When would a single tenant need its own cluster?
+    common_errors:
+      - Ignoring the per-cluster cost of add-ons, monitoring and upgrades.
+
+  - external_key: technical.devops_kubernetes.prod_only_bug_drift
+    competency_key: kubernetes
+    topic: Bug only in the production cluster
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A release works perfectly in staging but fails in production, and both clusters are supposed to be
+      identical. How would you find the difference?
+    expected_concepts:
+      - diff rendered manifests and live objects between clusters
+      - cluster version, add-ons and admission policy differences
+      - config, secrets and external dependencies
+      - node types, scale and traffic patterns
+      - closing the gap through GitOps and drift detection
+    rubric:
+      excellent: Compares systematically at manifest, cluster, configuration and environment levels with tooling, finds the cause, and reduces future drift.
+      good: Diffs manifests and config between the environments.
+      weak: Re-deploys repeatedly hoping it works.
+    followups:
+      - Which differences between staging and production are unavoidable?
+      - How would you detect drift continuously?
+    common_errors:
+      - Comparing the Git source but not the live objects.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: technical.devops_kubernetes.multi_cluster_failover
+    competency_key: kubernetes
+    topic: Cross-cluster traffic and failover
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      You run the same service in two clusters in different regions. How would you route users between
+      them and fail over when one cluster is unhealthy?
+    expected_concepts:
+      - global load balancing or DNS-based routing with health checks
+      - active-active versus active-passive
+      - state and data replication across regions
+      - cross-cluster service discovery or multi-cluster services
+      - regularly tested failover and capacity headroom
+    rubric:
+      excellent: Designs routing, health detection and capacity for failover, treats data as the hard part, and insists on rehearsing failover regularly.
+      good: Proposes global load balancing with health checks and mentions data replication.
+      weak: Assumes deploying to two clusters is enough for failover.
+    followups:
+      - What should decide that a cluster is unhealthy enough to drain?
+      - How do you avoid both regions overloading after a failover?
+    common_errors:
+      - Not having the surviving cluster sized to take the full load.
+
+  - external_key: technical.devops_kubernetes.fleet_gitops
+    competency_key: ci_cd
+    topic: GitOps across many clusters
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How would you structure GitOps for fifty clusters across several environments, so that you can promote
+      changes safely and a bad commit can't break everything at once?
+    expected_concepts:
+      - repository layout separating base, environment and cluster overlays
+      - generating applications per cluster, for example ApplicationSets
+      - progressive promotion through waves of clusters
+      - pinned versions and automated checks between waves
+      - limiting blast radius of shared components
+    rubric:
+      excellent: Proposes a clear repository and generation structure, staged promotion with gates, and specific controls that stop a single change from hitting every cluster.
+      good: Uses overlays per environment and promotes from lower to higher environments.
+      weak: Points every cluster at the same branch and path.
+    followups:
+      - How would you roll out an urgent security fix quickly but safely?
+      - How do you see what version each cluster is running?
+    common_errors:
+      - Sharing a single mutable branch for every cluster.
+
+  - external_key: technical.devops_kubernetes.webhook_outage
+    competency_key: kubernetes
+    topic: Admission webhook takes down the cluster
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Suddenly nothing in the cluster can create pods, not even replacement pods for crashed services, and
+      the API server logs show calls to a validating webhook timing out. How would you get out of this and
+      prevent it next time?
+    expected_concepts:
+      - webhook with failurePolicy Fail and no healthy backend
+      - temporarily removing or editing the webhook configuration
+      - webhook pods that themselves cannot be scheduled
+      - namespace selectors excluding system namespaces
+      - high availability, timeouts and monitoring for webhooks
+    rubric:
+      excellent: Identifies the webhook as the choke point, restores the cluster safely, explains the chicken-and-egg scheduling issue, and hardens failure policy, scope and availability.
+      good: Removes or relaxes the webhook to recover and suggests making it highly available.
+      weak: Restarts the API server or nodes without finding the webhook.
+    followups:
+      - When is failing closed the right choice for a webhook?
+      - How would you test the impact of a webhook outage safely?
+    common_errors:
+      - Letting the webhook intercept its own namespace and kube-system.
+
+  - external_key: technical.devops_kubernetes.operator_reconcile_storm
+    competency_key: kubernetes
+    topic: Controller overloading the API server
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      After installing a new operator, the API server's request rate tripled and other controllers started
+      lagging. How would you confirm the operator is responsible, and what would you do about it?
+    expected_concepts:
+      - API server metrics broken down by user agent or service account
+      - audit logs showing request patterns
+      - hot reconcile loops caused by status updates triggering themselves
+      - informer caches versus direct list calls
+      - API priority and fairness, rate limits, or scaling the operator down
+    rubric:
+      excellent: Attributes the load with metrics and audit data, explains the likely reconcile loop or list pattern, contains it with priority and fairness or scaling, and gets a proper fix from the operator.
+      good: Identifies the operator from metrics and limits its impact.
+      weak: Scales up the control plane without finding the source.
+    followups:
+      - How would you protect critical controllers from another misbehaving operator?
+      - What would you check before installing an operator next time?
+    common_errors:
+      - Not knowing that API priority and fairness can isolate noisy clients.
+
+  - external_key: technical.devops_kubernetes.cluster_migration
+    competency_key: kubernetes
+    topic: Migrating workloads to a new cluster
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You need to move around eighty services from an old self-managed cluster to a new managed one, without
+      a big-bang cutover or customer-visible downtime. How would you plan it?
+    expected_concepts:
+      - inventory and dependency mapping between services
+      - deploy to both clusters from the same source of truth
+      - gradual traffic shifting with weighted routing
+      - handling stateful workloads and data migration separately
+      - rollback path and decommissioning criteria
+    rubric:
+      excellent: Plans in waves based on dependencies, runs both clusters in parallel with weighted traffic, treats stateful data as its own workstream, and defines rollback and exit criteria.
+      good: Migrates service by service with traffic shifting.
+      weak: Proposes a weekend cutover of everything at once.
+    followups:
+      - How do services in the new cluster reach services still in the old one?
+      - Which services would you move first, and why?
+    common_errors:
+      - Overlooking hard-coded endpoints and firewall rules tied to the old cluster.
+
+  - external_key: technical.devops_kubernetes.developer_platform
+    competency_key: kubernetes
+    topic: Kubernetes abstractions for application teams
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Many application developers find Kubernetes overwhelming. How would you design a platform that gives
+      them a simple way to ship services while still keeping reliability and security standards?
+    expected_concepts:
+      - golden path templates or a higher-level service definition
+      - defaults for probes, resources, security context and policies
+      - self-service through a portal, CLI or Git
+      - escape hatches for advanced teams
+      - measuring adoption and developer feedback
+    rubric:
+      excellent: Designs an opinionated paved road with secure defaults and self-service, keeps escape hatches, and treats the platform as a product with feedback and adoption measures.
+      good: Proposes templates or a shared chart with good defaults.
+      weak: Expects every developer to learn raw Kubernetes manifests.
+    followups:
+      - How do you stop the abstraction from becoming a bottleneck for new features?
+      - What would you measure to know the platform is working?
+    common_errors:
+      - Hiding so much that teams cannot debug their own workloads.
+
+  - external_key: technical.devops_kubernetes.crd_versioning
+    competency_key: kubernetes
+    topic: Evolving custom resource definitions
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your team maintains an operator with its own custom resources, and you need to make a breaking change
+      to the schema. How would you evolve the CRD without breaking existing objects or users?
+    expected_concepts:
+      - multiple served versions with one storage version
+      - conversion webhook between versions
+      - migrating stored objects to the new storage version
+      - deprecation period before removing the old version
+      - CRD upgrades not handled by Helm upgrades by default
+    rubric:
+      excellent: Explains served and storage versions, conversion, storage migration and a deprecation timeline, and the operational care needed to ship CRD changes.
+      good: Knows to add a new version alongside the old and convert between them.
+      weak: Edits the existing schema in place.
+    followups:
+      - What happens if the conversion webhook is down?
+      - How would you know when it's safe to stop serving the old version?
+    common_errors:
+      - Removing the old version while objects are still stored in it.

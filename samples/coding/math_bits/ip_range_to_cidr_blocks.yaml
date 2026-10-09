@@ -1,0 +1,152 @@
+version: 1
+slug: ip_range_to_cidr_blocks
+title: IP Range to CIDR Blocks
+difficulty: hard
+competency_keys: [algorithms, problem_solving]
+role_tags: [network, security, cloud, devops]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## IP Range to CIDR Blocks
+
+  A partner sends you the IPv4 addresses their egress gateways use as an inclusive range such as
+  `10.0.0.5 - 10.0.0.20`. Your cloud firewall's allow-list, however, accepts **only CIDR blocks**.
+  Write the converter that turns the range into firewall rules.
+
+  A CIDR block `a.b.c.d/p` covers the `2^(32 - p)` consecutive addresses that share their first `p`
+  bits with `a.b.c.d`; the block's first address must have its last `32 - p` bits equal to zero (for
+  example `10.0.0.8/29` covers `10.0.0.8` to `10.0.0.15`, while `10.0.0.6/29` is not a valid block).
+
+  Given `first_ip` and `last_ip` as dotted quads with `first_ip <= last_ip`, return the **smallest
+  possible number** of CIDR blocks whose union is **exactly** the addresses from `first_ip` to
+  `last_ip` inclusive: nothing outside the range may be allowed. Return the blocks as strings
+  `"a.b.c.d/p"`, where `a.b.c.d` is the block's first address written without leading zeros, sorted
+  by ascending first address. The minimum set of blocks is unique, so the expected output is unique.
+
+  ### Example 1
+  ```
+  Input:  first_ip = "10.0.0.5", last_ip = "10.0.0.20"
+  Output: ["10.0.0.5/32", "10.0.0.6/31", "10.0.0.8/29", "10.0.0.16/30", "10.0.0.20/32"]
+  ```
+
+  ### Example 2
+  ```
+  Input:  first_ip = "192.168.1.0", last_ip = "192.168.1.255"
+  Output: ["192.168.1.0/24"]
+  ```
+
+  ### Example 3
+  ```
+  Input:  first_ip = "172.16.0.255", last_ip = "172.16.1.0"
+  Output: ["172.16.0.255/32", "172.16.1.0/32"]
+  Explanation: the two addresses are adjacent but no aligned block of size 2 contains both.
+  ```
+
+  ### Constraints
+  - `first_ip` and `last_ip` are valid IPv4 addresses: four decimal octets `0..255` separated by
+    dots, without leading zeros.
+  - `first_ip <= last_ip` when compared as 32-bit unsigned numbers.
+  - The range may be a single address or the whole address space `0.0.0.0` to `255.255.255.255`.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: range_to_cidrs
+  params:
+    - {name: first_ip, type: string}
+    - {name: last_ip, type: string}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def range_to_cidrs(first_ip: str, last_ip: str) -> list[str]:
+        def to_int(ip: str) -> int:
+            value = 0
+            for part in ip.split("."):
+                value = value * 256 + int(part)
+            return value
+
+        def to_ip(value: int) -> str:
+            return ".".join(str((value >> shift) & 255) for shift in (24, 16, 8, 0))
+
+        start = to_int(first_ip)
+        end = to_int(last_ip)
+        blocks: list[str] = []
+        while start <= end:
+            remaining = end - start + 1
+            # Largest power of two that keeps the block aligned at start and inside the range.
+            size = 1
+            while start % (size * 2) == 0 and size * 2 <= remaining:
+                size *= 2
+            prefix = 32 - (size.bit_length() - 1)
+            blocks.append(f"{to_ip(start)}/{prefix}")
+            start += size
+        return blocks
+  javascript: |
+    function rangeToCidrs(firstIp, lastIp) {
+      // Plain Number arithmetic: JavaScript bitwise operators are signed 32-bit and break above 2^31.
+      const toInt = (ip) => ip.split(".").reduce((acc, part) => acc * 256 + Number(part), 0);
+      const toIp = (value) => {
+        const octets = [];
+        for (let i = 0; i < 4; i++) {
+          octets.unshift(value % 256);
+          value = Math.floor(value / 256);
+        }
+        return octets.join(".");
+      };
+
+      let start = toInt(firstIp);
+      const end = toInt(lastIp);
+      const blocks = [];
+      while (start <= end) {
+        const remaining = end - start + 1;
+        let size = 1;
+        let hostBits = 0;
+        while (start % (size * 2) === 0 && size * 2 <= remaining) {
+          size *= 2;
+          hostBits++;
+        }
+        blocks.push(`${toIp(start)}/${32 - hostBits}`);
+        start += size;
+      }
+      return blocks;
+    }
+tests:
+  - {id: t1, args: ["10.0.0.5", "10.0.0.20"], expected: ["10.0.0.5/32", "10.0.0.6/31", "10.0.0.8/29", "10.0.0.16/30", "10.0.0.20/32"], description: Example 1}
+  - {id: t2, args: ["192.168.1.0", "192.168.1.255"], expected: ["192.168.1.0/24"], description: "Example 2 - range is exactly one aligned block"}
+  - {id: t3, args: ["172.16.0.255", "172.16.1.0"], expected: ["172.16.0.255/32", "172.16.1.0/32"], description: "Example 3 - adjacent addresses across an octet boundary cannot merge"}
+  - {id: t4, hidden: true, args: ["203.0.113.7", "203.0.113.7"], expected: ["203.0.113.7/32"], description: "Single address gives one /32"}
+  - {id: t5, hidden: true, args: ["0.0.0.0", "255.255.255.255"], expected: ["0.0.0.0/0"], description: "Whole address space - needs a /0 and a size of 2^32 without 32-bit overflow"}
+  - {id: t6, hidden: true, args: ["255.255.255.255", "255.255.255.255"], expected: ["255.255.255.255/32"], description: "Highest address - breaks signed 32-bit arithmetic and an end + 1 that wraps"}
+  - {id: t7, hidden: true, args: ["0.0.0.0", "0.0.0.0"], expected: ["0.0.0.0/32"], description: "Address zero - lowest set bit of 0 must be capped by the remaining size"}
+  - {id: t8, hidden: true, args: ["0.0.0.1", "255.255.255.254"], expected: ["0.0.0.1/32", "0.0.0.2/31", "0.0.0.4/30", "0.0.0.8/29", "0.0.0.16/28", "0.0.0.32/27", "0.0.0.64/26", "0.0.0.128/25", "0.0.1.0/24", "0.0.2.0/23", "0.0.4.0/22", "0.0.8.0/21", "0.0.16.0/20", "0.0.32.0/19", "0.0.64.0/18", "0.0.128.0/17", "0.1.0.0/16", "0.2.0.0/15", "0.4.0.0/14", "0.8.0.0/13", "0.16.0.0/12", "0.32.0.0/11", "0.64.0.0/10", "0.128.0.0/9", "1.0.0.0/8", "2.0.0.0/7", "4.0.0.0/6", "8.0.0.0/5", "16.0.0.0/4", "32.0.0.0/3", "64.0.0.0/2", "128.0.0.0/2", "192.0.0.0/3", "224.0.0.0/4", "240.0.0.0/5", "248.0.0.0/6", "252.0.0.0/7", "254.0.0.0/8", "255.0.0.0/9", "255.128.0.0/10", "255.192.0.0/11", "255.224.0.0/12", "255.240.0.0/13", "255.248.0.0/14", "255.252.0.0/15", "255.254.0.0/16", "255.255.0.0/17", "255.255.128.0/18", "255.255.192.0/19", "255.255.224.0/20", "255.255.240.0/21", "255.255.248.0/22", "255.255.252.0/23", "255.255.254.0/24", "255.255.255.0/25", "255.255.255.128/26", "255.255.255.192/27", "255.255.255.224/28", "255.255.255.240/29", "255.255.255.248/30", "255.255.255.252/31", "255.255.255.254/32"], description: "Worst case - 62 blocks growing then shrinking across the whole space"}
+  - {id: t9, hidden: true, args: ["10.1.255.250", "10.2.0.3"], expected: ["10.1.255.250/31", "10.1.255.252/30", "10.2.0.0/30"], description: "Range crossing a third-octet carry"}
+  - {id: t10, hidden: true, args: ["100.64.0.0", "100.127.255.255"], expected: ["100.64.0.0/10"], description: "Large aligned block spanning several octets"}
+  - {id: t11, hidden: true, args: ["198.51.100.17", "198.51.103.200"], expected: ["198.51.100.17/32", "198.51.100.18/31", "198.51.100.20/30", "198.51.100.24/29", "198.51.100.32/27", "198.51.100.64/26", "198.51.100.128/25", "198.51.101.0/24", "198.51.102.0/24", "198.51.103.0/25", "198.51.103.128/26", "198.51.103.192/29", "198.51.103.200/32"], description: "Mixed range where alignment grows then the remaining size limits the block"}
+expected_concepts:
+  - converting dotted quads to a 32-bit unsigned integer and back
+  - CIDR alignment via the lowest set bit of the start address
+  - greedy choice of the largest aligned block that fits the remaining size
+  - avoiding signed 32-bit overflow at 255.255.255.255 and for a /0 block
+optimal_complexity: {time: O(32) blocks of O(32) work each, space: O(1) beyond the output}
+rubric:
+  excellent: Converts addresses to unsigned integers, explains that a block at start is limited both by the alignment of start (its lowest set bit) and by the remaining count, applies that greedy choice until the range is covered, argues why it is minimal, and handles 0.0.0.0, 255.255.255.255 and the /0 case without overflow.
+  good: Correct greedy conversion with a small bug at an extreme (for example overflow at the top address or address 0) found and fixed during testing.
+  weak: Emits one /32 per address, picks blocks that spill outside the range, ignores alignment, or produces unsorted or malformed output.
+  criteria:
+    correctness: All tests pass, including the whole space, single addresses and the 62-block worst case.
+    efficiency: At most about 62 blocks, each found in constant or O(32) time; never iterates over individual addresses.
+    code_quality: Separate helpers for parsing and formatting addresses; the block-size rule is one clear loop or bit expression.
+    edge_cases: Address 0 (no lowest set bit), 255.255.255.255, ranges crossing octet boundaries and the full /0 range.
+    communication: Explains why both the alignment and the remaining size bound each block, and why the greedy choice is optimal.
+hints:
+  - Treat every address as a 32-bit number. Which sizes of block can legally start at a given address, and what decides whether a block stays inside the range?
+  - A block that starts at address x can have size 2^k only if x is a multiple of 2^k, which is governed by the lowest set bit of x; it also must not be larger than the number of addresses still left to cover.
+  - Repeat from the current start - pick the largest power of two that divides start (any size works for start 0) and does not exceed end - start + 1, emit start with prefix 32 minus log2(size), then advance start by size. Use 64-bit or unbounded arithmetic so 255.255.255.255 and a size of 2^32 do not overflow.
+followups:
+  - How would you merge an arbitrary list of overlapping CIDR blocks into the minimum equivalent list?
+  - How would you extend the converter to IPv6 ranges?
+  - Given an allow-list of blocks, how would you test quickly whether an address is permitted?
+  - How would you compute the blocks for a range minus a few excluded addresses?
+common_errors:
+  - Using signed 32-bit integers or bitwise operators that treat addresses above 127.255.255.255 as negative.
+  - Taking only the lowest set bit of the start and overshooting the end of the range.
+  - Looping forever or crashing at start 0, whose lowest set bit is undefined.
+  - Computing end + 1 in 32-bit arithmetic, which wraps to 0 at 255.255.255.255.

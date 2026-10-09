@@ -1,0 +1,134 @@
+"""Scoring and report jobs.
+
+``scoring.finalize`` {session_id}
+    Final score recompute (``scores.is_final``, final timeline snapshots).
+``report.generate`` {session_id, reason?, requested_by?}
+    Candidate + recruiter reports (new version every run), HTML artifacts,
+    automatic candidate release in ``immediate`` mode, ``report.ready`` on
+    the session bus.
+
+Both wait for the session's in-flight ``answer.evaluate`` /
+``coding.evaluate`` jobs: while any is unfinished they re-enqueue
+themselves with a short delay (bounded), so the last answers of an
+interview are part of the final scores. Both are idempotent.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from app.core.logging import get_logger
+from app.core.queue import JobContext, PermanentJobError, enqueue, job_handler, publish_session_event
+from app.db.models import InterviewSession
+from app.db.session import session_scope
+from app.domain.enums import SessionStatus
+from app.services.reports.service import generate_reports
+from app.services.scoring.persistence import pending_evaluation_jobs, recompute_session_scores
+
+log = get_logger(__name__)
+
+MAX_DEFERRALS = 12
+DEFER_SECONDS = 10.0
+REPORTABLE = frozenset(
+    {
+        SessionStatus.COMPLETING.value,
+        SessionStatus.COMPLETED.value,
+        SessionStatus.ABORTED.value,
+        SessionStatus.FAILED.value,
+    }
+)
+
+
+def _session_id(payload: dict[str, Any]) -> uuid.UUID:
+    try:
+        return uuid.UUID(str(payload["session_id"]))
+    except (KeyError, ValueError, TypeError) as exc:
+        raise PermanentJobError("payload needs a valid session_id") from exc
+
+
+async def _maybe_defer(job_type: str, sid: uuid.UUID, payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Re-enqueue when evaluations of the session are still running."""
+    deferrals = int(payload.get("deferrals", 0) or 0)
+    async with session_scope() as db:
+        session = await db.get(InterviewSession, sid)
+        if session is None:
+            raise PermanentJobError(f"session {sid} not found")
+        status = session.status
+        pending = await pending_evaluation_jobs(db, sid)
+    if job_type == "report.generate" and status not in REPORTABLE:
+        raise PermanentJobError(f"session {sid} is {status}; reports are generated once it has ended")
+    if pending and deferrals < MAX_DEFERRALS:
+        next_payload = {**payload, "deferrals": deferrals + 1}
+        await enqueue(
+            job_type,
+            next_payload,
+            dedupe_key=f"{job_type}:{sid}:defer:{deferrals + 1}",
+            delay_seconds=DEFER_SECONDS,
+        )
+        log.info(
+            "reports.deferred",
+            job_type=job_type,
+            session_id=str(sid),
+            pending=pending,
+            deferrals=deferrals + 1,
+        )
+        return {"deferred": True, "pending_evaluations": pending, "deferrals": deferrals + 1}
+    if pending:
+        log.warning(
+            "reports.pending_evaluations_ignored", job_type=job_type, session_id=str(sid), pending=pending
+        )
+    return None
+
+
+@job_handler("scoring.finalize", concurrency=2, timeout_seconds=120)
+async def finalize_scores(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
+    sid = _session_id(payload)
+    # Open interview links: unlock the next round / route to review as soon as
+    # the session has closed (does not wait for scores or reports).
+    try:
+        await enqueue(
+            "open_link.round_finished",
+            {"session_id": str(sid)},
+            dedupe_key=f"open_link.round_finished:{sid}",
+        )
+    except Exception as exc:  # noqa: BLE001 - never fails scoring
+        log.warning("reports.open_link_enqueue_failed", session_id=str(sid), error=type(exc).__name__)
+    deferred = await _maybe_defer("scoring.finalize", sid, payload)
+    if deferred is not None:
+        return deferred
+    async with session_scope() as db:
+        result = await recompute_session_scores(db, sid, final=True, trigger="final")
+    summary = {
+        "session_id": str(sid),
+        "overall_score": result.rubric.overall_score,
+        "overall_confidence": result.rubric.overall_confidence,
+        "recommendation": result.recommendation.recommendation.value,
+        "competencies": len(result.competencies),
+    }
+    await publish_session_event(sid, {"type": "scores.finalized", **summary})
+    return summary
+
+
+@job_handler("report.generate", concurrency=2, timeout_seconds=600)
+async def generate_report(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
+    sid = _session_id(payload)
+    deferred = await _maybe_defer("report.generate", sid, payload)
+    if deferred is not None:
+        return deferred
+    result = await generate_reports(
+        sid,
+        reason=str(payload.get("reason") or "session_completed")[:64],
+        job_id=ctx.job_id,
+        requested_by=payload.get("requested_by"),
+        # Model outages retry the job; the last attempt falls back to a
+        # deterministic narrative so a report is always produced.
+        allow_fallback=ctx.is_last_attempt,
+    )
+    # Reports are done: the session moves from COMPLETING to COMPLETED (and its
+    # interview invitation is marked completed by the session service).
+    from app.services.interview.sessions import mark_session_completed
+
+    async with session_scope() as db:
+        await mark_session_completed(db, sid)
+    return result.as_dict()

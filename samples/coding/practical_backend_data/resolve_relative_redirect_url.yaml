@@ -1,0 +1,298 @@
+version: 1
+slug: resolve_relative_redirect_url
+title: "Resolve a Redirect Location Against a Base URL"
+difficulty: hard
+competency_keys: [problem_solving, code_quality, debugging]
+role_tags: [backend, fullstack, security, qa]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Resolve a Redirect Location Against a Base URL
+
+  Your link-checking crawler follows HTTP redirects. Servers often answer with a **relative** `Location`
+  header such as `../login` or `?page=3`, which must be resolved against the URL that was requested (the
+  **base**). A previous implementation glued strings together and produced URLs like
+  `/catalog/items/../login`, so the crawler fetched the same page under many names. Implement the standard
+  resolution algorithm of RFC 3986 (section 5.2) yourself, **without** any URL library and **without**
+  normalising case or percent-encoding.
+
+  ### Splitting a URL into components
+
+  Split any URL or reference, in this order:
+
+  1. **fragment**: everything after the first `#` (the `#` itself is removed);
+  2. **query**: everything after the first `?` of what remains;
+  3. **scheme**: the text before the first `:` of what remains, if that `:` comes before any `/`;
+  4. **authority**: if what remains starts with `//`, the text after `//` up to the next `/` (or the end);
+  5. **path**: whatever is left (possibly empty).
+
+  A component is **defined** when its delimiter is present, even if the component is empty: `"?"` has a
+  defined, empty query; `""` has no query at all.
+
+  ### Resolving `reference` against `base`
+
+  - If the reference has a **scheme**: use its scheme, authority, path (with dot segments removed) and query.
+  - Else, if it has an **authority**: use the base scheme and the reference's authority, path (dot segments
+    removed) and query.
+  - Else, if its **path is empty**: use the base scheme, authority and path; use the reference query if it
+    is defined, otherwise the base query.
+  - Else, if its path **starts with `/`**: base scheme and authority, the reference path with dot segments
+    removed, the reference query.
+  - Otherwise (**relative path**): merge the paths, then remove dot segments; base scheme and authority,
+    reference query. **Merging**: if the base has an authority and an empty path, the result is `/` followed
+    by the reference path; otherwise it is the base path up to and including its last `/`, followed by the
+    reference path.
+
+  The fragment always comes from the reference (the base never has one). Rebuild the result as
+  `scheme ":"`, then `"//" authority` if an authority is defined, then the path, then `"?" query` and
+  `"#" fragment` if those are defined.
+
+  ### Removing dot segments
+
+  Treat the path as a list of segments separated by `/`. A segment `.` refers to the current directory and is
+  removed; a segment `..` removes itself **and** the segment before it (if there is no earlier segment, it
+  is just removed, so a path never climbs above the root). When the **last** segment is `.` or `..`, the
+  result ends with `/`. Segments such as `..g`, `g..` or `.hidden` are ordinary names. A leading `/` and
+  empty segments (`//`) are preserved. Only the path is processed: dots inside the query or the fragment are
+  left alone.
+
+  ### Example 1
+  ```
+  Input:  base = "https://shop.example.com/catalog/items/list?page=2", reference = "../deals/today"
+  Output: "https://shop.example.com/catalog/deals/today"
+  Explanation: merge gives /catalog/items/../deals/today; ".." removes "items"
+  ```
+
+  ### Example 2
+  ```
+  Input:  base = "https://shop.example.com/catalog/items/list?page=2", reference = "//cdn.example.net/assets/app.js"
+  Output: "https://cdn.example.net/assets/app.js"
+  Explanation: a network-path reference replaces everything except the scheme
+  ```
+
+  ### Example 3
+  ```
+  Input:  base = "https://shop.example.com/catalog/items/list?page=2", reference = "?page=3#top"
+  Output: "https://shop.example.com/catalog/items/list?page=3#top"
+  ```
+
+  ### Constraints
+  - `1 <= base.length <= 2000`, `0 <= reference.length <= 2000`, printable ASCII without spaces
+  - `base` always has a scheme and an authority (`scheme://authority`), a path that is empty or starts
+    with `/`, an optional query and no fragment
+  - Whenever a `:` appears before the first `/`, `?` and `#` of the reference, the text before it is a valid
+    scheme (letters, digits, `+`, `-`, `.`, starting with a letter)
+
+  **Follow-up:** after resolving, which further normalisations would a crawler apply to deduplicate URLs,
+  and which of them are safe?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: resolve_url
+  params:
+    - {name: base, type: string}
+    - {name: reference, type: string}
+  return_type: string
+  comparison: exact
+reference_solutions:
+  python: |
+    def resolve_url(base: str, reference: str) -> str:
+        def split(url: str):
+            """Return (scheme, authority, path, query, fragment); None means 'not present'."""
+            scheme = authority = query = fragment = None
+            if "#" in url:
+                url, fragment = url.split("#", 1)
+            if "?" in url:
+                url, query = url.split("?", 1)
+            colon = url.find(":")
+            if colon > 0 and "/" not in url[:colon]:
+                scheme, url = url[:colon], url[colon + 1:]
+            if url.startswith("//"):
+                end = url.find("/", 2)
+                end = len(url) if end == -1 else end
+                authority, url = url[2:end], url[end:]
+            return scheme, authority, url, query, fragment
+
+        def remove_dot_segments(path: str) -> str:
+            out: list[str] = []
+            while path:
+                if path.startswith("../"):
+                    path = path[3:]
+                elif path.startswith("./"):
+                    path = path[2:]
+                elif path.startswith("/./"):
+                    path = path[2:]
+                elif path == "/.":
+                    path = "/"
+                elif path.startswith("/../"):
+                    path = path[3:]
+                    if out:
+                        out.pop()
+                elif path == "/..":
+                    path = "/"
+                    if out:
+                        out.pop()
+                elif path in (".", ".."):
+                    path = ""
+                else:
+                    cut = path.find("/", 1)
+                    cut = len(path) if cut == -1 else cut
+                    out.append(path[:cut])
+                    path = path[cut:]
+            return "".join(out)
+
+        b_scheme, b_auth, b_path, b_query, _ = split(base)
+        r_scheme, r_auth, r_path, r_query, r_frag = split(reference)
+
+        if r_scheme is not None:
+            scheme, auth, path, query = r_scheme, r_auth, remove_dot_segments(r_path), r_query
+        else:
+            scheme = b_scheme
+            if r_auth is not None:
+                auth, path, query = r_auth, remove_dot_segments(r_path), r_query
+            else:
+                auth = b_auth
+                if r_path == "":
+                    path = b_path
+                    query = r_query if r_query is not None else b_query
+                else:
+                    if r_path.startswith("/"):
+                        path = remove_dot_segments(r_path)
+                    else:
+                        if b_auth is not None and b_path == "":
+                            merged = "/" + r_path
+                        else:
+                            merged = b_path[: b_path.rfind("/") + 1] + r_path
+                        path = remove_dot_segments(merged)
+                    query = r_query
+
+        result = scheme + ":"
+        if auth is not None:
+            result += "//" + auth
+        result += path
+        if query is not None:
+            result += "?" + query
+        if r_frag is not None:
+            result += "#" + r_frag
+        return result
+  javascript: |
+    function resolveUrl(base, reference) {
+      // Returns [scheme, authority, path, query, fragment]; null means "not present".
+      const split = (url) => {
+        let scheme = null, authority = null, query = null, fragment = null;
+        let i = url.indexOf("#");
+        if (i !== -1) { fragment = url.slice(i + 1); url = url.slice(0, i); }
+        i = url.indexOf("?");
+        if (i !== -1) { query = url.slice(i + 1); url = url.slice(0, i); }
+        const colon = url.indexOf(":");
+        if (colon > 0 && !url.slice(0, colon).includes("/")) {
+          scheme = url.slice(0, colon);
+          url = url.slice(colon + 1);
+        }
+        if (url.startsWith("//")) {
+          let end = url.indexOf("/", 2);
+          if (end === -1) end = url.length;
+          authority = url.slice(2, end);
+          url = url.slice(end);
+        }
+        return [scheme, authority, url, query, fragment];
+      };
+
+      const removeDotSegments = (path) => {
+        const out = [];
+        while (path.length > 0) {
+          if (path.startsWith("../")) path = path.slice(3);
+          else if (path.startsWith("./")) path = path.slice(2);
+          else if (path.startsWith("/./")) path = path.slice(2);
+          else if (path === "/.") path = "/";
+          else if (path.startsWith("/../")) { path = path.slice(3); out.pop(); }
+          else if (path === "/..") { path = "/"; out.pop(); }
+          else if (path === "." || path === "..") path = "";
+          else {
+            let cut = path.indexOf("/", 1);
+            if (cut === -1) cut = path.length;
+            out.push(path.slice(0, cut));
+            path = path.slice(cut);
+          }
+        }
+        return out.join("");
+      };
+
+      const [bScheme, bAuth, bPath, bQuery] = split(base);
+      const [rScheme, rAuth, rPath, rQuery, rFrag] = split(reference);
+      let scheme, auth, path, query;
+      if (rScheme !== null) {
+        [scheme, auth, path, query] = [rScheme, rAuth, removeDotSegments(rPath), rQuery];
+      } else {
+        scheme = bScheme;
+        if (rAuth !== null) {
+          [auth, path, query] = [rAuth, removeDotSegments(rPath), rQuery];
+        } else {
+          auth = bAuth;
+          if (rPath === "") {
+            path = bPath;
+            query = rQuery !== null ? rQuery : bQuery;
+          } else {
+            if (rPath.startsWith("/")) {
+              path = removeDotSegments(rPath);
+            } else {
+              const merged = bAuth !== null && bPath === ""
+                ? "/" + rPath
+                : bPath.slice(0, bPath.lastIndexOf("/") + 1) + rPath;
+              path = removeDotSegments(merged);
+            }
+            query = rQuery;
+          }
+        }
+      }
+      let result = scheme + ":";
+      if (auth !== null) result += "//" + auth;
+      result += path;
+      if (query !== null) result += "?" + query;
+      if (rFrag !== null) result += "#" + rFrag;
+      return result;
+    }
+tests:
+  - {id: t1, args: ["https://shop.example.com/catalog/items/list?page=2", "../deals/today"], expected: "https://shop.example.com/catalog/deals/today", description: "Example 1 - relative path merged with the base directory and one parent step"}
+  - {id: t2, args: ["https://shop.example.com/catalog/items/list?page=2", "//cdn.example.net/assets/app.js"], expected: "https://cdn.example.net/assets/app.js", description: "Example 2 - network-path reference keeps only the base scheme"}
+  - {id: t3, args: ["https://shop.example.com/catalog/items/list?page=2", "?page=3#top"], expected: "https://shop.example.com/catalog/items/list?page=3#top", description: "Example 3 - query-only reference keeps the base path and replaces the query; fragment kept"}
+  - {id: t4, hidden: true, args: ["https://shop.example.com/catalog/items/list?page=2", ""], expected: "https://shop.example.com/catalog/items/list?page=2", description: "Empty reference resolves to the base itself, query included"}
+  - {id: t5, hidden: true, args: ["https://shop.example.com/catalog/items/list?page=2", "#reviews"], expected: "https://shop.example.com/catalog/items/list?page=2#reviews", description: "Fragment-only reference keeps base path and base query"}
+  - {id: t6, hidden: true, args: ["https://shop.example.com/catalog/items/list?page=2", "?"], expected: "https://shop.example.com/catalog/items/list?", description: "Present-but-empty query replaces the base query and keeps the '?'"}
+  - {id: t7, hidden: true, args: ["https://shop.example.com/catalog/items/list?page=2", "HTTP://Status.Example.ORG/a/./b/../c/?x=1"], expected: "HTTP://Status.Example.ORG/a/c/?x=1", description: "Absolute reference: dot segments removed, case preserved, trailing slash kept"}
+  - {id: t8, hidden: true, args: ["https://shop.example.com/catalog/items/list?page=2", "/docs/../../../../help/./faq"], expected: "https://shop.example.com/help/faq", description: "Absolute-path reference with more '..' than segments - clamps at the root"}
+  - {id: t9, hidden: true, args: ["https://shop.example.com/catalog/items/view;v=2?id=17", ".."], expected: "https://shop.example.com/catalog/", description: "Bare '..' yields the grandparent directory with a trailing slash and drops the base query"}
+  - {id: t10, hidden: true, args: ["https://api.example.com?region=eu", "v2/./users/..g/g../."], expected: "https://api.example.com/v2/users/..g/g../", description: "Base with empty path gets '/' prepended on merge; '..g' and 'g..' are ordinary segments; trailing '/.' keeps a slash"}
+  - {id: t11, hidden: true, args: ["http://intranet.example:8080/a/b/c/", "mailto:ops@example.com"], expected: "mailto:ops@example.com", description: "Reference with its own scheme and no authority is returned unchanged; base port irrelevant"}
+  - {id: t12, hidden: true, args: ["http://intranet.example:8080/a/b/c/", "./../../x/y/..//z?q=a/../b#f/../g"], expected: "http://intranet.example:8080/a/x//z?q=a/../b#f/../g", description: "Mixed './' and '../' with an empty segment; dot segments inside query and fragment are not touched"}
+expected_concepts:
+  - "component parsing in a fixed order (fragment, query, scheme, authority, path)"
+  - "defined-but-empty versus absent components"
+  - "reference resolution cases: scheme, network-path, absolute-path, relative-path, empty path"
+  - "path merge with the base directory, including the empty-base-path case"
+  - "dot-segment removal with a stack of output segments"
+  - "rebuilding the URL from components"
+optimal_complexity: {time: "O(len(base) + len(reference))", space: "O(len(base) + len(reference))"}
+rubric:
+  excellent: "Parses both inputs into components that distinguish absent from empty, implements every resolution branch in the specified order, removes dot segments with a segment stack including trailing '.'/'..' and clamping at the root, keeps query and fragment untouched, and explains the empty-base-path merge rule."
+  good: "Correct for relative paths, absolute paths and network-path references, with one or two slips on rarer cases (empty query, trailing dot segment, excess '..') fixed after a hint or by testing."
+  weak: "Concatenates strings or splits on '/' without handling queries and fragments, never removes dot segments, treats an empty query like an absent one, or relies on a URL library that normalises case and encoding."
+  criteria:
+    correctness: "All tests pass, including empty and fragment-only references, the '?' edge case and dot segments that climb above the root."
+    efficiency: "Linear in the input length; dot-segment removal uses a stack instead of repeated string searches."
+    code_quality: "Parsing, merging, dot removal and recomposition are separate helpers with a clear representation for absent components."
+    edge_cases: "Empty reference, '?', '#frag', base with empty path, '..g' segments, '//' empty segments and references with their own scheme."
+    communication: "Explains why resolution matters for crawler deduplication and redirect safety."
+hints:
+  - "Do not treat the URLs as plain strings: split both into scheme, authority, path, query and fragment first, and remember whether each part was present at all."
+  - "Decide which components come from the reference and which from the base by checking, in order, whether the reference has a scheme, an authority, an empty path, an absolute path or a relative path; only the relative case needs the base directory."
+  - "For the relative case, keep the base path up to its last slash (or use a single slash when the base has an authority and an empty path) and append the reference path. Then walk the segments with a stack: skip single dots, pop the stack on double dots unless it is empty, push everything else, and remember to end with a slash when the last segment was a dot or double dot. Finally rebuild the string, adding the question mark and hash only for components that are present."
+followups:
+  - "Which security checks would you apply before following a redirect to the resolved URL?"
+  - "How do percent-encoded dots such as '%2E%2E' interact with dot-segment removal?"
+  - "How would you detect redirect loops between resolved URLs?"
+  - "Which normalisations (lowercasing the host, default ports, sorting query parameters) are safe for deduplication?"
+common_errors:
+  - "Dropping the base query for an empty reference, or keeping it for a relative-path reference."
+  - "Treating '?' (empty query) as if there were no query."
+  - "Removing dot segments inside the query or fragment."
+  - "Letting '..' climb above the root or failing to add a trailing slash after a final '.' or '..'."
+  - "Joining with the full base path instead of the base directory, or forgetting the leading slash when the base path is empty."

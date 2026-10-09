@@ -1,0 +1,614 @@
+# Curated questions: system design for backend services (part 2 of 4).
+# Notifications, messaging, webhooks, scheduling and event-driven plumbing.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend, fullstack]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # -------------------------------------------------------------------------- notifications
+  - external_key: system_design.backend_services.reset_email_async
+    competency_key: system_design
+    topic: Sending transactional email outside the request
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      When a user asks for a password reset, your API currently calls the email provider directly before it
+      responds. Sometimes that takes eight seconds or fails. How would you restructure this, and what new problems
+      does your change introduce?
+    expected_concepts:
+      - enqueue the email job and respond immediately
+      - durable queue with retries and backoff
+      - job created in the same transaction as the reset token, or an outbox
+      - duplicate sends on retry and how to limit them
+      - monitoring the queue for stuck jobs
+    rubric:
+      excellent: Moves sending to a durable background job, makes sure the job cannot be lost or sent for a token that was never committed, and discusses retries, duplicates and visibility into failures.
+      good: Puts the email on a queue with retries.
+      weak: Fires the call in an untracked background thread or keeps it inline with a longer timeout.
+    followups:
+      - The process crashes right after saving the token but before enqueuing. What happens?
+      - How would you know that reset emails have quietly stopped going out?
+    common_errors:
+      - Spawning an in-process thread that loses the email if the server restarts.
+
+  - external_key: system_design.backend_services.notification_preferences
+    competency_key: databases
+    topic: Notification preference model
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Users want control over which notifications they get on email, push and SMS, by category, plus quiet
+      hours. How would you model those preferences and apply them when sending?
+    expected_concepts:
+      - preferences keyed by user, category and channel
+      - defaults for categories the user never configured
+      - mandatory categories such as security alerts
+      - quiet hours stored with the user's time zone
+      - checking preferences at send time, not at enqueue time
+    rubric:
+      excellent: Proposes a sparse model with sensible defaults, mandatory categories that cannot be disabled, time-zone-aware quiet hours and evaluation at send time.
+      good: Clear per-category, per-channel model applied before sending.
+      weak: Stores a single on/off flag or hard-codes rules in each sending team's code.
+    followups:
+      - Product adds a new notification category. What do existing users get by default?
+      - A notification is queued during quiet hours. What happens to it?
+    common_errors:
+      - Storing quiet hours in server time instead of the user's time zone.
+
+  - external_key: system_design.backend_services.notification_batching
+    competency_key: system_design
+    topic: Batching and throttling notifications per user
+    difficulty: medium
+    text: >-
+      Users complain that a busy document thread sends them thirty emails in ten minutes. How would you change the
+      notification system to batch, de-duplicate and throttle messages per user without delaying urgent ones?
+    expected_concepts:
+      - per-user buffering window with a flush timer
+      - grouping by thread or object into a digest
+      - de-duplication keys for repeated events
+      - urgency classes that bypass batching
+      - per-user rate caps per channel
+      - state store for pending batches surviving restarts
+    rubric:
+      excellent: Designs a durable per-user buffer with a flush window, groups and de-duplicates by object, lets urgent categories bypass it and caps per-channel volume.
+      good: Collects notifications for a few minutes and sends a digest.
+      weak: Simply drops notifications above a threshold.
+    followups:
+      - Where do pending batches live, and what happens if that node dies?
+      - The user reads the thread in the app before the digest is sent. Should the email still go out?
+    common_errors:
+      - Keeping pending batches only in process memory.
+
+  - external_key: system_design.backend_services.push_token_management
+    competency_key: system_design
+    topic: Managing mobile push device tokens
+    difficulty: medium
+    text: >-
+      Your service sends mobile push notifications through the platform push gateways. Users have several devices,
+      reinstall apps and log out. How would you manage device tokens so pushes reach the right devices and no one
+      else's?
+    expected_concepts:
+      - registration endpoint linking token to user and device
+      - token refresh and replacement
+      - removing tokens on logout
+      - pruning tokens the gateway reports as invalid
+      - one token moving to another user on a shared device
+      - fan-out to all of a user's active devices
+    rubric:
+      excellent: Designs registration, refresh and logout flows, removes tokens based on gateway feedback, prevents a token from staying linked to a previous user, and fans out per device.
+      good: Stores tokens per user and removes ones that fail.
+      weak: Keeps one token per user or never cleans up invalid tokens.
+    followups:
+      - A user logs out and someone else logs in on the same phone. What must happen to the token?
+      - How would you handle the gateway rejecting a large batch of tokens?
+    common_errors:
+      - Leaving tokens attached to the old account after a logout, so notifications leak.
+
+  - external_key: system_design.backend_services.mass_broadcast
+    competency_key: distributed_systems
+    topic: Broadcasting to tens of millions quickly
+    difficulty: hard
+    text: >-
+      A news app needs to send a breaking-news push to fifty million users within ten minutes. How would you
+      design the broadcast pipeline, including the parts outside your control?
+    expected_concepts:
+      - target the audience by segment rather than enqueuing per user up front
+      - partitioned parallel workers over the audience
+      - push gateway throughput limits and batching
+      - backpressure and retry of throttled requests
+      - progress tracking and the ability to cancel
+      - load on the app servers when everyone opens the app
+    rubric:
+      excellent: Partitions the audience for parallel sending, works within gateway limits with batching and backpressure, tracks progress with cancel support and plans for the traffic surge the push itself triggers.
+      good: Uses many workers over partitions of the audience with retries.
+      weak: Loops through users in one process or ignores external rate limits.
+    followups:
+      - The editor notices a typo after two million sends. What can you do?
+      - Ten million people open the app within a minute of the push. What breaks?
+    common_errors:
+      - Forgetting that the notification itself causes a traffic spike on the backend.
+
+  - external_key: system_design.backend_services.notification_priority_lanes
+    competency_key: system_design
+    topic: Keeping urgent messages ahead of bulk sends
+    difficulty: medium
+    text: >-
+      During a marketing campaign, users report that one-time login codes are arriving ten minutes late because
+      they're stuck behind campaign messages. How would you redesign the sending pipeline?
+    expected_concepts:
+      - separate queues or lanes per priority
+      - dedicated worker capacity for critical traffic
+      - separate provider quota or sender accounts
+      - time-to-live on messages that are useless when late
+      - monitoring delivery latency per class
+    rubric:
+      excellent: Isolates critical and bulk traffic end to end, including workers and provider quotas, sets expiry on time-sensitive messages and adds per-class latency alerts.
+      good: Introduces a separate high-priority queue with its own workers.
+      weak: Adds a priority field to the same queue without considering shared provider limits.
+    followups:
+      - Both lanes share the same SMS provider rate limit. What then?
+      - What should happen to a login code that is still undelivered after five minutes?
+    common_errors:
+      - Isolating queues but still sharing one provider account that throttles everything.
+
+  - external_key: system_design.backend_services.delivery_status_tracking
+    competency_key: system_design
+    topic: Tracking delivery status across providers
+    difficulty: medium
+    text: >-
+      Support teams want to answer "did this customer get our message?" for emails and SMS sent through several
+      providers. How would you design tracking of delivery status end to end?
+    expected_concepts:
+      - message record with internal ID and provider message ID
+      - state machine such as queued, sent, delivered, bounced, failed
+      - provider callbacks mapped to internal states
+      - out-of-order or duplicate callbacks
+      - reconciliation for messages with no callback
+      - search by recipient for support
+    rubric:
+      excellent: Defines a message state machine fed by idempotent callbacks that tolerate reordering, reconciles messages that never get a final status, and provides support-friendly lookup.
+      good: Stores provider IDs and updates status from callbacks.
+      weak: Only logs that a send was attempted.
+    followups:
+      - A "delivered" callback arrives before the "sent" one. How do you handle it?
+      - How long would you keep these records, and why?
+    common_errors:
+      - Overwriting status with whatever callback arrives last.
+
+  - external_key: system_design.backend_services.provider_failover
+    competency_key: distributed_systems
+    topic: Failing over between messaging providers
+    difficulty: hard
+    text: >-
+      You send SMS through two vendors with different prices and reliability by country. How would you design
+      routing and failover so messages still go out when a vendor degrades, without sending duplicates?
+    expected_concepts:
+      - routing rules by country, cost and measured success rate
+      - detecting degradation from error rates and delivery latency
+      - circuit breaking a vendor
+      - unknown outcome on timeout and the duplicate risk
+      - per-message attempt history
+      - gradual recovery back to the preferred vendor
+    rubric:
+      excellent: Routes on live success and latency data, trips and recovers vendors gradually, records each attempt and reasons explicitly about timeouts where a retry through another vendor could duplicate the message.
+      good: Uses a primary vendor with automatic fallback on errors.
+      weak: Fails over by hand or retries every timeout through the second vendor without thought.
+    followups:
+      - Vendor A times out but may have delivered. Would you resend through B? It depends on what?
+      - How would you test failover before you need it?
+    common_errors:
+      - Treating a timeout as a definite failure.
+
+  - external_key: system_design.backend_services.in_app_inbox
+    competency_key: system_design
+    topic: In-app notification inbox
+    difficulty: medium
+    text: >-
+      Design the notification inbox behind the bell icon in a web app, with an unread count, mark as read, mark
+      all as read, and history going back ninety days.
+    expected_concepts:
+      - per-user notification rows partitioned or indexed by user and time
+      - unread count derived from a read marker or counter
+      - mark-all-as-read as a single marker update
+      - cursor pagination over history
+      - real-time delivery to open sessions
+      - retention and purge after ninety days
+    rubric:
+      excellent: Uses a per-user time-ordered store, implements mark-all as a cheap marker rather than updating every row, keeps the badge consistent and covers real-time delivery and retention.
+      good: Reasonable table, unread flag and paginated API.
+      weak: Updates every row on mark-all or counts unread with a full scan per page view.
+    followups:
+      - A user has forty thousand unread notifications and clicks mark all as read. What happens in your design?
+      - How does a new notification reach a browser tab that is already open?
+    common_errors:
+      - Running a bulk UPDATE over all of a heavy user's rows for mark-all.
+
+  - external_key: system_design.backend_services.webhook_platform
+    competency_key: distributed_systems
+    topic: Multi-tenant outbound webhook platform
+    difficulty: hard
+    text: >-
+      Your SaaS product sends webhooks to customer endpoints at twenty thousand events a second. Some endpoints
+      are slow or down for hours. How would you design delivery so one customer's broken endpoint never delays
+      everyone else?
+    expected_concepts:
+      - per-endpoint queues or partitions
+      - per-endpoint concurrency and timeouts
+      - exponential backoff with a retry horizon
+      - automatic disabling and customer notification
+      - payload signing and replay protection
+      - ordering guarantees per endpoint, or explicit lack of them
+    rubric:
+      excellent: Isolates delivery per endpoint with its own concurrency and backoff, bounds retries and disables endpoints with notification, signs payloads and is explicit about ordering and at-least-once semantics.
+      good: Uses retries with backoff and some per-customer isolation.
+      weak: Uses a single shared queue and worker pool where slow endpoints block others.
+    followups:
+      - A customer's endpoint comes back after six hours with a million queued events. How do you drain it safely?
+      - Customers ask for ordered delivery. What would that cost you?
+    common_errors:
+      - Head-of-line blocking from one slow endpoint in a shared worker pool.
+
+  - external_key: system_design.backend_services.delayed_reminders
+    competency_key: system_design
+    topic: Reminders due at a specific time
+    difficulty: medium
+    text: >-
+      Users can set reminders like "remind me in three days at nine" and you have millions pending at any time.
+      How would you design the system so each reminder fires close to its due time, exactly when users expect?
+    expected_concepts:
+      - durable store indexed by due time
+      - polling in time buckets or a timer wheel
+      - claiming due items with leases to avoid double firing
+      - time zones and daylight saving changes
+      - cancellation and edits before firing
+      - catching up after downtime
+    rubric:
+      excellent: Stores reminders durably by due time, claims due work safely across workers, handles edits, cancellation, time zones and backlog after an outage.
+      good: Uses a due-time index polled by workers with locking.
+      weak: Uses in-memory timers or a delay queue that cannot be cancelled.
+    followups:
+      - The scheduler is down for two hours. What happens to reminders that were due in that window?
+      - The user's country changes its daylight saving rules. Which reminders are affected?
+    common_errors:
+      - Converting local times to UTC at creation for recurring reminders and drifting after a DST change.
+
+  - external_key: system_design.backend_services.distributed_cron
+    competency_key: distributed_systems
+    topic: Recurring jobs for thousands of tenants
+    difficulty: hard
+    text: >-
+      Design a scheduling service where thousands of customers define recurring jobs, like "every weekday at six
+      in my time zone", and each run must start once and only once even when scheduler nodes fail.
+    expected_concepts:
+      - schedule definitions separate from run records
+      - computing next run time in the tenant's time zone
+      - partitioning schedules across scheduler nodes
+      - unique run key per schedule and fire time
+      - leases and fencing tokens on claimed runs
+      - missed-run policy after downtime
+    rubric:
+      excellent: Separates schedules from runs keyed by schedule and fire time, partitions work across nodes with leases and fencing, and defines missed-run and overlap policies per job.
+      good: Uses a database of next-run times with locking to avoid duplicates.
+      weak: Runs cron on every node or relies on a single scheduler instance.
+    followups:
+      - A job is still running when its next occurrence is due. What should happen?
+      - How does a fencing token stop a paused node from starting a duplicate run?
+    common_errors:
+      - Assuming a lock without fencing prevents duplicates after a long GC pause.
+
+  - external_key: system_design.backend_services.newsletter_sending
+    competency_key: system_design
+    topic: Sending a newsletter to millions
+    difficulty: medium
+    text: >-
+      Design the backend that sends a weekly newsletter to two million subscribers, honouring unsubscribes right up
+      to send time and handling bounces and complaints.
+    expected_concepts:
+      - snapshot or streaming of the audience at send time
+      - checking suppression lists per message
+      - throttling per receiving domain
+      - bounce and complaint processing into suppression
+      - resumable sends with per-recipient state
+      - personalisation rendered by workers
+    rubric:
+      excellent: Builds a resumable, per-recipient send with suppression checks at send time, domain-aware throttling and feedback loops that update suppression lists.
+      good: Batches the send through workers and handles unsubscribes and bounces.
+      weak: Builds one giant list up front and ignores unsubscribes that happen during the send.
+    followups:
+      - Halfway through, the worker fleet crashes. How do you resume without double sends?
+      - Why would you throttle per receiving domain?
+    common_errors:
+      - Sending to addresses that hard-bounced in previous campaigns.
+
+  - external_key: system_design.backend_services.order_status_updates
+    competency_key: system_design
+    topic: Telling clients that an order's status changed
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A shopping app shows an order status page that should update when the order is packed, shipped and
+      delivered. How would the backend get those updates to the app, and what would you choose for a first
+      version?
+    expected_concepts:
+      - client polling with sensible intervals
+      - server-sent events or WebSockets for open screens
+      - push notifications when the app is closed
+      - status changes emitted as events from the order service
+      - cost and complexity of each option
+    rubric:
+      excellent: Weighs polling, streaming and push against how often status changes and how many users watch, picks a pragmatic first version and explains how it would evolve.
+      good: Proposes a workable mechanism with a reason.
+      weak: Picks WebSockets for everything without considering cost or the closed-app case.
+    followups:
+      - The status changes maybe four times over three days. Does that change your choice?
+      - How would the order service tell the notification path that something changed?
+    common_errors:
+      - Polling every second for a status that changes a few times a week.
+
+  - external_key: system_design.backend_services.template_service
+    competency_key: system_design
+    topic: Versioned message templates
+    difficulty: medium
+    text: >-
+      Many teams send emails and SMS from shared templates in twelve languages, and marketing edits copy often. How
+      would you design a template service so edits are safe and a bad change can be rolled back quickly?
+    expected_concepts:
+      - immutable template versions with an active pointer
+      - validation of variables against a schema
+      - preview and test sends before publishing
+      - locale fallback rules
+      - rendering at send time with a pinned version
+      - audit of who changed what
+    rubric:
+      excellent: Uses immutable versions with an active pointer for instant rollback, validates variables and locales before publishing, and records which version each message used.
+      good: Stores template versions and lets teams preview before use.
+      weak: Edits templates in place with no versioning or validation.
+    followups:
+      - A template references a variable the sending service doesn't provide. Where should that be caught?
+      - How would you know which customers got the broken version?
+    common_errors:
+      - Overwriting templates in place so there is nothing to roll back to.
+
+  - external_key: system_design.backend_services.realtime_delivery_gateway
+    competency_key: distributed_systems
+    topic: Real-time delivery to connected clients
+    difficulty: hard
+    text: >-
+      You want notifications to appear instantly for the two million users who have the app open, and fall back to
+      mobile push for everyone else. How would you design the connection layer and routing?
+    expected_concepts:
+      - stateful gateway nodes holding persistent connections
+      - presence registry mapping users to gateway nodes
+      - publish to the right node via pub/sub or direct routing
+      - fallback to push when no live connection exists
+      - reconnect storms after a gateway deploy or failure
+      - acknowledgement and replay of missed messages
+    rubric:
+      excellent: Separates stateful gateways from stateless services, tracks presence with expiry, routes messages to the owning node, falls back to push, and plans for reconnect storms and replay of missed messages.
+      good: Uses WebSocket gateways with pub/sub and a push fallback.
+      weak: Broadcasts every message to every gateway or ignores how messages find the right connection.
+    followups:
+      - You roll out a new gateway version. What happens to two million open connections?
+      - How do you avoid sending both a live message and a push for the same notification?
+    common_errors:
+      - Broadcasting every event to all gateway nodes, which stops scaling.
+
+  - external_key: system_design.backend_services.transactional_outbox
+    competency_key: distributed_systems
+    topic: Publishing events reliably after a database write
+    difficulty: medium
+    text: >-
+      Your order service writes to its database and then publishes an "order placed" event to a broker. Sometimes
+      the event is missing, and sometimes it's published for an order that rolled back. How would you design this
+      to be reliable?
+    expected_concepts:
+      - dual-write problem between database and broker
+      - outbox table written in the same transaction
+      - relay process or change data capture publishing the outbox
+      - at-least-once publishing and idempotent consumers
+      - ordering per aggregate
+      - cleaning up the outbox
+    rubric:
+      excellent: Names the dual-write problem, writes events to an outbox in the same transaction, publishes via a relay or CDC with at-least-once semantics and requires idempotent consumers.
+      good: Describes the outbox pattern correctly.
+      weak: Suggests publishing first and then writing, or wrapping both in a retry loop.
+    followups:
+      - Your relay publishes an event and crashes before marking it sent. What do consumers see?
+      - How would you keep events for the same order in order?
+    common_errors:
+      - Believing a retry around the publish call removes the inconsistency.
+
+  - external_key: system_design.backend_services.ordered_event_consumers
+    competency_key: distributed_systems
+    topic: Per-entity ordering with scalable consumers
+    difficulty: hard
+    text: >-
+      Events about each customer account must be processed in order, but you have thousands of events a second and
+      consumers scale up and down. How would you design partitioning and consumption to keep per-account order?
+    expected_concepts:
+      - partition by account key
+      - one active consumer per partition
+      - rebalancing pauses and in-flight work
+      - hot keys limiting parallelism
+      - version numbers to detect out-of-order or stale events
+      - changing partition counts without breaking order
+    rubric:
+      excellent: Keys partitions by account, explains how consumer rebalancing can break order and how to handle in-flight work, addresses hot accounts and partition count changes, and adds version checks as a safety net.
+      good: Partitions by account and keeps one consumer per partition.
+      weak: Uses a shared queue with competing consumers and assumes order is preserved.
+    followups:
+      - You need to go from 12 to 48 partitions. What happens to ordering during the change?
+      - One account produces half of all events. What do you do?
+    common_errors:
+      - Processing a partition's messages concurrently inside one consumer and losing order.
+
+  - external_key: system_design.backend_services.product_analytics_ingestion
+    competency_key: system_design
+    topic: Product analytics event ingestion
+    difficulty: medium
+    text: >-
+      Design the ingestion side of a product analytics system that collects click and screen events from web and
+      mobile clients, around a billion events a day, for later analysis.
+    expected_concepts:
+      - lightweight collector endpoints with batching from clients
+      - schema validation and versioning of events
+      - durable log before processing
+      - de-duplication of client retries with event IDs
+      - offline clients sending late events
+      - privacy controls and consent handling
+    rubric:
+      excellent: Designs batched, retry-safe collection into a durable log, validates and versions schemas, handles late and duplicate events, and builds in consent and data-minimisation controls.
+      good: Collects events through an API into a queue or log for processing.
+      weak: Writes events straight into the transactional database.
+    followups:
+      - A mobile app sends events from three days ago after coming online. How do you handle them?
+      - A client release sends malformed events. What should the pipeline do?
+    common_errors:
+      - No event IDs, so client retries double-count events.
+
+  - external_key: system_design.backend_services.local_time_digests
+    competency_key: system_design
+    topic: Daily digests at each user's local morning
+    difficulty: medium
+    text: >-
+      You need to send a daily summary email to five million users at eight in the morning in each user's own time
+      zone, built from their activity. How would you design the generation and sending?
+    expected_concepts:
+      - grouping users by time zone or hourly buckets
+      - precomputing digest content ahead of send time
+      - spreading load across the day naturally
+      - skipping users with nothing to report
+      - resumable per-user processing
+      - keeping the summary window consistent per user
+    rubric:
+      excellent: Schedules by time-zone buckets, precomputes content shortly before each bucket, skips empty digests, and makes per-user processing idempotent and resumable.
+      good: Runs hourly jobs per time zone that build and send digests.
+      weak: Runs one job at a fixed UTC time for everyone.
+    followups:
+      - Most of your users are in two time zones. How does that affect capacity?
+      - The digest job for one hour fails halfway. How do you finish it without double sending?
+    common_errors:
+      - Computing the activity window in UTC, so users get the wrong day's summary.
+
+  - external_key: system_design.backend_services.large_channel_fanout
+    competency_key: distributed_systems
+    topic: Mentions in very large group channels
+    difficulty: hard
+    text: >-
+      In a team chat product, someone posts a message that mentions everyone in a channel with a hundred thousand
+      members. How would you design delivery of that message and its notifications without degrading the
+      platform?
+    expected_concepts:
+      - storing the message once and fanning out references
+      - online members get it via live connections, others via unread state
+      - notification fan-out queued and rate limited
+      - per-member preference and mute checks
+      - permission limits on who can mention everyone
+      - protecting other tenants from the spike
+    rubric:
+      excellent: Stores the message once, separates live delivery from notification fan-out, applies preferences and mutes, rate limits the fan-out and isolates the spike from other workspaces.
+      good: Fans out asynchronously with queues and respects mute settings.
+      weak: Writes a copy per member synchronously before acknowledging the post.
+    followups:
+      - Ten such messages are posted in one minute. What protects the rest of the platform?
+      - Which parts of this work must finish before the sender sees the message as sent?
+    common_errors:
+      - Making the sender's request wait for the full fan-out.
+
+  - external_key: system_design.backend_services.oncall_paging
+    competency_key: system_design
+    topic: On-call paging with escalation
+    difficulty: medium
+    text: >-
+      Design an on-call paging service where an alert must reach a person who acknowledges it, escalating to the
+      next person if nobody responds within five minutes.
+    expected_concepts:
+      - alert intake with de-duplication
+      - schedules and escalation policies
+      - multi-channel delivery with retries
+      - acknowledgement state machine with timers
+      - reliability of the paging system itself
+      - audit trail of who was notified when
+    rubric:
+      excellent: Models alerts, schedules and escalation policies, drives escalation from durable timers, delivers through several channels and treats the paging system's own availability as a top requirement.
+      good: Handles schedules, retries and escalation after a timeout.
+      weak: Sends one notification and treats it as done.
+    followups:
+      - What happens to escalation timers if the service restarts?
+      - How would you make sure the pager still works when your main cloud region is down?
+    common_errors:
+      - Running escalation timers in memory.
+
+  - external_key: system_design.backend_services.exactly_once_user_effects
+    competency_key: distributed_systems
+    topic: One notification per event despite retries
+    difficulty: hard
+    text: >-
+      Your notification pipeline is at-least-once from end to end, and users sometimes get the same push twice
+      after a worker crash. How would you get close to exactly-once from the user's point of view?
+    expected_concepts:
+      - deterministic notification ID from the source event
+      - de-duplication store checked before sending
+      - recording the send and the provider call as close together as possible
+      - window where a crash still causes a duplicate
+      - provider-side collapse or de-duplication keys
+      - deciding which duplicates matter
+    rubric:
+      excellent: Derives a stable ID per notification, de-duplicates before sending, uses provider collapse keys where available, and states plainly the remaining crash window and when it is acceptable.
+      good: Uses an idempotency key and a de-duplication check before sending.
+      weak: Claims the broker guarantees exactly-once delivery to the user.
+    followups:
+      - Where exactly is the remaining window for a duplicate in your design?
+      - How long would you keep de-duplication records?
+    common_errors:
+      - Generating a new random ID on every retry, defeating de-duplication.
+
+  - external_key: system_design.backend_services.unsubscribe_links
+    competency_key: api_design
+    topic: One-click unsubscribe links
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Every marketing email needs a one-click unsubscribe link that works without logging in. How would you design
+      those links and the endpoint behind them?
+    expected_concepts:
+      - signed or random token identifying user and list
+      - no guessable user IDs in the link
+      - idempotent unsubscribe operation
+      - link scanners that follow links automatically
+      - immediate effect on suppression for pending sends
+    rubric:
+      excellent: Uses signed or unguessable tokens scoped to the list, makes the action idempotent, accounts for automated link scanners and applies the change immediately to pending sends.
+      good: Uses a token in the link and updates preferences.
+      weak: Puts a raw user ID or email in the link so anyone can unsubscribe anyone.
+    followups:
+      - Email security scanners click every link in incoming mail. How does that affect your design?
+      - Should the link expire? What are the trade-offs?
+    common_errors:
+      - Accepting an email address parameter that lets anyone unsubscribe someone else.
+
+  - external_key: system_design.backend_services.search_index_sync
+    competency_key: system_design
+    topic: Keeping a search index in sync with the database
+    difficulty: medium
+    text: >-
+      Your product catalogue lives in a relational database and search runs on a separate search engine. Today a
+      nightly job rebuilds the index. How would you redesign it so changes show up in search within seconds?
+    expected_concepts:
+      - change data capture or outbox events
+      - indexing consumer with retries
+      - versioning to ignore stale updates
+      - full reindex with an alias swap for schema changes
+      - detecting drift between database and index
+      - deletes propagated to the index
+    rubric:
+      excellent: Streams changes via CDC or an outbox to an idempotent indexer that rejects stale versions, keeps a full-rebuild path with alias swaps and monitors drift.
+      good: Publishes change events that an indexer consumes.
+      weak: Has the application write to the database and the index in the same request with no recovery path.
+    followups:
+      - Two updates to one product arrive in the wrong order. Which wins?
+      - You need to change the index mapping. How do you do it without downtime?
+    common_errors:
+      - Dual writes from the application that leave the index silently out of date.

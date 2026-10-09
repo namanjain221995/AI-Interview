@@ -1,0 +1,615 @@
+# System design: reliability and observability (2 of 4) — logging pipelines and error tracking.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [sre, platform, devops]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.reliability_observability.centralised_logs_small_fleet
+    competency_key: observability
+    topic: Getting logs from a small fleet into one place
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Right now engineers SSH into thirty servers and grep log files when something breaks. How would you design a
+      setup that gets those logs into one searchable place, and what would you watch out for in the first version?
+    expected_concepts:
+      - an agent on each host tailing files and shipping them
+      - a central store with search and time filtering
+      - consistent host, service and environment fields
+      - buffering so logs survive short outages of the backend
+      - retention limits and access control
+    rubric:
+      excellent: Designs agent, transport and central store, adds metadata so logs are filterable, handles backend outages with buffering and sets retention and access from the start.
+      good: Proposes agents shipping to a central searchable store with basic metadata.
+      weak: Proposes copying log files to a shared drive on a schedule.
+    followups:
+      - What happens to logs if the central store is down for an hour?
+      - How would someone find all logs for one request across several servers?
+    common_errors:
+      - Forgetting log rotation on the hosts, so the agent misses or duplicates lines.
+
+  - external_key: system_design.reliability_observability.structured_logging_standard
+    competency_key: observability
+    topic: A company-wide structured log format
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Every team at your company logs in a different format, which makes cross-service searches painful. How would you
+      design a structured logging standard and get teams to adopt it without rewriting everything at once?
+    expected_concepts:
+      - JSON or similar structured format with required core fields
+      - timestamp in UTC, level, service, environment, request or trace ID
+      - shared logging libraries per language
+      - parsing legacy formats at the pipeline as a bridge
+      - documented field names and reserved keys
+    rubric:
+      excellent: Defines a small set of required fields, provides libraries that make compliance the easy path, bridges legacy formats in the pipeline and plans incremental adoption.
+      good: Defines a structured format with core fields and suggests a shared library.
+      weak: Writes a style guide for message wording with no structure or tooling.
+    followups:
+      - Which fields would you make mandatory, and which optional?
+      - How would you handle a team whose service writes plain text and can't change soon?
+    common_errors:
+      - Requiring so many fields that teams skip the standard altogether.
+
+  - external_key: system_design.reliability_observability.log_retention_policy
+    competency_key: observability
+    topic: Retention policy for different kinds of logs
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your company keeps every log line for one year in expensive searchable storage. How would you design retention so
+      different kinds of logs are kept for as long as they're actually needed, and no longer?
+    expected_concepts:
+      - classifying logs (debug, application, access, audit, security)
+      - short searchable retention for high-volume debug data
+      - cheaper archive tier for longer-term needs
+      - legal and compliance requirements for audit logs
+      - deletion that is automatic and verifiable
+    rubric:
+      excellent: Classifies logs by purpose, sets retention per class with justification, uses a cheap archive tier, accounts for compliance obligations and automates deletion.
+      good: Proposes different retention per log type with a cheaper tier for older data.
+      weak: Proposes cutting retention to the same short period for everything.
+    followups:
+      - Who should decide how long audit logs are kept?
+      - How would someone search a log that is only in the archive?
+    common_errors:
+      - Keeping logs indefinitely because nobody owns the decision to delete them.
+
+  - external_key: system_design.reliability_observability.error_tracking_basics
+    competency_key: observability
+    topic: Collecting application exceptions in one place
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Developers only find out about exceptions in your web app when someone reads the logs. How would you design an
+      error tracking setup that collects exceptions, groups the duplicates and tells the right team about new ones?
+    expected_concepts:
+      - SDK capturing exception, stack trace and context
+      - grouping identical errors into issues
+      - release or version tagging
+      - notifying owners on new or regressed issues
+      - scrubbing sensitive data before sending
+    rubric:
+      excellent: Describes capture with context, grouping by fingerprint, release tagging, alerting only on new or regressed issues and scrubbing sensitive fields before data leaves the app.
+      good: Captures exceptions centrally with grouping and some notification.
+      weak: Emails every exception to a shared inbox.
+    followups:
+      - How would you decide two exceptions are the same issue?
+      - What should happen when an error that was marked fixed comes back?
+    common_errors:
+      - Notifying on every occurrence instead of on new or regressed issues.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.reliability_observability.log_agent_backpressure
+    competency_key: observability
+    topic: Node log agents under backpressure
+    difficulty: medium
+    text: >-
+      When your log backend slows down, the agents on every node keep retrying and some nodes run out of disk or memory.
+      How would you design the node-level agent so it degrades safely when the backend can't keep up?
+    expected_concepts:
+      - bounded memory and disk buffers
+      - backpressure versus dropping with explicit policy
+      - prioritising some log classes over others
+      - exponential backoff with jitter on retries
+      - resource limits so the agent never starves the workload
+      - agent self-metrics for dropped and buffered bytes
+    rubric:
+      excellent: Bounds buffers, defines what gets dropped first and why, retries with jitter, caps the agent's own resources and exposes drop and lag metrics so loss is visible.
+      good: Adds disk buffering with limits and backoff.
+      weak: Proposes unlimited buffering or simply adding backend capacity.
+    followups:
+      - Which logs would you drop first, and which never?
+      - How would you know that logs were dropped on a particular node?
+    common_errors:
+      - Letting the agent buffer to the same disk the application needs.
+
+  - external_key: system_design.reliability_observability.log_pipeline_queue_layer
+    competency_key: distributed_systems
+    topic: Adding a durable queue to the log pipeline
+    difficulty: medium
+    text: >-
+      Your agents write straight into the search cluster, so every cluster upgrade or slowdown loses logs. How would you
+      redesign the pipeline with a durable queue in the middle, and what new problems would that introduce?
+    expected_concepts:
+      - message queue such as Kafka between collection and indexing
+      - partitioning strategy and ordering per source
+      - consumer groups for indexing, archiving and other sinks
+      - replay from retained offsets after an indexing failure
+      - consumer lag as a key health signal
+      - extra cost and operational burden of the queue
+    rubric:
+      excellent: Uses the queue to decouple producers from sinks, picks partitioning deliberately, supports multiple consumers and replay, monitors lag and is clear about the new operational costs.
+      good: Introduces a queue with consumers and mentions replay.
+      weak: Adds a queue but cannot say how partitions, lag or replay work.
+    followups:
+      - How long would you retain data in the queue, and why that long?
+      - What's the impact of choosing the hostname as the partition key?
+    common_errors:
+      - Sizing queue retention smaller than the longest realistic indexing outage.
+
+  - external_key: system_design.reliability_observability.log_pii_redaction
+    competency_key: security
+    topic: Redacting sensitive data in the log pipeline
+    difficulty: medium
+    text: >-
+      A security review found email addresses, tokens and card fragments in your central logs. How would you design the
+      pipeline so sensitive data is caught and removed, ideally before it's ever stored?
+    expected_concepts:
+      - prevention at source through logging libraries and field allowlists
+      - pattern and field-based redaction in the pipeline
+      - hashing or tokenising identifiers that are still needed for debugging
+      - scanning stored data and purging past leaks
+      - measuring false positives and performance cost
+      - restricting access to raw data before redaction
+    rubric:
+      excellent: Layers prevention at source with pipeline redaction, keeps useful identifiers through hashing, plans remediation of already-stored data and monitors redaction effectiveness.
+      good: Adds pipeline redaction rules for known patterns and some source-side guidance.
+      weak: Relies on asking developers to be careful or on restricting who can search logs.
+    followups:
+      - How would you handle a secret format your regex doesn't know about yet?
+      - What do you do about the leaked data already sitting in the archive?
+    common_errors:
+      - Redacting only in the search index while the raw archive still holds the data.
+
+  - external_key: system_design.reliability_observability.log_index_strategy
+    competency_key: observability
+    topic: Full-text indexing versus label-only indexing
+    difficulty: medium
+    text: >-
+      You're choosing between a log store that full-text indexes every field and one that indexes only a few labels and
+      scans compressed chunks at query time. How would you decide which fits your company, and how would the design
+      differ?
+    expected_concepts:
+      - ingest and storage cost of full indexing
+      - query speed for needle-in-haystack searches versus label filtering
+      - importance of low-cardinality labels in the label-only model
+      - typical query patterns of the organisation
+      - hybrid options such as indexing a few high-value fields
+    rubric:
+      excellent: Compares cost, query patterns and operational load with concrete examples, explains why label cardinality matters in the label-only model and proposes how to measure actual query patterns before choosing.
+      good: Explains the core cost versus query-speed trade-off and picks one with a reason.
+      weak: Chooses based on tool popularity without discussing cost or query behaviour.
+    followups:
+      - What happens in the label-only model if someone puts a request ID in a label?
+      - How would you find out which queries your engineers really run?
+    common_errors:
+      - Using high-cardinality values as labels in a label-indexed store.
+
+  - external_key: system_design.reliability_observability.tiered_log_storage
+    competency_key: cloud_cost_optimization
+    topic: Hot, warm and cold log storage with rehydration
+    difficulty: medium
+    text: >-
+      You need ninety days of logs to be searchable during investigations, but nearly every query touches only the last
+      two days. How would you design tiered storage so recent searches are fast and older data is cheap but still
+      reachable?
+    expected_concepts:
+      - hot tier on fast storage for recent days
+      - warm tier with fewer replicas or slower disks
+      - cold tier in object storage with on-demand rehydration or direct query
+      - index lifecycle policies that move data automatically
+      - expected latency and cost per tier communicated to users
+    rubric:
+      excellent: Defines tiers with clear movement rules, explains how cold data is queried or rehydrated and how long that takes, and backs the design with access-pattern data and cost estimates.
+      good: Proposes hot and cold tiers with automatic lifecycle movement.
+      weak: Proposes one tier with shorter retention.
+    followups:
+      - An investigation needs logs from sixty days ago within an hour. What does that look like?
+      - How would you size the hot tier?
+    common_errors:
+      - Making cold data so hard to reach that people keep everything hot just in case.
+
+  - external_key: system_design.reliability_observability.log_access_control
+    competency_key: security
+    topic: Controlling who can see which logs
+    difficulty: medium
+    text: >-
+      Everyone in engineering can search every log, including payment and authentication services. How would you design
+      access control for the logging platform without making incident response painfully slow?
+    expected_concepts:
+      - tagging logs by sensitivity and owning team at ingest
+      - role-based or attribute-based access by index or field
+      - field-level masking for sensitive attributes
+      - break-glass access with approval and auditing
+      - audit trail of searches on sensitive data
+    rubric:
+      excellent: Classifies data at ingest, enforces access by sensitivity and team, masks sensitive fields, provides audited break-glass for incidents and logs who searched what.
+      good: Separates sensitive logs into restricted indexes with role-based access.
+      weak: Proposes locking down all logs to a small admin group.
+    followups:
+      - How does on-call get access to restricted logs at three in the morning?
+      - How would you review whether break-glass access is being overused?
+    common_errors:
+      - Making restricted access so slow that engineers copy logs elsewhere.
+
+  - external_key: system_design.reliability_observability.kubernetes_log_collection
+    competency_key: kubernetes
+    topic: Collecting and enriching container logs
+    difficulty: medium
+    text: >-
+      You're designing log collection for a large Kubernetes platform where pods come and go constantly. How would you
+      collect container logs, attach the right metadata and avoid losing the logs of pods that crash or get evicted?
+    expected_concepts:
+      - node-level agent reading container log files as a DaemonSet
+      - enrichment with namespace, pod, labels and owner from the API
+      - caching metadata to avoid overloading the API server
+      - handling log rotation and fast-exiting containers
+      - multi-line handling for stack traces
+      - sidecar only when apps cannot log to stdout
+    rubric:
+      excellent: Uses node agents reading runtime log files, enriches from cached API metadata, handles rotation, multi-line events and short-lived pods, and explains when a sidecar is justified.
+      good: Proposes a DaemonSet agent with Kubernetes metadata enrichment.
+      weak: Proposes a logging sidecar in every pod by default or pulling logs through the API.
+    followups:
+      - How would you avoid hammering the API server with metadata lookups?
+      - A pod crashes within one second of starting. Do its logs make it?
+    common_errors:
+      - Splitting multi-line stack traces into separate unrelated events.
+
+  - external_key: system_design.reliability_observability.error_grouping_design
+    competency_key: system_design
+    topic: Fingerprinting errors into meaningful issues
+    difficulty: medium
+    text: >-
+      Your error tracker creates thousands of separate issues for what is really one bug, and sometimes merges different
+      bugs into one. How would you design the grouping logic so issues match what engineers think of as one problem?
+    expected_concepts:
+      - fingerprint from normalised stack frames, not messages
+      - stripping variable data such as IDs and addresses
+      - focusing on in-app frames over library frames
+      - source maps and symbolication for minified or compiled code
+      - custom fingerprint overrides and manual merge or split
+      - regression detection per release
+    rubric:
+      excellent: Builds fingerprints from normalised in-app frames after symbolication, removes variable data, supports overrides and merge or split, and ties issues to releases for regression detection.
+      good: Groups by stack trace with some normalisation.
+      weak: Groups by exact error message.
+    followups:
+      - How would you handle minified JavaScript stack traces?
+      - What happens to existing issues if you change the grouping algorithm?
+    common_errors:
+      - Including line numbers in the fingerprint so every deploy creates new issues.
+
+  - external_key: system_design.reliability_observability.log_pattern_alerting
+    competency_key: observability
+    topic: Alerting on log patterns at scale
+    difficulty: medium
+    text: >-
+      Teams want to be alerted when certain messages appear in logs, and today that's done with hundreds of saved
+      searches running every minute against the cluster. How would you design log-based alerting that scales and
+      doesn't hurt search performance?
+    expected_concepts:
+      - evaluating patterns in the stream rather than by querying storage
+      - turning matches into counters or metrics
+      - rate-based alert conditions rather than single occurrences
+      - pattern registry with ownership
+      - encouraging teams to emit proper metrics for important events
+    rubric:
+      excellent: Moves matching into the stream, converts matches to metrics so alerting reuses the metrics system, alerts on rates with ownership and nudges teams toward direct instrumentation.
+      good: Proposes stream processing for patterns and rate-based alerts.
+      weak: Proposes running the saved searches less often.
+    followups:
+      - What happens if a team changes the log message your pattern depends on?
+      - When should a log alert really be a metric?
+    common_errors:
+      - Alerting on a single occurrence of an error string that appears normally.
+
+  - external_key: system_design.reliability_observability.infrastructure_audit_log
+    competency_key: security
+    topic: Tamper-evident audit log for infrastructure changes
+    difficulty: medium
+    text: >-
+      Auditors want a trustworthy record of who changed what across your cloud accounts, Kubernetes clusters and
+      production databases. How would you design an audit log service that is complete and that an attacker with admin
+      access couldn't quietly edit?
+    expected_concepts:
+      - collecting provider audit trails and application audit events
+      - shipping to a separate account or store with restricted write access
+      - append-only or write-once storage
+      - hash chaining or signing for tamper evidence
+      - normalised schema for actor, action, resource and time
+      - alerting on gaps in audit streams
+    rubric:
+      excellent: Collects from all sources into an isolated, append-only store, adds tamper evidence through hashing or signing, normalises events and detects gaps so missing data is noticed.
+      good: Centralises audit events in a separate, restricted store with retention.
+      weak: Keeps audit logs in the same account and storage as the systems being audited.
+    followups:
+      - How would you prove to an auditor that no records were deleted?
+      - How would you notice if an audit source stopped sending?
+    common_errors:
+      - Granting the same admin role write access to both production and the audit store.
+
+  - external_key: system_design.reliability_observability.dynamic_log_levels
+    competency_key: observability
+    topic: Dynamic log levels and sampling
+    difficulty: medium
+    text: >-
+      Debug logging is too expensive to leave on, but when an incident happens you always wish you had it. How would you
+      design a way to turn up logging detail for a specific service, customer or request path on demand, safely?
+    expected_concepts:
+      - runtime configuration of log levels without redeploying
+      - targeting by service, tenant, endpoint or trace
+      - automatic expiry of elevated levels
+      - sampling of high-volume logs
+      - guarding against cost spikes and sensitive data in debug logs
+    rubric:
+      excellent: Designs targeted, runtime-configurable levels with auto-expiry, uses sampling for volume, protects against cost surges and sensitive data, and audits who turned it on.
+      good: Proposes runtime log level changes with some targeting.
+      weak: Proposes redeploying with debug enabled during incidents.
+    followups:
+      - How would you make sure debug logging gets turned off again?
+      - How would you sample without losing the one request you care about?
+    common_errors:
+      - Enabling debug across a whole fleet and overwhelming the pipeline during an incident.
+
+  - external_key: system_design.reliability_observability.mobile_crash_reporting
+    competency_key: system_design
+    topic: Crash reporting for a mobile app
+    difficulty: medium
+    text: >-
+      Your mobile app has a few million daily users, and you only learn about crashes from store reviews. How would you
+      design crash reporting from the device all the way to an engineer's dashboard?
+    expected_concepts:
+      - on-device capture and persistence until next launch
+      - batching and upload on suitable network conditions
+      - symbolication with uploaded debug symbols per build
+      - grouping and crash-free user rates per release
+      - privacy controls and user consent
+      - ingest that tolerates bursts after a bad release
+    rubric:
+      excellent: Covers capture, persistence and deferred upload, symbolication per build, grouping and crash-free rates by release, privacy controls and ingest that handles release spikes.
+      good: Captures crashes, uploads them and symbolicates with grouping.
+      weak: Proposes sending a crash event immediately while the app is crashing, with no symbolication.
+    followups:
+      - What breaks if a build ships without uploading its symbols?
+      - How would you spot a crash spike within an hour of a staged rollout?
+    common_errors:
+      - Attempting network uploads inside the crash handler itself.
+
+  - external_key: system_design.reliability_observability.log_search_query_guardrails
+    competency_key: observability
+    topic: Protecting a shared log cluster from heavy queries
+    difficulty: medium
+    text: >-
+      During incidents, many engineers run broad searches over weeks of logs at once and the shared cluster falls over
+      exactly when it's needed most. How would you design the query layer to protect the cluster?
+    expected_concepts:
+      - per-user and per-query limits on time range and data scanned
+      - query cost estimation before execution
+      - queueing and prioritisation for on-call users
+      - caching of repeated queries
+      - separating ingest capacity from query capacity
+      - guidance toward narrower queries in the UI
+    rubric:
+      excellent: Estimates and limits query cost, prioritises incident responders, isolates ingest from queries, caches repeated work and helps users write narrower searches.
+      good: Adds limits on range and concurrency with some prioritisation.
+      weak: Proposes adding nodes or telling people to search less.
+    followups:
+      - How would you prioritise the incident commander's queries over everyone else's?
+      - What should the user see when their query is rejected?
+    common_errors:
+      - Letting heavy searches compete with ingest so logs stop arriving during an outage.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.reliability_observability.log_pipeline_high_volume
+    competency_key: distributed_systems
+    topic: Log pipeline at millions of events per second
+    difficulty: hard
+    text: >-
+      Design a central logging pipeline for an organisation producing around two million log events per second across
+      four regions, with search available within thirty seconds of an event. Walk me through the architecture and the
+      numbers that drive it.
+    expected_concepts:
+      - capacity estimates for events, bytes, partitions and storage
+      - regional collection with a durable queue per region
+      - stream processing for parsing, enrichment and redaction
+      - indexing tier sized for peak, plus object storage archive
+      - cross-region strategy for search (federation or central)
+      - end-to-end latency and lag monitoring
+    rubric:
+      excellent: Starts from numbers, designs regional queues, processing and indexing tiers sized for peak, chooses a cross-region search approach with reasoning and defines how freshness and loss are measured.
+      good: Provides a sound layered architecture with some sizing.
+      weak: Draws boxes with no capacity reasoning or a single global cluster.
+    followups:
+      - Traffic spikes to five times normal during an incident. Which component breaks first?
+      - Would you ship logs across regions, and what would that cost?
+    common_errors:
+      - Sizing for average volume rather than incident-time peaks.
+
+  - external_key: system_design.reliability_observability.log_delivery_guarantees
+    competency_key: distributed_systems
+    topic: Delivery guarantees in a log pipeline
+    difficulty: hard
+    text: >-
+      Some of your logs, like security and billing events, must never be lost, while debug logs can be dropped freely.
+      How would you design the pipeline to give different delivery guarantees to different classes of logs, and how
+      would you prove it's meeting them?
+    expected_concepts:
+      - separate paths or priorities per class
+      - durable acknowledgement end to end for critical classes
+      - at-least-once with idempotent writes or deduplication by event ID
+      - sequence numbers or counts reconciled between source and sink
+      - load shedding that drops low-priority classes first
+      - measuring loss as an SLO of the pipeline
+    rubric:
+      excellent: Separates classes with distinct guarantees, uses end-to-end acknowledgement and deduplication for critical data, reconciles counts between source and destination, and treats loss as a measured pipeline SLO.
+      good: Prioritises critical logs with durable paths and some form of deduplication.
+      weak: Claims exactly-once delivery from a tool without explaining how loss or duplicates are detected.
+    followups:
+      - How would you detect that one host's security events never arrived?
+      - Where do duplicates come from in an at-least-once pipeline, and how do you remove them?
+    common_errors:
+      - Treating a successful send from the agent as proof that the event was stored.
+
+  - external_key: system_design.reliability_observability.log_routing_multi_destination
+    competency_key: system_design
+    topic: Routing logs to many destinations by rule
+    difficulty: hard
+    text: >-
+      The same logs now need to go to search for engineers, a security analytics tool, a cheap archive and a few team
+      specific systems, each with different formats and costs. How would you design a routing layer that teams can
+      configure safely?
+    expected_concepts:
+      - a central routing and transformation tier
+      - declarative per-team routing rules with validation
+      - fan-out without multiplying collection cost
+      - per-destination buffering so one slow sink doesn't stall others
+      - schema translation per destination
+      - cost and volume visibility per route
+    rubric:
+      excellent: Builds a routing tier with validated declarative rules, isolates destinations from each other with separate buffers, handles format translation and shows teams the cost of each route.
+      good: Proposes a routing tier with rules and per-destination outputs.
+      weak: Proposes installing a separate agent per destination on every host.
+    followups:
+      - The security tool goes down for six hours. What happens to everything else?
+      - How would you stop a bad rule from sending all logs to an expensive destination?
+    common_errors:
+      - Coupling all destinations to one buffer so the slowest sink controls throughput.
+
+  - external_key: system_design.reliability_observability.streaming_logs_to_metrics
+    competency_key: data_engineering
+    topic: Deriving metrics from logs in a stream
+    difficulty: hard
+    text: >-
+      Your CDN and load balancers produce billions of access log lines a day, and you want request rate, error rate and
+      latency by customer and endpoint within a minute. How would you design a streaming system that turns those logs
+      into metrics?
+    expected_concepts:
+      - stream processor reading from the log queue
+      - windowed aggregation with event time and watermarks
+      - handling late and out-of-order events
+      - controlling dimension cardinality before emitting
+      - mergeable latency histograms
+      - reprocessing after a bug fix
+    rubric:
+      excellent: Uses event-time windows with watermarks, handles late data explicitly, bounds cardinality, emits mergeable latency structures and plans for backfills after logic changes.
+      good: Proposes windowed aggregation in a stream processor with some late-data handling.
+      weak: Proposes running batch queries over stored logs every few minutes.
+    followups:
+      - How long would you wait for late events before closing a window?
+      - A new customer generates a million distinct endpoints. What happens?
+    common_errors:
+      - Aggregating by processing time so delays in the pipeline look like traffic drops.
+
+  - external_key: system_design.reliability_observability.log_store_on_object_storage
+    competency_key: distributed_systems
+    topic: A log store built on object storage
+    difficulty: hard
+    text: >-
+      Your search cluster costs more than the services it monitors, and you're considering building log storage on
+      object storage with a columnar format. How would you design it so common queries still return in seconds?
+    expected_concepts:
+      - columnar files partitioned by time and tenant or service
+      - small-file problem and compaction
+      - metadata catalog and partition pruning
+      - bloom filters or lightweight indexes for needle searches
+      - stateless query workers that scale with demand
+      - recent data served from a write buffer before files are sealed
+    rubric:
+      excellent: Designs partitioning, compaction and a metadata catalog for pruning, adds lightweight indexes for selective lookups, uses elastic query workers and explains how data is queryable before it is compacted.
+      good: Proposes columnar time-partitioned files with compaction and a query engine.
+      weak: Proposes dumping raw log files into buckets and scanning them for every query.
+    followups:
+      - How would you make a search for one request ID across a day fast?
+      - What does query latency look like for the last thirty seconds of data?
+    common_errors:
+      - Writing many tiny files that make listing and scanning slower than the old cluster.
+
+  - external_key: system_design.reliability_observability.multi_tenant_log_isolation
+    competency_key: distributed_systems
+    topic: Isolating tenants on a shared logging platform
+    difficulty: hard
+    text: >-
+      Your internal logging platform serves two hundred teams, and when one team's service starts spewing errors, ingest
+      and search slow down for everyone. How would you design fairness and isolation into the platform?
+    expected_concepts:
+      - per-tenant ingest rate limits with burst allowances
+      - fair queueing in processing and indexing
+      - per-tenant query concurrency limits
+      - shard or index separation for the largest tenants
+      - visibility for tenants when they are throttled
+      - protecting critical classes such as security logs
+    rubric:
+      excellent: Applies limits and fair scheduling at ingest, processing and query, separates the largest tenants, protects critical log classes and tells tenants clearly when and why they are throttled.
+      good: Adds per-tenant ingest limits and some query isolation.
+      weak: Proposes scaling the cluster whenever a tenant spikes.
+    followups:
+      - A team's incident doubles their error logs. Do you throttle them while they're debugging?
+      - How would you set initial limits for two hundred teams?
+    common_errors:
+      - Throttling a tenant silently so they believe their service stopped logging.
+
+  - external_key: system_design.reliability_observability.error_tracking_spike_protection
+    competency_key: system_design
+    topic: Error tracking ingest during error storms
+    difficulty: hard
+    text: >-
+      A bad release makes one service throw fifty thousand exceptions per second, and your error tracking backend falls
+      over, hiding errors from every other team. How would you design the ingest path to survive storms like that while
+      keeping the data useful?
+    expected_concepts:
+      - client-side rate limiting and sampling in SDKs
+      - per-project quotas at the edge
+      - aggregating counts while storing only sample events
+      - keeping accurate occurrence counts despite sampling
+      - isolating projects so one storm doesn't affect others
+      - fast feedback to the affected team about the spike
+    rubric:
+      excellent: Combines SDK sampling, per-project edge quotas and aggregation that keeps true counts while storing representative samples, isolates projects and surfaces the spike itself as a signal.
+      good: Adds per-project quotas and sampling.
+      weak: Proposes autoscaling the backend with no limits.
+    followups:
+      - How do you keep the occurrence count right if you only store one in a thousand events?
+      - Should the storm itself trigger an alert, and to whom?
+    common_errors:
+      - Dropping events uniformly so rare but important errors from other services disappear.
+
+  - external_key: system_design.reliability_observability.log_archive_deletion_requests
+    competency_key: security
+    topic: Deletion requests against an immutable log archive
+    difficulty: hard
+    text: >-
+      Your logs are archived for a year in compressed, append-only files, and now the company must honour customer data
+      deletion requests within thirty days while also keeping some records under legal hold. How would you design the
+      archive to meet both?
+    expected_concepts:
+      - minimising personal data stored in logs at all
+      - pseudonymising identifiers with a key that can be destroyed (crypto-shredding)
+      - index of which files contain which subject identifiers
+      - rewrite or compaction jobs for targeted deletion
+      - legal hold flags that override deletion with audit
+      - proving deletion happened
+    rubric:
+      excellent: Reduces personal data at source, uses per-subject keys or pseudonymisation to make deletion cheap, handles legal holds explicitly and produces evidence of deletion, with costs of rewriting discussed.
+      good: Proposes an index of affected files and rewrite jobs, with legal hold handling.
+      weak: Proposes deleting entire archive files or ignoring the archive.
+    followups:
+      - How does crypto-shredding work, and what are its limits?
+      - How would you show a regulator that a deletion was completed?
+    common_errors:
+      - Forgetting backups and replicas when deleting from the primary archive.

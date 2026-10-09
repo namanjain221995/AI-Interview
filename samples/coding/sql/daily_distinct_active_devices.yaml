@@ -1,0 +1,253 @@
+version: 1
+slug: daily_distinct_active_devices
+title: Daily Active Devices
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, data, product_manager]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Daily Active Devices
+
+  A fleet of field gateways sends telemetry events (heartbeats, sensor readings, firmware pings) to a
+  collector. Product wants a simple adoption chart: **how many different devices were active on each
+  calendar day**.
+
+  Table `device_events`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | device_id | VARCHAR(40) | identifier of the sending device; compared exactly (case-sensitive) |
+  | event_ts | TEXT | UTC timestamp in the fixed format `YYYY-MM-DD HH:MM:SS` |
+
+  The calendar day of an event is the first 10 characters of `event_ts`, i.e. `SUBSTR(event_ts, 1, 10)`
+  (for example `2026-03-14`).
+
+  Return one row per day that has **at least one event**, with columns:
+
+  - `day`: the calendar day as text `YYYY-MM-DD`;
+  - `active_devices`: the number of **distinct** devices with at least one event on that day. A device
+    that sends many events on the same day counts once for that day; a device active on two days counts
+    once on each of them.
+
+  Order the rows by `day` ascending. Days without events are not listed; an empty table returns no rows.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite (do not use date or time functions).
+
+  ### Example 1
+  ```
+  device_events
+  +----+------------+---------------------+
+  | id | device_id  | event_ts            |
+  +----+------------+---------------------+
+  | 1  | gw-north-1 | 2026-03-14 08:00:05 |
+  | 2  | gw-north-1 | 2026-03-14 08:05:05 |
+  | 3  | gw-south-2 | 2026-03-14 13:40:00 |
+  | 4  | gw-north-1 | 2026-03-15 07:59:58 |
+  | 5  | gw-east-7  | 2026-03-15 22:10:41 |
+  | 6  | gw-south-2 | 2026-03-15 23:01:00 |
+  | 7  | gw-east-7  | 2026-03-17 00:00:00 |
+  +----+------------+---------------------+
+
+  Output
+  +------------+----------------+
+  | day        | active_devices |
+  +------------+----------------+
+  | 2026-03-14 | 2              |
+  | 2026-03-15 | 3              |
+  | 2026-03-17 | 1              |
+  +------------+----------------+
+  gw-north-1 sends two events on 2026-03-14 but is counted once. 2026-03-16 has no events and is not listed.
+  ```
+
+  ### Example 2
+  ```
+  device_events
+  +----+-----------+---------------------+
+  | id | device_id | event_ts            |
+  +----+-----------+---------------------+
+  | 1  | meter-a   | 2026-03-31 23:59:59 |
+  | 2  | meter-a   | 2026-04-01 00:00:00 |
+  | 3  | meter-b   | 2026-04-01 12:30:00 |
+  | 4  | meter-b   | 2026-04-01 12:30:00 |
+  +----+-----------+---------------------+
+
+  Output
+  +------------+----------------+
+  | day        | active_devices |
+  +------------+----------------+
+  | 2026-03-31 | 1              |
+  | 2026-04-01 | 2              |
+  +------------+----------------+
+  meter-a is active on both days. meter-b's two identical events on 2026-04-01 still count once.
+  ```
+
+  ### Constraints
+  - `0 <= rows in device_events <= 10^5`
+  - Every `event_ts` is a valid timestamp in the format `YYYY-MM-DD HH:MM:SS`; rows may be stored in any order.
+  - `device_id` is never NULL.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return day (YYYY-MM-DD) and active_devices (distinct devices with an event that day), ordered by day.
+    SELECT event_ts AS day, device_id AS active_devices
+    FROM device_events;
+reference_solutions:
+  sql: |
+    SELECT SUBSTR(event_ts, 1, 10) AS day,
+           COUNT(DISTINCT device_id) AS active_devices
+    FROM device_events
+    GROUP BY SUBSTR(event_ts, 1, 10)
+    ORDER BY day;
+sql_setup: |
+  CREATE TABLE device_events (
+    id INTEGER PRIMARY KEY,
+    device_id VARCHAR(40) NOT NULL,
+    event_ts TEXT NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - repeated events of one device on a day count once"
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, event_ts) VALUES
+        (1, 'gw-north-1', '2026-03-14 08:00:05'), (2, 'gw-north-1', '2026-03-14 08:05:05'), (3, 'gw-south-2', '2026-03-14 13:40:00'), (4, 'gw-north-1', '2026-03-15 07:59:58'), (5, 'gw-east-7', '2026-03-15 22:10:41'),
+        (6, 'gw-south-2', '2026-03-15 23:01:00'), (7, 'gw-east-7', '2026-03-17 00:00:00');
+    expected_rows: [["2026-03-14", 2], ["2026-03-15", 3], ["2026-03-17", 1]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - events one second apart across midnight belong to different days"
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, event_ts) VALUES
+        (1, 'meter-a', '2026-03-31 23:59:59'), (2, 'meter-a', '2026-04-01 00:00:00'), (3, 'meter-b', '2026-04-01 12:30:00'), (4, 'meter-b', '2026-04-01 12:30:00');
+    expected_rows: [["2026-03-31", 1], ["2026-04-01", 2]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Single event"
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, event_ts) VALUES (1, 'x', '2026-01-01 00:00:00');
+    expected_rows: [["2026-01-01", 1]]
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "One device sending many events on one day - COUNT(*) instead of COUNT(DISTINCT) gives 6"
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, event_ts) VALUES
+        (1, 'pump-9', '2026-02-10 01:00:00'), (2, 'pump-9', '2026-02-10 03:00:00'), (3, 'pump-9', '2026-02-10 05:00:00'), (4, 'pump-9', '2026-02-10 09:00:00'), (5, 'pump-9', '2026-02-10 15:00:00'),
+        (6, 'pump-9', '2026-02-10 23:00:00');
+    expected_rows: [["2026-02-10", 1]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Rows inserted out of time order across a year boundary - output ordered by day"
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, event_ts) VALUES
+        (1, 'd3', '2026-01-02 10:00:00'), (2, 'd1', '2025-12-31 23:00:00'), (3, 'd2', '2026-01-01 00:00:01'), (4, 'd1', '2026-01-01 05:00:00'), (5, 'd2', '2025-12-31 01:00:00'),
+        (6, 'd3', '2025-12-31 12:00:00');
+    expected_rows: [["2025-12-31", 3], ["2026-01-01", 2], ["2026-01-02", 1]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Device ids differing only in case are distinct devices"
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, event_ts) VALUES
+        (1, 'Sensor-1', '2026-06-01 09:00:00'), (2, 'sensor-1', '2026-06-01 09:00:00'), (3, 'SENSOR-1', '2026-06-01 10:00:00'), (4, 'sensor-1', '2026-06-02 09:00:00');
+    expected_rows: [["2026-06-01", 3], ["2026-06-02", 1]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Grouping by full timestamp (or by hour) instead of day splits a day into several rows"
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, event_ts) VALUES
+        (1, 'a', '2026-07-04 01:00:00'), (2, 'b', '2026-07-04 02:00:00'), (3, 'c', '2026-07-04 03:00:00'), (4, 'a', '2026-07-05 01:00:00'), (5, 'b', '2026-07-05 01:00:00');
+    expected_rows: [["2026-07-04", 3], ["2026-07-05", 2]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Stress - 240 events from 30 devices over ten days with one empty day"
+    setup_sql: |
+      INSERT INTO device_events (id, device_id, event_ts) VALUES
+        (1, 'gw-05', '2026-08-07 12:41:03'), (2, 'gw-09', '2026-08-02 03:23:37'), (3, 'gw-09', '2026-08-01 06:02:05'), (4, 'gw-14', '2026-08-07 02:15:05'), (5, 'gw-14', '2026-08-09 01:52:36'),
+        (6, 'gw-04', '2026-08-02 20:40:37'), (7, 'gw-10', '2026-08-01 18:25:03'), (8, 'gw-02', '2026-08-04 17:54:08'), (9, 'gw-14', '2026-08-05 04:34:07'), (10, 'gw-10', '2026-08-10 17:52:43'),
+        (11, 'gw-02', '2026-08-03 18:36:40'), (12, 'gw-12', '2026-08-04 03:35:45'), (13, 'gw-10', '2026-08-02 01:39:13'), (14, 'gw-22', '2026-08-08 17:27:49'), (15, 'gw-15', '2026-08-07 18:59:29'),
+        (16, 'gw-10', '2026-08-07 07:50:11'), (17, 'gw-03', '2026-08-04 18:19:33'), (18, 'gw-11', '2026-08-08 23:28:18'), (19, 'gw-03', '2026-08-10 03:32:26'), (20, 'gw-13', '2026-08-03 10:09:59'),
+        (21, 'gw-14', '2026-08-08 01:42:04'), (22, 'gw-19', '2026-08-09 10:21:44'), (23, 'gw-20', '2026-08-07 15:37:51'), (24, 'gw-03', '2026-08-08 02:17:30'), (25, 'gw-01', '2026-08-02 23:44:19'),
+        (26, 'gw-22', '2026-08-10 14:18:45'), (27, 'gw-22', '2026-08-07 11:01:29'), (28, 'gw-06', '2026-08-07 19:07:31'), (29, 'gw-04', '2026-08-01 09:08:47'), (30, 'gw-13', '2026-08-04 12:58:55'),
+        (31, 'gw-03', '2026-08-08 05:28:25'), (32, 'gw-09', '2026-08-09 04:52:27'), (33, 'gw-09', '2026-08-09 22:26:22'), (34, 'gw-08', '2026-08-07 04:05:11'), (35, 'gw-04', '2026-08-03 21:14:00'),
+        (36, 'gw-19', '2026-08-08 05:16:18'), (37, 'gw-03', '2026-08-01 13:34:23'), (38, 'gw-19', '2026-08-10 10:08:44'), (39, 'gw-20', '2026-08-09 20:43:47'), (40, 'gw-08', '2026-08-01 21:51:35'),
+        (41, 'gw-13', '2026-08-07 12:25:06'), (42, 'gw-21', '2026-08-08 12:03:12'), (43, 'gw-04', '2026-08-02 14:10:07'), (44, 'gw-20', '2026-08-07 01:06:00'), (45, 'gw-05', '2026-08-10 17:06:23'),
+        (46, 'gw-01', '2026-08-10 02:55:13'), (47, 'gw-13', '2026-08-10 04:40:16'), (48, 'gw-20', '2026-08-07 11:30:07'), (49, 'gw-08', '2026-08-02 14:30:30'), (50, 'gw-03', '2026-08-05 04:06:47'),
+        (51, 'gw-09', '2026-08-07 15:53:44'), (52, 'gw-09', '2026-08-03 00:13:33'), (53, 'gw-05', '2026-08-07 22:34:58'), (54, 'gw-09', '2026-08-01 09:41:55'), (55, 'gw-12', '2026-08-02 08:33:23'),
+        (56, 'gw-06', '2026-08-03 07:34:34'), (57, 'gw-11', '2026-08-09 20:14:39'), (58, 'gw-08', '2026-08-04 12:47:51'), (59, 'gw-07', '2026-08-04 16:31:22'), (60, 'gw-01', '2026-08-01 08:30:16'),
+        (61, 'gw-12', '2026-08-04 14:51:59'), (62, 'gw-12', '2026-08-07 02:14:06'), (63, 'gw-16', '2026-08-04 06:21:13'), (64, 'gw-20', '2026-08-08 19:53:00'), (65, 'gw-21', '2026-08-08 11:51:41'),
+        (66, 'gw-11', '2026-08-02 03:58:24'), (67, 'gw-16', '2026-08-04 05:27:50'), (68, 'gw-03', '2026-08-07 23:25:29'), (69, 'gw-03', '2026-08-07 23:10:10'), (70, 'gw-01', '2026-08-03 04:37:57'),
+        (71, 'gw-21', '2026-08-08 04:39:52'), (72, 'gw-16', '2026-08-10 21:59:22'), (73, 'gw-09', '2026-08-03 17:08:01'), (74, 'gw-02', '2026-08-01 16:47:59'), (75, 'gw-07', '2026-08-03 06:52:55'),
+        (76, 'gw-01', '2026-08-04 08:13:18'), (77, 'gw-08', '2026-08-09 18:20:16'), (78, 'gw-14', '2026-08-09 04:03:58'), (79, 'gw-15', '2026-08-07 21:37:52'), (80, 'gw-14', '2026-08-09 16:08:34'),
+        (81, 'gw-09', '2026-08-03 16:01:55'), (82, 'gw-06', '2026-08-08 19:00:49'), (83, 'gw-03', '2026-08-03 04:30:39'), (84, 'gw-09', '2026-08-02 01:20:43'), (85, 'gw-17', '2026-08-09 17:30:50'),
+        (86, 'gw-09', '2026-08-02 01:15:12'), (87, 'gw-02', '2026-08-05 03:32:28'), (88, 'gw-01', '2026-08-09 02:28:20'), (89, 'gw-17', '2026-08-10 19:32:12'), (90, 'gw-15', '2026-08-05 16:34:51'),
+        (91, 'gw-17', '2026-08-08 07:44:33'), (92, 'gw-18', '2026-08-05 06:53:28'), (93, 'gw-07', '2026-08-03 03:25:28'), (94, 'gw-03', '2026-08-07 21:15:27'), (95, 'gw-04', '2026-08-02 21:19:50'),
+        (96, 'gw-03', '2026-08-02 22:41:42'), (97, 'gw-05', '2026-08-07 08:56:08'), (98, 'gw-08', '2026-08-08 23:06:25'), (99, 'gw-06', '2026-08-08 21:53:14'), (100, 'gw-12', '2026-08-03 13:32:25'),
+        (101, 'gw-14', '2026-08-07 06:22:20'), (102, 'gw-12', '2026-08-02 11:01:21'), (103, 'gw-15', '2026-08-09 14:45:01'), (104, 'gw-11', '2026-08-07 16:39:18'), (105, 'gw-03', '2026-08-09 03:58:50'),
+        (106, 'gw-04', '2026-08-04 02:16:17'), (107, 'gw-03', '2026-08-01 08:48:08'), (108, 'gw-22', '2026-08-07 08:25:09'), (109, 'gw-17', '2026-08-09 18:31:44'), (110, 'gw-03', '2026-08-07 08:03:51'),
+        (111, 'gw-07', '2026-08-03 02:17:01'), (112, 'gw-05', '2026-08-02 02:38:54'), (113, 'gw-03', '2026-08-04 08:55:07'), (114, 'gw-01', '2026-08-08 10:35:26'), (115, 'gw-05', '2026-08-05 01:33:45'),
+        (116, 'gw-04', '2026-08-04 05:16:03'), (117, 'gw-04', '2026-08-03 09:40:19'), (118, 'gw-25', '2026-08-09 06:18:28'), (119, 'gw-22', '2026-08-09 05:17:22'), (120, 'gw-05', '2026-08-01 01:00:01'),
+        (121, 'gw-18', '2026-08-09 06:32:30'), (122, 'gw-15', '2026-08-04 03:42:52'), (123, 'gw-22', '2026-08-07 15:34:53'), (124, 'gw-17', '2026-08-07 09:44:13'), (125, 'gw-11', '2026-08-04 06:53:56'),
+        (126, 'gw-07', '2026-08-03 11:03:53'), (127, 'gw-01', '2026-08-03 02:40:47'), (128, 'gw-14', '2026-08-05 05:03:05'), (129, 'gw-17', '2026-08-07 21:18:38'), (130, 'gw-10', '2026-08-04 01:29:11'),
+        (131, 'gw-05', '2026-08-03 14:00:16'), (132, 'gw-11', '2026-08-07 17:20:15'), (133, 'gw-05', '2026-08-01 06:22:11'), (134, 'gw-06', '2026-08-01 12:05:30'), (135, 'gw-17', '2026-08-05 20:12:15'),
+        (136, 'gw-25', '2026-08-09 00:05:16'), (137, 'gw-03', '2026-08-02 12:37:02'), (138, 'gw-01', '2026-08-07 09:19:40'), (139, 'gw-03', '2026-08-04 18:33:54'), (140, 'gw-11', '2026-08-03 22:50:56'),
+        (141, 'gw-13', '2026-08-10 10:46:31'), (142, 'gw-05', '2026-08-03 23:39:41'), (143, 'gw-01', '2026-08-03 22:57:32'), (144, 'gw-17', '2026-08-07 04:58:33'), (145, 'gw-19', '2026-08-09 00:52:43'),
+        (146, 'gw-26', '2026-08-10 22:43:44'), (147, 'gw-03', '2026-08-04 00:02:08'), (148, 'gw-04', '2026-08-07 12:53:28'), (149, 'gw-02', '2026-08-09 20:01:40'), (150, 'gw-22', '2026-08-09 07:31:16'),
+        (151, 'gw-08', '2026-08-01 02:47:59'), (152, 'gw-18', '2026-08-09 02:42:33'), (153, 'gw-12', '2026-08-02 23:30:16'), (154, 'gw-05', '2026-08-02 07:46:48'), (155, 'gw-08', '2026-08-04 23:41:29'),
+        (156, 'gw-13', '2026-08-08 02:30:58'), (157, 'gw-02', '2026-08-05 19:40:41'), (158, 'gw-03', '2026-08-04 19:09:21'), (159, 'gw-10', '2026-08-05 19:36:08'), (160, 'gw-08', '2026-08-01 01:31:17'),
+        (161, 'gw-12', '2026-08-02 06:43:31'), (162, 'gw-17', '2026-08-05 09:29:29'), (163, 'gw-04', '2026-08-08 17:12:19'), (164, 'gw-08', '2026-08-02 00:18:29'), (165, 'gw-09', '2026-08-02 14:17:24'),
+        (166, 'gw-07', '2026-08-04 02:37:05'), (167, 'gw-12', '2026-08-03 16:16:23'), (168, 'gw-10', '2026-08-03 20:32:17'), (169, 'gw-12', '2026-08-02 11:14:31'), (170, 'gw-13', '2026-08-08 00:10:00'),
+        (171, 'gw-22', '2026-08-08 14:25:19'), (172, 'gw-07', '2026-08-03 11:24:20'), (173, 'gw-06', '2026-08-02 00:20:48'), (174, 'gw-13', '2026-08-07 03:59:12'), (175, 'gw-05', '2026-08-01 08:23:04'),
+        (176, 'gw-13', '2026-08-07 18:04:23'), (177, 'gw-09', '2026-08-07 01:17:06'), (178, 'gw-05', '2026-08-01 20:59:09'), (179, 'gw-09', '2026-08-04 13:32:20'), (180, 'gw-12', '2026-08-04 13:56:01'),
+        (181, 'gw-18', '2026-08-07 17:13:46'), (182, 'gw-01', '2026-08-02 23:26:28'), (183, 'gw-25', '2026-08-10 04:41:55'), (184, 'gw-16', '2026-08-05 01:58:59'), (185, 'gw-05', '2026-08-09 05:30:26'),
+        (186, 'gw-10', '2026-08-07 09:16:47'), (187, 'gw-13', '2026-08-05 20:15:19'), (188, 'gw-18', '2026-08-08 21:25:07'), (189, 'gw-11', '2026-08-03 05:04:13'), (190, 'gw-26', '2026-08-09 15:35:14'),
+        (191, 'gw-11', '2026-08-08 14:27:08'), (192, 'gw-07', '2026-08-09 07:05:11'), (193, 'gw-18', '2026-08-07 02:20:15'), (194, 'gw-09', '2026-08-07 18:12:56'), (195, 'gw-07', '2026-08-01 12:26:47'),
+        (196, 'gw-07', '2026-08-09 12:17:21'), (197, 'gw-08', '2026-08-01 08:36:23'), (198, 'gw-11', '2026-08-03 16:33:40'), (199, 'gw-03', '2026-08-04 08:57:15'), (200, 'gw-13', '2026-08-07 20:28:27'),
+        (201, 'gw-01', '2026-08-05 04:02:27'), (202, 'gw-19', '2026-08-08 15:00:04'), (203, 'gw-17', '2026-08-07 14:28:15'), (204, 'gw-04', '2026-08-02 04:09:33'), (205, 'gw-12', '2026-08-02 22:41:54'),
+        (206, 'gw-03', '2026-08-08 17:49:02'), (207, 'gw-03', '2026-08-01 07:36:58'), (208, 'gw-05', '2026-08-01 04:40:16'), (209, 'gw-21', '2026-08-09 13:44:48'), (210, 'gw-02', '2026-08-02 02:19:33'),
+        (211, 'gw-07', '2026-08-10 12:16:14'), (212, 'gw-01', '2026-08-10 00:34:19'), (213, 'gw-09', '2026-08-08 10:41:53'), (214, 'gw-16', '2026-08-04 16:15:35'), (215, 'gw-01', '2026-08-04 13:45:41'),
+        (216, 'gw-02', '2026-08-05 00:12:31'), (217, 'gw-03', '2026-08-07 08:14:42'), (218, 'gw-12', '2026-08-07 07:31:02'), (219, 'gw-14', '2026-08-07 11:43:25'), (220, 'gw-01', '2026-08-04 09:47:54'),
+        (221, 'gw-03', '2026-08-09 06:31:12'), (222, 'gw-07', '2026-08-05 07:29:14'), (223, 'gw-10', '2026-08-05 03:39:31'), (224, 'gw-06', '2026-08-10 07:31:26'), (225, 'gw-10', '2026-08-01 04:59:25'),
+        (226, 'gw-04', '2026-08-01 00:38:09'), (227, 'gw-02', '2026-08-07 22:03:11'), (228, 'gw-15', '2026-08-07 22:56:20'), (229, 'gw-02', '2026-08-02 05:21:12'), (230, 'gw-11', '2026-08-03 16:47:29'),
+        (231, 'gw-05', '2026-08-01 21:46:24'), (232, 'gw-11', '2026-08-07 14:10:06'), (233, 'gw-02', '2026-08-01 08:05:22'), (234, 'gw-04', '2026-08-07 17:48:13'), (235, 'gw-12', '2026-08-07 09:52:51'),
+        (236, 'gw-03', '2026-08-07 01:45:30'), (237, 'gw-12', '2026-08-04 17:58:28'), (238, 'gw-11', '2026-08-04 11:47:57'), (239, 'gw-01', '2026-08-08 20:26:15'), (240, 'gw-02', '2026-08-07 12:02:29');
+    expected_rows: [["2026-08-01", 10], ["2026-08-02", 11], ["2026-08-03", 12], ["2026-08-04", 13], ["2026-08-05", 12], ["2026-08-07", 18], ["2026-08-08", 15], ["2026-08-09", 18], ["2026-08-10", 13]]
+expected_concepts:
+  - GROUP BY on a computed expression (SUBSTR of the timestamp)
+  - COUNT(DISTINCT ...) versus COUNT(*)
+  - deterministic ORDER BY
+  - lexicographic order of fixed-format date strings
+optimal_complexity: {time: "O(n log n) for grouping and sorting", space: "O(d + u) where d is days and u distinct (day, device) pairs"}
+rubric:
+  excellent: Groups by SUBSTR(event_ts, 1, 10), counts COUNT(DISTINCT device_id), orders by day, and explains why fixed-format date text sorts chronologically and what an index or a stored date column would change.
+  good: Correct query after a hint about counting distinct devices or adding ORDER BY.
+  weak: Counts events with COUNT(*), groups by the full timestamp, relies on vendor-specific date functions or omits ORDER BY.
+  criteria:
+    correctness: All tests pass, including repeated events, midnight boundaries and case-sensitive device ids.
+    efficiency: One grouped scan; mentions that an expression index or a separate date column helps on large tables.
+    code_quality: Clear output aliases and the day expression used consistently in SELECT and GROUP BY.
+    edge_cases: Empty table, single event, out-of-order rows and year boundaries.
+    communication: Explains the difference between events and distinct devices.
+hints:
+  - Every event on the same calendar day shares the same first ten characters of its timestamp; that prefix is the natural grouping key.
+  - Counting rows per day counts events, not devices. You need an aggregate that ignores repeated device ids within each group.
+  - Group by the ten-character day prefix, count the distinct device ids in each group, alias both columns as requested and sort by the day text, which is chronological because the format is fixed-width.
+followups:
+  - How would you also list days with zero active devices in a date range?
+  - How would you compute weekly active devices without double counting a device seen on several days?
+  - What would you index or precompute if this table held billions of events?
+common_errors:
+  - Using COUNT(*) or COUNT(device_id), which counts events instead of devices.
+  - Grouping by the full event_ts, producing one row per timestamp.
+  - Forgetting ORDER BY and relying on the grouping order.
+  - Using vendor-specific date functions such as DATE() or DATE_TRUNC that do not run on both engines.

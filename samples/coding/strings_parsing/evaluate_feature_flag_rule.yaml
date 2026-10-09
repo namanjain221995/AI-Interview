@@ -1,0 +1,187 @@
+version: 1
+slug: evaluate_feature_flag_rule
+title: Evaluate a Feature Flag Rule
+difficulty: hard
+competency_keys: [algorithms, data_structures]
+role_tags: [backend, platform, fullstack]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Evaluate a Feature Flag Rule
+
+  A feature-flag service decides whether to show a feature by evaluating a targeting rule such as
+  `beta AND NOT (legacy_ui OR eu_only)` against the flags that are switched on for a request.
+
+  Rule syntax:
+
+  - A **flag name** is a run of lowercase letters, digits and `_`. A flag is `true` if it appears in
+    `enabled`, otherwise `false`.
+  - The operators are the uppercase keywords `NOT`, `AND` and `OR`, plus parentheses for grouping.
+  - Precedence from highest to lowest: `NOT`, then `AND`, then `OR`. `AND` and `OR` are evaluated left
+    to right among equals, and `NOT` applies to the single operand that follows it (a flag, a
+    parenthesised group or another `NOT`).
+  - Any whitespace (spaces, tabs, newlines) may appear between tokens. Keywords and flag names are always
+    separated by whitespace or a parenthesis.
+
+  The rule is guaranteed to be well formed. Evaluate it **without** using your language's `eval` or an
+  expression library, and return the result.
+
+  ### Example 1
+  ```
+  Input:  rule = "beta AND NOT (legacy_ui OR eu_only)", enabled = ["beta", "dark_mode"]
+  Output: true
+  ```
+
+  ### Example 2
+  ```
+  Input:  rule = "beta OR new_checkout AND eu_only", enabled = ["new_checkout"]
+  Output: false
+  Explanation: AND binds tighter, so this is beta OR (new_checkout AND eu_only)
+  ```
+
+  ### Example 3
+  ```
+  Input:  rule = "NOT beta AND (internal OR qa_team)", enabled = ["qa_team"]
+  Output: true
+  Explanation: NOT binds tighter than AND, so this is (NOT beta) AND (internal OR qa_team)
+  ```
+
+  ### Constraints
+  - `1 <= rule.length <= 3000`, parentheses nest at most `100` levels deep
+  - `0 <= enabled.length <= 100`; `enabled` may contain duplicates and names not used by the rule
+  - Flag names match `[a-z0-9_]+`, so they never collide with the uppercase keywords
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: evaluate_flag_rule
+  params:
+    - {name: rule, type: string}
+    - {name: enabled, type: "string[]"}
+  return_type: bool
+  comparison: exact
+reference_solutions:
+  python: |
+    def evaluate_flag_rule(rule: str, enabled: list[str]) -> bool:
+        on = set(enabled)
+        tokens: list[str] = []
+        i = 0
+        while i < len(rule):
+            ch = rule[i]
+            if ch.isspace():
+                i += 1
+            elif ch in "()":
+                tokens.append(ch)
+                i += 1
+            else:
+                start = i
+                while i < len(rule) and not rule[i].isspace() and rule[i] not in "()":
+                    i += 1
+                tokens.append(rule[start:i])
+        pos = 0
+
+        def parse_or() -> bool:
+            nonlocal pos
+            value = parse_and()
+            while pos < len(tokens) and tokens[pos] == "OR":
+                pos += 1
+                right = parse_and()
+                value = value or right
+            return value
+
+        def parse_and() -> bool:
+            nonlocal pos
+            value = parse_not()
+            while pos < len(tokens) and tokens[pos] == "AND":
+                pos += 1
+                right = parse_not()
+                value = value and right
+            return value
+
+        def parse_not() -> bool:
+            nonlocal pos
+            token = tokens[pos]
+            pos += 1
+            if token == "NOT":
+                return not parse_not()
+            if token == "(":
+                value = parse_or()
+                pos += 1  # closing parenthesis
+                return value
+            return token in on
+
+        return parse_or()
+  javascript: |
+    function evaluateFlagRule(rule, enabled) {
+      const on = new Set(enabled);
+      const tokens = rule.match(/[()]|[^\s()]+/g) || [];
+      let pos = 0;
+      const parseNot = () => {
+        const token = tokens[pos++];
+        if (token === "NOT") return !parseNot();
+        if (token === "(") {
+          const value = parseOr();
+          pos += 1;
+          return value;
+        }
+        return on.has(token);
+      };
+      const parseAnd = () => {
+        let value = parseNot();
+        while (pos < tokens.length && tokens[pos] === "AND") {
+          pos += 1;
+          const right = parseNot();
+          value = value && right;
+        }
+        return value;
+      };
+      const parseOr = () => {
+        let value = parseAnd();
+        while (pos < tokens.length && tokens[pos] === "OR") {
+          pos += 1;
+          const right = parseAnd();
+          value = value || right;
+        }
+        return value;
+      };
+      return parseOr();
+    }
+tests:
+  - {id: t1, args: ["beta AND NOT (legacy_ui OR eu_only)", ["beta", "dark_mode"]], expected: true, description: "Example 1 - NOT applied to a parenthesised OR"}
+  - {id: t2, args: ["beta OR new_checkout AND eu_only", ["new_checkout"]], expected: false, description: "Example 2 - AND binds tighter than OR"}
+  - {id: t3, args: ["NOT beta AND (internal OR qa_team)", ["qa_team"]], expected: true, description: "Example 3 - NOT binds tighter than AND"}
+  - {id: t4, hidden: true, args: ["beta", []], expected: false, description: "Single flag with no flags enabled"}
+  - {id: t5, hidden: true, args: ["NOT NOT NOT kill_switch", ["kill_switch"]], expected: false, description: "Chained NOT operators"}
+  - {id: t6, hidden: true, args: ["(a)AND(b)OR\t(\nc )", ["c"]], expected: true, description: "No spaces around parentheses, tabs and newlines as whitespace"}
+  - {id: t7, hidden: true, args: ["a OR b AND c OR d AND NOT e", ["b", "d"]], expected: true, description: "Mixed precedence - (a) OR (b AND c) OR (d AND NOT e)"}
+  - {id: t8, hidden: true, args: ["NOT a AND b OR c", ["a", "c"]], expected: true, description: "Left side false, OR rescues - checks NOT does not swallow the whole expression"}
+  - {id: t9, hidden: true, args: ["((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((canary))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))", ["canary", "canary", "unused_flag"]], expected: true, description: "60 levels of parentheses; duplicates and extra names in enabled"}
+  - {id: t10, hidden: true, args: ["v2_api AND NOT v2 AND api_v2", ["v2_api", "api_v2"]], expected: true, description: "Flag names that share substrings must be matched as whole tokens"}
+  - {id: t11, hidden: true, args: ["(region_0 AND NOT blocked_0) OR (region_1 AND NOT blocked_1) OR (region_2 AND NOT blocked_2) OR (region_3 AND NOT blocked_3) OR (region_4 AND NOT blocked_4) OR (region_5 AND NOT blocked_5) OR (region_6 AND NOT blocked_6) OR (region_7 AND NOT blocked_7) OR (region_8 AND NOT blocked_8) OR (region_9 AND NOT blocked_9) OR (region_10 AND NOT blocked_10) OR (region_11 AND NOT blocked_11) OR (region_12 AND NOT blocked_12) OR (region_13 AND NOT blocked_13) OR (region_14 AND NOT blocked_14) OR (region_15 AND NOT blocked_15) OR (region_16 AND NOT blocked_16) OR (region_17 AND NOT blocked_17) OR (region_18 AND NOT blocked_18) OR (region_19 AND NOT blocked_19) OR (region_20 AND NOT blocked_20) OR (region_21 AND NOT blocked_21) OR (region_22 AND NOT blocked_22) OR (region_23 AND NOT blocked_23) OR (region_24 AND NOT blocked_24) OR (region_25 AND NOT blocked_25) OR (region_26 AND NOT blocked_26) OR (region_27 AND NOT blocked_27) OR (region_28 AND NOT blocked_28) OR (region_29 AND NOT blocked_29) OR (region_30 AND NOT blocked_30) OR (region_31 AND NOT blocked_31) OR (region_32 AND NOT blocked_32) OR (region_33 AND NOT blocked_33) OR (region_34 AND NOT blocked_34) OR (region_35 AND NOT blocked_35) OR (region_36 AND NOT blocked_36) OR (region_37 AND NOT blocked_37) OR (region_38 AND NOT blocked_38) OR (region_39 AND NOT blocked_39)", ["region_7", "blocked_7", "region_31"]], expected: true, description: "Stress - long OR chain of 40 parenthesised AND terms"}
+expected_concepts:
+  - "tokenisation of identifiers, keywords and parentheses"
+  - "recursive descent with one function per precedence level (or shunting-yard)"
+  - "unary prefix operator handling"
+  - "hash set lookup for enabled flags"
+optimal_complexity: {time: "O(n + e) for rule length n and e enabled names", space: "O(n) for tokens and recursion depth"}
+rubric:
+  excellent: "Tokenises cleanly, writes a recursive-descent parser with OR, AND and NOT levels (or a correct shunting-yard with a unary operator), consumes every token even when the result is already decided, uses a set for enabled flags and explains how the grammar encodes precedence and associativity."
+  good: "Correct evaluator after a hint about NOT precedence or about consuming the right operand when short-circuiting."
+  weak: "Evaluates strictly left to right ignoring precedence, uses eval or string replacement, or matches flag names as substrings."
+  criteria:
+    correctness: "All tests pass, including precedence mixes, chained NOT, deep nesting and whitespace without spaces around parentheses."
+    efficiency: "Single pass over the tokens with constant-time flag lookups."
+    code_quality: "Grammar-shaped functions with a shared cursor, or a clearly separated tokenizer and evaluator."
+    edge_cases: "Lone flag, empty enabled list, duplicate enabled names and names sharing substrings."
+    communication: "Writes down the grammar and explains why NOT is parsed at the lowest grammar level."
+hints:
+  - "First turn the rule into a list of tokens: names, the three keywords and the two parentheses. Whitespace only separates tokens."
+  - "Precedence can be built into the structure of the parser: one routine for OR expressions that is made of AND expressions, which are made of NOT expressions, which are a flag, a parenthesised OR expression, or NOT applied to another NOT expression."
+  - "Use a shared token position. The OR routine parses an AND expression and, while the next token is OR, skips it and parses another AND expression, combining with logical or. The AND routine does the same with NOT expressions. The NOT routine reads one token, negates a recursive call for NOT, parses an OR expression and skips the closing parenthesis for an opening one, and otherwise looks the name up in a set of enabled flags. Always parse the right operand even if the answer is already known."
+followups:
+  - "How would you report a helpful error for a malformed rule such as a missing parenthesis?"
+  - "How would you compile the rule once and evaluate it for millions of requests?"
+  - "How would you add comparisons such as country == de or percentage rollouts?"
+  - "How would you detect that a rule can never be true?"
+common_errors:
+  - "Evaluating left to right with no precedence, so a OR b AND c is computed as (a OR b) AND c."
+  - "Short-circuiting by returning early without consuming the remaining tokens of the right operand."
+  - "Applying NOT to everything to its right instead of a single operand."
+  - "Searching for flag names as substrings of the rule or of each other."

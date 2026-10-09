@@ -1,0 +1,161 @@
+version: 1
+slug: multiwindow_burn_rate_alerts
+title: "Multi-Window Burn-Rate Alerting"
+difficulty: medium
+competency_keys: [algorithms, problem_solving]
+role_tags: [sre, devops, platform]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Multi-Window Burn-Rate Alerting
+
+  A service has an availability SLO whose **error budget** is `budget_ppm` failed requests per million
+  (for a 99.9% SLO, `budget_ppm = 1000`). The monitoring pipeline produces one data point per minute:
+  `total[i]` requests and `errors[i]` failed requests in minute `i`.
+
+  To page only for real, sustained problems, the alert checks two windows that both end at the current
+  minute `i`:
+
+  - the **long window**: minutes `i - long_window + 1` through `i`;
+  - the **short window**: minutes `i - short_window + 1` through `i`.
+
+  A window is **burning** when it has at least one request and its error rate is at least
+  `burn_threshold` times the budget. With integer arithmetic only:
+
+  `window_errors * 1_000_000 >= burn_threshold * budget_ppm * window_total`
+
+  The alert **fires at minute `i`** when `i + 1 >= long_window` (the long window is complete) and **both**
+  windows are burning. Return all minutes at which the alert fires, in ascending order.
+
+  Sums can exceed 32-bit integers, so use 64-bit arithmetic where your language needs it. Aim for
+  `O(n)` time.
+
+  ### Example 1
+  ```
+  Input:  total  = [1000, 1000, 1000, 1000, 1000, 1000]
+          errors = [0, 5, 30, 40, 2, 0]
+          budget_ppm = 1000, long_window = 4, short_window = 2, burn_threshold = 10
+  Output: [3, 4]
+  Explanation: burning means an error rate of at least 10 * 0.1% = 1%. At minute 3 the long window has
+  75 / 4000 and the short window 70 / 2000. At minute 5 the long window still burns (72 / 4000) but the
+  short window has recovered (2 / 2000), so the alert stops.
+  ```
+
+  ### Example 2
+  ```
+  Input:  total  = [500, 500, 500, 500]
+          errors = [0, 0, 0, 50]
+          budget_ppm = 1000, long_window = 4, short_window = 1, burn_threshold = 30
+  Output: []
+  Explanation: the short window burns (50 / 500 = 10% >= 3%) but the long window has 50 / 2000 = 2.5%.
+  ```
+
+  ### Example 3
+  ```
+  Input:  total  = [200, 200]
+          errors = [1, 1]
+          budget_ppm = 5000, long_window = 2, short_window = 1, burn_threshold = 1
+  Output: [1]
+  Explanation: both windows are exactly at the threshold (0.5%), which counts as burning.
+  ```
+
+  ### Constraints
+  - `0 <= total.length == errors.length <= 5000`
+  - `0 <= errors[i] <= total[i] <= 10^6`
+  - `1 <= budget_ppm <= 10^6`, `1 <= burn_threshold`, and `burn_threshold * budget_ppm <= 10^6`
+  - `1 <= short_window <= long_window <= 5000`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: multiwindow_burn_rate_alerts
+  params:
+    - {name: total, type: "long[]"}
+    - {name: errors, type: "long[]"}
+    - {name: budget_ppm, type: "int"}
+    - {name: long_window, type: "int"}
+    - {name: short_window, type: "int"}
+    - {name: burn_threshold, type: "int"}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def multiwindow_burn_rate_alerts(total: list[int], errors: list[int], budget_ppm: int, long_window: int, short_window: int, burn_threshold: int) -> list[int]:
+        prefix_total = [0]
+        prefix_errors = [0]
+        for t, e in zip(total, errors):
+            prefix_total.append(prefix_total[-1] + t)
+            prefix_errors.append(prefix_errors[-1] + e)
+        limit = burn_threshold * budget_ppm
+
+        def burning(start: int, end: int) -> bool:
+            requests = prefix_total[end] - prefix_total[start]
+            failed = prefix_errors[end] - prefix_errors[start]
+            return requests > 0 and failed * 1_000_000 >= limit * requests
+
+        firing = []
+        for i in range(long_window - 1, len(total)):
+            if burning(i + 1 - long_window, i + 1) and burning(i + 1 - short_window, i + 1):
+                firing.append(i)
+        return firing
+  javascript: |
+    function multiwindowBurnRateAlerts(total, errors, budgetPpm, longWindow, shortWindow, burnThreshold) {
+      const n = total.length;
+      const prefixTotal = [0];
+      const prefixErrors = [0];
+      for (let i = 0; i < n; i++) {
+        prefixTotal.push(prefixTotal[i] + total[i]);
+        prefixErrors.push(prefixErrors[i] + errors[i]);
+      }
+      const limit = BigInt(burnThreshold) * BigInt(budgetPpm);
+      const burning = (start, end) => {
+        const requests = prefixTotal[end] - prefixTotal[start];
+        const failed = prefixErrors[end] - prefixErrors[start];
+        return requests > 0 && BigInt(failed) * 1000000n >= limit * BigInt(requests);
+      };
+      const firing = [];
+      for (let i = longWindow - 1; i < n; i++) {
+        if (burning(i + 1 - longWindow, i + 1) && burning(i + 1 - shortWindow, i + 1)) firing.push(i);
+      }
+      return firing;
+    }
+tests:
+  - {id: t1, args: [[1000, 1000, 1000, 1000, 1000, 1000], [0, 5, 30, 40, 2, 0], 1000, 4, 2, 10], expected: [3, 4], description: "Example 1 - fires while both windows burn, stops when the short window recovers"}
+  - {id: t2, args: [[500, 500, 500, 500], [0, 0, 0, 50], 1000, 4, 1, 30], expected: [], description: "Example 2 - short spike without long-window support does not fire"}
+  - {id: t3, args: [[200, 200], [1, 1], 5000, 2, 1, 1], expected: [1], description: "Example 3 - equality at the threshold fires"}
+  - {id: t4, hidden: true, args: [[], [], 1000, 1, 1, 1], expected: [], description: "No data points"}
+  - {id: t5, hidden: true, args: [[100, 100, 100], [100, 100, 100], 1000, 5, 2, 1], expected: [], description: "Fewer minutes than long_window - never evaluated"}
+  - {id: t6, hidden: true, args: [[0, 0, 0, 10, 0, 0], [0, 0, 0, 10, 0, 0], 1000, 3, 1, 2], expected: [3], description: "Zero-traffic windows never burn even though the long window has 100% errors"}
+  - {id: t7, hidden: true, args: [[10, 10, 10, 10, 10], [1, 0, 2, 1, 0], 100000, 1, 1, 1], expected: [0, 2, 3], description: "long_window = short_window = 1 - each minute judged alone at a 10% threshold"}
+  - {id: t8, hidden: true, args: [[1000000, 1000000, 1000000, 1000000, 1000000, 1000000], [1000000, 999999, 1000000, 1000000, 1000000, 1000000], 1, 3, 3, 1000000], expected: [4, 5], description: "burn_threshold * budget_ppm = 10^6 needs 100% errors; sums exceed 32-bit and products exceed 10^12"}
+  - {id: t9, hidden: true, args: [[4000, 4000, 4000, 4000, 4000, 4000, 4000, 4000, 4000, 4000], [0, 0, 400, 400, 400, 400, 0, 0, 0, 0], 1000, 6, 3, 30], expected: [5, 6, 7], description: "Long window catches up late; alert fires once both agree and ends after recovery"}
+  - {id: t10, hidden: true, args: [[999999, 999999, 999999, 999999], [21000, 20999, 21000, 21001], 1500, 2, 1, 14], expected: [3], description: "Rates just around the threshold (2.1%) - exact integer comparison, no floating point"}
+  - {id: t11, hidden: true, args: [[831226, 934171, 957556, 943605, 915630, 961009, 875298, 803011, 882374, 865932, 898656, 889232, 941050, 919917, 984542, 986348, 920867, 904536, 911527, 937534, 947849, 935787, 858857, 984723, 963134, 837332, 831985, 923051, 905402, 969571, 913525, 870526, 839280, 928324, 868186, 934025, 946233, 883009, 914937, 847985, 925605, 869852, 825339, 907822, 803678, 918287, 852112, 962810, 870395, 801345, 952847, 988867, 858439, 834397, 909518, 953624, 908013, 936322, 803704, 819250, 969416, 806706, 978990, 885470, 922311, 954995, 963405, 956819, 986353, 904636, 969667, 969929, 997842, 986370, 969253, 836102, 848760, 911504, 900449, 890194, 921612, 875411, 885403, 831484, 856185, 824410, 886623, 975741, 892261, 947325, 962734, 996934, 877253, 945682, 869130, 844898, 815840, 848626, 882195, 816754, 1, 0, 3, 0, 0, 0, 0, 2, 0, 2, 3, 0, 2, 2, 3, 2, 0, 3, 0, 1, 829516, 832161, 832946, 969841, 911350, 908867, 862732, 857557, 942325, 988027, 838714, 804350, 925525, 882508, 955621, 944960, 934754, 965938, 972456, 863650, 858153, 904614, 947217, 852685, 920394, 924272, 841495, 927102, 937160, 967540, 878390, 991629, 987358, 939831, 952669, 811702, 941290, 827504, 992040, 943521, 810902, 876785, 874862, 901872, 965102, 969812, 893233, 935316, 882489, 807449, 975034, 816672, 856673, 959912, 827857, 828152, 868831, 830814, 930744, 936038, 979184, 890470, 823033, 869547, 885197, 947213, 989752, 882229, 921374, 891369, 954629, 840469, 948522, 870157, 883895, 869107, 964331, 886971, 832305, 950572, 905183, 805693, 987816, 976715, 888299, 978041, 977786, 975014, 935447, 911263, 969928, 815736, 989906, 802756, 946517, 866105, 887559, 968916, 908690, 926593, 803081, 998513, 966794, 973192, 885619, 854846, 934988, 963270, 896844, 945690, 849192, 802986, 840849, 857515, 854098, 976460, 984946, 822094, 909324, 936786, 954418, 834931, 807419, 909978, 848564, 992479, 860648, 972460, 889460, 891072, 959018, 866938, 885729, 809624, 928451, 805707, 895993, 997908, 852096, 871731, 991927, 857224, 816922, 961588, 936955, 883344, 847490, 845704, 936457, 827882, 921584, 912456, 855385, 928079, 977862, 970623, 961280, 959061, 837742, 950193, 809050, 846920, 941641, 919876, 981660, 978238, 968093, 807604, 934893, 824114, 995860, 885066, 933231, 801983, 892543, 998379, 931927, 910845, 844739, 973440, 897609, 910617, 895208, 964979, 959018, 855326, 998194, 987382, 845120, 913662, 807995, 966271, 993759, 802496, 920639, 927971, 837746, 919542, 965948, 975642, 978789, 922830, 937729, 877793, 954719, 938317, 828520, 950726, 925470, 883470, 827565, 844086, 812108, 936528, 887795, 923412, 987947, 863578, 934764, 810822, 956156, 849441, 924862, 938913, 857295, 808923, 877246, 882280, 992744, 957867, 832025, 953764, 844580, 829113, 905097, 851548, 997070, 869832, 866938, 857292, 944100, 981892, 965276, 970507, 876366, 970883, 853634, 961938, 867984, 990764, 966642, 813952, 940708, 822927, 803966, 945721, 976912, 862098, 852261, 873119, 824226, 819481, 935480, 981780, 884513, 944209, 800395, 982970, 909741, 893313, 978691, 866136, 898891, 955886, 995696, 889797, 920110, 974191, 959200, 817699, 960693, 881548, 906879, 805318, 959519, 839469, 966074, 801313, 953947, 825226, 885134, 900979, 916393, 916902, 877710, 826649, 855922, 999215, 981491, 826609, 833672, 940639, 961590, 941092, 869115, 863587, 879173, 962841, 844520, 952165, 898344, 815512, 809479, 878104, 981184, 961027, 996932, 857816, 937804, 963266, 946594, 994797, 861898, 928589, 841234, 849679, 942959, 830650, 832276, 890966, 861605, 800901, 999691, 839500, 908494, 827650, 927326, 847479, 890814, 916224, 944375, 823898, 921574, 915813, 917655, 995869, 906863, 967849, 986875, 828567, 802874, 958959, 913941, 859357, 907607, 961956, 911915, 994416, 909854, 945625, 920610, 993582, 985526, 893800, 881603, 864695, 957514, 883420, 888195, 911229, 898654, 912875, 885049, 803787, 992803, 925777, 908358, 958122, 877060, 886732], [833, 0, 1917, 1889, 457, 0, 1, 1608, 442, 866, 2, 2, 942, 461, 984, 987, 1841, 1809, 1824, 938, 1897, 2, 429, 2, 1927, 1674, 1665, 925, 907, 1940, 457, 0, 1680, 928, 1737, 1869, 1, 1766, 915, 1697, 2, 1740, 414, 454, 0, 2, 426, 2, 870, 803, 1907, 496, 1718, 834, 454, 955, 1816, 469, 1, 1, 969, 1614, 979, 1, 461, 478, 964, 480, 2, 0, 484, 1, 499, 0, 486, 420, 1698, 1823, 900, 446, 1844, 1750, 1771, 831, 428, 1650, 1775, 487, 447, 473, 964, 500, 879, 472, 1, 2, 817, 2, 884, 817, 1, 0, 1, 0, 0, 0, 0, 1, 0, 2, 2, 0, 1, 2, 1, 2, 0, 2, 0, 1, 416, 0, 834, 969, 456, 1818, 1727, 428, 2, 1977, 419, 806, 1852, 443, 0, 2, 935, 965, 2, 1727, 431, 904, 948, 853, 1842, 924, 1682, 1, 1874, 483, 880, 991, 0, 471, 954, 1624, 472, 0, 1985, 944, 405, 878, 874, 452, 2, 1940, 448, 0, 441, 2, 1, 817, 430, 479, 828, 1, 870, 831, 2, 469, 1960, 0, 1647, 434, 1772, 948, 1980, 441, 462, 892, 1909, 1682, 475, 870, 884, 436, 964, 445, 833, 1903, 27156, 24172, 29635, 29302, 26648, 29342, 29335, 29252, 28063, 27338, 29098, 24473, 29697, 24083, 28397, 25983, 26628, 29069, 27261, 27798, 24092, 29955, 29003, 29196, 26568, 25646, 28050, 28900, 26905, 28372, 25477, 24089, 25226, 25726, 25624, 29293, 29549, 24664, 27281, 28105, 28634, 25047, 24223, 27299, 25458, 29776, 25820, 29175, 26684, 26733, 28771, 26009, 26572, 24290, 27853, 24172, 26880, 29938, 25563, 26153, 1984, 1, 817, 2, 937, 884, 2, 847, 1874, 413, 460, 458, 857, 466, 978, 1943, 480, 481, 420, 2, 810, 424, 941, 459, 0, 490, 1938, 807, 936, 1650, 1991, 444, 1, 0, 893, 0, 465, 1821, 422, 1946, 450, 1822, 448, 1931, 1918, 427, 1, 493, 424, 457, 405, 967, 994, 1606, 921, 463, 419, 1841, 2, 976, 1, 924, 1, 0, 0, 1878, 1659, 1903, 0, 441, 1655, 844, 2, 2, 444, 462, 1977, 1727, 935, 1621, 479, 2, 1850, 1, 1716, 1617, 440, 883, 1, 480, 832, 2, 1690, 1, 0, 1, 500, 869, 433, 1, 1, 1965, 0, 1941, 0, 1, 1, 1, 2, 497, 484, 813, 1882, 411, 1608, 1, 488, 433, 853, 437, 1, 411, 468, 492, 443, 0, 1600, 1967, 911, 2, 2, 433, 450, 478, 0, 446, 0, 1948, 1918, 408, 28822, 26446, 27207, 24160, 28786, 25185, 28984, 24040, 28618, 24756, 1770, 901, 917, 1834, 877, 0, 857, 1998, 981, 414, 835, 1881, 963, 1884, 870, 433, 2, 482, 1691, 477, 1798, 817, 811, 1756, 983, 962, 1995, 1, 1876, 963, 1894, 0, 430, 1858, 1684, 849, 0, 416, 1666, 1, 862, 0, 1001, 1681, 2, 415, 929, 0, 445, 1832, 1888, 2, 1843, 1831, 1836, 0, 454, 1, 494, 828, 403, 959, 2, 859, 2, 962, 911, 499, 909, 947, 921, 993, 1971, 894, 2, 0, 959, 2, 1778, 1824, 1, 1827, 1771, 804, 993, 1, 1816, 2, 0, 1774], 1000, 60, 5, 14], expected: [226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261], description: "Stress - 500 minutes of near-million traffic with two incidents and a low-traffic gap; 60/5 minute windows, 14x burn"}
+expected_concepts:
+  - "prefix sums for O(1) window totals"
+  - "multi-window, multi-burn-rate SLO alerting"
+  - "integer cross-multiplication instead of floating-point division"
+  - "64-bit overflow awareness"
+  - "guarding against empty (zero-traffic) windows"
+optimal_complexity: {time: "O(n)", space: "O(n) for prefix sums (O(1) with two running window sums)"}
+rubric:
+  excellent: "Builds prefix sums (or two running sums), evaluates both windows in O(1) per minute only once the long window is complete, compares with integer cross-multiplication in 64-bit arithmetic, rejects zero-traffic windows, and explains why the short window makes the alert reset quickly."
+  good: "Correct results with prefix sums but needs a hint on the zero-traffic guard, the threshold equality or 64-bit sums."
+  weak: "Recomputes each window with a nested loop, compares floating-point rates, starts evaluating before the long window is complete, or overflows 32-bit sums."
+  criteria:
+    correctness: "All tests pass, including threshold equality, zero-traffic windows and large counts."
+    efficiency: "Constant work per minute after a linear prefix-sum pass."
+    code_quality: "A small helper decides whether a window burns; the start index and window bounds are computed once and named."
+    edge_cases: "Fewer minutes than the long window, equal windows, zero traffic and maximal values."
+    communication: "Explains the purpose of the two windows and why integer arithmetic avoids rounding errors."
+hints:
+  - "Each check needs the sum of requests and the sum of errors over a range of minutes ending now. How can you get any range sum without adding it up again every minute?"
+  - "With prefix sums, a window's totals are the difference of two prefix values. Compare the error rate with the threshold by cross-multiplying instead of dividing, and remember that a window with no traffic can never burn."
+  - "Build prefix sums of total and errors with 64-bit integers, then for every minute from long_window minus one onward compute both window totals by subtraction; fire when each window has a positive total and its errors times one million is at least burn_threshold times budget_ppm times its total, collecting the minute indices in order."
+followups:
+  - "How would you add a second alert tier (for example a 6-hour and 30-minute pair at a lower burn rate) that opens a ticket instead of paging?"
+  - "How would you compute this on a live stream with constant memory per alert?"
+  - "Why do multi-window alerts reduce both false pages and time-to-reset compared with a single window?"
+common_errors:
+  - "Summing every window from scratch, giving O(n * long_window) time."
+  - "Dividing integers to get a rate, which truncates to zero, or comparing floating-point rates that miss the equality case."
+  - "Accumulating totals in 32-bit integers, which overflow on high-traffic services."
+  - "Treating a window with zero requests as burning or dividing by zero."
+  - "Evaluating minutes before the long window is complete."

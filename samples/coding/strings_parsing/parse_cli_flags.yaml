@@ -1,0 +1,147 @@
+version: 1
+slug: parse_cli_flags
+title: Parse CLI Flags
+difficulty: medium
+competency_keys: [problem_solving, code_quality]
+role_tags: [platform, devops, backend]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Parse CLI Flags
+
+  An internal deploy CLI needs a small, dependency-free flag parser. You are given the argument list
+  `argv` (without the program name). Process it from left to right:
+
+  - `--` on its own **stops flag parsing**: it and every argument after it are positional.
+  - `--name=value` sets flag `name` to `value`. The name ends at the **first** `=`; the value is the rest
+    of the argument and may be empty or contain more `=` characters.
+  - `--name` without `=`: if there is a next argument and it does **not** start with `-`, that next
+    argument is consumed as the value. Otherwise the flag is set to `true`.
+  - `-abc` (a single dash followed by letters) sets each letter as its own flag to `true`: `a`, `b` and
+    `c`. Short flags never take a value.
+  - A lone `-` and any argument that does not start with `-` are positional arguments, which are ignored.
+
+  Short and long flags share one namespace (`-v` and `--v` set the same flag). If a flag is set more
+  than once, the **last** assignment wins.
+
+  Return one string `name=value` per flag, sorted by name in ascending character-code order.
+
+  ### Example 1
+  ```
+  Input:  argv = ["deploy", "--env", "staging", "--dry-run", "-vf", "--replicas=3", "web"]
+  Output: ["dry-run=true", "env=staging", "f=true", "replicas=3", "v=true"]
+  Explanation: staging is consumed by --env. --dry-run is followed by -vf, which starts with -, so it is true.
+  ```
+
+  ### Example 2
+  ```
+  Input:  argv = ["--tag=v1", "--tag", "v2", "--", "--tag=v3", "-x"]
+  Output: ["tag=v2"]
+  Explanation: Everything after -- is positional, so --tag=v3 and -x are ignored.
+  ```
+
+  ### Constraints
+  - `0 <= argv.length <= 200`
+  - Every argument is non-empty and consists of printable ASCII characters.
+  - Long flag names (between `--` and `=` or the end) are non-empty and use lowercase letters, digits and `-`.
+  - An argument that starts with a single `-` is either a lone `-` or `-` followed by one or more ASCII letters.
+
+  **Follow-up:** how would you report unknown flags or a flag that is missing its required value?
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: parse_cli_flags
+  params:
+    - {name: argv, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def parse_cli_flags(argv: list[str]) -> list[str]:
+        flags: dict[str, str] = {}
+        i, n = 0, len(argv)
+        while i < n:
+            arg = argv[i]
+            if arg == "--":
+                break
+            if arg.startswith("--"):
+                body = arg[2:]
+                if "=" in body:
+                    name, value = body.split("=", 1)
+                    flags[name] = value
+                elif i + 1 < n and not argv[i + 1].startswith("-"):
+                    flags[body] = argv[i + 1]
+                    i += 1
+                else:
+                    flags[body] = "true"
+            elif arg.startswith("-") and len(arg) > 1:
+                for letter in arg[1:]:
+                    flags[letter] = "true"
+            i += 1
+        return [f"{name}={flags[name]}" for name in sorted(flags)]
+  javascript: |
+    function parseCliFlags(argv) {
+      const flags = new Map();
+      for (let i = 0; i < argv.length; i++) {
+        const arg = argv[i];
+        if (arg === "--") break;
+        if (arg.startsWith("--")) {
+          const body = arg.slice(2);
+          const eq = body.indexOf("=");
+          if (eq !== -1) {
+            flags.set(body.slice(0, eq), body.slice(eq + 1));
+          } else if (i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
+            flags.set(body, argv[i + 1]);
+            i++;
+          } else {
+            flags.set(body, "true");
+          }
+        } else if (arg.startsWith("-") && arg.length > 1) {
+          for (const letter of arg.slice(1)) flags.set(letter, "true");
+        }
+      }
+      const names = [...flags.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      return names.map((name) => `${name}=${flags.get(name)}`);
+    }
+tests:
+  - {id: t1, args: [["deploy", "--env", "staging", "--dry-run", "-vf", "--replicas=3", "web"]], expected: ["dry-run=true", "env=staging", "f=true", "replicas=3", "v=true"], description: "Example 1 - consumed value, boolean long flag, grouped short flags, = form, positionals"}
+  - {id: t2, args: [["--tag=v1", "--tag", "v2", "--", "--tag=v3", "-x"]], expected: ["tag=v2"], description: "Example 2 - last assignment wins and -- stops parsing"}
+  - {id: t3, hidden: true, args: [[]], expected: [], description: "No arguments"}
+  - {id: t4, hidden: true, args: [["build", "-", "src/", "--"]], expected: [], description: "Only positionals, a lone dash and a terminator"}
+  - {id: t5, hidden: true, args: [["--verbose"]], expected: ["verbose=true"], description: "Long flag at the end of the list is true"}
+  - {id: t6, hidden: true, args: [["--label=", "--query=a=b=c", "--note=has space"]], expected: ["label=", "note=has space", "query=a=b=c"], description: "Empty value after =, value containing = signs, value containing a space"}
+  - {id: t7, hidden: true, args: [["--force", "--yes", "--out", "-", "--level", "true"]], expected: ["force=true", "level=true", "out=true", "yes=true"], description: "Long flag followed by another long flag, by a lone dash (not consumed), and by a literal true"}
+  - {id: t8, hidden: true, args: [["-ab", "--a=x", "-b", "--b", "-a"]], expected: ["a=true", "b=true"], description: "Short and long forms share a namespace; last write wins for both names"}
+  - {id: t9, hidden: true, args: [["-Zz", "--z-index", "10", "--z1", "-a", "--0", "Y"]], expected: ["0=Y", "Z=true", "a=true", "z=true", "z-index=10", "z1=true"], description: "Character-code order: digit name, then uppercase, then lowercase, with z-index before z1 because hyphen precedes digits; --z1 is true because a short flag group follows"}
+  - {id: t10, hidden: true, args: [["--a", "--", "b", "--c=1"]], expected: ["a=true"], description: "A long flag directly before -- is true and -- is not consumed as its value"}
+  - {id: t11, hidden: true, args: [["--region", "eu-west-1", "--n", "-q", "pos", "--n", "--m", "x", "-pqr", "tail"]], expected: ["m=x", "n=true", "p=true", "q=true", "r=true", "region=eu-west-1"], description: "Mixed sequence: value with hyphens is consumed, repeated flag ends true, short groups"}
+expected_concepts:
+  - "index-based scan that can consume the next argument"
+  - "first-occurrence split on ="
+  - "last-write-wins map of flags"
+  - "terminator handling for --"
+  - "sorting output keys by character code"
+optimal_complexity: {time: "O(L + k log k)", space: "O(k)"}
+rubric:
+  excellent: "Uses an explicit index so a value can be consumed, orders the checks correctly (-- before --name before -abc), splits on the first = only, stores into a map with last-write-wins, and sorts names by code order; explains the ambiguity of values that start with a dash."
+  good: "Correct parser that needs a nudge on one rule, such as not consuming a lone dash, splitting on the first = only, or stopping at --."
+  weak: "Uses a for-each loop that cannot skip a consumed value, splits on every =, treats -abc as a flag named abc, or keeps the first value of a repeated flag."
+  criteria:
+    correctness: "All tests pass, including the terminator, repeated flags across short and long forms, and values containing = signs."
+    efficiency: "Single pass over the arguments plus sorting the distinct flag names."
+    code_quality: "Each argument shape handled by a clear branch in a sensible order; no duplicated parsing logic."
+    edge_cases: "Empty list, flag at the end, flag before --, lone dash, empty value after =, uppercase short flags in the sort order."
+    communication: "Explains which argument shapes are checked first and why the order of checks matters."
+hints:
+  - "Classify each argument by its shape first: the terminator, a long flag, a group of short flags, or something positional."
+  - "A long flag without an equals sign may need to look at the argument after it, so a plain for-each loop is awkward; keep an index you can advance an extra step. Store results in a map so later assignments overwrite earlier ones."
+  - "Walk with an index. Stop entirely at a bare double dash. For a double-dash argument, split at the first equals sign if there is one; otherwise take the next argument as the value when it exists and does not begin with a dash (and skip it), or use true. For a single dash followed by letters, set each letter to true. Finally sort the map keys by character code and format name equals value."
+followups:
+  - "How would you support flags that may be repeated to build a list, such as --tag a --tag b?"
+  - "How would you handle a negative number as a value, for example --offset -5?"
+  - "How would you declare which flags are boolean so that --dry-run never consumes a positional argument?"
+  - "How would you generate a usage message from the same flag definitions?"
+common_errors:
+  - "Iterating with for-each and then also processing the consumed value as a positional argument."
+  - "Splitting --query=a=b=c on every equals sign."
+  - "Consuming a lone - or a following short flag group as the value of a long flag."
+  - "Continuing to parse flags after the -- terminator."
+  - "Sorting with a locale-aware comparison so uppercase names do not come first."

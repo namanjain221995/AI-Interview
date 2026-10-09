@@ -1,0 +1,227 @@
+version: 1
+slug: category_breadcrumb_paths
+title: "Category Breadcrumb Paths (SQL)"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [data_analyst, fullstack, backend, dba]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Category Breadcrumb Paths
+
+  An online store keeps its product categories in one table:
+
+  Table `categories`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | name | TEXT | not unique: the same name can appear under different parents |
+  | parent_id | INTEGER | references `categories.id`; **NULL for a top-level (root) category** |
+
+  Every non-NULL `parent_id` points to an existing category and there are no cycles, so the table is a
+  forest of trees. A child's `id` can be smaller than its parent's.
+
+  The storefront needs a breadcrumb for every category. Return one row per category with columns:
+
+  - `id`: the category id;
+  - `breadcrumb`: the names on the path from its root down to the category itself, joined with
+    `' > '` (space, greater-than sign, space), for example `'Hardware > Storage > SSD'`. A root's
+    breadcrumb is just its name;
+  - `depth`: the number of ancestors (`0` for a root).
+
+  Order the rows by `id` ascending. The tree can be arbitrarily deep.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite (use `||` for string concatenation and a
+  recursive common table expression).
+
+  ### Example 1
+  ```
+  categories
+  +----+------------+-----------+
+  | id | name       | parent_id |
+  +----+------------+-----------+
+  | 1  | Hardware   | NULL      |
+  | 2  | Storage    | 1         |
+  | 3  | Networking | 1         |
+  | 4  | SSD        | 2         |
+  | 5  | HDD        | 2         |
+  | 6  | Software   | NULL      |
+  | 7  | Databases  | 6         |
+  +----+------------+-----------+
+
+  Output
+  +----+--------------------------+-------+
+  | id | breadcrumb               | depth |
+  +----+--------------------------+-------+
+  | 1  | Hardware                 | 0     |
+  | 2  | Hardware > Storage       | 1     |
+  | 3  | Hardware > Networking    | 1     |
+  | 4  | Hardware > Storage > SSD | 2     |
+  | 5  | Hardware > Storage > HDD | 2     |
+  | 6  | Software                 | 0     |
+  | 7  | Software > Databases     | 1     |
+  +----+--------------------------+-------+
+  ```
+
+  ### Example 2
+  ```
+  categories
+  +----+----------------+-----------+
+  | id | name           | parent_id |
+  +----+----------------+-----------+
+  | 2  | Tools          | 5         |
+  | 5  | Garden         | NULL      |
+  | 9  | Pruning Shears | 2         |
+  | 11 | Seasonal       | NULL      |
+  +----+----------------+-----------+
+
+  Output
+  +----+---------------------------------+-------+
+  | id | breadcrumb                      | depth |
+  +----+---------------------------------+-------+
+  | 2  | Garden > Tools                  | 1     |
+  | 5  | Garden                          | 0     |
+  | 9  | Garden > Tools > Pruning Shears | 2     |
+  | 11 | Seasonal                        | 0     |
+  +----+---------------------------------+-------+
+  Tools (id 2) has a smaller id than its parent Garden (id 5); rows are still ordered by id.
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return id, breadcrumb (root names joined with ' > ') and depth for every category, ordered by id.
+    SELECT id, name AS breadcrumb, 0 AS depth
+    FROM categories
+    ORDER BY id;
+reference_solutions:
+  sql: |
+    WITH RECURSIVE trail (id, breadcrumb, depth) AS (
+      SELECT id, name, 0
+      FROM categories
+      WHERE parent_id IS NULL
+      UNION ALL
+      SELECT c.id, t.breadcrumb || ' > ' || c.name, t.depth + 1
+      FROM categories c
+      JOIN trail t ON c.parent_id = t.id
+    )
+    SELECT id, breadcrumb, depth
+    FROM trail
+    ORDER BY id;
+sql_setup: |
+  CREATE TABLE categories (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    parent_id INTEGER REFERENCES categories (id)
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - two roots, three levels, siblings"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (1, 'Hardware', NULL), (2, 'Storage', 1), (3, 'Networking', 1), (4, 'SSD', 2),
+        (5, 'HDD', 2), (6, 'Software', NULL), (7, 'Databases', 6);
+    expected_rows: [[1, "Hardware", 0], [2, "Hardware > Storage", 1], [3, "Hardware > Networking", 1], [4, "Hardware > Storage > SSD", 2], [5, "Hardware > Storage > HDD", 2], [6, "Software", 0], [7, "Software > Databases", 1]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - child ids smaller than parent ids; a lone root"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (2, 'Tools', 5), (5, 'Garden', NULL), (9, 'Pruning Shears', 2), (11, 'Seasonal', NULL);
+    expected_rows: [[2, "Garden > Tools", 1], [5, "Garden", 0], [9, "Garden > Tools > Pruning Shears", 2], [11, "Seasonal", 0]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Only roots - breadcrumb is the name and depth 0"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (3, 'Returns', NULL), (1, 'Clearance', NULL), (2, 'New Arrivals', NULL);
+    expected_rows: [[1, "Clearance", 0], [2, "New Arrivals", 0], [3, "Returns", 0]]
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Single chain of 10 levels - long breadcrumb and depth 9 (no fixed self-join count works)"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (1, 'L1', NULL), (2, 'L2', 1), (3, 'L3', 2), (4, 'L4', 3),
+        (5, 'L5', 4), (6, 'L6', 5), (7, 'L7', 6), (8, 'L8', 7),
+        (9, 'L9', 8), (10, 'L10', 9);
+    expected_rows: [[1, "L1", 0], [2, "L1 > L2", 1], [3, "L1 > L2 > L3", 2], [4, "L1 > L2 > L3 > L4", 3], [5, "L1 > L2 > L3 > L4 > L5", 4], [6, "L1 > L2 > L3 > L4 > L5 > L6", 5], [7, "L1 > L2 > L3 > L4 > L5 > L6 > L7", 6], [8, "L1 > L2 > L3 > L4 > L5 > L6 > L7 > L8", 7], [9, "L1 > L2 > L3 > L4 > L5 > L6 > L7 > L8 > L9", 8], [10, "L1 > L2 > L3 > L4 > L5 > L6 > L7 > L8 > L9 > L10", 9]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Same names under different parents, plus apostrophe and ampersand in names; must join by id, not name"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (1, 'Women''s Wear', NULL), (2, 'Accessories', 1), (3, 'Kids & Teens', NULL), (4, 'Accessories', 3),
+        (5, 'Belts', 2), (6, 'Belts', 4);
+    expected_rows: [[1, "Women's Wear", 0], [2, "Women's Wear > Accessories", 1], [3, "Kids & Teens", 0], [4, "Kids & Teens > Accessories", 1], [5, "Women's Wear > Accessories > Belts", 2], [6, "Kids & Teens > Accessories > Belts", 2]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Ids unrelated to tree order, grandchildren with lower ids than ancestors; output must be ordered by id"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (10, 'Garden', NULL), (20, 'Office', NULL), (8, 'Hoses', 10), (7, 'Paper', 20),
+        (6, 'A4', 7), (5, 'Seeds', 10), (4, 'Letter', 7), (3, 'Bulbs', 5),
+        (2, 'Tulips', 3), (1, 'Pens', 20);
+    expected_rows: [[1, "Office > Pens", 1], [2, "Garden > Seeds > Bulbs > Tulips", 3], [3, "Garden > Seeds > Bulbs", 2], [4, "Office > Paper > Letter", 2], [5, "Garden > Seeds", 1], [6, "Office > Paper > A4", 2], [7, "Office > Paper", 1], [8, "Garden > Hoses", 1], [10, "Garden", 0], [20, "Office", 0]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Stress - 60 categories in a random forest inserted out of order, repeated names"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (89, 'Tools', 158), (128, 'Adapters', 163), (91, 'Chairs', 52), (80, 'Office', 184),
+        (107, 'Adapters', 121), (166, 'Lighting', 36), (121, 'Desks', NULL), (133, 'Kitchen', NULL),
+        (174, 'Paper', 78), (63, 'Paper', 78), (15, 'Audio', 80), (58, 'Audio', 146),
+        (165, 'Lighting', 121), (47, 'Tools', 121), (84, 'Kitchen', 137), (168, 'Adapters', 186),
+        (189, 'Audio', 133), (68, 'Safety', 105), (52, 'Desks', 47), (85, 'Safety', NULL),
+        (53, 'Storage', 91), (90, 'Kitchen', 189), (149, 'Safety', 121), (11, 'Labels', 163),
+        (32, 'Safety', 80), (120, 'Labels', 140), (146, 'Tools', 165), (20, 'Audio', 85),
+        (191, 'Lighting', 15), (130, 'Cleaning', 170), (56, 'Storage', 128), (67, 'Cables', 165),
+        (105, 'Labels', 47), (55, 'Office', 38), (59, 'Chairs', 89), (158, 'Cables', 184),
+        (106, 'Tools', 53), (110, 'Batteries', 158), (137, 'Audio', 186), (5, 'Desks', 11),
+        (175, 'Cleaning', 32), (161, 'Safety', 168), (194, 'Paper', 100), (108, 'Chairs', 106),
+        (178, 'Batteries', 84), (187, 'Chairs', 121), (135, 'Lighting', 187), (36, 'Batteries', 90),
+        (29, 'Cables', 58), (78, 'Storage', 149), (192, 'Cleaning', 166), (163, 'Lighting', 184),
+        (140, 'Desks', 135), (100, 'Storage', 161), (38, 'Paper', 85), (186, 'Lighting', 121),
+        (184, 'Audio', 47), (153, 'Cleaning', 130), (82, 'Labels', 178), (170, 'Chairs', 158);
+    expected_rows: [[5, "Desks > Tools > Audio > Lighting > Labels > Desks", 5], [11, "Desks > Tools > Audio > Lighting > Labels", 4], [15, "Desks > Tools > Audio > Office > Audio", 4], [20, "Safety > Audio", 1], [29, "Desks > Lighting > Tools > Audio > Cables", 4], [32, "Desks > Tools > Audio > Office > Safety", 4], [36, "Kitchen > Audio > Kitchen > Batteries", 3], [38, "Safety > Paper", 1], [47, "Desks > Tools", 1], [52, "Desks > Tools > Desks", 2], [53, "Desks > Tools > Desks > Chairs > Storage", 4], [55, "Safety > Paper > Office", 2], [56, "Desks > Tools > Audio > Lighting > Adapters > Storage", 5], [58, "Desks > Lighting > Tools > Audio", 3], [59, "Desks > Tools > Audio > Cables > Tools > Chairs", 5], [63, "Desks > Safety > Storage > Paper", 3], [67, "Desks > Lighting > Cables", 2], [68, "Desks > Tools > Labels > Safety", 3], [78, "Desks > Safety > Storage", 2], [80, "Desks > Tools > Audio > Office", 3], [82, "Desks > Lighting > Audio > Kitchen > Batteries > Labels", 5], [84, "Desks > Lighting > Audio > Kitchen", 3], [85, "Safety", 0], [89, "Desks > Tools > Audio > Cables > Tools", 4], [90, "Kitchen > Audio > Kitchen", 2], [91, "Desks > Tools > Desks > Chairs", 3], [100, "Desks > Lighting > Adapters > Safety > Storage", 4], [105, "Desks > Tools > Labels", 2], [106, "Desks > Tools > Desks > Chairs > Storage > Tools", 5], [107, "Desks > Adapters", 1], [108, "Desks > Tools > Desks > Chairs > Storage > Tools > Chairs", 6], [110, "Desks > Tools > Audio > Cables > Batteries", 4], [120, "Desks > Chairs > Lighting > Desks > Labels", 4], [121, "Desks", 0], [128, "Desks > Tools > Audio > Lighting > Adapters", 4], [130, "Desks > Tools > Audio > Cables > Chairs > Cleaning", 5], [133, "Kitchen", 0], [135, "Desks > Chairs > Lighting", 2], [137, "Desks > Lighting > Audio", 2], [140, "Desks > Chairs > Lighting > Desks", 3], [146, "Desks > Lighting > Tools", 2], [149, "Desks > Safety", 1], [153, "Desks > Tools > Audio > Cables > Chairs > Cleaning > Cleaning", 6], [158, "Desks > Tools > Audio > Cables", 3], [161, "Desks > Lighting > Adapters > Safety", 3], [163, "Desks > Tools > Audio > Lighting", 3], [165, "Desks > Lighting", 1], [166, "Kitchen > Audio > Kitchen > Batteries > Lighting", 4], [168, "Desks > Lighting > Adapters", 2], [170, "Desks > Tools > Audio > Cables > Chairs", 4], [174, "Desks > Safety > Storage > Paper", 3], [175, "Desks > Tools > Audio > Office > Safety > Cleaning", 5], [178, "Desks > Lighting > Audio > Kitchen > Batteries", 4], [184, "Desks > Tools > Audio", 2], [186, "Desks > Lighting", 1], [187, "Desks > Chairs", 1], [189, "Kitchen > Audio", 1], [191, "Desks > Tools > Audio > Office > Audio > Lighting", 5], [192, "Kitchen > Audio > Kitchen > Batteries > Lighting > Cleaning", 5], [194, "Desks > Lighting > Adapters > Safety > Storage > Paper", 5]]
+expected_concepts:
+  - "WITH RECURSIVE over an adjacency list (parent_id)"
+  - "anchoring the recursion on roots (parent_id IS NULL)"
+  - "building a path string with || while recursing top-down"
+  - "carrying a depth counter"
+  - "ordering the final result independently of recursion order"
+optimal_complexity: {time: "O(n) rows produced, each join step indexed on parent_id", space: "O(n * d) for the breadcrumb strings, d = depth"}
+rubric:
+  excellent: "Anchors a recursive CTE on the roots, appends ' > ' and the child name while incrementing depth, joins on parent_id = id (never on names), orders the final SELECT by id, and discusses index on parent_id and type consistency of the recursive column."
+  good: "Correct recursive query after a hint about the anchor (roots) or about walking top-down so the breadcrumb is built in the right order."
+  weak: "Uses a fixed number of self-joins, builds the breadcrumb in reverse order, joins categories by name, or misses roots."
+  criteria:
+    correctness: "All tests pass, including deep chains, duplicate names and ids smaller than their parents."
+    efficiency: "Single recursive pass touching each category once; mentions an index on parent_id."
+    code_quality: "Readable CTE with named columns and a clear separator literal."
+    edge_cases: "Empty table, roots only, repeated names and names containing punctuation."
+    communication: "Explains why walking down from roots builds the path naturally and how recursion stops at the leaves."
+hints:
+  - "A breadcrumb is easiest to build if you start at the top of each tree and walk down, extending the path one level at a time."
+  - "Use a recursive common table expression whose first part selects the roots with their own name as the path and depth zero."
+  - "In the recursive part, join categories to the rows already produced on child parent id equals produced id, and output the produced breadcrumb followed by the separator and the child's name, with depth plus one. Select from the CTE and order by id."
+followups:
+  - "How would you list, for one category, all of its descendants with their relative depth?"
+  - "How would you detect a cycle if bad data introduced one, and stop the recursion safely?"
+  - "What schema alternatives (materialised path, nested sets, closure table) make breadcrumb reads cheaper, and what do they cost on writes?"
+  - "How would you count the number of products under each category including all subcategories?"
+common_errors:
+  - "Starting the recursion from every category instead of only from roots, which produces partial breadcrumbs."
+  - "Walking upwards from each category and concatenating in the wrong order."
+  - "Joining on category names, which mixes up categories that share a name."
+  - "Using a fixed number of self-joins that silently stops at a few levels."
+  - "Forgetting the final ORDER BY id, relying on recursion output order."

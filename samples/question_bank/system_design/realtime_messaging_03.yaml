@@ -1,0 +1,612 @@
+# Curated questions: system design for real-time and messaging systems (part 3 of 4).
+# Notification delivery details, event buses and publish-subscribe platforms.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend, platform]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------------------ easy
+  - external_key: system_design.realtime_messaging.daily_digest_email
+    competency_key: system_design
+    topic: Daily activity digest emails
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Product wants to send each user a daily email summarising activity they missed in their projects, delivered
+      around eight in the morning wherever they are. How would you design the job that builds and sends these
+      digests?
+    expected_concepts:
+      - grouping users by local send time and scheduling batches
+      - collecting unseen activity since the last digest per user
+      - skipping users with nothing new or who opted out
+      - recording what was sent so a rerun doesn't double-send
+      - rate-limited hand-off to the email provider
+    rubric:
+      excellent: Schedules by local time, builds per-user content from a clear "since last digest" marker, skips empty digests, makes reruns safe and paces sending to the provider.
+      good: Runs a scheduled job that queries activity and sends emails, with some idempotency.
+      weak: Sends everyone a digest at one fixed server time with no protection against duplicates.
+    followups:
+      - The job crashes halfway through. What happens when it restarts?
+      - How would you keep the digest from repeating things the user already saw in the app?
+    common_errors:
+      - Using "the last twenty-four hours" instead of the last digest time, so gaps and overlaps appear.
+
+  - external_key: system_design.realtime_messaging.topic_vs_work_queue
+    competency_key: distributed_systems
+    topic: Broadcast topics versus competing consumers
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      When an order is placed, the email service, the warehouse service and the analytics team all need to know,
+      and the warehouse runs ten worker instances. How would you set up the messaging so each service gets every
+      order but each order is handled by only one warehouse worker?
+    expected_concepts:
+      - publish once to a topic or exchange with one subscription per service
+      - competing consumers within a subscription or consumer group
+      - independent progress and failure handling per subscriber
+      - adding a new subscriber without changing the producer
+      - idempotent handlers because redelivery still happens
+    rubric:
+      excellent: Clearly separates fan-out across services from load sharing within a service, maps it onto a concrete broker's concepts, and notes independent retries and idempotency.
+      good: Gets the topic plus consumer group structure right but is vague on failure isolation.
+      weak: Has the order service call each consumer directly, or puts all services on one queue where they steal each other's messages.
+    followups:
+      - The analytics consumer is down for a day. What happens to the others?
+      - How would you add a fourth consumer next month?
+    common_errors:
+      - Putting different services on a single shared queue so each order reaches only one of them.
+
+  - external_key: system_design.realtime_messaging.flaky_api_job_retries
+    competency_key: distributed_systems
+    topic: Retrying jobs that call an unreliable API
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A background job syncs customer records to a partner's API, which times out or returns errors several times a
+      day. How would you design the retry behaviour for these jobs?
+    expected_concepts:
+      - separating retryable errors from permanent ones
+      - exponential backoff with jitter and a maximum number of attempts
+      - idempotency so a retried call doesn't create duplicates
+      - parking failed jobs in a dead-letter queue with the error recorded
+      - circuit breaking when the partner is fully down
+    rubric:
+      excellent: Classifies errors, retries with jittered backoff and a cap, ensures idempotent calls, parks permanent failures with context and pauses traffic when the partner is down.
+      good: Retries with backoff and a limit and records failures.
+      weak: Retries immediately in a tight loop forever, or gives up silently.
+    followups:
+      - How would you know that a timed-out request actually succeeded on the partner's side?
+      - What should happen when the partner is down for six hours?
+    common_errors:
+      - Retrying errors like validation failures that will never succeed.
+
+  - external_key: system_design.realtime_messaging.appointment_reminders
+    competency_key: system_design
+    topic: Reminders that follow rescheduling
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A clinic booking product sends reminders a day before and an hour before each appointment, and people often
+      reschedule or cancel. How would you design reminders so they go out on time and never refer to the old slot?
+    expected_concepts:
+      - computing reminder times from the appointment rather than storing fixed jobs blindly
+      - cancelling or superseding reminders when the appointment changes
+      - re-reading the appointment at send time and skipping stale reminders
+      - idempotent sending per appointment version and reminder type
+      - time zones handled at send time
+    rubric:
+      excellent: Ties reminders to an appointment version, re-validates at send time so cancellations and moves can't leak through, and guarantees one send per reminder.
+      good: Deletes scheduled reminders on change and schedules new ones, without a send-time check.
+      weak: Schedules reminders once at booking and never updates them.
+    followups:
+      - An appointment is moved to twenty minutes from now. Which reminders should be sent?
+      - How do you make sure a reminder isn't sent twice if the scheduler restarts?
+    common_errors:
+      - Relying only on cancelling queued jobs, which races with jobs that are already running.
+
+  # ------------------------------------------------------------------------ medium: notifications
+  - external_key: system_design.realtime_messaging.email_bounce_suppression
+    competency_key: system_design
+    topic: Handling bounces and complaints
+    difficulty: medium
+    text: >-
+      Your email provider warns that your bounce and spam-complaint rates are too high and threatens to suspend
+      sending. How would you design the handling of bounces, complaints and unsubscribes in your notification system?
+    expected_concepts:
+      - ingesting provider events through webhooks
+      - suppression list checked before every send
+      - hard versus soft bounce handling with retry limits
+      - honouring complaints and unsubscribes across all marketing categories
+      - separating transactional and marketing traffic and reputation
+      - monitoring rates per sending domain
+    rubric:
+      excellent: Builds an event-driven suppression list checked on every send, treats bounce types differently, separates transactional from marketing streams and monitors reputation metrics.
+      good: Processes bounces and stops sending to bad addresses, but doesn't separate streams or monitor rates.
+      weak: Keeps sending and only cleans the list manually after warnings.
+    followups:
+      - A user fixes their mailbox. How do they get off the suppression list?
+      - Why might you send password resets from a different domain or IP pool?
+    common_errors:
+      - Treating every soft bounce as a permanent failure, or never suppressing hard bounces.
+
+  - external_key: system_design.realtime_messaging.notification_templates_locale
+    competency_key: system_design
+    topic: Notification templates and localisation
+    difficulty: medium
+    text: >-
+      Twenty product teams send notifications in fifteen languages across email, push and SMS, and wording changes
+      currently need a deploy. How would you design a template system for those messages?
+    expected_concepts:
+      - templates stored and versioned outside application code
+      - typed variables per template validated at send time
+      - per-channel variants with length limits for push and SMS
+      - locale fallback chains and pluralisation rules
+      - preview and test sends before publishing, with rollback
+    rubric:
+      excellent: Versions templates outside code with typed variables, handles channels and locale fallbacks properly, and adds previews, validation and rollback so a bad edit can't break sends.
+      good: Moves templates into a store with per-language variants but lacks validation or versioning.
+      weak: Keeps string concatenation in each service or relies on machine translation at send time.
+    followups:
+      - A template edit removes a variable that old events still send. What happens?
+      - How do you stop an SMS template from becoming two messages long after translation?
+    common_errors:
+      - Letting a missing translation fail the whole send instead of falling back.
+
+  # ------------------------------------------------------------------------ medium: event bus
+  - external_key: system_design.realtime_messaging.consumer_lag_autoscaling
+    competency_key: distributed_systems
+    topic: Scaling consumers on lag
+    difficulty: medium
+    text: >-
+      A Kafka consumer group falls hours behind every evening and catches up overnight. How would you design
+      autoscaling for it, and what limits how far scaling out can actually help?
+    expected_concepts:
+      - scaling on lag or estimated time to catch up rather than CPU
+      - partition count as the ceiling on parallelism
+      - downstream capacity such as the database the consumers write to
+      - cool-down and rebalance cost when adding consumers
+      - in-consumer concurrency per partition when ordering allows
+    rubric:
+      excellent: Scales on a lag-based signal, explains the partition ceiling and rebalance cost, protects downstream systems, and considers concurrency within a partition when ordering permits.
+      good: Scales on lag and mentions the partition limit.
+      weak: Scales on CPU only or adds consumers beyond the partition count expecting it to help.
+    followups:
+      - How would you increase parallelism without increasing partitions?
+      - What signal would you use to scale back down?
+    common_errors:
+      - Ignoring that the downstream database is often the real bottleneck.
+
+  - external_key: system_design.realtime_messaging.poison_message_partition
+    competency_key: distributed_systems
+    topic: A poison message blocking an ordered partition
+    difficulty: medium
+    text: >-
+      One malformed event keeps crashing your consumer, and because the topic is partitioned for ordering, every event
+      behind it in that partition is stuck. How would you design consumers to handle poison messages without
+      breaking ordering guarantees where they matter?
+    expected_concepts:
+      - distinguishing transient from permanent failures with bounded retries
+      - moving the bad event to a dead-letter topic with context
+      - deciding whether later events for the same key must wait
+      - parking the affected key while other keys continue
+      - alerting and a redrive path once fixed
+    rubric:
+      excellent: Bounds retries, sidelines the poison event, and reasons per key about whether later events can proceed, possibly parking just that key, with alerting and redrive.
+      good: Uses a dead-letter topic after a few retries but doesn't consider ordering for the affected key.
+      weak: Skips the offset silently or lets the partition stay blocked.
+    followups:
+      - If later events for the same customer depend on the bad one, what do you do with them?
+      - How would you replay the event once the bug is fixed?
+    common_errors:
+      - Silently committing past the failing event and losing it.
+
+  - external_key: system_design.realtime_messaging.claim_check_payloads
+    competency_key: distributed_systems
+    topic: Large payloads on a message bus
+    difficulty: medium
+    text: >-
+      A team wants to publish events carrying twenty-megabyte documents through your message broker, and broker
+      performance is already suffering. How would you design for large payloads?
+    expected_concepts:
+      - storing the payload in object storage and sending a reference
+      - payload lifecycle and retention matching the event's
+      - access control on the referenced object for consumers
+      - integrity check such as a hash in the event
+      - compression or splitting where references aren't suitable
+    rubric:
+      excellent: Applies a reference-based approach with aligned retention, consumer permissions and integrity checks, and explains why brokers degrade with large messages.
+      good: Moves payloads to object storage and sends a link.
+      weak: Raises the broker's maximum message size and moves on.
+    followups:
+      - The object is deleted before a slow consumer reads the event. How do you prevent that?
+      - When would you still keep data inline in the event?
+    common_errors:
+      - Not aligning object retention with event retention and replays.
+
+  - external_key: system_design.realtime_messaging.delayed_delivery_at_scale
+    competency_key: distributed_systems
+    topic: Delayed messages without native broker support
+    difficulty: medium
+    text: >-
+      Your services need to say "deliver this event in thirty minutes" or "in three days", millions of times a day,
+      but your broker has no delay feature. How would you design delayed delivery?
+    expected_concepts:
+      - a durable store of pending messages indexed by due time
+      - time-bucketed tables or tiered delay topics
+      - pollers claiming due buckets with leases
+      - idempotent publish when moving due messages to the target topic
+      - cancellation and monitoring of overdue items
+    rubric:
+      excellent: Designs a durable, time-indexed store or bucketed topics, safe concurrent claiming, idempotent hand-off, cancellation and lateness monitoring, and compares options.
+      good: Stores messages with due times and polls them, with some duplicate protection.
+      weak: Keeps timers in process memory or makes consumers sleep before processing.
+    followups:
+      - How would you cancel a delayed message that's no longer needed?
+      - What happens if the poller is down for an hour?
+    common_errors:
+      - Blocking a consumer while it waits, holding up every message behind it.
+
+  - external_key: system_design.realtime_messaging.choreography_vs_orchestration
+    competency_key: distributed_systems
+    topic: Choreography versus orchestration
+    difficulty: medium
+    text: >-
+      Checkout involves payment, inventory, shipping and loyalty points, each owned by a different team. Talk me
+      through how you'd coordinate that flow with events between services versus a central orchestrator, and which
+      you would pick here.
+    expected_concepts:
+      - choreography with services reacting to each other's events
+      - orchestration with an explicit workflow owning state and steps
+      - compensating actions when a later step fails
+      - visibility into where a given order is stuck
+      - coupling and change cost of each approach
+    rubric:
+      excellent: Compares both on coupling, visibility, failure handling and change cost, designs compensations, and makes a reasoned choice for this flow.
+      good: Explains both approaches correctly but the choice or the compensations are thin.
+      weak: Uses one distributed transaction across all services or doesn't handle partial failure.
+    followups:
+      - Shipping fails after payment succeeded. Walk me through what happens.
+      - How would support find out why one order is stuck?
+    common_errors:
+      - Ending up with a hidden workflow spread across event handlers that nobody can trace.
+
+  - external_key: system_design.realtime_messaging.rebalance_pauses
+    competency_key: distributed_systems
+    topic: Consumer group rebalances during deploys
+    difficulty: medium
+    text: >-
+      Every deploy of a fifty-instance consumer service causes repeated consumer group rebalances, processing stops for
+      minutes and some events are handled twice. How would you change the design and configuration?
+    expected_concepts:
+      - incremental or cooperative rebalancing
+      - static membership so restarts keep their assignments
+      - session and poll timeouts tuned to processing time
+      - committing offsets before partitions are revoked
+      - idempotent processing for the duplicates that remain
+    rubric:
+      excellent: Explains why rolling restarts trigger rebalance cascades, applies cooperative rebalancing and static membership, tunes timeouts, commits cleanly on revoke and still keeps processing idempotent.
+      good: Identifies rebalancing as the cause and suggests tuning timeouts or slower rollouts.
+      weak: Suggests deploying less often or doesn't connect duplicates to uncommitted offsets.
+    followups:
+      - A single message takes ten minutes to process. What does that do to the group?
+      - How would you see rebalances in your metrics?
+    common_errors:
+      - Committing offsets only periodically, so every revoke replays recent events.
+
+  - external_key: system_design.realtime_messaging.compacted_state_topics
+    competency_key: distributed_systems
+    topic: Distributing current state through compacted topics
+    difficulty: medium
+    text: >-
+      Many services need a local copy of current product prices and availability, and they all hammer the catalogue
+      API. How would you use an event stream to give them that data, and what are the pitfalls?
+    expected_concepts:
+      - log-compacted topic keyed by product holding the latest state
+      - consumers bootstrapping from the beginning to build a local view
+      - tombstones for deletions
+      - full-state events rather than deltas for compaction to work
+      - staleness and the time a new instance needs to warm up
+    rubric:
+      excellent: Designs a keyed, compacted topic with full-state records and tombstones, explains bootstrap and warm-up, and is clear about staleness for consumers.
+      good: Proposes publishing changes for consumers to cache, but uses deltas or ignores bootstrap.
+      weak: Suggests every service query the catalogue database directly.
+    followups:
+      - How long does a new instance take to become ready, and how would you speed it up?
+      - Which data is unsafe to serve from a local copy?
+    common_errors:
+      - Publishing partial updates to a compacted topic so the latest record isn't the full state.
+
+  - external_key: system_design.realtime_messaging.subscriber_filtering
+    competency_key: distributed_systems
+    topic: Filtering events for many subscribers
+    difficulty: medium
+    text: >-
+      Two hundred internal subscribers listen to a single high-volume event stream, but most care about a small
+      fraction of it, like one region or one event type. How would you design filtering so they don't all pay to
+      read everything?
+    expected_concepts:
+      - topic design split by type or domain versus one firehose
+      - attribute-based filtering in the broker or a routing layer
+      - derived filtered streams owned by a platform team
+      - cost of each subscriber reading and discarding data
+      - schema and headers that make filtering possible
+    rubric:
+      excellent: Weighs topic granularity against broker-side filtering and derived streams, quantifies the waste of client-side filtering and makes filter attributes part of the contract.
+      good: Proposes broker-side filtering or splitting topics.
+      weak: Lets every subscriber read everything and filter in its own code.
+    followups:
+      - How would you avoid creating thousands of tiny topics?
+      - Who owns a derived stream when its source schema changes?
+    common_errors:
+      - Splitting topics in a way that breaks ordering consumers relied on.
+
+  - external_key: system_design.realtime_messaging.broker_outage_producers
+    competency_key: distributed_systems
+    topic: Producers during a broker outage
+    difficulty: medium
+    text: >-
+      Your message broker cluster is unavailable for fifteen minutes. What should the services that publish events do
+      during that time, and how would you design them so no events are lost and user requests keep working?
+    expected_concepts:
+      - transactional outbox or durable local buffer
+      - bounded in-memory buffering and what happens when it fills
+      - deciding which requests can succeed without publishing immediately
+      - retry with backoff and replay in order after recovery
+      - visibility into the backlog during the outage
+    rubric:
+      excellent: Decouples requests from publishing with a durable outbox, bounds any memory buffering, decides per use case whether to degrade or fail, and drains in order after recovery with monitoring.
+      good: Buffers and retries events, but only in memory or without thinking about ordering.
+      weak: Lets requests fail or drops events silently.
+    followups:
+      - How would ordering be preserved when the backlog is drained?
+      - Which requests should fail rather than succeed without the event?
+    common_errors:
+      - Unbounded in-memory buffers that crash the service and lose everything.
+
+  - external_key: system_design.realtime_messaging.urgent_lane_on_log_broker
+    competency_key: distributed_systems
+    topic: Priority on a log-based broker
+    difficulty: medium
+    text: >-
+      Your platform uses a log-based broker, which has no message priority, and one consumer must process fraud alerts
+      within seconds even while it's working through a huge backlog of routine events. How would you design that?
+    expected_concepts:
+      - separate topics for urgent and routine events
+      - consumers that poll the urgent topic first or have dedicated capacity
+      - pausing routine partitions while urgent work is pending
+      - producers deciding priority at publish time
+      - preventing starvation of routine work
+    rubric:
+      excellent: Splits priority into separate topics with dedicated or preferential consumption, uses pause and resume to prioritise, and guards against starving routine work.
+      good: Uses separate topics and separate consumers.
+      weak: Expects the broker to reorder messages or adds a priority field that consumers can't act on.
+    followups:
+      - What happens if urgent volume suddenly becomes as large as routine volume?
+      - How would you measure that the urgent path meets its latency goal?
+    common_errors:
+      - Adding a priority header to messages in a single partitioned log where it changes nothing.
+
+  # ------------------------------------------------------------------------ hard
+  - external_key: system_design.realtime_messaging.oncall_paging_escalation
+    competency_key: system_design
+    topic: On-call paging and escalation
+    difficulty: hard
+    text: >-
+      Design an on-call paging system: monitoring sends alerts, the system pages the right engineer by push, SMS and
+      phone call, escalates to the next person if nobody acknowledges within five minutes, and must keep working when
+      half of your infrastructure is down.
+    expected_concepts:
+      - alert ingestion with de-duplication and grouping into incidents
+      - escalation policies and schedules as durable state machines
+      - timers for escalation that survive process and node failures
+      - several delivery channels and providers with fallbacks
+      - acknowledgement from any channel stopping escalation
+      - running independently from the infrastructure it monitors
+    rubric:
+      excellent: Models incidents and escalations as durable state with reliable timers, de-duplicates alerts, uses redundant channels and providers, handles acknowledgements from any channel and isolates the system from the infrastructure it watches.
+      good: Covers routing, escalation and multiple channels but timers or independence are weak.
+      weak: Sends one notification per alert with no escalation state or redundancy.
+    followups:
+      - The alert storm generates ten thousand alerts in a minute. What does the on-call engineer get?
+      - How do you test that paging works without waking people up?
+    common_errors:
+      - Hosting the pager on the same cloud region and stack that it's meant to alert about.
+
+  - external_key: system_design.realtime_messaging.shared_event_bus_platform
+    competency_key: system_design
+    topic: A shared event bus for many teams
+    difficulty: hard
+    text: >-
+      Forty teams each run their own small brokers, and you've been asked to build one shared event platform for the
+      company. How would you design topic ownership, access control, quotas and self-service so it scales across
+      teams without the platform team becoming a bottleneck?
+    expected_concepts:
+      - topics as owned, declared resources created through self-service and code
+      - producer and consumer access control per topic
+      - quotas on throughput and storage per team
+      - schema registry and compatibility rules
+      - cluster tiers or isolation for critical workloads
+      - observability per topic and consumer group for owners
+    rubric:
+      excellent: Treats topics as declared, owned resources with self-service, enforces access, quotas and schemas, isolates critical tenants and gives teams their own visibility, plus a migration path from the existing brokers.
+      good: Covers a shared cluster with access control and some governance, but self-service or isolation is thin.
+      weak: Proposes one big cluster with open access and a ticket queue for changes.
+    followups:
+      - One team's consumer bug fills the disks. How does your design contain it?
+      - How would you migrate teams off their own brokers?
+    common_errors:
+      - No ownership metadata, so nobody knows who can change or delete a topic.
+
+  - external_key: system_design.realtime_messaging.cross_region_event_replication
+    competency_key: distributed_systems
+    topic: Replicating event streams across regions
+    difficulty: hard
+    text: >-
+      You run event streams in two regions and need consumers in each to see events from both, and to fail over if
+      one region disappears. How would you design cross-region replication, and what happens to offsets and ordering
+      during failover?
+    expected_concepts:
+      - active-passive versus active-active topic layouts
+      - region-prefixed topics to avoid replication loops
+      - offset translation or timestamp-based resumption after failover
+      - ordering only within a key and region
+      - data lost or duplicated in the replication lag window
+      - idempotent consumers to tolerate replays
+    rubric:
+      excellent: Picks a topology deliberately, avoids replication loops, explains how consumers resume after failover through offset translation or replay, and is explicit about loss and duplication within the lag window.
+      good: Replicates topics between regions and mentions failover, but is vague on offsets or duplicates.
+      weak: Assumes replicated offsets map one-to-one or that failover is lossless.
+    followups:
+      - How much data could you lose, and how would you report that number?
+      - How do you fail back once the original region recovers?
+    common_errors:
+      - Expecting consumer offsets from one cluster to be valid in another.
+
+  - external_key: system_design.realtime_messaging.tenant_isolated_pubsub
+    competency_key: system_design
+    topic: Multi-tenant real-time pub/sub as a product
+    difficulty: hard
+    text: >-
+      Your company wants to sell a hosted real-time publish-subscribe service to other developers, who publish to
+      channels and have their end users subscribe from browsers. How would you design it so that one customer's
+      traffic spike doesn't degrade everyone else?
+    expected_concepts:
+      - per-tenant limits on connections, messages and fan-out
+      - token-based client authorisation scoped to channels
+      - sharding tenants and channels across clusters with hot-channel handling
+      - isolating large tenants on dedicated capacity
+      - usage metering for billing
+      - global edge presence for client connections
+    rubric:
+      excellent: Designs per-tenant quotas, channel-scoped client auth, placement that can move or isolate hot tenants and channels, metering and an edge layer, and explains how noisy neighbours are contained.
+      good: Has a scalable fan-out design with tenant limits, but placement or isolation of hot tenants is missing.
+      weak: Puts everyone on shared nodes without limits and relies on autoscaling.
+    followups:
+      - One channel has two million subscribers. How do you serve it?
+      - How would you bill fairly for fan-out?
+    common_errors:
+      - Rate limiting publishes but not fan-out, which is where the real cost is.
+
+  - external_key: system_design.realtime_messaging.broker_migration_live
+    competency_key: distributed_systems
+    topic: Migrating from one broker to another
+    difficulty: hard
+    text: >-
+      You need to move about three hundred queues and their producers and consumers from RabbitMQ to Kafka while the
+      business runs normally. How would you plan the migration so no messages are lost or processed twice?
+    expected_concepts:
+      - inventory of queues, semantics and owners
+      - bridging messages between brokers during the transition
+      - migrating consumers before or after producers per flow
+      - idempotent consumers to absorb overlap
+      - semantic differences such as routing, acknowledgements and retries
+      - per-flow cutover with rollback and verification
+    rubric:
+      excellent: Plans per-flow cutovers with bridging, makes consumers idempotent for the overlap, maps semantic differences between the brokers and defines verification and rollback.
+      good: Has a phased plan with a bridge but misses semantic differences or verification.
+      weak: Proposes switching everything over in one weekend.
+    followups:
+      - Some consumers depend on per-message acknowledgement and redelivery. How do you replicate that?
+      - How would you verify a flow is fully migrated?
+    common_errors:
+      - Assuming RabbitMQ routing patterns map directly onto Kafka topics.
+
+  - external_key: system_design.realtime_messaging.global_ordering_request
+    competency_key: distributed_systems
+    topic: Pushing back on total ordering
+    difficulty: hard
+    text: >-
+      A team asks for every event in the company's event stream to be totally ordered, across all entities, because
+      their consumer gets confused by out-of-order events. How would you respond, and what would you design instead?
+    expected_concepts:
+      - total order forcing a single partition and a throughput ceiling
+      - finding what ordering the consumer actually needs, often per entity
+      - partitioning by the entity key
+      - versions or sequence numbers so consumers can reorder or ignore stale events
+      - designing consumers that tolerate reordering across entities
+    rubric:
+      excellent: Explains the scalability and availability cost of total ordering, uncovers the real per-entity requirement, and offers keyed partitioning plus version-aware consumers.
+      good: Recommends per-key ordering instead and explains the throughput limit.
+      weak: Agrees to one partition for everything, or dismisses the team's problem.
+    followups:
+      - Their consumer joins events from two different entities. How can it still work?
+      - When is a single ordered log genuinely the right answer?
+    common_errors:
+      - Assuming timestamps on events are enough to restore a global order.
+
+  - external_key: system_design.realtime_messaging.notification_loss_detection
+    competency_key: observability
+    topic: Detecting silently undelivered notifications
+    difficulty: hard
+    text: >-
+      Customers occasionally say they never received a notification, and every service in the pipeline reports
+      success. How would you design observability for the notification pipeline so silent loss is detected and
+      traced to the stage that dropped it?
+    expected_concepts:
+      - a notification id carried through every stage
+      - counting in and out per stage to reconcile volumes
+      - recording terminal outcomes including suppressions and filters
+      - provider delivery receipts and client open telemetry
+      - synthetic end-to-end probes per channel
+      - per-user lookup tool for support
+    rubric:
+      excellent: Traces each notification by id across stages, reconciles counts between stages, records every intentional drop with its reason, uses provider and client signals and runs synthetic probes.
+      good: Adds tracing or per-stage metrics, but can't distinguish intentional suppression from loss.
+      weak: Adds more logging and checks it when someone complains.
+    followups:
+      - How would you tell a filter that worked correctly from a bug that dropped messages?
+      - What alert would have caught this before customers did?
+    common_errors:
+      - Counting only errors, when silent drops don't raise any.
+
+  - external_key: system_design.realtime_messaging.consumer_dedup_store
+    competency_key: distributed_systems
+    topic: De-duplication store for high-volume consumers
+    difficulty: hard
+    text: >-
+      A consumer processes two hundred thousand events a second with at-least-once delivery, and duplicates are
+      costly. How would you design de-duplication that keeps up with that rate, given that duplicates can arrive
+      minutes or even days apart?
+    expected_concepts:
+      - stable event ids assigned by producers
+      - choosing a de-duplication window based on how late duplicates arrive
+      - partitioned key-value store or local state keyed by event id with expiry
+      - atomic check-and-apply with the side effect, or idempotent effects instead
+      - probabilistic filters as a first pass with exact confirmation
+      - memory and cost estimates for the window
+    rubric:
+      excellent: Sizes the window and storage from the arrival pattern, co-locates de-duplication state with the partition, makes check and effect atomic or the effect idempotent, and considers probabilistic pre-filters.
+      good: Stores seen ids with a TTL in a fast store but doesn't size it or make it atomic with the effect.
+      weak: Keeps seen ids in a single process's memory or a single database table without expiry.
+    followups:
+      - How would you handle a replay of last month's events?
+      - What happens if the de-duplication store loses data?
+    common_errors:
+      - Recording the id before the side effect succeeds, so a crash drops the event entirely.
+
+  - external_key: system_design.realtime_messaging.consumer_history_bootstrap
+    competency_key: distributed_systems
+    topic: Bootstrapping a new consumer with full history
+    difficulty: hard
+    text: >-
+      A new service needs to build its view from three years of order events, but the event topic only keeps seven
+      days. How would you design the system so new consumers can bootstrap from full history and then switch to live
+      events without gaps or duplicates?
+    expected_concepts:
+      - archiving events to object storage or tiered storage
+      - snapshot or state transfer as an alternative to replaying everything
+      - recording the stream position at which the backfill ends
+      - switching to the live topic from that exact position
+      - idempotent processing across the overlap
+      - schema evolution across years of events
+    rubric:
+      excellent: Provides a durable history source, joins backfill and live streams at a precise position with idempotent overlap, considers snapshots to avoid full replay, and handles old event schemas.
+      good: Archives events and replays them, then switches to live, but the hand-over point is fuzzy.
+      weak: Extends topic retention to forever without thinking about cost, or has the new service query other services' databases.
+    followups:
+      - Event formats changed twice in three years. How does the replay handle that?
+      - How long would a full replay take, and how would you speed it up?
+    common_errors:
+      - Switching to the live topic at "now", losing events published during the backfill.

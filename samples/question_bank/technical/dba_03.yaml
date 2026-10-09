@@ -1,0 +1,609 @@
+# Curated questions: Database engineer / DBA (part 3 of 4).
+# Schema migrations, locking, deadlocks, MVCC housekeeping and connections.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [dba]
+questions:
+  # ----------------------------------------------------------- schema changes
+  - external_key: technical.dba.migration_workflow
+    competency_key: database_administration
+    topic: Managing schema changes across environments
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How did your last team manage schema changes from a developer's laptop through to production? Talk me
+      through the tooling, the review and the deployment steps.
+    expected_concepts:
+      - migrations kept in version control with the application
+      - a migration tool tracking applied versions
+      - review of migrations for locking and performance impact
+      - testing against production-like data volumes
+      - controlled deployment order relative to application releases
+    rubric:
+      excellent: Describes a versioned, reviewed and tested pipeline in concrete detail, explains how DBAs reviewed risky changes, and how migrations were ordered against application deploys.
+      good: Uses a migration tool with version control and some review.
+      weak: Applies changes manually in production with no record or review.
+    followups:
+      - What did you check for when reviewing a migration someone else wrote?
+    common_errors:
+      - Testing migrations only on tiny development databases.
+
+  - external_key: technical.dba.shared_exclusive_locks
+    competency_key: database_administration
+    topic: Shared, exclusive, row and table locks
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Explain the difference between shared and exclusive locks, and how row-level and table-level locks show
+      up in everyday database work.
+    expected_concepts:
+      - shared locks allow concurrent readers
+      - exclusive locks block other conflicting access
+      - row locks taken by updates and deletes
+      - table-level locks taken by DDL and some maintenance
+      - lock compatibility and waiting
+    rubric:
+      excellent: Explains lock modes and compatibility, gives everyday examples of which statements take which locks, and notes how MVCC engines avoid read locks for ordinary selects.
+      good: Correctly distinguishes shared and exclusive and row and table locks.
+      weak: Cannot say which operations take which locks.
+    followups:
+      - Which common statements take a table-level lock you might not expect?
+    common_errors:
+      - Assuming plain selects always block writers in every engine.
+
+  - external_key: technical.dba.find_blocking_session
+    competency_key: database_administration
+    topic: Finding who is blocking whom
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      An application team says their updates are hanging right now. How would you find out what is blocking
+      them, and what would you do about it?
+    expected_concepts:
+      - system views for sessions, locks and waits
+      - identifying the head of the blocking chain
+      - what the blocker is running or whether it is idle in a transaction
+      - deciding whether to wait, contact the owner or terminate
+      - capturing details for follow-up
+    rubric:
+      excellent: Uses lock and activity views to find the head blocker, checks what it is doing, makes a reasoned decision about terminating it, and records evidence to fix the cause.
+      good: Finds blocking sessions with system views and considers killing the blocker.
+      weak: Restarts the database or kills random sessions.
+    followups:
+      - What would make you hesitate before terminating the blocking session?
+    common_errors:
+      - Killing a waiting session instead of the one at the head of the chain.
+
+  - external_key: technical.dba.deadlock_basics
+    competency_key: database_administration
+    topic: How deadlocks are detected and resolved
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What is a deadlock, how does the database resolve one, and what should the application do when its
+      transaction is chosen as the victim?
+    expected_concepts:
+      - two or more transactions waiting on each other's locks
+      - the engine's deadlock detector picks a victim
+      - the victim's transaction is rolled back
+      - the application should retry the whole transaction
+      - difference from ordinary blocking
+    rubric:
+      excellent: Defines a deadlock precisely, contrasts it with blocking, explains victim selection and rollback, and describes safe retries of the whole transaction with limits.
+      good: Defines a deadlock and knows the application should retry.
+      weak: Confuses deadlocks with slow queries or long blocking.
+    followups:
+      - Why should the application retry the whole transaction and not just the failed statement?
+    common_errors:
+      - Retrying only the last statement after a deadlock rollback.
+
+  - external_key: technical.dba.daytime_not_null_column
+    competency_key: database_administration
+    topic: Reviewing a new NOT NULL column
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A developer wants to add a new NOT NULL column with a default value to a busy table in the middle of
+      the day. What would you want to know, and what would you check before approving it?
+    expected_concepts:
+      - whether the engine version rewrites the table for this change
+      - table size and lock duration
+      - lock timeout to avoid queueing behind long transactions
+      - nullable column then backfill then constraint as a fallback
+      - impact on replicas
+    rubric:
+      excellent: Checks whether the engine adds the column as a metadata-only change or a rewrite, sets a lock timeout, and offers a staged approach if a rewrite is needed.
+      good: Asks about table size and lock behaviour and suggests a quieter time.
+      weak: Approves without considering locks or rewrite cost.
+    followups:
+      - How would the answer change if the default were computed per row?
+    common_errors:
+      - Assuming every engine and version handles defaults without rewriting the table.
+
+  - external_key: technical.dba.idle_in_transaction
+    competency_key: database_administration
+    topic: Long and idle-in-transaction sessions
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Why are long-running transactions, or sessions sitting idle inside an open transaction, a problem for a
+      database, and how do you keep them in check?
+    expected_concepts:
+      - they hold locks that block others
+      - they prevent cleanup of old row versions
+      - they can stall DDL and online index builds
+      - timeouts for idle transactions and statements
+      - monitoring transaction age and finding the application cause
+    rubric:
+      excellent: Explains blocking and cleanup effects, sets timeouts and alerts on transaction age, and works with application teams to fix the code paths that leave transactions open.
+      good: Knows they hold locks and sets a timeout.
+      weak: Does not see a problem with idle sessions.
+    followups:
+      - What kind of application bug usually causes idle-in-transaction sessions?
+    common_errors:
+      - Setting aggressive timeouts without telling application teams, causing surprise failures.
+
+  - external_key: technical.dba.too_many_connections
+    competency_key: database_administration
+    topic: Connection exhaustion during a spike
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      During a traffic spike, the database starts refusing new connections with a too-many-connections
+      error. What's your immediate response, and what would you change for the longer term?
+    expected_concepts:
+      - see who holds connections and in what state
+      - terminate idle or leaked connections carefully
+      - reserved admin connections
+      - connection pooling in front of the database
+      - right-sizing application pool settings
+    rubric:
+      excellent: Restores service by identifying and clearing idle or leaked connections while keeping admin access, then introduces pooling and right-sized app pools rather than just raising the limit.
+      good: Clears idle connections and recommends a pooler.
+      weak: Only raises the maximum connections setting.
+    followups:
+      - Why can simply raising the connection limit make things worse?
+    common_errors:
+      - Raising the connection limit until memory runs out.
+
+  - external_key: technical.dba.migration_rollback_planning
+    competency_key: database_administration
+    topic: Planning schema migration rollbacks
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you plan the rollback for a schema migration, and which kinds of changes can't really be rolled
+      back?
+    expected_concepts:
+      - writing and testing a down migration or reverse plan
+      - destructive changes such as dropped columns lose data
+      - backward-compatible changes allow rolling back the application only
+      - backups or copies before destructive steps
+      - separating risky steps into later releases
+    rubric:
+      excellent: Distinguishes reversible from destructive changes, prefers backward-compatible steps so the code can roll back independently, and protects data before irreversible operations.
+      good: Writes down migrations and takes a backup before risky changes.
+      weak: Assumes any migration can be undone by reversing the SQL.
+    followups:
+      - How do you roll back after the new code has already written data in the new format?
+    common_errors:
+      - Dropping a column in the same release that stops using it.
+
+  # ----------------------------------------------------- locking in practice
+  - external_key: technical.dba.deadlocks_after_release
+    competency_key: database_administration
+    topic: Investigating new deadlocks after a release
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Deadlock errors have started showing up a few times an hour since the latest release. Walk me through
+      how you'd find the cause and get it fixed.
+    expected_concepts:
+      - capturing deadlock graphs or engine deadlock reports
+      - identifying the statements and resources involved
+      - inconsistent lock ordering between code paths
+      - missing indexes widening lock ranges
+      - fixes such as consistent ordering, shorter transactions and retries
+    rubric:
+      excellent: Captures deadlock reports, maps the statements to code paths changed in the release, finds the ordering or index cause, and fixes it at the source while keeping retries as a safety net.
+      good: Reads deadlock reports and suggests consistent ordering or shorter transactions.
+      weak: Only adds retries or lowers isolation without finding the cause.
+    followups:
+      - How can a missing index cause more deadlocks?
+    common_errors:
+      - Masking deadlocks with unlimited retries.
+
+  - external_key: technical.dba.ddl_lock_queue
+    competency_key: database_administration
+    topic: DDL waiting in the lock queue
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Why can an ALTER TABLE that only needs a lock for a split second still take a whole application down,
+      and how do you protect against that?
+    expected_concepts:
+      - DDL waits behind a long-running transaction or query
+      - new queries queue behind the waiting DDL
+      - lock timeout on the migration session
+      - retrying with backoff
+      - checking for long transactions before running DDL
+    rubric:
+      excellent: Explains the lock queue effect where everything piles up behind the waiting DDL, uses lock timeouts with retries and pre-checks for long transactions, and monitors during the change.
+      good: Knows to set a lock timeout for migrations.
+      weak: Believes a fast DDL statement cannot cause an outage.
+    followups:
+      - What would a sensible lock timeout be for a busy table, and why?
+    common_errors:
+      - Running DDL without a lock timeout behind a long analytical query.
+
+  - external_key: technical.dba.mvcc_tradeoffs
+    competency_key: database_administration
+    topic: MVCC and its housekeeping cost
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How does multi-version concurrency control let readers and writers avoid blocking each other, and what
+      housekeeping cost does it create?
+    expected_concepts:
+      - writers create new row versions while readers see a snapshot
+      - old versions kept until no transaction needs them
+      - cleanup through vacuum, purge or version store
+      - bloat when cleanup falls behind
+      - long transactions holding back cleanup
+    rubric:
+      excellent: Explains snapshots and row versions clearly, describes how a specific engine cleans up old versions, and connects long transactions and heavy updates to bloat and performance.
+      good: Explains row versions and snapshots and knows cleanup is needed.
+      weak: Cannot explain how readers avoid blocking writers.
+    followups:
+      - Where does each engine you know keep the old versions?
+    common_errors:
+      - Not connecting long-open transactions to growing table size.
+
+  - external_key: technical.dba.table_growth_flat_rows
+    competency_key: database_administration
+    topic: Table growing with a flat row count
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A heavily updated table keeps growing on disk even though its row count stays flat, and queries on it
+      are getting slower. How would you investigate and fix it?
+    expected_concepts:
+      - dead row versions and bloat
+      - autovacuum or purge falling behind
+      - long transactions or replication feedback blocking cleanup
+      - per-table cleanup thresholds and throttling
+      - reclaiming space with online repack tools
+    rubric:
+      excellent: Measures dead rows and cleanup history, finds what is blocking or slowing cleanup, tunes per-table settings, and reclaims space online without a long exclusive lock.
+      good: Identifies bloat and tunes autovacuum or runs a manual cleanup.
+      weak: Runs a full table rewrite during business hours without finding the cause.
+    followups:
+      - Why does a plain vacuum not always shrink the file on disk?
+    common_errors:
+      - Using a locking full rewrite on a live table to reclaim space.
+
+  - external_key: technical.dba.online_schema_change_tools
+    competency_key: database_administration
+    topic: How online schema change tools work
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do online schema change tools such as gh-ost or pt-online-schema-change work under the hood, and
+      what trade-offs come with them?
+    expected_concepts:
+      - shadow table with the new schema
+      - copying rows in chunks
+      - capturing ongoing changes through triggers or the binary log
+      - atomic table swap at cut-over
+      - extra load, disk space, replica lag and foreign key complications
+    rubric:
+      excellent: Explains shadow table, chunked copy, change capture by triggers versus binlog and the cut-over, and weighs load, space, lag throttling and foreign key limits.
+      good: Explains the copy and swap approach.
+      weak: Thinks the tools change the table in place without copying.
+    followups:
+      - Why might you prefer binlog-based capture over triggers?
+    common_errors:
+      - Not leaving enough disk space for a full copy of the table.
+
+  - external_key: technical.dba.purge_old_rows
+    competency_key: database_administration
+    topic: Purging hundreds of millions of rows
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You need to delete two years of old data, around three hundred million rows, from a live table. How
+      would you do it without hurting production?
+    expected_concepts:
+      - deleting in small batches using an indexed key
+      - pauses and throttling based on replica lag and load
+      - avoiding one giant transaction and log growth
+      - cleanup and bloat after deletion
+      - copying rows to keep into a new table or using partitions instead
+    rubric:
+      excellent: Uses throttled, indexed batches with lag-aware pauses, plans for bloat afterwards, and considers keeping the small remainder in a new table or partitioning for future purges.
+      good: Deletes in batches during quiet periods.
+      weak: Issues one large delete statement.
+    followups:
+      - When would copying out the rows you keep be faster than deleting the rest?
+    common_errors:
+      - Running a single delete that fills the log and stalls replicas.
+
+  - external_key: technical.dba.queue_table_skip_locked
+    competency_key: database_administration
+    topic: Database tables used as job queues
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Many workers pull jobs from a database table used as a queue and keep colliding on the same rows. How
+      do row-locking options like SKIP LOCKED help, and what are the limits of this pattern?
+    expected_concepts:
+      - SELECT FOR UPDATE with SKIP LOCKED claims unlocked rows
+      - an index on the status and ordering columns
+      - short claim transactions
+      - churn and bloat from frequent updates and deletes
+      - when to move to a dedicated queue system
+    rubric:
+      excellent: Explains how skip-locked claims avoid contention, designs the index and claim transaction, and discusses bloat, ordering guarantees and when a real message queue is better.
+      good: Knows skip-locked lets workers claim different rows.
+      weak: Suggests table locks or polling without row locking.
+    followups:
+      - What happens to a job if its worker crashes after claiming it?
+    common_errors:
+      - Holding the row lock for the whole job duration in a long transaction.
+
+  - external_key: technical.dba.batch_update_freezes_app
+    competency_key: database_administration
+    topic: Large batch updates blocking the application
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A batch job updates a large share of a table in one statement, and the web application freezes while
+      it runs. Why does that happen, and how would you redesign the job?
+    expected_concepts:
+      - many row locks or lock escalation to a table lock
+      - long transaction blocking conflicting writes
+      - batching by key ranges with commits
+      - running against an index to avoid scanning
+      - throttling and scheduling off-peak
+    rubric:
+      excellent: Explains the lock footprint including escalation where relevant, redesigns into small committed batches by key, and adds throttling and idempotency so the job can resume.
+      good: Recommends batching the update and running it off-peak.
+      weak: Moves the job to night without changing how it locks.
+    followups:
+      - How do you make a batched job safe to restart halfway through?
+    common_errors:
+      - Batching without an index so each batch scans the whole table.
+
+  - external_key: technical.dba.foreign_key_locking_cost
+    competency_key: database_administration
+    topic: Foreign keys, locking and validation
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do foreign keys affect locking and performance? Think about missing indexes on the referencing
+      columns, or adding a new constraint to a table that already holds lots of data.
+    expected_concepts:
+      - parent deletes and updates scan unindexed child columns
+      - locks taken on parent rows when inserting children
+      - adding a constraint validates all existing rows
+      - adding the constraint unvalidated and validating separately
+      - trade-off between integrity and write cost
+    rubric:
+      excellent: Explains child-side scans and parent row locking, uses a two-step not-validated then validate approach for big tables, and argues for keeping foreign keys with proper indexes.
+      good: Knows to index foreign key columns and that adding constraints validates existing data.
+      weak: Recommends dropping foreign keys for performance without considering integrity.
+    followups:
+      - What lock does validating a constraint take compared with adding it?
+    common_errors:
+      - Leaving foreign key columns unindexed on large child tables.
+
+  - external_key: technical.dba.pooling_mode_choice
+    competency_key: database_administration
+    topic: Introducing a connection pooler
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You're asked to put a connection pooler in front of the database for several hundred application
+      instances. How would you choose the pooling mode, and which application behaviours might break?
+    expected_concepts:
+      - session, transaction and statement pooling modes
+      - session state such as temp tables, settings and advisory locks
+      - prepared statements under transaction pooling
+      - sizing the server-side pool
+      - pooler as a single point of failure
+    rubric:
+      excellent: Chooses transaction pooling with reasons, lists the session features that break and how to check for them, sizes the pool from database capacity, and makes the pooler highly available.
+      good: Knows the pooling modes and that some session features break.
+      weak: Adds a pooler without considering session state or pool sizing.
+    followups:
+      - How would you size the pool between the pooler and the database?
+    common_errors:
+      - Using transaction pooling with an application that relies on session settings.
+
+  - external_key: technical.dba.migration_locked_production
+    competency_key: database_administration
+    topic: Postmortem of a migration that locked production
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A migration that ran fine in staging locked a production table for five minutes. Walk me through the
+      postmortem: what probably differed, and what guardrails would you add to the migration pipeline?
+    expected_concepts:
+      - data volume and traffic differences from staging
+      - long transactions in production holding conflicting locks
+      - lock timeouts and statement timeouts for migrations
+      - automated linting of risky DDL
+      - production-sized rehearsal or estimates
+    rubric:
+      excellent: Identifies realistic differences such as data size and concurrent load, and proposes concrete guardrails like DDL linting, lock timeouts, size-aware checks and a DBA review step for risky tables.
+      good: Recognises data size difference and adds lock timeouts.
+      weak: Blames the developer and adds manual approval only.
+    followups:
+      - Which DDL patterns would your linter flag automatically?
+    common_errors:
+      - Treating a staging success as evidence a migration is safe at production scale.
+
+  - external_key: technical.dba.transaction_id_wraparound
+    competency_key: database_administration
+    topic: Transaction ID wraparound
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You get a warning that a PostgreSQL database is getting close to transaction ID wraparound. Explain
+      what's at stake and how you'd get out of it with as little disruption as possible.
+    expected_concepts:
+      - transaction IDs are finite and old rows must be frozen
+      - the database stops accepting writes to protect data
+      - finding the tables with the oldest frozen age
+      - blockers such as long transactions, stale slots or prepared transactions
+      - targeted freeze vacuums and cost limit tuning
+    rubric:
+      excellent: Explains freezing and the forced write stop, finds the oldest tables and the blockers holding back the horizon, runs targeted aggressive vacuums, and sets up monitoring of age to prevent a repeat.
+      good: Knows vacuum freeze is needed and that writes stop if it is ignored.
+      weak: Does not know what wraparound is or proposes a restart.
+    followups:
+      - Why might vacuum run but fail to advance the oldest transaction ID?
+    common_errors:
+      - Running vacuum while an old prepared transaction or abandoned slot holds back the horizon.
+
+  - external_key: technical.dba.deadlock_free_design
+    competency_key: database_administration
+    topic: Designing to avoid deadlocks
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How do you design transactions and data access so that deadlocks are rare by construction, rather than
+      something you just retry away?
+    expected_concepts:
+      - acquiring locks in a consistent global order
+      - keeping transactions short and free of user or network waits
+      - locking up front with SELECT FOR UPDATE where needed
+      - indexes so statements lock only the rows they need
+      - lowering contention on hot rows
+    rubric:
+      excellent: Gives concrete design rules with examples, such as sorting keys before updating, locking parents before children and avoiding external calls inside transactions, and explains how indexes shrink lock footprints.
+      good: Recommends consistent ordering and short transactions.
+      weak: Relies only on retries or lower isolation.
+    followups:
+      - How would you enforce lock ordering across many services that share a database?
+    common_errors:
+      - Making network calls while holding row locks.
+
+  - external_key: technical.dba.split_table_live
+    competency_key: database_administration
+    topic: Splitting a table under live traffic
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You need to split one heavily used table into two while the application keeps running and deploys
+      several times a day. How would you sequence the database changes and the code changes?
+    expected_concepts:
+      - create the new table and dual-write
+      - backfill in throttled batches
+      - verify consistency between old and new
+      - switch reads gradually behind a feature flag
+      - stop writing to the old columns and remove them later
+      - rollback point at each stage
+    rubric:
+      excellent: Lays out a staged expand and contract plan coordinated with deploys, with backfill, verification, gradual read switching and a clear rollback at each stage until the final cleanup.
+      good: Describes dual writes, backfill and a cut-over.
+      weak: Proposes a single migration and deploy that moves everything at once.
+    followups:
+      - How would you verify the two tables match before switching reads?
+    common_errors:
+      - Removing the old structure before the new code has run safely in production.
+
+  - external_key: technical.dba.hot_row_contention
+    competency_key: database_administration
+    topic: Hot row contention
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      During a flash sale, the single row holding stock for a popular product becomes a bottleneck with heavy
+      lock waits. How would you redesign this?
+    expected_concepts:
+      - every purchase serialises on one row lock
+      - conditional atomic decrement instead of read-then-write
+      - splitting the counter into several sub-rows
+      - reservations or queueing outside the hot path
+      - shorter transactions around the decrement
+    rubric:
+      excellent: Explains why one row serialises writers, shortens the critical section with an atomic conditional update, and proposes sharded counters or reservation designs while keeping overselling impossible.
+      good: Suggests an atomic update and shorter transactions.
+      weak: Removes locking and accepts overselling or suggests a bigger server.
+    followups:
+      - How would you keep the total correct if you split the counter into several rows?
+    common_errors:
+      - Reading stock, checking in the application and then writing, which races or holds locks longer.
+
+  - external_key: technical.dba.standby_query_conflicts
+    competency_key: database_administration
+    topic: Queries on hot standbys versus primary cleanup
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Long queries on a hot standby get cancelled, and when you change settings to stop that, the primary
+      starts to bloat. Explain the trade-off and how you'd configure around it.
+    expected_concepts:
+      - replay needs to remove row versions the standby query still uses
+      - cancelling queries versus delaying replay
+      - feedback from standby holding back cleanup on the primary
+      - separate replicas for long analytics and for failover
+      - statement timeouts on standbys
+    rubric:
+      excellent: Explains the conflict between replay and standby snapshots, compares delay, cancel and feedback options with their side effects, and separates analytics replicas from failover replicas.
+      good: Knows about the cancel versus delay trade-off and standby feedback.
+      weak: Unaware why standby queries are cancelled.
+    followups:
+      - Why would you not want your failover replica to also run long reports?
+    common_errors:
+      - Enabling standby feedback on every replica and causing primary bloat.
+
+  - external_key: technical.dba.ddl_behaviour_across_engines
+    competency_key: database_administration
+    topic: Transactional DDL and metadata locks across engines
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How do transactional DDL and metadata locking differ between engines you've worked with, for example
+      PostgreSQL and MySQL, and how does that change the way you write migrations?
+    expected_concepts:
+      - DDL inside transactions with rollback in PostgreSQL
+      - implicit commits around DDL in MySQL
+      - metadata locks waiting on open transactions
+      - instant, in-place and copy algorithms for alterations
+      - partial failure handling for multi-step migrations
+    rubric:
+      excellent: Contrasts transactional versus implicitly committed DDL accurately, explains metadata lock waits, knows which alterations are instant or online, and adjusts migration structure and failure handling accordingly.
+      good: Knows one engine supports transactional DDL and the other commits implicitly.
+      weak: Assumes DDL behaves the same everywhere.
+    followups:
+      - How do you recover from a multi-step MySQL migration that failed halfway?
+    common_errors:
+      - Assuming a failed MySQL migration rolled back its earlier DDL statements.

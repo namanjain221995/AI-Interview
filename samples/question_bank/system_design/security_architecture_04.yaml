@@ -1,0 +1,612 @@
+# System design: security architecture (4 of 4) — audit logging, security telemetry and multi-tenant isolation.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [security, cloud]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.security_architecture.admin_action_audit_log
+    competency_key: security
+    topic: Audit log for administrative actions
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your SaaS product has no audit trail, and a customer just asked who changed their account settings last
+      week. Design a first version of an audit log for administrative actions in the product.
+    expected_concepts:
+      - who, what, when, where and on which resource for each event
+      - before and after values for changes
+      - append-only storage separate from the main data
+      - consistent event format across features
+      - retention period and access controls on the log
+    rubric:
+      excellent: Defines a consistent event with actor, action, target, time, source and before-and-after values, stores it append-only away from application data and sets retention and access rules.
+      good: Captures the main fields and stores them separately but misses before-and-after values or retention.
+      weak: Proposes searching application debug logs when someone asks.
+    followups:
+      - Should a customer's own admins be able to delete audit entries?
+      - How would you record actions taken by your own support staff?
+    common_errors:
+      - Storing audit events in the same table that admins can edit.
+
+  - external_key: system_design.security_architecture.tenant_file_storage
+    competency_key: security
+    topic: Keeping tenants' uploaded files apart
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Customers of your multi-tenant app upload contracts and invoices. How would you design file storage so one
+      customer can never download another customer's files, even if there's a bug somewhere in the app?
+    expected_concepts:
+      - unguessable object keys under a tenant prefix
+      - access through short-lived signed URLs issued after an authorisation check
+      - storage policies scoped to tenant prefixes
+      - no public buckets or listing
+      - per-tenant encryption keys as an extra layer
+    rubric:
+      excellent: Authorises every download in the app and issues short-lived signed URLs, uses tenant-prefixed unguessable keys, scopes storage permissions per tenant and adds layered protection such as per-tenant keys.
+      good: Checks authorisation and uses signed URLs but relies on that single check alone.
+      weak: Serves files from a public bucket with guessable names or permanent links.
+    followups:
+      - How long should a signed download URL stay valid?
+      - What layer would still protect you if the app forgot the tenant check?
+    common_errors:
+      - Generating signed URLs that last for days.
+
+  - external_key: system_design.security_architecture.auth_event_logging
+    competency_key: observability
+    topic: Logging authentication for investigations
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      If an account in your product were taken over tomorrow, investigators would need to reconstruct exactly what
+      happened. What would you design your authentication service to log, and where would those logs go?
+    expected_concepts:
+      - successful and failed logins with method and factor used
+      - password, MFA and recovery changes
+      - session creation, refresh and revocation with identifiers
+      - source IP, device and user agent
+      - never logging secrets or tokens themselves
+      - central storage with retention and restricted access
+    rubric:
+      excellent: Logs the full authentication lifecycle with session identifiers and context, excludes secrets, ships logs centrally with retention and access controls and explains how an investigation would use them.
+      good: Logs logins and failures with context but misses session or recovery events.
+      weak: Logs only failed logins, or logs passwords and tokens for debugging.
+    followups:
+      - How would you link a suspicious API call back to the login that created its session?
+      - How long would you keep these logs, and why?
+    common_errors:
+      - Writing raw session tokens into the logs.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.security_architecture.audit_completeness
+    competency_key: security
+    topic: Making sure every audited action is recorded
+    difficulty: medium
+    text: >-
+      An internal review found that some privileged actions never showed up in your audit log because events were
+      lost when a service crashed. Design audit logging so that an action can't succeed without its audit record.
+    expected_concepts:
+      - writing the audit event in the same transaction as the change, such as an outbox
+      - reliable delivery from the outbox to the audit store
+      - failing closed for the most sensitive actions if auditing is unavailable
+      - sequence numbers or counts to detect gaps
+      - reconciliation between system state and audit events
+    rubric:
+      excellent: Ties audit events transactionally to the change, delivers them reliably, decides where to fail closed, detects gaps with sequencing and reconciles against system state.
+      good: Uses an outbox or reliable queue but has no gap detection or fail-closed decision.
+      weak: Fires audit events asynchronously after the change and hopes they arrive.
+    followups:
+      - Which actions should be blocked if the audit pipeline is down?
+      - How would you prove to an auditor that no events were dropped?
+    common_errors:
+      - Emitting audit events from the client side.
+
+  - external_key: system_design.security_architecture.security_telemetry_pipeline
+    competency_key: observability
+    topic: Pipeline for security telemetry at scale
+    difficulty: medium
+    text: >-
+      The security team needs logs from cloud accounts, Kubernetes, endpoints and SaaS tools, several terabytes a
+      day, in one place they can search and alert on. Design the collection and storage pipeline.
+    expected_concepts:
+      - collectors and agents per source feeding a durable queue
+      - normalisation into a common schema with enrichment
+      - hot searchable storage plus cheap long-term storage
+      - detecting sources that stop sending
+      - backpressure and buffering during spikes
+      - cost controls such as filtering and sampling low-value data
+    rubric:
+      excellent: Designs per-source collection into a durable buffer, normalises and enriches, tiers storage by age and value, monitors source silence and handles spikes and cost explicitly.
+      good: Describes collection and central storage sensibly but ignores silent sources or cost.
+      weak: Sends everything directly to one expensive search cluster with no buffering or schema.
+    followups:
+      - How would you know an important log source stopped sending three days ago?
+      - What data would you drop or sample first when costs rise?
+    common_errors:
+      - Treating missing logs as no activity.
+
+  - external_key: system_design.security_architecture.customer_audit_streaming
+    competency_key: security
+    topic: Delivering audit logs to customers' tools
+    difficulty: medium
+    text: >-
+      Enterprise customers want their audit events from your platform streamed into their own security tools in
+      near real time, and available for export going back a year. Design that capability.
+    expected_concepts:
+      - per-tenant partitioning of audit data
+      - push delivery to customer endpoints with retries and signing
+      - pull API with cursors for export
+      - strict tenant scoping on every read path
+      - delivery status and backlog visible to the customer
+      - retention tiers and cost
+    rubric:
+      excellent: Partitions events per tenant, offers signed push delivery with retries and a cursor-based pull API, enforces tenant scoping on every path and exposes delivery health to customers.
+      good: Supports export and push but is weak on retries, ordering or delivery visibility.
+      weak: Emails customers a nightly CSV or queries a shared table without tenant isolation.
+    followups:
+      - A customer's endpoint is down for a day. What happens to their events?
+      - How does the customer verify that events really came from you?
+    common_errors:
+      - Dropping events when the customer's endpoint is unavailable.
+
+  - external_key: system_design.security_architecture.tiered_tenant_isolation
+    competency_key: system_design
+    topic: Offering pooled and dedicated tenancy
+    difficulty: medium
+    text: >-
+      Most customers are fine sharing infrastructure, but a few regulated customers pay for dedicated resources.
+      Design a platform that supports both pooled and dedicated tenants from one codebase, with security as the
+      main concern.
+    expected_concepts:
+      - tenant routing layer that knows each tenant's placement
+      - same code and deployment pipeline for pooled and dedicated stacks
+      - isolation boundaries such as separate accounts, databases and keys for dedicated tenants
+      - shared control plane and its risk
+      - moving a tenant from pooled to dedicated
+      - consistent patching across many stacks
+    rubric:
+      excellent: Designs placement-aware routing, keeps one codebase and pipeline, defines what dedicated tenants actually get in isolation, examines the shared control plane and plans tenant migration and patching.
+      good: Describes both models with routing but is vague on what is truly isolated or on operating many stacks.
+      weak: Forks the codebase for dedicated customers.
+    followups:
+      - What does a dedicated tenant still share with everyone else?
+      - How would you roll out an urgent security patch to all stacks?
+    common_errors:
+      - Promising isolation while sharing the same admin credentials across stacks.
+
+  - external_key: system_design.security_architecture.database_tenant_enforcement
+    competency_key: databases
+    topic: Enforcing tenant isolation in the database
+    difficulty: medium
+    text: >-
+      All tenants share one PostgreSQL database and every query is supposed to filter by tenant ID. How would you
+      push tenant isolation down into the database so a missing filter in the code can't leak data?
+    expected_concepts:
+      - row-level security policies keyed on a session tenant setting
+      - setting the tenant context per transaction from the authenticated request
+      - connection pooling pitfalls where context leaks between requests
+      - application role without the right to bypass policies
+      - migrations and admin jobs that legitimately cross tenants
+      - tests that try cross-tenant access
+    rubric:
+      excellent: Enables row-level security driven by a per-transaction tenant setting, prevents context leaking through pooled connections, uses roles that can't bypass policies and handles cross-tenant jobs and tests explicitly.
+      good: Proposes row-level security correctly but overlooks pooling or bypassing roles.
+      weak: Relies on code review to catch missing tenant filters.
+    followups:
+      - What happens if the tenant setting is left over from the previous request on a pooled connection?
+      - How do reporting jobs that need all tenants work under this design?
+    common_errors:
+      - Connecting as a table owner or superuser that bypasses row-level security.
+
+  - external_key: system_design.security_architecture.tenant_aware_shared_services
+    competency_key: security
+    topic: Tenant isolation in caches, queues and jobs
+    difficulty: medium
+    text: >-
+      Your API checks tenants carefully, but caches, message queues, search indexes and background jobs are
+      shared across tenants too. Design how tenant isolation is preserved through those components.
+    expected_concepts:
+      - tenant ID in every cache key and enforced by a shared library
+      - tenant context carried in message metadata and verified by consumers
+      - per-tenant filtering or partitioning in search indexes
+      - background jobs re-establishing tenant context before acting
+      - tests and linting that catch missing tenant scoping
+    rubric:
+      excellent: Builds tenant scoping into shared libraries for cache keys, messages, search and jobs, verifies context at each consumer and backs it with automated checks.
+      good: Covers caches and search but forgets jobs or queue consumers.
+      weak: Assumes data is safe once the API layer has checked the tenant.
+    followups:
+      - A cached response for one tenant is served to another. How could that happen?
+      - How would a background job know which tenant it's acting for?
+    common_errors:
+      - Building cache keys from the URL alone.
+
+  - external_key: system_design.security_architecture.support_impersonation
+    competency_key: security
+    topic: Support staff acting as customers
+    difficulty: medium
+    text: >-
+      Support engineers often need to see the product exactly as a customer sees it to fix problems. Design an
+      impersonation feature that is safe, limited and transparent to the customer.
+    expected_concepts:
+      - customer consent or a support ticket as the basis for access
+      - time-limited impersonation sessions
+      - read-only by default with restricted actions
+      - actions attributed to the staff member, not the customer
+      - visible banner for staff and audit visible to the customer
+      - blocking access to secrets and payment details
+    rubric:
+      excellent: Bases access on consent or a ticket, limits time and actions, attributes every action to the staff member, shows audit to the customer and keeps the most sensitive data out of reach.
+      good: Logs impersonation and limits duration but records actions as the customer or allows full write access.
+      weak: Lets support log in with the customer's password or a master password.
+    followups:
+      - The support engineer needs to change a setting to fix the issue. How is that handled?
+      - How would a customer find out who accessed their account?
+    common_errors:
+      - Recording impersonated actions as if the customer performed them.
+
+  - external_key: system_design.security_architecture.tenant_isolation_testing
+    competency_key: security
+    topic: Continuously verifying tenant isolation
+    difficulty: medium
+    text: >-
+      You've designed tenant isolation carefully, but new endpoints ship every day. How would you design
+      continuous verification that tenant isolation still holds?
+    expected_concepts:
+      - automated tests where one tenant tries to reach another's resources on every endpoint
+      - synthetic canary tenants with marker data
+      - alerts when canary data appears in another tenant's responses
+      - static checks for queries without tenant scoping
+      - authorisation coverage reports for new endpoints
+      - production monitoring for cross-tenant access patterns
+    rubric:
+      excellent: Combines automated cross-tenant tests for every endpoint, canary tenants with marker data, static checks, coverage reporting and production monitoring for anomalies.
+      good: Adds cross-tenant tests in CI but has nothing that catches problems in production.
+      weak: Relies on an annual penetration test.
+    followups:
+      - How would you automatically generate cross-tenant tests for new endpoints?
+      - What would you do if a canary tenant's marker showed up elsewhere?
+    common_errors:
+      - Testing only the endpoints that existed when the tests were written.
+
+  - external_key: system_design.security_architecture.abusive_tenant_containment
+    competency_key: distributed_systems
+    topic: Containing an abusive tenant
+    difficulty: medium
+    text: >-
+      One tenant on your shared platform, compromised or simply malicious, starts sending huge request volumes and
+      expensive queries. Design the controls that stop one tenant from degrading or endangering everyone else.
+    expected_concepts:
+      - per-tenant rate limits and quotas at the edge and per service
+      - limits on query cost, payload size and concurrency
+      - fair scheduling or separate pools for heavy work
+      - ability to throttle or suspend a tenant quickly
+      - per-tenant metrics and alerts
+    rubric:
+      excellent: Applies per-tenant limits at several layers, bounds expensive operations, isolates heavy workloads, provides fast throttling and suspension and monitors per tenant.
+      good: Adds per-tenant rate limits but not limits on expensive operations or isolation of heavy work.
+      weak: Scales up the shared infrastructure and hopes it absorbs the load.
+    followups:
+      - How do you distinguish a legitimate traffic spike from abuse?
+      - Who can suspend a tenant, and how is that decision reviewed?
+    common_errors:
+      - Rate limiting by IP address instead of by tenant.
+
+  - external_key: system_design.security_architecture.audit_event_standard
+    competency_key: security
+    topic: One audit event standard across many services
+    difficulty: medium
+    text: >-
+      Eighty microservices each write audit events in their own format, and investigators can't follow an action
+      across them. Design a common audit event standard and the tooling that gets teams to adopt it.
+    expected_concepts:
+      - a shared schema with actor, delegation chain, action, target, outcome and request IDs
+      - recording the original human behind service-to-service calls
+      - a shared library or sidecar that emits events correctly
+      - schema registry and validation in CI
+      - correlation IDs across services
+      - migration plan and adoption tracking
+    rubric:
+      excellent: Defines a schema that captures delegation and correlation, ships a library that makes correct events easy, validates in CI and plans migration with measurable adoption.
+      good: Defines a sensible schema and library but ignores delegation chains or adoption.
+      weak: Asks teams to follow a wiki page with no tooling or validation.
+    followups:
+      - How would you represent an action taken by a scheduled job on behalf of a user?
+      - What would you do about services that won't adopt the standard?
+    common_errors:
+      - Recording only the calling service and losing the human who started the request.
+
+  - external_key: system_design.security_architecture.audit_log_access_privacy
+    competency_key: security
+    topic: Protecting the audit log itself
+    difficulty: medium
+    text: >-
+      Your audit logs now contain IP addresses, email addresses and sometimes record contents, and many teams want
+      to query them. Design who can access audit data, what they see and how that access is itself controlled.
+    expected_concepts:
+      - minimising sensitive fields in events from the start
+      - role-based views with masking for most readers
+      - full access only for investigations with justification
+      - auditing access to the audit log
+      - retention and deletion rules that respect privacy obligations
+    rubric:
+      excellent: Minimises sensitive content at write time, offers masked views by role, gates full access behind justified investigation, audits audit-log access and sets privacy-aware retention.
+      good: Restricts access by role but stores and shows everything to those roles.
+      weak: Gives every engineer full search access to audit data.
+    followups:
+      - A user asks you to delete their personal data. What happens to their audit entries?
+      - How would you detect someone using the audit log to look up a colleague?
+    common_errors:
+      - Treating audit logs as low-sensitivity operational data.
+
+  - external_key: system_design.security_architecture.tenant_custom_domains
+    competency_key: networking
+    topic: Custom domains for tenants
+    difficulty: medium
+    text: >-
+      Customers can serve their portal on your platform from their own domain, like help dot their company dot
+      com. Design custom domain support, including certificates and the security risks involved.
+    expected_concepts:
+      - verifying domain ownership before activation
+      - automated per-domain certificate issuance and renewal
+      - mapping hostnames to tenants at the edge
+      - dangling DNS and subdomain takeover when tenants leave
+      - isolating cookies so tenant domains can't affect each other or your main domain
+    rubric:
+      excellent: Verifies ownership, automates certificates, routes by hostname to the right tenant, prevents takeover of abandoned domains and scopes cookies so tenant domains are isolated.
+      good: Handles verification and certificates but misses takeover or cookie scoping risks.
+      weak: Lets customers point any domain at the platform and serves it without verification.
+    followups:
+      - A customer cancels but leaves their DNS pointing at you. What's the risk?
+      - Why shouldn't tenant portals share a cookie domain with your main app?
+    common_errors:
+      - Releasing a hostname mapping that someone else can then claim.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.security_architecture.regional_data_residency
+    competency_key: security
+    topic: Regional isolation for data residency
+    difficulty: hard
+    text: >-
+      Customers in some jurisdictions require that their data, including backups, logs and support access, stays in
+      their region. Design your SaaS platform so tenants can be pinned to a region while you still run one global
+      product.
+    expected_concepts:
+      - regional data planes with a minimal global control plane
+      - tenant directory that routes requests to the home region
+      - identity and login that don't leak data across regions
+      - logs, backups and analytics kept in region
+      - regional support access controls
+      - what metadata may legitimately be global
+    rubric:
+      excellent: Separates regional data planes from a minimal global control plane, routes by tenant directory, keeps logs, backups and support access in region and is precise about which metadata crosses borders.
+      good: Builds regional stacks with routing but forgets logs, backups or support access.
+      weak: Stores data in one region and adds a regional CDN.
+    followups:
+      - Where does a user's email live before you know which tenant they belong to?
+      - How would you move a tenant to a different region?
+    common_errors:
+      - Shipping regional application logs to a global logging cluster.
+
+  - external_key: system_design.security_architecture.cell_security_boundaries
+    competency_key: system_design
+    topic: Cells as security boundaries
+    difficulty: hard
+    text: >-
+      Your platform is moving to a cell-based architecture for reliability. How would you design the cells so they
+      also limit the impact of a security breach, and what would still be shared that could undo that?
+    expected_concepts:
+      - separate accounts, networks and credentials per cell
+      - cell-specific keys and secrets
+      - tenants mapped to cells with no cross-cell data access
+      - the global control plane, deploy pipeline and identity as shared risks
+      - least-privilege control plane actions with approval for bulk operations
+      - detection and response scoped per cell
+    rubric:
+      excellent: Gives cells their own accounts, networks, credentials and keys, identifies shared control plane, pipeline and identity as the real risk and hardens those with least privilege and approval for bulk changes.
+      good: Isolates data and network per cell but treats the shared control plane as trusted.
+      weak: Assumes reliability cells automatically provide security isolation.
+    followups:
+      - An attacker compromises the deployment pipeline. How many cells are affected?
+      - How do support engineers work across cells without breaking isolation?
+    common_errors:
+      - Sharing one set of operator credentials across every cell.
+
+  - external_key: system_design.security_architecture.cross_tenant_search_isolation
+    competency_key: security
+    topic: Isolation in shared search and analytics
+    difficulty: hard
+    text: >-
+      Your product offers full-text search, recommendations and benchmark analytics, all built on indexes and
+      models that span every tenant. Design these features so no tenant's data can surface for another.
+    expected_concepts:
+      - per-tenant index filtering enforced in the search layer, or separate indexes for large tenants
+      - authorisation applied to search results, not just queries
+      - aggregated benchmarks with minimum group sizes
+      - models that can't memorise or reveal tenant content
+      - leakage through autocomplete, counts and relevance signals
+      - testing with canary data
+    rubric:
+      excellent: Enforces tenant and permission filtering inside the search layer, protects benchmarks with aggregation thresholds, considers leakage through models, autocomplete and counts and verifies with canary data.
+      good: Filters search results per tenant but misses indirect leakage such as autocomplete or result counts.
+      weak: Relies on the client to filter results after a global search.
+    followups:
+      - How could result counts or autocomplete suggestions leak another tenant's data?
+      - What would stop a recommendation model trained on all tenants from exposing one tenant's content?
+    common_errors:
+      - Filtering only the final page of results, so totals and facets still leak.
+
+  - external_key: system_design.security_architecture.audit_retention_legal_hold
+    competency_key: distributed_systems
+    topic: Long-term audit storage with legal holds
+    difficulty: hard
+    text: >-
+      You ingest billions of audit events a day, must keep them for seven years, answer investigation queries in
+      seconds for recent data and support legal holds and privacy deletion requests. Design the storage
+      architecture.
+    expected_concepts:
+      - hot, warm and cold tiers with different query paths
+      - immutable storage with retention locks
+      - legal holds that override expiry for specific scopes
+      - reconciling deletion requests with immutability, such as pseudonymisation or per-subject keys
+      - indexing for common investigation queries
+      - cost modelling over seven years
+    rubric:
+      excellent: Tiers storage with suitable query paths, locks retention, implements scoped legal holds, resolves the tension between deletion and immutability with a concrete technique and models cost.
+      good: Tiers and retains data well but has no answer for deletion requests against immutable storage.
+      weak: Keeps everything in one search cluster for seven years or deletes data to save cost.
+    followups:
+      - A legal hold applies to one tenant's events from two years ago. How is that enforced?
+      - How do you query seven-year-old data that's in cold storage?
+    common_errors:
+      - Assuming immutability and deletion requests can't coexist.
+
+  - external_key: system_design.security_architecture.access_transparency
+    competency_key: security
+    topic: Showing customers when your staff access their data
+    difficulty: hard
+    text: >-
+      Large customers want proof that your engineers only touch their data when justified, and they want to see
+      every such access. Design an access transparency system for your platform.
+    expected_concepts:
+      - all staff access to customer data through controlled paths
+      - justification linked to a ticket or incident for every access
+      - customer-visible logs of staff access in near real time
+      - optional customer approval for access
+      - detecting access that bypasses the controlled paths
+      - handling emergencies and legally compelled access
+    rubric:
+      excellent: Forces all staff access through controlled, justified paths, exposes near real-time logs to customers, offers customer approval, detects bypass and defines emergency handling.
+      good: Logs justified staff access and shares reports but can't show that no access bypassed the system.
+      weak: Promises a quarterly report compiled by hand.
+    followups:
+      - How would you prove that an engineer didn't access data through a backdoor path?
+      - What should happen when a customer refuses to approve access during an outage?
+    common_errors:
+      - Ignoring access through backups, logs or debugging tools.
+
+  - external_key: system_design.security_architecture.tenant_admin_identity_isolation
+    competency_key: security
+    topic: Tenant-managed identity in a shared platform
+    difficulty: hard
+    text: >-
+      Each customer's admins manage their own users, roles and identity provider settings in your platform, and some
+      people belong to several customer organisations at once. Design the identity model so no tenant admin can ever
+      affect another tenant.
+    expected_concepts:
+      - global user identity separate from per-tenant memberships
+      - roles and permissions scoped strictly to a tenant
+      - tenant admins unable to change global credentials or other memberships
+      - per-tenant authentication policies such as SSO and MFA requirements
+      - session context switching between tenants
+      - privilege escalation paths through invitations and shared users
+    rubric:
+      excellent: Separates global identity from tenant memberships, scopes every admin action to the tenant, applies per-tenant authentication policy at tenant entry and analyses escalation through invitations and shared users.
+      good: Models memberships and scoped roles correctly but lets tenant policy or admins affect the global account.
+      weak: Lets tenant admins reset passwords or change emails of users who also belong to other tenants.
+    followups:
+      - Tenant A requires SSO but tenant B doesn't. How does a user in both sign in?
+      - How could an invitation flow be abused to take over an account?
+    common_errors:
+      - Allowing a tenant admin to change a shared user's email address.
+
+  - external_key: system_design.security_architecture.async_tenant_context
+    competency_key: security
+    topic: Trustworthy tenant context across async services
+    difficulty: hard
+    text: >-
+      Requests fan out through queues and internal services, and each downstream service takes the tenant ID from a
+      message field. Design how tenant and user context travels so a compromised or buggy service can't make
+      another service act for the wrong tenant.
+    expected_concepts:
+      - signed context tokens carrying tenant and user issued at the edge
+      - downstream services verifying context rather than trusting fields
+      - token scoping and expiry for async work that runs later
+      - service identity combined with end-user context in authorisation
+      - preventing confused deputy problems
+      - handling system jobs with no end user
+    rubric:
+      excellent: Propagates signed, scoped and expiring context from the edge, has every service verify it and combine it with caller identity, handles delayed work and system jobs and names the confused deputy risk explicitly.
+      good: Propagates context consistently but trusts unsigned fields from any internal caller.
+      weak: Lets each service accept whatever tenant ID appears in the message.
+    followups:
+      - A job runs six hours later, after the user has lost access. Should it still run?
+      - How do you authorise jobs that legitimately act across all tenants?
+    common_errors:
+      - Assuming internal callers are trustworthy by default.
+
+  - external_key: system_design.security_architecture.greenfield_saas_security
+    competency_key: security
+    topic: Security architecture for a new SaaS platform
+    difficulty: hard
+    text: >-
+      You're the first security architect at a startup building a multi-tenant B2B SaaS platform from scratch.
+      Walk me through the security architecture you'd put in place in the first six months, and how you'd decide
+      what comes first.
+    expected_concepts:
+      - risk-based prioritisation from a threat model of the product
+      - identity foundations for staff and customers
+      - tenant isolation built into the data and service layers
+      - secrets, keys and cloud account structure
+      - audit logging and security telemetry from day one
+      - secure delivery pipeline and a path to compliance requirements
+    rubric:
+      excellent: Prioritises from a threat model and business needs, sequences identity, tenant isolation, secrets, logging and pipeline security sensibly and explains what is deliberately deferred and why.
+      good: Covers the right areas but presents them as a flat list without prioritisation.
+      weak: Starts with buying tools or writing policies without addressing architecture.
+    followups:
+      - Which decision would be hardest to change later if you got it wrong?
+      - What would you deliberately leave for later?
+    common_errors:
+      - Postponing tenant isolation until after the first enterprise customer.
+
+  - external_key: system_design.security_architecture.log_tampering_detection
+    competency_key: observability
+    topic: Detecting attackers silencing your logging
+    difficulty: hard
+    text: >-
+      A capable attacker's first moves are often to stop or alter logging. Design your logging and detection
+      architecture so that silencing or tampering with logs is itself detected quickly.
+    expected_concepts:
+      - logs shipped off-host immediately to a separate administrative domain
+      - heartbeats and expected-volume baselines per source
+      - alerts on logging configuration changes and agent stops
+      - integrity protection such as signed batches or hash chains
+      - a separate control plane for the logging system itself
+      - correlating gaps with other signals
+    rubric:
+      excellent: Ships logs immediately to an independently administered store, monitors heartbeats and volumes, alerts on configuration changes, protects integrity and correlates gaps with other telemetry.
+      good: Alerts on agent stops and centralises logs but uses the same admin domain as production.
+      weak: Relies on local log files and periodic manual review.
+    followups:
+      - A source's volume drops by forty percent but doesn't stop. How would you notice?
+      - Who administers the logging platform, and how is that access controlled?
+    common_errors:
+      - Letting production administrators also turn off log forwarding.
+
+  - external_key: system_design.security_architecture.customer_hosted_deployment
+    competency_key: security
+    topic: Running your SaaS inside a customer's cloud account
+    difficulty: hard
+    text: >-
+      A highly regulated customer will only buy your product if it runs inside their own cloud account, yet you still
+      need to update, monitor and support it. Design the deployment and access model.
+    expected_concepts:
+      - data plane in the customer account with a minimal remote control plane
+      - outbound-only connections initiated from the customer side
+      - narrowly scoped, customer-approved roles for your operators
+      - signed, verifiable updates the customer can review
+      - telemetry stripped of customer data
+      - customer ability to cut off your access at any time
+    rubric:
+      excellent: Runs the data plane in the customer account with outbound-only connections, uses customer-approved scoped roles, ships verifiable updates, limits telemetry and gives the customer a clear way to revoke access.
+      good: Deploys into the customer account with scoped access but keeps broad standing admin rights or unrestricted telemetry.
+      weak: Asks the customer for an admin role in their account and manages it like your own.
+    followups:
+      - How do you push an urgent security fix if the customer delays updates?
+      - How would your engineers debug a production issue they can't see directly?
+    common_errors:
+      - Requiring inbound network access from your network into the customer's environment.

@@ -1,0 +1,218 @@
+version: 1
+slug: canonical_url_cache_key
+title: Canonical Cache Key for a URL
+difficulty: medium
+competency_keys: [problem_solving, code_quality, debugging]
+role_tags: [backend, fullstack, platform, frontend]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Canonical Cache Key for a URL
+
+  The CDN in front of an online shop caches responses by URL. Today `https://Shop.example.com/a?x=1&y=2`
+  and `https://shop.example.com:443//a?y=2&x=1` are cached twice, and campaign links tagged with
+  `utm_source=...` never hit the cache. Write `cache_key(url)` that turns a URL into one **canonical
+  key** so equivalent URLs share a cache entry.
+
+  The input has the shape `scheme://authority[path][?query][#fragment]`:
+
+  - `scheme` is `http` or `https` in any letter case.
+  - `authority` runs up to the first `/`, `?` or `#` after `://` (or the end) and is `host` or
+    `host:port`.
+  - `path` starts with `/` and runs up to the first `?` or `#`; it may be missing.
+  - `query` is the text after the first `?` up to the first `#`; it exists only if that `?` comes
+    **before** any `#`.
+  - `fragment` is everything from the first `#`.
+
+  Build the key as `scheme://authority` + `path`, then `?` + `query` when a query remains:
+
+  1. **Scheme and host** are lowercased. A port equal to the scheme's default (`80` for `http`, `443`
+     for `https`) is removed; any other port is kept.
+  2. **Path**: split it on `/` and process the pieces left to right: skip empty pieces and `.`, a `..`
+     removes the most recently kept segment (and does nothing if there is none), any other piece is
+     kept. The new path is `/` followed by the kept segments joined with `/`. If the original path ended
+     with `/`, `/.` or `/..` and at least one segment was kept, add a trailing `/`. A missing path, or
+     one where nothing is kept, becomes `/`. Path segments keep their letter case.
+  3. **Query**: split it on `&`. The key of a parameter is the text before its first `=` (the whole
+     parameter if it has no `=`). Drop parameters whose key is empty (this includes empty pieces) or
+     starts with `utm_` (lowercase, case-sensitive). Sort the remaining parameters by **key**, and
+     parameters with the same key by their **full text**, both in plain character-code (ASCII) order.
+     Keep every parameter exactly as written (no decoding, duplicates kept) and join them with `&`.
+     If no parameter remains, the key has no `?`.
+  4. **Fragment** is dropped.
+
+  ### Example 1
+  ```
+  Input:  url = "HTTPS://Shop.Example.COM:443/Cart//items/./42?utm_source=mail&size=XL&color=red#reviews"
+  Output: "https://shop.example.com/Cart/items/42?color=red&size=XL"
+  ```
+
+  ### Example 2
+  ```
+  Input:  url = "http://cdn.example.net:8080/a/b/../../../img.png?v=2&v=10&=x&utm_medium=cpc"
+  Output: "http://cdn.example.net:8080/img.png?v=10&v=2"
+  Explanation: the third .. has nothing left to remove; "v=10" sorts before "v=2" in character order.
+  ```
+
+  ### Example 3
+  ```
+  Input:  url = "http://API.example.org"
+  Output: "http://api.example.org/"
+  ```
+
+  ### Constraints
+  - `10 <= url.length <= 2000`
+  - `url` contains printable ASCII characters without spaces and always contains `://`.
+  - The host contains only letters, digits, `.` and `-`; there is no user info (`user@`) and no IPv6.
+  - A port, when present, is 1 to 5 digits without leading zeros.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: cache_key
+  params:
+    - {name: url, type: string}
+  return_type: string
+  comparison: exact
+reference_solutions:
+  python: |
+    def cache_key(url: str) -> str:
+        sep = url.index("://")
+        scheme = url[:sep].lower()
+        rest = url[sep + 3:]
+        hash_at = rest.find("#")
+        if hash_at != -1:
+            rest = rest[:hash_at]
+        query = None
+        question = rest.find("?")
+        if question != -1:
+            query = rest[question + 1:]
+            rest = rest[:question]
+        slash = rest.find("/")
+        authority, path = (rest, "") if slash == -1 else (rest[:slash], rest[slash:])
+        authority = authority.lower()
+        if ":" in authority:
+            host, port = authority.split(":", 1)
+            if (scheme == "http" and port == "80") or (scheme == "https" and port == "443"):
+                authority = host
+
+        pieces = path.split("/")
+        kept: list[str] = []
+        for piece in pieces:
+            if piece in ("", "."):
+                continue
+            if piece == "..":
+                if kept:
+                    kept.pop()
+            else:
+                kept.append(piece)
+        trailing = pieces[-1] in ("", ".", "..")
+        new_path = "/" + "/".join(kept) + ("/" if trailing and kept else "")
+
+        params: list[tuple[str, str]] = []
+        if query is not None:
+            for param in query.split("&"):
+                key = param.split("=", 1)[0]
+                if key == "" or key.startswith("utm_"):
+                    continue
+                params.append((key, param))
+        params.sort()
+        result = scheme + "://" + authority + new_path
+        if params:
+            result += "?" + "&".join(param for _, param in params)
+        return result
+  javascript: |
+    function cacheKey(url) {
+      const sep = url.indexOf("://");
+      const scheme = url.slice(0, sep).toLowerCase();
+      let rest = url.slice(sep + 3);
+      const hashAt = rest.indexOf("#");
+      if (hashAt !== -1) rest = rest.slice(0, hashAt);
+      let query = null;
+      const question = rest.indexOf("?");
+      if (question !== -1) {
+        query = rest.slice(question + 1);
+        rest = rest.slice(0, question);
+      }
+      const slash = rest.indexOf("/");
+      let authority = slash === -1 ? rest : rest.slice(0, slash);
+      const path = slash === -1 ? "" : rest.slice(slash);
+      authority = authority.toLowerCase();
+      const colon = authority.indexOf(":");
+      if (colon !== -1) {
+        const port = authority.slice(colon + 1);
+        if ((scheme === "http" && port === "80") || (scheme === "https" && port === "443")) {
+          authority = authority.slice(0, colon);
+        }
+      }
+
+      const pieces = path.split("/");
+      const kept = [];
+      for (const piece of pieces) {
+        if (piece === "" || piece === ".") continue;
+        if (piece === "..") {
+          if (kept.length > 0) kept.pop();
+        } else {
+          kept.push(piece);
+        }
+      }
+      const last = pieces[pieces.length - 1];
+      const trailing = last === "" || last === "." || last === "..";
+      const newPath = "/" + kept.join("/") + (trailing && kept.length > 0 ? "/" : "");
+
+      const params = [];
+      if (query !== null) {
+        for (const param of query.split("&")) {
+          const eq = param.indexOf("=");
+          const key = eq === -1 ? param : param.slice(0, eq);
+          if (key === "" || key.startsWith("utm_")) continue;
+          params.push([key, param]);
+        }
+      }
+      const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+      params.sort((a, b) => cmp(a[0], b[0]) || cmp(a[1], b[1]));
+      let result = scheme + "://" + authority + newPath;
+      if (params.length > 0) result += "?" + params.map((p) => p[1]).join("&");
+      return result;
+    }
+tests:
+  - {"id": "t1", "args": ["HTTPS://Shop.Example.COM:443/Cart//items/./42?utm_source=mail&size=XL&color=red#reviews"], "expected": "https://shop.example.com/Cart/items/42?color=red&size=XL", "description": "Example 1"}
+  - {"id": "t2", "args": ["http://cdn.example.net:8080/a/b/../../../img.png?v=2&v=10&=x&utm_medium=cpc"], "expected": "http://cdn.example.net:8080/img.png?v=10&v=2", "description": "Example 2 - .. above root, non-default port, ordinal value order, empty key dropped"}
+  - {"id": "t3", "args": ["http://API.example.org"], "expected": "http://api.example.org/", "description": "Example 3 - missing path becomes /"}
+  - {"id": "t4", "hidden": true, "args": ["https://h.example.com:80/x/?b=1#frag"], "expected": "https://h.example.com:80/x/?b=1", "description": "Port 80 is not the https default and is kept; trailing slash kept"}
+  - {"id": "t5", "hidden": true, "args": ["http://h.io:443/a/b/..?q"], "expected": "http://h.io:443/a/?q", "description": "Port 443 kept for http; path ending in .. keeps a trailing slash; flag parameter without ="}
+  - {"id": "t6", "hidden": true, "args": ["http://h.io//./..//?utm_a=1&&utm_=2&"], "expected": "http://h.io/", "description": "Path collapses to root; every parameter filtered so no ? is emitted"}
+  - {"id": "t7", "hidden": true, "args": ["https://h.io/docs#section?x=1"], "expected": "https://h.io/docs", "description": "? inside the fragment is not a query"}
+  - {"id": "t8", "hidden": true, "args": ["https://h.io/s?a=1&a-b=1&a.c=2&a&a=&UTM_source=k&utm=3"], "expected": "https://h.io/s?UTM_source=k&a&a=&a=1&a-b=1&a.c=2&utm=3", "description": "Key-then-text ordering differs from raw string sort; flag before empty value; UTM_ uppercase and utm without underscore are kept"}
+  - {"id": "t9", "hidden": true, "args": ["HTTP://Mixed.Case.io/Path/%2Fenc/..a/.hidden/./?Z=%20&z=+"], "expected": "http://mixed.case.io/Path/%2Fenc/..a/.hidden/?Z=%20&z=+", "description": "Path case and percent-encoding preserved; ..a and .hidden are normal segments; uppercase keys sort first"}
+  - {"id": "t10", "hidden": true, "args": ["https://h.io?"], "expected": "https://h.io/", "description": "Empty query right after the authority with no path"}
+  - {"id": "t11", "hidden": true, "args": ["http://h.io:8443/s1/s2/s3/s4/../s6/s7/s8/s9/../s11/s12/s13/s14/../s16/s17/s18/s19/../s21/s22/s23/s24/../s26/s27/s28/s29/../s31/s32/s33/s34/../s36/s37/s38/s39?utm_c0=x&p7=1&f2&&utm_c4=x&p9=5&f0&&utm_c8=x&p11=9&f1&&utm_c12=x&p0=13&f2&&utm_c16=x&p2=17&f0&&utm_c20=x&p4=21&f1&&utm_c24=x&p6=25&f2&&utm_c28=x&p8=29&f0&&utm_c32=x&p10=33&f1&&utm_c36=x&p12=37&f2&&utm_c40=x&p1=41&f0&&utm_c44=x&p3=45&f1&&utm_c48=x&p5=49&f2&&utm_c52=x&p7=53&f0&&utm_c56=x&p9=57&f1&"], "expected": "http://h.io:8443/s1/s2/s3/s6/s7/s8/s11/s12/s13/s16/s17/s18/s21/s22/s23/s26/s27/s28/s31/s32/s33/s36/s37/s38/s39?f0&f0&f0&f0&f0&f1&f1&f1&f1&f1&f2&f2&f2&f2&f2&p0=13&p1=41&p10=33&p11=9&p12=37&p2=17&p3=45&p4=21&p5=49&p6=25&p7=1&p7=53&p8=29&p9=5&p9=57", "description": "Stress - long path with many .. segments and 60 query parameters with filters, flags and empty pieces"}
+expected_concepts:
+  - splitting a URL into components in the right order (fragment, then query, then authority and path)
+  - stack-based removal of dot segments with a root boundary
+  - stable canonical ordering of query parameters by key then full text
+  - filtering tracking parameters without decoding
+  - scheme-specific default ports
+optimal_complexity: {time: O(n log n) for sorting the query parameters, space: O(n)}
+rubric:
+  excellent: Splits the URL in a safe order (fragment first), normalises each part with a small helper, uses a stack for dot segments, sorts parameters by key and then full text, and explains why the key-then-text order differs from sorting the raw strings.
+  good: Produces correct keys for most inputs but needs a nudge on one rule such as the trailing slash after .., a # before ?, the empty-key parameter or scheme-specific default ports.
+  weak: Uses string replacement for // and ../ (which breaks on repeated patterns), sorts raw parameter strings, lowercases the path, or decodes and re-encodes parameters.
+  criteria:
+    correctness: All tests pass, including dot segments above root, # before ?, empty keys and utm_ filtering.
+    efficiency: One pass per component plus a sort of the parameters.
+    code_quality: Separate, named steps for authority, path and query; no fragile chained string replacements.
+    edge_cases: Missing path, trailing slash rules, non-default ports, flag parameters without =, duplicate keys, an empty or fully filtered query.
+    communication: Explains each normalisation rule and why the fragment must be removed before looking for ?.
+hints:
+  - Handle the URL in pieces. Which separator must you look for first so that a ? inside the fragment is not mistaken for the start of the query?
+  - For the path, think of a stack of segments - a normal segment is pushed, .. pops if possible and empty or . pieces are ignored. Remember separately whether the original path ended in a way that implies a trailing slash.
+  - For the query, split on &, compute each parameter's key as the text before the first =, filter out empty and utm_ keys, then sort pairs of (key, full parameter text) in character-code order and join the parameter texts with &.
+followups:
+  - Which other parts of a URL would you normalise for a real CDN (percent-encoding case, IDN hosts, trailing dots) and which are risky to change?
+  - How would you make the set of ignored query parameters configurable per route?
+  - Why can sorting query parameters change the meaning of some URLs, and how would you allow an opt-out?
+  - How would you test that two equivalent URLs always produce the same key?
+common_errors:
+  - Looking for ? before removing the fragment, so a ? inside the fragment starts a fake query.
+  - Sorting raw parameter strings, which puts a-b=1 before a=1 even though key a sorts first.
+  - Removing ports 80 and 443 regardless of the scheme.
+  - Letting .. climb above the root or producing an empty path instead of /.
+  - Leaving a dangling ? when every parameter was filtered out.

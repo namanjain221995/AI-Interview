@@ -1,0 +1,635 @@
+# Curated questions: DevOps CI/CD and infrastructure as code (part 1 of 4).
+# Pipeline design, build caching, artifact management and CI runners.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [devops]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: technical.devops_ci_iac.integration_delivery_deployment
+    competency_key: ci_cd
+    topic: Continuous integration, delivery and deployment
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      In your own words, how do continuous integration, continuous delivery and continuous deployment differ,
+      and where did a team you've worked with sit on that spectrum?
+    expected_concepts:
+      - integration means merging small changes often with automated build and test
+      - delivery means every change is releasable, with a manual decision to ship
+      - deployment means every passing change goes to production automatically
+      - what has to be true (test confidence, rollback, monitoring) to move further along
+    rubric:
+      excellent: Defines all three precisely, ties them to a real team's practice and explains what held that team back from going further or why it chose not to.
+      good: Distinguishes the three correctly with a brief example from their own work.
+      weak: Treats the terms as interchangeable or equates CI with simply having a build server.
+    followups:
+      - What would that team have needed to change to deploy automatically on every merge?
+      - Is there a kind of system where you'd deliberately stop at continuous delivery?
+    common_errors:
+      - Saying a team does CI while branches live for weeks before merging.
+
+  - external_key: technical.devops_ci_iac.stage_ordering
+    competency_key: ci_cd
+    topic: Ordering pipeline stages
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you lay out the stages of a CI pipeline, how do you decide what runs first, what runs in
+      parallel, and what can wait until later?
+    expected_concepts:
+      - fail fast with cheap checks first (lint, compile, unit tests)
+      - run independent jobs in parallel
+      - slower integration and end-to-end tests after the quick gate
+      - expensive or environment-bound checks after merge or before release
+      - developer feedback time as the main design goal
+    rubric:
+      excellent: Orders stages by cost and failure likelihood, parallelises independent work, and explains the feedback-time target they design for with a concrete example.
+      good: Puts quick checks first and slow tests later, with some mention of parallel jobs.
+      weak: Runs everything sequentially in an arbitrary order or cannot justify the ordering.
+    followups:
+      - How long should a developer wait for the first signal on a pull request?
+      - Where would a security scan fit in that ordering?
+    common_errors:
+      - "Putting a slow end-to-end suite before linting, so trivial mistakes take half an hour to surface."
+
+  - external_key: technical.devops_ci_iac.red_main_branch
+    competency_key: ci_cd
+    topic: Broken main branch
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You arrive in the morning and the main branch build has been failing since last night, and three
+      people have merged on top of it since. What do you do?
+    expected_concepts:
+      - treat a red main branch as a priority and tell the team
+      - find the first failing commit from build history
+      - revert the offending change rather than debugging in place
+      - check whether later merges hid or compounded the failure
+      - prevent recurrence with required checks or a merge queue
+    rubric:
+      excellent: Restores a green main quickly by identifying and reverting the first bad commit, communicates clearly, and proposes a process change such as required status checks so merges cannot land on red.
+      good: Finds the breaking commit and gets it fixed or reverted.
+      weak: Keeps merging, disables the failing test, or waits for someone else to notice.
+    followups:
+      - The author of the breaking change is on holiday. Does that change anything?
+      - What would you change so this can't happen overnight again?
+    common_errors:
+      - Skipping or quarantining the failing test without understanding the failure.
+
+  - external_key: technical.devops_ci_iac.dependency_cache
+    competency_key: ci_cd
+    topic: Dependency caching in CI
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How would you set up dependency caching in a pipeline for, say, an npm or pip project, and how do
+      you make sure the cache never hands you stale or wrong packages?
+    expected_concepts:
+      - cache keyed on a hash of the lock file
+      - restore keys or fallback for partial hits
+      - caching the package manager's download cache rather than build output blindly
+      - lock files to make installs deterministic
+      - a way to bust the cache when needed
+    rubric:
+      excellent: Keys the cache on the lock file hash plus relevant platform details, explains fallback behaviour, relies on lock files for correctness and knows how to invalidate a bad cache.
+      good: Caches dependencies with a sensible key and mentions lock files.
+      weak: Uses a fixed cache key or caches node_modules with no thought to invalidation.
+    followups:
+      - The cache restore now takes longer than a fresh install. What's going on?
+      - How would the key change if you built on both Linux and macOS runners?
+    common_errors:
+      - Keying the cache on the branch name, so every branch starts cold.
+
+  - external_key: technical.devops_ci_iac.build_once_promote
+    competency_key: ci_cd
+    topic: Build once, promote everywhere
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Many teams insist on building an artifact once and promoting that exact artifact through each
+      environment instead of rebuilding for every stage. Why do you think that matters?
+    expected_concepts:
+      - what was tested is exactly what ships
+      - rebuilds can pull different dependencies or base images
+      - environment-specific settings injected at deploy time, not baked in
+      - faster deploys and a clear audit trail
+      - immutable artifacts identified by version or digest
+    rubric:
+      excellent: Explains the risk of rebuild drift with a concrete cause, describes keeping configuration out of the artifact, and links it to traceability and rollback.
+      good: Says it guarantees the tested artifact is the deployed one.
+      weak: Sees no difference between rebuilding and promoting, or bakes environment config into each build.
+    followups:
+      - How do you handle a setting that genuinely differs between staging and production?
+      - What would you do if you discovered an image was rebuilt between staging and production?
+    common_errors:
+      - "Baking environment-specific URLs or credentials into the artifact, which forces a rebuild per environment."
+
+  - external_key: technical.devops_ci_iac.artifact_traceability
+    competency_key: ci_cd
+    topic: Artifact versioning and traceability
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you version the artifacts your pipeline produces, so that anyone looking at a running service
+      can trace it back to the exact commit and build that made it?
+    expected_concepts:
+      - version scheme such as semantic version or commit SHA
+      - commit SHA and build ID embedded as labels or metadata
+      - immutable tags, never overwritten
+      - exposing version via an endpoint, label or log line
+      - link from artifact to pipeline run and source
+    rubric:
+      excellent: Describes a versioning scheme, embeds commit and build metadata in the artifact, keeps tags immutable and shows how an on-call engineer finds the source from a running instance.
+      good: Tags artifacts with a version or commit hash and can look it up.
+      weak: Relies on a mutable tag such as latest, with no way to tell what's running.
+    followups:
+      - How would an on-call engineer find this at three in the morning?
+      - How do semantic versions and commit hashes work together, if you use both?
+    common_errors:
+      - "Overwriting an existing version tag with a new build, so the same tag points at different code over time."
+
+  - external_key: technical.devops_ci_iac.flaky_test_retry
+    competency_key: ci_cd
+    topic: Handling a flaky test
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      One test fails roughly one run in ten, and people have got into the habit of just hitting retry. How
+      would you deal with it?
+    expected_concepts:
+      - treat flakiness as a real defect, not noise
+      - reproduce by running the test repeatedly or in isolation
+      - common causes such as timing, shared state, ordering and external services
+      - quarantine with an owner and deadline if it blocks others
+      - track flake rate so it doesn't silently grow
+    rubric:
+      excellent: Reproduces the flake, reasons about likely causes, fixes or quarantines it with clear ownership, and adds tracking so new flakes are caught early.
+      good: Investigates the test and fixes the cause or temporarily isolates it.
+      weak: Adds automatic retries or deletes the test without investigating.
+    followups:
+      - The test passes every time you run it on its own. What next?
+      - What's the danger of automatic retries for every failing test?
+    common_errors:
+      - Assuming the test is wrong rather than the code under test.
+
+  - external_key: technical.devops_ci_iac.pipeline_as_code
+    competency_key: ci_cd
+    topic: Pipelines defined as code
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What benefits have you seen from defining pipelines as code in the repository, compared with
+      configuring them by hand in a CI tool's web interface, and what new problems does it bring?
+    expected_concepts:
+      - pipeline changes are reviewed and versioned with the code
+      - pipeline matches the branch and commit it builds
+      - easy to reproduce, copy and roll back
+      - risk of duplication across repositories
+      - pull requests can change the pipeline, so permissions matter
+    rubric:
+      excellent: Gives concrete benefits from experience and also names the downsides, such as copy-paste drift and the security risk of untrusted pull requests editing the pipeline.
+      good: Lists versioning, review and reproducibility benefits.
+      weak: Can only say it is the modern way without explaining why.
+    followups:
+      - How would you stop a pull request from a fork using the pipeline to read secrets?
+    common_errors:
+      - "Letting pull requests from forks run modified pipeline definitions with access to deployment secrets."
+
+  # ------------------------------------------------------------------ medium
+  - external_key: technical.devops_ci_iac.ephemeral_runner_layer_cache
+    competency_key: docker
+    topic: Image build caching on ephemeral runners
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Once you move to ephemeral CI runners, Docker layer caching usually stops helping because each job
+      starts from an empty machine. How would you get fast image builds back in that setup?
+    expected_concepts:
+      - BuildKit cache export and import to a registry or cache backend
+      - cache-from using previously pushed images
+      - ordering Dockerfile instructions so dependencies change rarely
+      - cache mounts for package managers
+      - a shared remote builder as an alternative
+    rubric:
+      excellent: Explains why the cache disappears, uses BuildKit cache export to a registry or backend, restructures the Dockerfile for cache hits and weighs a persistent remote builder against it.
+      good: Uses cache-from or a registry cache and orders layers sensibly.
+      weak: Proposes going back to long-lived runners without considering remote caching.
+    followups:
+      - How would you stop a feature branch's cache from polluting the main branch's cache?
+      - How would you know whether the cache is actually being hit?
+    common_errors:
+      - Copying the whole source tree before installing dependencies, which invalidates every later layer.
+
+  - external_key: technical.devops_ci_iac.monorepo_affected_builds
+    competency_key: ci_cd
+    topic: Building only what changed in a monorepo
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your company moved twenty services into a single monorepo, and now every commit builds and tests all
+      of them. How would you change the pipeline so a change only triggers the work it actually affects?
+    expected_concepts:
+      - dependency graph between services and shared libraries
+      - path filters as a simple first step and their limits
+      - build tools that compute affected targets (Bazel, Nx, Turborepo, Pants)
+      - shared library changes fanning out to dependents
+      - a periodic full build as a safety net
+    rubric:
+      excellent: Builds or derives a dependency graph, explains why naive path filters miss shared-code changes, uses an affected-target tool or equivalent and keeps a periodic full build to catch gaps.
+      good: Uses path-based triggers and accounts for shared libraries.
+      weak: Suggests splitting back into many repositories or only adding more runners.
+    followups:
+      - A change to a shared logging library affects every service. How do you keep that pipeline fast?
+      - How would you validate that the affected-target calculation isn't missing anything?
+    common_errors:
+      - "Relying only on directory path filters, so changes to shared libraries never trigger their dependents."
+
+  - external_key: technical.devops_ci_iac.artifact_repository_design
+    competency_key: ci_cd
+    topic: Artifact repository design
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you design artifact storage for an organisation that publishes container images, language
+      packages and binaries? I'm interested in where things live, who can push and pull, and how long you
+      keep them.
+    expected_concepts:
+      - a managed repository manager or registry per artifact type
+      - separate repositories for snapshots and releases, or by promotion stage
+      - proxy or cache of public registries for reliability and control
+      - write access limited to CI identities, broad read access
+      - retention and cleanup policies that keep anything deployed
+      - immutability of released versions
+    rubric:
+      excellent: Covers layout by type and stage, upstream proxying, least-privilege push, immutable releases and retention rules that never delete what is still running, with reasons for each.
+      good: Describes a central registry with access control and some cleanup policy.
+      weak: Lets anyone push anywhere and has no plan for retention or public registry outages.
+    followups:
+      - How would you avoid deleting an old image that a production service still runs?
+      - What happens to your builds if the public package registry goes down?
+    common_errors:
+      - Cleanup policies based purely on age, which delete artifacts still in use.
+
+  - external_key: technical.devops_ci_iac.self_hosted_runners
+    competency_key: ci_cd
+    topic: Self-hosted CI runners
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your team wants to move from hosted CI runners to self-hosted runners on your own infrastructure.
+      What would you put in place so they're secure and can scale with demand?
+    expected_concepts:
+      - ephemeral, single-use runners instead of long-lived machines
+      - autoscaling based on queue depth
+      - network isolation and minimal cloud permissions per runner
+      - separate runner pools for untrusted pull requests and trusted deploys
+      - patched, versioned runner images
+    rubric:
+      excellent: Designs ephemeral autoscaled runners with isolated pools by trust level, scoped credentials and network controls, and explains the risks of persistent runners shared across jobs.
+      good: Mentions autoscaling and some isolation between jobs.
+      weak: Proposes a few long-lived VMs with broad admin credentials shared by every repository.
+    followups:
+      - Why are persistent runners risky for public or forked pull requests?
+      - How would you keep runner images patched without breaking builds?
+    common_errors:
+      - "Reusing persistent runners across jobs, letting one job leave behind files or credentials for the next."
+
+  - external_key: technical.devops_ci_iac.shared_pipeline_templates
+    competency_key: ci_cd
+    topic: Shared pipeline templates
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Forty repositories each carry their own slightly different copy of the same pipeline. How would you
+      bring in shared templates without breaking teams or forcing everyone onto one rigid pipeline?
+    expected_concepts:
+      - reusable workflows, templates or shared libraries
+      - versioned templates that teams pin and upgrade
+      - extension points and parameters for legitimate differences
+      - migrating a few pilot repositories first
+      - automation to raise upgrade pull requests
+    rubric:
+      excellent: Proposes versioned reusable templates with clear extension points, a pilot-first migration, and a way to roll out template updates safely across repositories.
+      good: Introduces shared templates with parameters and migrates teams gradually.
+      weak: Mandates one copy-pasted pipeline for all teams with no versioning.
+    followups:
+      - A template change breaks ten repositories at once. How would you have prevented that?
+      - How do you handle a team whose needs genuinely don't fit the template?
+    common_errors:
+      - "Referencing templates from a moving branch so every change rolls out to all repositories at once."
+
+  - external_key: technical.devops_ci_iac.test_placement
+    competency_key: ci_cd
+    topic: Where each kind of test runs
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you decide which tests run on every pull request, which run after merge, and which run only
+      before a production release?
+    expected_concepts:
+      - fast, deterministic tests on every pull request
+      - integration and contract tests after merge or in parallel
+      - end-to-end and performance tests before release or on a schedule
+      - cost of late detection versus cost of slow feedback
+      - moving tests earlier when late failures keep happening
+    rubric:
+      excellent: Places tests by speed, reliability and the cost of catching a defect late, and describes adjusting the placement based on where failures are actually found.
+      good: Gives a sensible split of unit, integration and end-to-end tests across the stages.
+      weak: Runs all tests everywhere or postpones most testing until release.
+    followups:
+      - Your end-to-end suite catches a bug two days after merge. What would you change?
+    common_errors:
+      - "Pushing most testing to a pre-release stage, so defects are found days after the change that caused them."
+
+  - external_key: technical.devops_ci_iac.semantic_merge_conflicts
+    competency_key: ci_cd
+    topic: Merge queues and semantic conflicts
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Two pull requests each pass CI on their own, but the main branch breaks as soon as both are merged.
+      How would you change the workflow so this stops happening?
+    expected_concepts:
+      - semantic conflicts that Git cannot detect
+      - testing against the latest main before merge
+      - merge queue or merge train that tests the combined result
+      - batching and bisecting in the queue for throughput
+      - trade-off with merge latency
+    rubric:
+      excellent: Explains semantic conflicts, introduces a merge queue that tests changes against the true future main, and discusses batching strategies and throughput trade-offs.
+      good: Requires branches to be up to date with main before merging, or adopts a merge queue.
+      weak: Blames the developers or suggests merging less often.
+    followups:
+      - With fifty merges a day, how do you keep the merge queue from becoming a bottleneck?
+    common_errors:
+      - Requiring rebases on main without re-running CI after the rebase.
+
+  - external_key: technical.devops_ci_iac.reproducible_builds
+    competency_key: ci_cd
+    topic: Reproducible builds
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What does it take to make a build reproducible, so that building the same commit next month gives
+      the same result, and why would a team care about that?
+    expected_concepts:
+      - pinned dependencies through lock files
+      - pinned tool and base image versions, ideally by digest
+      - hermetic builds without network access during the build
+      - removing timestamps and other nondeterminism
+      - value for debugging, security verification and hotfixing old releases
+    rubric:
+      excellent: Covers pinning of dependencies, toolchains and base images, hermeticity and nondeterminism sources, and explains the security and hotfix benefits.
+      good: Mentions lock files and pinned versions with a reason it matters.
+      weak: Thinks committing the source code alone is enough to reproduce a build.
+    followups:
+      - How would you rebuild a release from eighteen months ago to ship a security fix?
+    common_errors:
+      - "Using floating base image tags or unpinned toolchains and assuming the lock file alone guarantees reproducibility."
+
+  - external_key: technical.devops_ci_iac.preview_environments
+    competency_key: ci_cd
+    topic: Per-pull-request preview environments
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Product managers would like a live preview environment for every pull request. How would you build
+      that into the pipeline, and how would you keep it from getting expensive or messy?
+    expected_concepts:
+      - namespace or stack per pull request created by the pipeline
+      - shared or seeded data instead of full databases per preview
+      - automatic teardown on merge, close or inactivity
+      - unique URLs and access control
+      - cost limits such as quotas or scale-to-zero
+    rubric:
+      excellent: Designs automated create and destroy tied to pull request lifecycle, handles data and dependencies sensibly, secures access and puts explicit cost controls in place.
+      good: Spins up and tears down environments per pull request with some thought to cost.
+      weak: Creates environments manually or never cleans them up.
+    followups:
+      - How would preview environments get data without copying production?
+      - What happens to previews left behind when the teardown job fails?
+    common_errors:
+      - "Having no automatic teardown, so abandoned preview environments accumulate cost for months."
+
+  - external_key: technical.devops_ci_iac.pipeline_health_metrics
+    competency_key: ci_cd
+    topic: Measuring pipeline health
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What would you measure about the CI/CD pipelines themselves to know whether they're healthy and
+      getting better over time?
+    expected_concepts:
+      - duration percentiles, not just averages
+      - queue time waiting for runners
+      - failure rate split into code, flaky and infrastructure failures
+      - cost per run or per pipeline
+      - time to restore a broken main branch
+    rubric:
+      excellent: Proposes specific metrics including queue time and failure classification, explains how each drives a decision and how they would be collected and reviewed.
+      good: Tracks duration and success rate and uses them to find slow or broken pipelines.
+      weak: Only looks at whether the latest build passed.
+    followups:
+      - How would you separate infrastructure failures from genuine test failures automatically?
+    common_errors:
+      - "Reporting average duration only, which hides long tails and runner queue time."
+
+  - external_key: technical.devops_ci_iac.build_cache_poisoning
+    competency_key: ci_cd
+    topic: Suspected bad cache entry
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A build starts producing a broken binary, but only in CI, and you suspect the shared build cache is
+      serving a bad entry. How would you confirm that, and how would you stop it happening again?
+    expected_concepts:
+      - rebuild with the cache disabled and compare outputs
+      - inspect cache keys and what inputs they include
+      - missing inputs such as environment variables, tool versions or platform
+      - restrict who can write to the cache (trusted branches only)
+      - targeted invalidation instead of wiping everything blindly
+    rubric:
+      excellent: Proves the cache is at fault by comparing cached and uncached builds, finds the input missing from the key, and limits cache writes to trusted builds to prevent poisoning.
+      good: Disables the cache to confirm and fixes the cache key.
+      weak: Clears the cache and moves on without finding why it happened.
+    followups:
+      - Could an untrusted pull request write to that cache? What would that allow?
+    common_errors:
+      - "Letting untrusted branches write to the same cache that release builds read from."
+
+  # ------------------------------------------------------------------ hard
+  - external_key: technical.devops_ci_iac.remote_build_cache_design
+    competency_key: ci_cd
+    topic: Organisation-wide remote build cache
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Suppose you're introducing a remote build cache, something like Bazel's or Gradle's, across a large
+      engineering organisation. How would you design it for correctness, speed and security?
+    expected_concepts:
+      - content-addressed keys covering all inputs, toolchains and platform
+      - hermetic build rules as a prerequisite for correctness
+      - only trusted CI writes, developers read
+      - cache placement near runners, eviction and sizing
+      - measuring hit rate and the cost of misses
+      - fallback behaviour when the cache is unavailable
+    rubric:
+      excellent: Ties correctness to hermeticity and complete keys, separates read and write trust, plans capacity, locality and eviction, and defines how to measure and debug hit rates.
+      good: Describes a shared cache with sensible keys and restricted writes.
+      weak: Treats it as a shared folder anyone can write to with no correctness concerns.
+    followups:
+      - Hit rates are only 30 percent. How would you find out why?
+      - Should developers' laptops be allowed to write to the cache?
+    common_errors:
+      - Ignoring non-hermetic steps, so cache hits return results built with different tools.
+
+  - external_key: technical.devops_ci_iac.flaky_test_program
+    competency_key: ci_cd
+    topic: Reducing flakiness at scale
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      In a large codebase, about five percent of pipeline runs fail because of flaky tests spread across
+      hundreds of suites. How would you run a sustained effort to bring that number down?
+    expected_concepts:
+      - automatic flake detection from rerun results and history
+      - flake dashboard with ownership mapped to teams
+      - automatic quarantine with deadlines and ticket creation
+      - fixing top offenders first by impact
+      - preventing new flakes with repeated runs of new tests
+      - infrastructure causes such as noisy runners and shared environments
+    rubric:
+      excellent: Builds detection and ownership into tooling, prioritises by impact, uses quarantine with accountability, addresses infrastructure-caused flakes and sets a measurable target that is tracked over time.
+      good: Identifies flaky tests systematically and gets teams to fix the worst ones.
+      weak: Adds global retries and declares the problem solved.
+    followups:
+      - Quarantined tests tend to stay quarantined forever. How would you stop that?
+      - How do you get product teams to prioritise fixing their flaky tests?
+    common_errors:
+      - "Retrying every failure automatically, which hides real intermittent bugs in the product."
+
+  - external_key: technical.devops_ci_iac.regulated_pipeline_controls
+    competency_key: ci_cd
+    topic: Compliance controls in delivery pipelines
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How would you design a delivery pipeline that satisfies an auditor's separation-of-duties and change
+      approval requirements, without slowing engineers to a crawl?
+    expected_concepts:
+      - peer review enforced by branch protection as the approval record
+      - nobody can deploy their own unreviewed change to production
+      - automated evidence collection linking change, review, tests and deployment
+      - immutable audit logs of deployments
+      - pre-approved standard changes versus manual approval for risky ones
+      - break-glass process with after-the-fact review
+    rubric:
+      excellent: Turns controls into automated, enforced pipeline steps that produce audit evidence, distinguishes standard from high-risk changes and includes a monitored break-glass path.
+      good: Uses mandatory reviews and logged approvals in the pipeline.
+      weak: Proposes a weekly change board meeting for every deployment.
+    followups:
+      - What would you show an auditor to prove a specific change was reviewed and tested?
+      - How would an emergency fix go out at night under these controls?
+    common_errors:
+      - "Relying on manual sign-off documents that are disconnected from what the pipeline actually deployed."
+
+  - external_key: technical.devops_ci_iac.daily_deploys_plan
+    competency_key: ci_cd
+    topic: Moving from fortnightly to daily deploys
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your organisation deploys once every two weeks using a long manual release checklist, and leadership
+      wants daily deploys within six months. How would you plan that change?
+    expected_concepts:
+      - measure the current lead time and failure points
+      - automate the checklist steps and testing gaps first
+      - smaller batches, trunk-based development and feature flags
+      - safe rollout and fast rollback before increasing frequency
+      - incremental milestones such as weekly, then twice weekly
+      - bring teams along and track change failure rate
+    rubric:
+      excellent: Starts from data on the current process, sequences automation and safety mechanisms before raising frequency, sets intermediate milestones and tracks both speed and stability metrics.
+      good: Automates the manual steps and improves testing and rollback before deploying more often.
+      weak: Simply schedules more frequent releases without changing the process or safety nets.
+    followups:
+      - Which item on the checklist would you automate first, and why?
+      - How would you show leadership that stability hasn't suffered?
+    common_errors:
+      - "Increasing release frequency before automated testing and rollback are in place, which raises the change failure rate."
+
+  - external_key: technical.devops_ci_iac.multi_account_promotion
+    competency_key: ci_cd
+    topic: Promotion across isolated accounts and regions
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Walk me through how you'd design artifact promotion from build through staging to production across
+      several isolated cloud accounts and regions, including what you'd do with an artifact you later
+      discover is bad.
+    expected_concepts:
+      - single build, promoted by digest between registries or via cross-account pull
+      - production accounts can only pull, never build
+      - promotion as a recorded, gated event
+      - replication to regional registries for availability
+      - revoking or blocking a bad artifact and redeploying the previous one
+    rubric:
+      excellent: Designs a one-way promotion flow by digest with production isolation, regional replication and recorded gates, and has a concrete plan to block a bad artifact everywhere and roll back.
+      good: Promotes the same artifact between accounts with approval steps.
+      weak: Rebuilds in each account or gives production write access to the build system.
+    followups:
+      - How would you make sure the bad artifact can't be redeployed by an old pipeline run?
+      - What breaks if the central registry region has an outage?
+    common_errors:
+      - "Rebuilding the image in each account, so production runs something never tested in staging."
+
+  - external_key: technical.devops_ci_iac.runner_capacity_planning
+    competency_key: ci_cd
+    topic: Runner fleet capacity
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      During working hours pull requests wait twenty minutes just to get a CI runner, while overnight the
+      fleet sits idle. Some jobs also need GPUs or large machines. How would you redesign runner capacity?
+    expected_concepts:
+      - measure queue time and job demand by type
+      - autoscaling on queue depth with warm pools for fast start
+      - separate pools for specialised hardware with their own scaling
+      - spot or preemptible capacity with retry for interruptible jobs
+      - priority for blocking jobs versus scheduled or nightly work
+      - cost reporting per team or pipeline
+    rubric:
+      excellent: Sizes from measured demand, uses autoscaling with warm capacity, separates specialised pools, uses cheaper interruptible capacity safely and prioritises developer-blocking jobs.
+      good: Introduces autoscaling and separates expensive runners from general ones.
+      weak: Buys more fixed runners for peak and leaves them idle.
+    followups:
+      - Spot instances keep getting reclaimed mid-job. How would you handle that?
+      - How would you stop one team's huge job matrix starving everyone else?
+    common_errors:
+      - "Sizing the fleet from average demand, which leaves the morning peak badly under-provisioned."

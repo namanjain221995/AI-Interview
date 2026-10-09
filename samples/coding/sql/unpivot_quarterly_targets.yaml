@@ -1,0 +1,239 @@
+version: 1
+slug: unpivot_quarterly_targets
+title: "Unpivot Quarterly Targets"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data, data_analyst, business_analyst]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Unpivot Quarterly Targets
+
+  Finance maintains quarterly sales targets in a spreadsheet that is imported nightly: one row per
+  team and one column per quarter. A cell that has not been agreed yet is empty and arrives as
+  `NULL`. The reporting tool needs the same data in **long format**: one row per team and quarter.
+
+  Table `sales_targets`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | team | VARCHAR(40) | primary key, lowercase ASCII letters |
+  | q1 | INTEGER | target for the first quarter, NULL when not set |
+  | q2 | INTEGER | target for the second quarter, NULL when not set |
+  | q3 | INTEGER | target for the third quarter, NULL when not set |
+  | q4 | INTEGER | target for the fourth quarter, NULL when not set |
+
+  Return the columns `team`, `quarter` and `target`, where `quarter` is the text `'Q1'`, `'Q2'`,
+  `'Q3'` or `'Q4'` and `target` is the value from the matching column. Produce a row **only** for
+  cells that are not NULL; a target of `0` is a real target and must appear. A team whose four cells
+  are all NULL produces no rows.
+
+  Order by `team`, then `quarter`, both ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  sales_targets
+  +---------+------+------+------+------+
+  | team    | q1   | q2   | q3   | q4   |
+  +---------+------+------+------+------+
+  | alpha   | 100  | 120  | NULL | 150  |
+  | bravo   | NULL | NULL | NULL | NULL |
+  | charlie | 0    | 50   | 50   | NULL |
+  +---------+------+------+------+------+
+
+  Output
+  +---------+---------+--------+
+  | team    | quarter | target |
+  +---------+---------+--------+
+  | alpha   | Q1      | 100    |
+  | alpha   | Q2      | 120    |
+  | alpha   | Q4      | 150    |
+  | charlie | Q1      | 0      |
+  | charlie | Q2      | 50     |
+  | charlie | Q3      | 50     |
+  +---------+---------+--------+
+  ```
+  bravo has no targets yet, so it does not appear; charlie's Q1 target of 0 is kept.
+
+  ### Example 2
+  ```
+  sales_targets
+  +------+----+----+----+----+
+  | team | q1 | q2 | q3 | q4 |
+  +------+----+----+----+----+
+  | ops  | 10 | 20 | 30 | 40 |
+  +------+----+----+----+----+
+
+  Output
+  +------+---------+--------+
+  | team | quarter | target |
+  +------+---------+--------+
+  | ops  | Q1      | 10     |
+  | ops  | Q2      | 20     |
+  | ops  | Q3      | 30     |
+  | ops  | Q4      | 40     |
+  +------+---------+--------+
+  ```
+
+  ### Constraints
+  - `0 <= rows in sales_targets <= 10^4`
+  - `0 <= target <= 2 * 10^9` when not NULL
+  - The output order is part of the answer.
+languages: [sql]
+starter_code:
+  sql: |
+    -- One row per team and quarter that has a target, ordered by team, quarter.
+    SELECT team, 'Q1' AS quarter, q1 AS target
+    FROM sales_targets
+    ORDER BY team, quarter;
+reference_solutions:
+  sql: |
+    SELECT team, 'Q1' AS quarter, q1 AS target FROM sales_targets WHERE q1 IS NOT NULL
+    UNION ALL
+    SELECT team, 'Q2', q2 FROM sales_targets WHERE q2 IS NOT NULL
+    UNION ALL
+    SELECT team, 'Q3', q3 FROM sales_targets WHERE q3 IS NOT NULL
+    UNION ALL
+    SELECT team, 'Q4', q4 FROM sales_targets WHERE q4 IS NOT NULL
+    ORDER BY team, quarter;
+sql_setup: |
+  CREATE TABLE sales_targets (
+    team VARCHAR(40) PRIMARY KEY,
+    q1 INTEGER,
+    q2 INTEGER,
+    q3 INTEGER,
+    q4 INTEGER
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - gaps, a team with no targets and a zero target that must be kept"
+    setup_sql: |
+      INSERT INTO sales_targets (team, q1, q2, q3, q4) VALUES
+        ('alpha', 100, 120, NULL, 150), ('bravo', NULL, NULL, NULL, NULL), ('charlie', 0, 50, 50, NULL);
+    expected_rows:
+      - ["alpha", "Q1", 100]
+      - ["alpha", "Q2", 120]
+      - ["alpha", "Q4", 150]
+      - ["charlie", "Q1", 0]
+      - ["charlie", "Q2", 50]
+      - ["charlie", "Q3", 50]
+  - id: t2
+    ordered: true
+    description: "Example 2 - one team with all four quarters set"
+    setup_sql: |
+      INSERT INTO sales_targets (team, q1, q2, q3, q4) VALUES
+        ('ops', 10, 20, 30, 40);
+    expected_rows:
+      - ["ops", "Q1", 10]
+      - ["ops", "Q2", 20]
+      - ["ops", "Q3", 30]
+      - ["ops", "Q4", 40]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Every target is NULL - no rows"
+    setup_sql: |
+      INSERT INTO sales_targets (team, q1, q2, q3, q4) VALUES
+        ('delta', NULL, NULL, NULL, NULL), ('echo', NULL, NULL, NULL, NULL);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Only the last quarter set - quarter label must be Q4, not Q1"
+    setup_sql: |
+      INSERT INTO sales_targets (team, q1, q2, q3, q4) VALUES
+        ('late', NULL, NULL, NULL, 75);
+    expected_rows: [["late", "Q4", 75]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Zero targets everywhere are real values, not missing ones"
+    setup_sql: |
+      INSERT INTO sales_targets (team, q1, q2, q3, q4) VALUES
+        ('pilot', 0, 0, 0, 0);
+    expected_rows:
+      - ["pilot", "Q1", 0]
+      - ["pilot", "Q2", 0]
+      - ["pilot", "Q3", 0]
+      - ["pilot", "Q4", 0]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Teams inserted out of order with prefix names - ordering by team then quarter"
+    setup_sql: |
+      INSERT INTO sales_targets (team, q1, q2, q3, q4) VALUES
+        ('north', 5, NULL, 7, NULL), ('east', NULL, 3, NULL, 4), ('northeast', 1, 1, NULL, NULL);
+    expected_rows:
+      - ["east", "Q2", 3]
+      - ["east", "Q4", 4]
+      - ["north", "Q1", 5]
+      - ["north", "Q3", 7]
+      - ["northeast", "Q1", 1]
+      - ["northeast", "Q2", 1]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Large target values and the same value repeated across quarters (UNION would still be safe)"
+    setup_sql: |
+      INSERT INTO sales_targets (team, q1, q2, q3, q4) VALUES
+        ('enterprise', 2000000000, 2000000000, 1999999999, 2000000000), ('smb', 15, NULL, 15, NULL);
+    expected_rows:
+      - ["enterprise", "Q1", 2000000000]
+      - ["enterprise", "Q2", 2000000000]
+      - ["enterprise", "Q3", 1999999999]
+      - ["enterprise", "Q4", 2000000000]
+      - ["smb", "Q1", 15]
+      - ["smb", "Q3", 15]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Mixed batch of six teams with scattered gaps"
+    setup_sql: |
+      INSERT INTO sales_targets (team, q1, q2, q3, q4) VALUES
+        ('fox', 1, NULL, NULL, NULL), ('golf', NULL, 2, NULL, NULL), ('hotel', NULL, NULL, 3, NULL), ('india', NULL, NULL, NULL, 4),
+        ('juliet', 9, 8, 7, 6), ('kilo', NULL, NULL, NULL, NULL);
+    expected_rows:
+      - ["fox", "Q1", 1]
+      - ["golf", "Q2", 2]
+      - ["hotel", "Q3", 3]
+      - ["india", "Q4", 4]
+      - ["juliet", "Q1", 9]
+      - ["juliet", "Q2", 8]
+      - ["juliet", "Q3", 7]
+      - ["juliet", "Q4", 6]
+expected_concepts:
+  - "unpivoting wide columns into rows with UNION ALL"
+  - "constant literal columns as labels"
+  - "IS NOT NULL versus treating 0 as missing"
+  - "ORDER BY applied to the whole compound query"
+optimal_complexity: {time: "O(n log n) - four scans plus a sort of up to 4n rows", space: "O(n)"}
+rubric:
+  excellent: "Writes four SELECTs joined with UNION ALL, each labelling its quarter with a literal and filtering IS NOT NULL, puts one ORDER BY at the end of the compound query and explains why UNION ALL is preferred over UNION."
+  good: "Correct result after a hint about NULL filtering or about where ORDER BY belongs in a compound query."
+  weak: "Filters out zero targets, keeps NULL rows, mislabels quarters or tries to order each branch separately."
+  criteria:
+    correctness: "All tests pass, including all-NULL teams, zero targets and teams with only one quarter set."
+    efficiency: "Uses UNION ALL rather than UNION, avoiding an unnecessary de-duplication sort."
+    code_quality: "Consistent column aliases and one readable branch per quarter."
+    edge_cases: "Empty table, zero values, all-NULL rows and large targets."
+    communication: "Explains the difference between UNION and UNION ALL and how NULL differs from 0."
+hints:
+  - "Each output row comes from one cell of the input. Can you write a query that produces just the first-quarter rows?"
+  - "Repeat that query once per quarter column with a fixed label for the quarter, then stack the four result sets on top of each other."
+  - "Write four SELECTs of team, a literal quarter label and that quarter's column, each with WHERE <column> IS NOT NULL, combine them with UNION ALL and add a single ORDER BY team, quarter after the last branch."
+followups:
+  - "How would you do the reverse transformation (long to wide) with conditional aggregation?"
+  - "PostgreSQL offers other ways to unpivot (for example a lateral VALUES list); what are the trade-offs?"
+  - "How would you validate that no team has a target for Q3 without one for Q2?"
+common_errors:
+  - "Filtering with WHERE q1 > 0 or COALESCE(q1, 0) <> 0, which drops real zero targets."
+  - "Using UNION instead of UNION ALL, which adds a needless de-duplication step."
+  - "Placing ORDER BY inside one branch, which is invalid or does not order the combined result."
+  - "Copy-pasting a branch without changing the label, so two quarters get the same name."

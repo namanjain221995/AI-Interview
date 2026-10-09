@@ -1,0 +1,161 @@
+version: 1
+slug: infer_csv_column_types
+title: "Infer Column Types for a CSV Load"
+difficulty: medium
+competency_keys: [problem_solving, code_quality, debugging]
+role_tags: [data, backend, data_analyst, data_scientist]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Infer Column Types for a CSV Load
+
+  Before a CSV export is bulk-loaded into the warehouse, the loader must pick a type for every column.
+  The file has already been split into cells: `rows[0]` is the **header** (unique column names, none
+  containing `:`) and every later row is a data row. A data row may be **shorter** than the header;
+  its missing trailing cells count as empty. Data rows are never longer than the header.
+
+  Cells are used exactly as given (no trimming). A cell is **empty** when it is the empty string `""`.
+  Type each column from its **non-empty** cells, checking the rules in this order:
+
+  1. `empty` - the column has no non-empty cells.
+  2. `bool` - every non-empty cell is `true` or `false` in any letter case (`TRUE`, `False`, ...).
+  3. `int` - every non-empty cell is an optional sign (`+` or `-`) followed by one or more digits `0-9`.
+  4. `float` - every non-empty cell is either an int as above or a **decimal**: an optional sign,
+     then digits containing **exactly one** `.`, with at least one digit in total (`1.5`, `-.5`, `3.`
+     are decimals; `.`, `1.2.3` and `1e5` are not).
+  5. `string` - anything else.
+
+  Return one entry `"name:type"` per column, in header order.
+
+  ### Example 1
+  ```
+  Input:  rows = [["sku", "qty", "active", "region"], ["A-100", "3", "true", "eu"], ["A-101", "2.5", "FALSE", "42"], ["A-102", "-7", "True", "us"]]
+  Output: ["sku:string", "qty:float", "active:bool", "region:string"]
+  Explanation: qty mixes ints and a decimal, so it is float; region has a value that
+  is not a number.
+  ```
+
+  ### Example 2
+  ```
+  Input:  rows = [["id", "code", "note"], ["1", "007", ""], ["2"], ["+3", "-12"]]
+  Output: ["id:int", "code:int", "note:empty"]
+  Explanation: the short row counts as empty for code and note. note never has a value.
+  ```
+
+  ### Constraints
+  - `1 <= rows.length <= 10^4` (the header is always present)
+  - `1 <= rows[0].length <= 100`
+  - `0 <= rows[i].length <= rows[0].length` for data rows
+  - cells contain printable ASCII characters only
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: infer_column_types
+  params:
+    - {name: rows, type: "string[][]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    DIGITS = set("0123456789")
+
+
+    def _is_bool(cell: str) -> bool:
+        return cell.lower() in ("true", "false")
+
+
+    def _is_int(cell: str) -> bool:
+        body = cell[1:] if cell[:1] in ("+", "-") else cell
+        return len(body) > 0 and all(ch in DIGITS for ch in body)
+
+
+    def _is_decimal(cell: str) -> bool:
+        body = cell[1:] if cell[:1] in ("+", "-") else cell
+        if body.count(".") != 1:
+            return False
+        digits = body.replace(".", "")
+        return len(digits) > 0 and all(ch in DIGITS for ch in digits)
+
+
+    def infer_column_types(rows: list[list[str]]) -> list[str]:
+        header = rows[0]
+        result = []
+        for c, name in enumerate(header):
+            values = [row[c] for row in rows[1:] if c < len(row) and row[c] != ""]
+            if not values:
+                kind = "empty"
+            elif all(_is_bool(v) for v in values):
+                kind = "bool"
+            elif all(_is_int(v) for v in values):
+                kind = "int"
+            elif all(_is_int(v) or _is_decimal(v) for v in values):
+                kind = "float"
+            else:
+                kind = "string"
+            result.append(f"{name}:{kind}")
+        return result
+  javascript: |
+    function inferColumnTypes(rows) {
+      const isDigits = (s) => s.length > 0 && /^[0-9]+$/.test(s);
+      const stripSign = (s) => (s[0] === '+' || s[0] === '-' ? s.slice(1) : s);
+      const isBool = (s) => s.toLowerCase() === 'true' || s.toLowerCase() === 'false';
+      const isInt = (s) => isDigits(stripSign(s));
+      const isDecimal = (s) => {
+        const body = stripSign(s);
+        if (body.split('.').length !== 2) return false;
+        return isDigits(body.replace('.', ''));
+      };
+      const header = rows[0];
+      return header.map((name, c) => {
+        const values = [];
+        for (let r = 1; r < rows.length; r++) {
+          if (c < rows[r].length && rows[r][c] !== '') values.push(rows[r][c]);
+        }
+        let kind;
+        if (values.length === 0) kind = 'empty';
+        else if (values.every(isBool)) kind = 'bool';
+        else if (values.every(isInt)) kind = 'int';
+        else if (values.every((v) => isInt(v) || isDecimal(v))) kind = 'float';
+        else kind = 'string';
+        return `${name}:${kind}`;
+      });
+    }
+tests:
+  - {id: t1, args: [[["sku", "qty", "active", "region"], ["A-100", "3", "true", "eu"], ["A-101", "2.5", "FALSE", "42"], ["A-102", "-7", "True", "us"]]], expected: ["sku:string", "qty:float", "active:bool", "region:string"], description: "Example 1 - one column of each type besides empty"}
+  - {id: t2, args: [[["id", "code", "note"], ["1", "007", ""], ["2"], ["+3", "-12"]]], expected: ["id:int", "code:int", "note:empty"], description: "Example 2 - short row, leading zeros and signs, all-empty column"}
+  - {id: t3, hidden: true, args: [[["a", "b"]]], expected: ["a:empty", "b:empty"], description: "Header only - every column is empty"}
+  - {id: t4, hidden: true, args: [[["flag", "mixed"], ["yes", "true"], ["no", "1"]]], expected: ["flag:string", "mixed:string"], description: "yes/no are not bool; bool mixed with int becomes string"}
+  - {id: t5, hidden: true, args: [[["x", "y", "z", "w"], [".5", ".", "1e5", "3."], ["-.25", "1", "2", "+4"]]], expected: ["x:float", "y:string", "z:string", "w:float"], description: "Decimal edge cases - lone dot and exponent are strings, trailing dot is a decimal"}
+  - {id: t6, hidden: true, args: [[["p", "q"], ["1.2.3", "+"], ["4", "-"]]], expected: ["p:string", "q:string"], description: "Two dots and a bare sign are not numbers"}
+  - {id: t7, hidden: true, args: [[["n", "s"], [" 7", "8"], ["9", "10 "]]], expected: ["n:string", "s:string"], description: "Surrounding whitespace is not trimmed - both columns are string"}
+  - {id: t8, hidden: true, args: [[["only"], [""], [""], ["-0"], [""]]], expected: ["only:int"], description: "Single non-empty value among empty cells; -0 is an int"}
+  - {id: t9, hidden: true, args: [[["big", "ratio"], ["123456789012345678901234567890", "1.0"], ["-98765432109876543210", "2"]]], expected: ["big:int", "ratio:float"], description: "Integers far beyond 64 bits are still int by the textual rule; float column of decimals and ints"}
+  - {id: t10, hidden: true, args: [[["a", "b", "c"], [], ["tRuE", "", "x"], [], ["fAlSe"]]], expected: ["a:bool", "b:empty", "c:string"], description: "Empty data rows and mixed-case booleans"}
+expected_concepts:
+  - "precise character-level validation instead of language number parsers"
+  - "rule precedence (bool, int, float, string)"
+  - "handling ragged rows and empty cells"
+  - "single pass per column with early exit"
+optimal_complexity: {time: "O(total characters in all cells)", space: "O(number of columns)"}
+rubric:
+  excellent: "Implements each rule with explicit character checks, applies the precedence in order, ignores empty cells, handles short rows and explains why float() or parseFloat are unsafe for this contract."
+  good: "Correct on most tests and fixes one or two edge cases (lone dot, exponent, whitespace) after running the hidden tests."
+  weak: "Relies on float() or Number() and accepts exponents, whitespace or NaN, crashes on short rows, or treats empty cells as strings."
+  criteria:
+    correctness: "All tests pass, including signs, lone dots, exponents, whitespace and ragged rows."
+    efficiency: "Linear in the size of the input; each cell is inspected a constant number of times."
+    code_quality: "Small named predicates for each rule and a clear precedence chain."
+    edge_cases: "Header-only input, all-empty columns, very long digit strings and mixed-case booleans."
+    communication: "Explains how the rules map to warehouse column types and what would change for locale-specific decimals."
+hints:
+  - "Treat each column on its own: collect its non-empty cells (a missing trailing cell is empty) and ask which is the most specific rule that all of them satisfy."
+  - "Built-in number parsers accept things the contract rejects, such as exponents, surrounding spaces, inf or nan, so write small predicates that check the characters yourself."
+  - "Write is_bool, is_int (optional sign then at least one digit) and is_decimal (optional sign, exactly one dot, at least one digit, nothing else); then test the column's values with bool first, then int, then int-or-decimal, and fall back to string."
+followups:
+  - "How would you add a date type without making ambiguous values like 01/02/2024 unpredictable?"
+  - "How would you type a 50 GB file without holding all of it in memory?"
+  - "What should happen when an int column contains values that overflow a 64-bit integer?"
+  - "How would you report the first offending cell so a data engineer can fix the export?"
+common_errors:
+  - "Using float() or Number() to detect numbers, which accepts 1e5, inf, NaN or surrounding whitespace."
+  - "Indexing past the end of a short row instead of treating the cell as empty."
+  - "Checking int before bool, or float before int, so the precedence is wrong."
+  - "Counting empty cells when deciding the type, which turns numeric columns into string."

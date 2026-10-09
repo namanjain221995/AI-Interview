@@ -1,0 +1,171 @@
+version: 1
+slug: resolve_config_variable_references
+title: Resolve Config Variable References
+difficulty: hard
+competency_keys: [algorithms, data_structures]
+role_tags: [devops, platform, backend]
+time_limit_minutes: 30
+prompt_markdown: |
+  ## Resolve Config Variable References
+
+  A deployment tool reads a flat configuration as two parallel lists: `keys[i]` has the raw value
+  `values[i]`. Keys are unique. A value may **reference** another key by writing `${key}`, and the tool
+  must expand every value before shipping it.
+
+  - A reference is `${`, then a key name, then `}`. Every `${` in the input starts a well-formed
+    reference; any other `$`, `{` or `}` is literal text.
+  - Resolve values **fully and recursively**: a reference is replaced by the fully resolved value of the
+    referenced key.
+  - A reference to a key that does not exist is replaced by the empty string.
+  - If resolving a key ever leads back into a cycle (a key that references itself, directly or through
+    other keys) the key resolves to the string `!CYCLE`. This applies to every key on the cycle **and**
+    to every key whose resolution reaches a cycle through its references.
+
+  Return the resolved values in the same order as `keys`.
+
+  ### Example 1
+  ```
+  Input:  keys = ["host", "port", "url"], values = ["db.internal", "5432", "postgres://${host}:${port}/app"]
+  Output: ["db.internal", "5432", "postgres://db.internal:5432/app"]
+  ```
+
+  ### Example 2
+  ```
+  Input:  keys = ["api_url", "base", "region", "mirror"], values = ["https://${base}/v1", "${region}.example.net", "${zone}eu", "${mirror}"]
+  Output: ["https://eu.example.net/v1", "eu.example.net", "eu", "!CYCLE"]
+  Explanation: zone does not exist so it becomes ""; mirror references itself
+  ```
+
+  ### Example 3
+  ```
+  Input:  keys = ["log_dir", "home", "root", "cache"], values = ["${home}/logs", "${root}", "${home}/srv", "/tmp/${cache_name}"]
+  Output: ["!CYCLE", "!CYCLE", "!CYCLE", "/tmp/"]
+  Explanation: home and root reference each other, and log_dir reaches that cycle
+  ```
+
+  ### Constraints
+  - `0 <= keys.length == values.length <= 200`
+  - Key names match `[A-Za-z0-9_.]+`; `0 <= values[i].length <= 200`
+  - Every fully resolved value that is not `!CYCLE` has at most `10^4` characters
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: resolve_config_variables
+  params:
+    - {name: keys, type: "string[]"}
+    - {name: values, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def resolve_config_variables(keys: list[str], values: list[str]) -> list[str]:
+        raw = dict(zip(keys, values))
+        resolved: dict[str, str] = {}
+        in_progress: set[str] = set()
+        cycle = "!CYCLE"
+
+        def resolve(key: str) -> str:
+            if key in resolved:
+                return resolved[key]
+            if key in in_progress:
+                return cycle
+            in_progress.add(key)
+            text = raw[key]
+            parts: list[str] = []
+            hit_cycle = False
+            i = 0
+            while i < len(text):
+                if text.startswith("${", i):
+                    end = text.index("}", i + 2)
+                    name = text[i + 2:end]
+                    if name in raw:
+                        value = resolve(name)
+                        if value == cycle:
+                            hit_cycle = True
+                        parts.append(value)
+                    i = end + 1
+                else:
+                    parts.append(text[i])
+                    i += 1
+            in_progress.discard(key)
+            resolved[key] = cycle if hit_cycle else "".join(parts)
+            return resolved[key]
+
+        return [resolve(key) for key in keys]
+  javascript: |
+    function resolveConfigVariables(keys, values) {
+      const CYCLE = "!CYCLE";
+      const raw = new Map();
+      keys.forEach((key, i) => raw.set(key, values[i]));
+      const resolved = new Map();
+      const inProgress = new Set();
+      const resolve = (key) => {
+        if (resolved.has(key)) return resolved.get(key);
+        if (inProgress.has(key)) return CYCLE;
+        inProgress.add(key);
+        const text = raw.get(key);
+        let out = "";
+        let hitCycle = false;
+        let i = 0;
+        while (i < text.length) {
+          if (text.startsWith("${", i)) {
+            const end = text.indexOf("}", i + 2);
+            const name = text.slice(i + 2, end);
+            if (raw.has(name)) {
+              const value = resolve(name);
+              if (value === CYCLE) hitCycle = true;
+              out += value;
+            }
+            i = end + 1;
+          } else {
+            out += text[i];
+            i += 1;
+          }
+        }
+        inProgress.delete(key);
+        const result = hitCycle ? CYCLE : out;
+        resolved.set(key, result);
+        return result;
+      };
+      return keys.map((key) => resolve(key));
+    }
+tests:
+  - {id: t1, args: [["host", "port", "url"], ["db.internal", "5432", "postgres://${host}:${port}/app"]], expected: ["db.internal", "5432", "postgres://db.internal:5432/app"], description: "Example 1 - plain substitution"}
+  - {id: t2, args: [["api_url", "base", "region", "mirror"], ["https://${base}/v1", "${region}.example.net", "${zone}eu", "${mirror}"]], expected: ["https://eu.example.net/v1", "eu.example.net", "eu", "!CYCLE"], description: "Example 2 - forward reference, unknown key becomes empty, self reference"}
+  - {id: t3, args: [["log_dir", "home", "root", "cache"], ["${home}/logs", "${root}", "${home}/srv", "/tmp/${cache_name}"]], expected: ["!CYCLE", "!CYCLE", "!CYCLE", "/tmp/"], description: "Example 3 - a key that reaches a two-key cycle is also a cycle"}
+  - {id: t4, hidden: true, args: [[], []], expected: [], description: "Empty configuration"}
+  - {id: t5, hidden: true, args: [["price", "shell"], ["cost $5 {net}", "$HOME/${missing}bin}"]], expected: ["cost $5 {net}", "$HOME/bin}"], description: "Dollar signs and braces that are not references stay literal; unknown reference removed"}
+  - {id: t6, hidden: true, args: [["top", "left", "right", "base"], ["${left}+${right}", "${base}L", "${base}R", "core"]], expected: ["coreL+coreR", "coreL", "coreR", "core"], description: "Diamond dependency shared twice is not a cycle (visited-set pitfall)"}
+  - {id: t7, hidden: true, args: [["a", "b", "c", "watcher", "solo"], ["${b}", "${c}", "x${a}", "w:${c}", "${unknown}"]], expected: ["!CYCLE", "!CYCLE", "!CYCLE", "!CYCLE", ""], description: "Three-key cycle, a key that reaches it, and a key referencing only an unknown key"}
+  - {id: t8, hidden: true, args: [["svc", "name", "env"], ["${name}-${env}-${name}", "billing", ""]], expected: ["billing--billing", "billing", ""], description: "Same reference used twice; empty value substitutes nothing"}
+  - {id: t9, hidden: true, args: [["first", "loop", "after"], ["ok", "${loop}${first}", "${first}!"]], expected: ["ok", "!CYCLE", "ok!"], description: "Self-referencing key mixed with good references is still a cycle; keys after it unaffected"}
+  - {id: t10, hidden: true, args: [["layer_0", "layer_1", "layer_2", "layer_3", "layer_4", "layer_5", "layer_6", "layer_7", "layer_8", "layer_9", "layer_10", "layer_11", "layer_12", "layer_13", "layer_14", "layer_15", "layer_16", "layer_17", "layer_18", "layer_19", "layer_20", "layer_21", "layer_22", "layer_23", "layer_24", "layer_25", "layer_26", "layer_27", "layer_28", "layer_29", "layer_30", "layer_31", "layer_32", "layer_33", "layer_34", "layer_35", "layer_36", "layer_37", "layer_38", "layer_39", "layer_40", "layer_41", "layer_42", "layer_43", "layer_44", "layer_45", "layer_46", "layer_47", "layer_48", "layer_49", "layer_50", "layer_51", "layer_52", "layer_53", "layer_54", "layer_55", "layer_56", "layer_57", "layer_58", "layer_59"], ["${layer_1}/0", "${layer_2}/1", "${layer_3}/2", "${layer_4}/3", "${layer_5}/4", "${layer_6}/5", "${layer_7}/6", "${layer_8}/7", "${layer_9}/8", "${layer_10}/9", "${layer_11}/10", "${layer_12}/11", "${layer_13}/12", "${layer_14}/13", "${layer_15}/14", "${layer_16}/15", "${layer_17}/16", "${layer_18}/17", "${layer_19}/18", "${layer_20}/19", "${layer_21}/20", "${layer_22}/21", "${layer_23}/22", "${layer_24}/23", "${layer_25}/24", "${layer_26}/25", "${layer_27}/26", "${layer_28}/27", "${layer_29}/28", "${layer_30}/29", "${layer_31}/30", "${layer_32}/31", "${layer_33}/32", "${layer_34}/33", "${layer_35}/34", "${layer_36}/35", "${layer_37}/36", "${layer_38}/37", "${layer_39}/38", "${layer_40}/39", "${layer_41}/40", "${layer_42}/41", "${layer_43}/42", "${layer_44}/43", "${layer_45}/44", "${layer_46}/45", "${layer_47}/46", "${layer_48}/47", "${layer_49}/48", "${layer_50}/49", "${layer_51}/50", "${layer_52}/51", "${layer_53}/52", "${layer_54}/53", "${layer_55}/54", "${layer_56}/55", "${layer_57}/56", "${layer_58}/57", "${layer_59}/58", "root"]], expected: ["root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12/11/10/9/8/7/6/5/4/3/2/1/0", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12/11/10/9/8/7/6/5/4/3/2/1", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12/11/10/9/8/7/6/5/4/3/2", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12/11/10/9/8/7/6/5/4/3", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12/11/10/9/8/7/6/5/4", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12/11/10/9/8/7/6/5", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12/11/10/9/8/7/6", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12/11/10/9/8/7", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12/11/10/9/8", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12/11/10/9", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12/11/10", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12/11", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13/12", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14/13", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15/14", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16/15", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17/16", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18/17", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19/18", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20/19", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21/20", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22/21", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23/22", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/23", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27/26", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28/27", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29/28", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30/29", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31/30", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32/31", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33/32", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34/33", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35/34", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36/35", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37/36", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38/37", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39/38", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40/39", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41/40", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42/41", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43/42", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44/43", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45/44", "root/58/57/56/55/54/53/52/51/50/49/48/47/46/45", "root/58/57/56/55/54/53/52/51/50/49/48/47/46", "root/58/57/56/55/54/53/52/51/50/49/48/47", "root/58/57/56/55/54/53/52/51/50/49/48", "root/58/57/56/55/54/53/52/51/50/49", "root/58/57/56/55/54/53/52/51/50", "root/58/57/56/55/54/53/52/51", "root/58/57/56/55/54/53/52", "root/58/57/56/55/54/53", "root/58/57/56/55/54", "root/58/57/56/55", "root/58/57/56", "root/58/57", "root/58", "root"], description: "Stress - 60-key reference chain listed from the top so resolution recurses deeply"}
+expected_concepts:
+  - "references as edges of a directed graph"
+  - "depth-first search with in-progress and done states (three-colour marking)"
+  - "memoisation so each key is resolved once"
+  - "propagating a cycle result to every key that reaches the cycle"
+optimal_complexity: {time: "O(k + total output length) for k keys", space: "O(k + total output length)"}
+rubric:
+  excellent: "Models references as a graph, resolves with memoised DFS using in-progress and done states, distinguishes a revisit of a finished key (diamond) from a back edge (cycle), propagates the cycle marker to every dependant and discusses recursion depth and output blow-up limits."
+  good: "Correct memoised resolution with cycle detection after a hint about diamonds or about keys that only reach a cycle."
+  weak: "Uses a single visited set that flags diamonds as cycles, re-scans values in a loop without termination guarantees, or marks only the key where the cycle was detected."
+  criteria:
+    correctness: "All tests pass, including diamonds, self references, keys reaching cycles, unknown keys and literal dollar signs."
+    efficiency: "Each key is resolved once thanks to memoisation."
+    code_quality: "Parsing of references is separated from graph traversal; the cycle sentinel is a named constant."
+    edge_cases: "Empty input, empty values, repeated references and long reference chains."
+    communication: "Explains the three states of a key during DFS and why a done key is safe to reuse."
+hints:
+  - "Think of each key as a node and each reference as an edge to the key it mentions. Resolving a value means visiting everything it can reach."
+  - "Resolve keys with a depth-first search and remember finished results. You need to tell apart a key you are still in the middle of resolving from one you have already finished, because only the first case means a cycle."
+  - "Keep each key in one of three states: untouched, in progress, or done with a stored result. When resolving a key, mark it in progress, scan its value and replace each reference with the recursive result, using empty text for unknown keys. Meeting an in-progress key, or a dependency whose stored result is the cycle marker, makes the current key's result the cycle marker; otherwise store the concatenated text and mark it done."
+followups:
+  - "How would you report the keys that form each cycle instead of a sentinel?"
+  - "How would you support default values such as ${port:-8080}?"
+  - "How would you stop a malicious config from expanding into gigabytes of text?"
+  - "How would you avoid deep recursion for very long reference chains?"
+common_errors:
+  - "Using a single visited set, which reports a cycle for a key referenced twice through a diamond."
+  - "Marking only the key where the back edge was found instead of every key that reaches the cycle."
+  - "Substituting repeatedly until nothing changes, which never terminates on cycles."
+  - "Treating a bare dollar sign or brace as the start of a reference."

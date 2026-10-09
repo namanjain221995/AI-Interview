@@ -1,0 +1,212 @@
+version: 1
+slug: exclude_blocked_cidrs
+title: Allowlist Minus Blocklist CIDRs
+difficulty: hard
+competency_keys: [algorithms, problem_solving, debugging]
+role_tags: [network, security, cloud, platform]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Allowlist Minus Blocklist CIDRs
+
+  A firewall generator receives two lists of IPv4 CIDR blocks written as `a.b.c.d/p`: `allowed` and
+  `blocked`. The effective rule set is every IPv4 address that is in **at least one** allowed block
+  and in **no** blocked block. The firewall only accepts CIDR blocks, so you must express that address
+  set as CIDR blocks again.
+
+  Input details:
+
+  - A block `a.b.c.d/p` contains every address whose first `p` bits equal the first `p` bits of
+    `a.b.c.d`. The input may have **host bits set** (`10.0.0.7/24` means `10.0.0.0/24`).
+  - Blocks within each list may overlap, nest, repeat or touch.
+
+  Return the **smallest possible number** of CIDR blocks whose union is exactly the effective address
+  set, sorted by ascending start address, each written in normalised form (host bits cleared, decimal
+  octets without leading zeros, for example `"10.0.0.128/25"`). Return an empty array if no address
+  remains. (The smallest cover is unique, so the answer is well defined.)
+
+  ### Example 1
+  ```
+  Input:  allowed = ["10.0.0.0/24"], blocked = ["10.0.0.64/26"]
+  Output: ["10.0.0.0/26", "10.0.0.128/25"]
+  Explanation: removing 10.0.0.64 - 10.0.0.127 leaves 10.0.0.0 - 10.0.0.63 and 10.0.0.128 - 10.0.0.255.
+  ```
+
+  ### Example 2
+  ```
+  Input:  allowed = ["192.168.1.7/30", "192.168.1.0/30", "172.16.5.3/32"], blocked = ["172.16.0.0/16"]
+  Output: ["192.168.1.0/29"]
+  Explanation: 192.168.1.7/30 is 192.168.1.4/30; together with 192.168.1.0/30 it forms one /29.
+  The single address 172.16.5.3 is blocked.
+  ```
+
+  ### Example 3
+  ```
+  Input:  allowed = ["10.1.0.0/16"], blocked = ["10.0.0.0/8"]
+  Output: []
+  ```
+
+  ### Constraints
+  - `0 <= allowed.length, blocked.length <= 10^4`
+  - Every entry is four decimal octets `0..255` separated by `.`, then `/` and a prefix length `0..32`.
+  - `0.0.0.0/0` (2^32 addresses) is valid input, so address arithmetic needs more than 32 signed bits.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: exclude_blocked_cidrs
+  params:
+    - {name: allowed, type: "string[]"}
+    - {name: blocked, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def exclude_blocked_cidrs(allowed, blocked):
+        def to_range(cidr):
+            address, prefix = cidr.split("/")
+            value = 0
+            for octet in address.split("."):
+                value = value * 256 + int(octet)
+            size = 1 << (32 - int(prefix))
+            start = value - value % size
+            return start, start + size - 1
+
+        def merge(cidrs):
+            merged = []
+            for lo, hi in sorted(to_range(c) for c in cidrs):
+                if merged and lo <= merged[-1][1] + 1:
+                    merged[-1][1] = max(merged[-1][1], hi)
+                else:
+                    merged.append([lo, hi])
+            return merged
+
+        allow, block = merge(allowed), merge(blocked)
+        remaining = []
+        j = 0
+        for lo, hi in allow:
+            while j < len(block) and block[j][1] < lo:
+                j += 1
+            cur, k = lo, j
+            while cur <= hi:
+                if k < len(block) and block[k][0] <= hi:
+                    if block[k][0] > cur:
+                        remaining.append((cur, block[k][0] - 1))
+                    cur = max(cur, block[k][1] + 1)
+                    k += 1
+                else:
+                    remaining.append((cur, hi))
+                    break
+
+        result = []
+        for lo, hi in remaining:
+            while lo <= hi:
+                size = 1 << 32 if lo == 0 else lo & -lo
+                while size > hi - lo + 1:
+                    size >>= 1
+                octets = [(lo >> shift) & 255 for shift in (24, 16, 8, 0)]
+                result.append(".".join(map(str, octets)) + "/" + str(33 - size.bit_length()))
+                lo += size
+        return result
+
+  javascript: |
+    function excludeBlockedCidrs(allowed, blocked) {
+      const TOTAL = 4294967296; // 2^32; plain arithmetic avoids 32-bit bitwise operators
+      function toRange(cidr) {
+        const [address, prefix] = cidr.split("/");
+        let value = 0;
+        for (const octet of address.split(".")) value = value * 256 + Number(octet);
+        const size = 2 ** (32 - Number(prefix));
+        const start = value - (value % size);
+        return [start, start + size - 1];
+      }
+      function merge(cidrs) {
+        const ranges = cidrs.map(toRange).sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+        const merged = [];
+        for (const [lo, hi] of ranges) {
+          const last = merged[merged.length - 1];
+          if (last && lo <= last[1] + 1) last[1] = Math.max(last[1], hi);
+          else merged.push([lo, hi]);
+        }
+        return merged;
+      }
+      const allow = merge(allowed);
+      const block = merge(blocked);
+      const remaining = [];
+      let j = 0;
+      for (const [lo, hi] of allow) {
+        while (j < block.length && block[j][1] < lo) j++;
+        let cur = lo;
+        let k = j;
+        while (cur <= hi) {
+          if (k < block.length && block[k][0] <= hi) {
+            if (block[k][0] > cur) remaining.push([cur, block[k][0] - 1]);
+            cur = Math.max(cur, block[k][1] + 1);
+            k++;
+          } else {
+            remaining.push([cur, hi]);
+            break;
+          }
+        }
+      }
+      const result = [];
+      for (let [lo, hi] of remaining) {
+        while (lo <= hi) {
+          let size = 1;
+          let bits = 0;
+          while (size < TOTAL && lo % (size * 2) === 0 && size * 2 <= hi - lo + 1) {
+            size *= 2;
+            bits++;
+          }
+          const octets = [];
+          let v = lo;
+          for (let s = 0; s < 4; s++) {
+            octets.unshift(v % 256);
+            v = Math.floor(v / 256);
+          }
+          result.push(octets.join(".") + "/" + (32 - bits));
+          lo += size;
+        }
+      }
+      return result;
+    }
+tests:
+  - {id: t1, args: [["10.0.0.0/24"], ["10.0.0.64/26"]], expected: ["10.0.0.0/26", "10.0.0.128/25"], description: "Example 1 - hole in the middle of a /24"}
+  - {id: t2, args: [["192.168.1.7/30", "192.168.1.0/30", "172.16.5.3/32"], ["172.16.0.0/16"]], expected: ["192.168.1.0/29"], description: "Example 2 - host bits set, adjacent blocks merge, a /32 fully blocked"}
+  - {id: t3, args: [["10.1.0.0/16"], ["10.0.0.0/8"]], expected: [], description: "Example 3 - everything blocked"}
+  - {id: t4, hidden: true, args: [["0.0.0.0/0"], []], expected: ["0.0.0.0/0"], description: "Whole address space with nothing blocked - 2^32 addresses"}
+  - {id: t5, hidden: true, args: [["0.0.0.0/0"], ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]], expected: ["0.0.0.0/5", "8.0.0.0/7", "11.0.0.0/8", "12.0.0.0/6", "16.0.0.0/4", "32.0.0.0/3", "64.0.0.0/2", "128.0.0.0/3", "160.0.0.0/5", "168.0.0.0/6", "172.0.0.0/12", "172.32.0.0/11", "172.64.0.0/10", "172.128.0.0/9", "173.0.0.0/8", "174.0.0.0/7", "176.0.0.0/4", "192.0.0.0/9", "192.128.0.0/11", "192.160.0.0/13", "192.169.0.0/16", "192.170.0.0/15", "192.172.0.0/14", "192.176.0.0/12", "192.192.0.0/10", "193.0.0.0/8", "194.0.0.0/7", "196.0.0.0/6", "200.0.0.0/5", "208.0.0.0/4", "224.0.0.0/3"], description: "Public address space - internet minus the private ranges"}
+  - {id: t6, hidden: true, args: [["0.0.0.0/0"], ["255.255.255.255/32"]], expected: ["0.0.0.0/1", "128.0.0.0/2", "192.0.0.0/3", "224.0.0.0/4", "240.0.0.0/5", "248.0.0.0/6", "252.0.0.0/7", "254.0.0.0/8", "255.0.0.0/9", "255.128.0.0/10", "255.192.0.0/11", "255.224.0.0/12", "255.240.0.0/13", "255.248.0.0/14", "255.252.0.0/15", "255.254.0.0/16", "255.255.0.0/17", "255.255.128.0/18", "255.255.192.0/19", "255.255.224.0/20", "255.255.240.0/21", "255.255.248.0/22", "255.255.252.0/23", "255.255.254.0/24", "255.255.255.0/25", "255.255.255.128/26", "255.255.255.192/27", "255.255.255.224/28", "255.255.255.240/29", "255.255.255.248/30", "255.255.255.252/31", "255.255.255.254/32"], description: "Remove the very last address - 32 blocks, top of the unsigned range"}
+  - {id: t7, hidden: true, args: [[], ["10.0.0.0/8"]], expected: [], description: "Empty allowlist"}
+  - {id: t8, hidden: true, args: [["10.0.0.1/32", "10.0.0.2/32", "10.0.0.3/32", "10.0.0.4/32", "10.0.0.5/32", "10.0.0.6/32", "10.0.0.6/32"], ["10.0.0.0/32"]], expected: ["10.0.0.1/32", "10.0.0.2/31", "10.0.0.4/31", "10.0.0.6/32"], description: "Unaligned run of /32s with a duplicate - must split into aligned blocks"}
+  - {id: t9, hidden: true, args: [["10.0.0.0/29", "10.0.0.0/30", "10.0.0.255/24"], ["10.0.0.5/32", "10.0.1.0/24"]], expected: ["10.0.0.0/30", "10.0.0.4/32", "10.0.0.6/31", "10.0.0.8/29", "10.0.0.16/28", "10.0.0.32/27", "10.0.0.64/26", "10.0.0.128/25"], description: "Nested allowlist entries, host bits set, single-address hole"}
+  - {id: t10, hidden: true, args: [["10.0.214.3/20", "10.0.144.0/24", "10.0.110.153/25", "10.0.93.254/25", "10.0.120.220/26", "10.0.7.58/18", "10.0.219.59/23", "10.0.74.51/19", "10.0.119.35/21", "10.0.223.171/18", "10.0.226.56/24", "10.0.168.105/18", "10.0.254.191/26", "10.0.188.165/19", "10.0.79.67/18", "10.0.63.239/19", "10.0.232.0/18", "10.0.175.147/20", "10.0.248.43/24", "10.0.95.178/20", "10.0.240.156/18", "10.0.38.53/21", "10.0.106.200/21", "10.0.62.181/19", "10.0.243.224/26", "10.0.198.169/26", "10.0.174.181/21", "10.0.209.183/20", "10.0.186.254/22", "10.0.197.132/25"], ["10.0.248.10/27", "10.0.136.10/28", "10.0.47.192/22", "10.0.253.245/24", "10.0.251.171/22", "10.0.113.174/23", "10.0.163.36/31", "10.0.57.181/30", "10.0.87.22/24", "10.0.178.72/32", "10.0.177.119/27", "10.0.156.252/31", "10.0.52.224/25", "10.0.33.156/24", "10.0.219.128/24", "10.0.81.220/27", "10.0.18.201/32", "10.0.123.172/32", "10.0.83.128/28", "10.0.7.77/31", "10.0.251.88/27", "10.0.192.73/30", "10.0.126.146/32", "10.0.83.24/25", "10.0.35.127/30", "10.0.208.159/29", "10.0.29.103/29", "10.0.26.182/26", "10.0.148.106/26", "10.0.214.207/22", "10.0.87.92/25", "10.0.35.143/28", "10.0.74.207/27", "10.0.245.59/24", "10.0.129.34/22", "10.0.245.72/24", "10.0.108.151/22", "10.0.78.196/27", "10.0.218.39/27", "10.0.244.37/29"]], expected: ["10.0.0.0/22", "10.0.4.0/23", "10.0.6.0/24", "10.0.7.0/26", "10.0.7.64/29", "10.0.7.72/30", "10.0.7.78/31", "10.0.7.80/28", "10.0.7.96/27", "10.0.7.128/25", "10.0.8.0/21", "10.0.16.0/23", "10.0.18.0/25", "10.0.18.128/26", "10.0.18.192/29", "10.0.18.200/32", "10.0.18.202/31", "10.0.18.204/30", "10.0.18.208/28", "10.0.18.224/27", "10.0.19.0/24", "10.0.20.0/22", "10.0.24.0/23", "10.0.26.0/25", "10.0.26.192/26", "10.0.27.0/24", "10.0.28.0/24", "10.0.29.0/26", "10.0.29.64/27", "10.0.29.104/29", "10.0.29.112/28", "10.0.29.128/25", "10.0.30.0/23", "10.0.32.0/24", "10.0.34.0/24", "10.0.35.0/26", "10.0.35.64/27", "10.0.35.96/28", "10.0.35.112/29", "10.0.35.120/30", "10.0.35.144/28", "10.0.35.160/27", "10.0.35.192/26", "10.0.36.0/22", "10.0.40.0/22", "10.0.48.0/22", "10.0.52.0/25", "10.0.53.0/24", "10.0.54.0/23", "10.0.56.0/24", "10.0.57.0/25", "10.0.57.128/27", "10.0.57.160/28", "10.0.57.176/30", "10.0.57.184/29", "10.0.57.192/26", "10.0.58.0/23", "10.0.60.0/22", "10.0.64.0/21", "10.0.72.0/23", "10.0.74.0/25", "10.0.74.128/26", "10.0.74.224/27", "10.0.75.0/24", "10.0.76.0/23", "10.0.78.0/25", "10.0.78.128/26", "10.0.78.224/27", "10.0.79.0/24", "10.0.80.0/24", "10.0.81.0/25", "10.0.81.128/26", "10.0.81.224/27", "10.0.82.0/24", "10.0.83.144/28", "10.0.83.160/27", "10.0.83.192/26", "10.0.84.0/23", "10.0.86.0/24", "10.0.88.0/21", "10.0.96.0/21", "10.0.104.0/22", "10.0.114.0/23", "10.0.116.0/22", "10.0.120.0/23", "10.0.122.0/24", "10.0.123.0/25", "10.0.123.128/27", "10.0.123.160/29", "10.0.123.168/30", "10.0.123.173/32", "10.0.123.174/31", "10.0.123.176/28", "10.0.123.192/26", "10.0.124.0/23", "10.0.126.0/25", "10.0.126.128/28", "10.0.126.144/31", "10.0.126.147/32", "10.0.126.148/30", "10.0.126.152/29", "10.0.126.160/27", "10.0.126.192/26", "10.0.127.0/24", "10.0.132.0/22", "10.0.136.16/28", "10.0.136.32/27", "10.0.136.64/26", "10.0.136.128/25", "10.0.137.0/24", "10.0.138.0/23", "10.0.140.0/22", "10.0.144.0/22", "10.0.148.0/26", "10.0.148.128/25", "10.0.149.0/24", "10.0.150.0/23", "10.0.152.0/22", "10.0.156.0/25", "10.0.156.128/26", "10.0.156.192/27", "10.0.156.224/28", "10.0.156.240/29", "10.0.156.248/30", "10.0.156.254/31", "10.0.157.0/24", "10.0.158.0/23", "10.0.160.0/23", "10.0.162.0/24", "10.0.163.0/27", "10.0.163.32/30", "10.0.163.38/31", "10.0.163.40/29", "10.0.163.48/28", "10.0.163.64/26", "10.0.163.128/25", "10.0.164.0/22", "10.0.168.0/21", "10.0.176.0/24", "10.0.177.0/26", "10.0.177.64/27", "10.0.177.128/25", "10.0.178.0/26", "10.0.178.64/29", "10.0.178.73/32", "10.0.178.74/31", "10.0.178.76/30", "10.0.178.80/28", "10.0.178.96/27", "10.0.178.128/25", "10.0.179.0/24", "10.0.180.0/22", "10.0.184.0/21", "10.0.192.0/26", "10.0.192.64/29", "10.0.192.76/30", "10.0.192.80/28", "10.0.192.96/27", "10.0.192.128/25", "10.0.193.0/24", "10.0.194.0/23", "10.0.196.0/22", "10.0.200.0/21", "10.0.208.0/25", "10.0.208.128/28", "10.0.208.144/29", "10.0.208.160/27", "10.0.208.192/26", "10.0.209.0/24", "10.0.210.0/23", "10.0.216.0/23", "10.0.218.0/27", "10.0.218.64/26", "10.0.218.128/25", "10.0.220.0/22", "10.0.224.0/20", "10.0.240.0/22", "10.0.244.0/27", "10.0.244.40/29", "10.0.244.48/28", "10.0.244.64/26", "10.0.244.128/25", "10.0.246.0/23", "10.0.252.0/24", "10.0.254.0/23"], description: "30 random allowed and 40 random blocked blocks inside 10.0.0.0/16"}
+expected_concepts:
+  - converting CIDR blocks to integer address ranges (and normalising host bits)
+  - merging overlapping and adjacent intervals
+  - interval subtraction with a two-pointer sweep
+  - greedy decomposition of a range into aligned power-of-two blocks
+  - unsigned or 64-bit arithmetic for 2^32 addresses
+optimal_complexity: {time: "O((a + b) log(a + b) + output)", space: O(a + b + output)}
+rubric:
+  excellent: Converts blocks to integer ranges with host bits cleared, merges overlapping and adjacent ranges, subtracts with a sweep, decomposes each remaining range greedily into the largest aligned block that fits, and explains why merging adjacent ranges is needed for a minimal answer and why 32-bit signed integers overflow.
+  good: Correct range conversion and subtraction, and a correct greedy decomposition after a hint about alignment or adjacency; minor issues with the /0 case fixed when prompted.
+  weak: Enumerates individual addresses, emits non-aligned blocks, forgets to clear host bits, returns overlapping or non-minimal blocks, or overflows on 0.0.0.0/0.
+  criteria:
+    correctness: All tests pass, including /0, /32, host bits set, nested and adjacent blocks and fully blocked input.
+    efficiency: Works on ranges, never on individual addresses; sorting dominates the running time.
+    code_quality: Separate helpers for parsing, merging, subtracting and formatting.
+    edge_cases: Empty lists, the whole address space, the last address 255.255.255.255 and duplicate blocks.
+    communication: Explains the alignment rule of CIDR blocks and why the greedy choice is optimal.
+hints:
+  - Treat every address as a 32-bit unsigned number. Then each CIDR block is a contiguous integer range whose length is a power of two and whose start is a multiple of that length.
+  - Merge the allowed ranges (overlapping or touching), merge the blocked ranges, and subtract one sorted list from the other with a sweep. What remains is a set of disjoint, non-touching integer ranges.
+  - Turn each remaining range [lo, hi] into blocks greedily - at lo take the largest power-of-two size that divides lo (any size if lo is 0) and still fits in the range, emit it, advance lo by that size and repeat. Use 64-bit or unsigned arithmetic so 2^32 does not overflow.
+followups:
+  - How would you extend the solution to IPv6?
+  - How would you produce the smallest diff between yesterday's and today's rule sets?
+  - If rules are evaluated in order with allow and deny actions mixed, how would you flatten them into one allow list?
+  - Why is the greedy decomposition minimal, and why must adjacent remaining ranges be merged first?
+common_errors:
+  - Using 32-bit signed integers, so addresses above 127.255.255.255 or the /0 size overflow.
+  - Forgetting to clear host bits, which shifts the block to the wrong range.
+  - Emitting blocks that are not aligned to their size (for example 10.0.0.1/31).
+  - Not merging touching ranges, which produces two /25 blocks instead of one /24.
+  - Expanding blocks into individual addresses, which is far too slow for large prefixes.

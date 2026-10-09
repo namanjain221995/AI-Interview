@@ -1,0 +1,642 @@
+# Platform engineering (2/4): multi-tenancy, tenant onboarding and cost attribution, and policy as code.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [platform]
+questions:
+  # ------------------------------------------------------------ multi-tenancy
+  - external_key: technical.platform.tenancy_model_choice
+    competency_key: kubernetes
+    topic: Choosing a tenancy model
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you host many teams on Kubernetes, you can give each team a namespace in a shared cluster or a
+      cluster of their own. What pushes you toward one model or the other?
+    expected_concepts:
+      - soft isolation of namespaces versus hard isolation of clusters
+      - cost and operational overhead of many clusters
+      - shared control plane, CRDs and cluster-scoped resources
+      - compliance or data-sensitivity requirements
+      - blast radius of upgrades and outages
+    rubric:
+      excellent: Compares isolation strength, cost, operational overhead, cluster-scoped resource conflicts, compliance and blast radius, and gives concrete criteria for when a team earns its own cluster.
+      good: Explains the isolation versus cost trade-off with one or two decision criteria.
+      weak: Treats one model as always correct without explaining the trade-offs.
+    followups:
+      - What does a shared cluster make hard that teams often only discover later?
+      - How would you keep dozens of per-team clusters consistent?
+    common_errors:
+      - Assuming namespaces isolate cluster-scoped resources such as CRDs or webhooks.
+
+  - external_key: technical.platform.noisy_neighbour_latency
+    competency_key: kubernetes
+    topic: Noisy neighbour in a shared cluster
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A latency-sensitive API team reports p99 spikes every night, and you notice another tenant's batch
+      jobs start at the same time on the same nodes. How would you confirm the cause and protect the API
+      team going forward?
+    expected_concepts:
+      - correlating node-level CPU throttling, memory pressure and disk or network IO
+      - requests and limits, and QoS classes
+      - separate node pools with taints and tolerations for batch work
+      - priority classes and preemption
+      - quotas on the batch tenant
+      - shared resources outside CPU and memory (disk IO, network, conntrack)
+    rubric:
+      excellent: Confirms the link with node-level metrics, then isolates batch work using node pools, taints, priorities and quotas, and remembers contention on resources Kubernetes does not schedule, such as disk IO and network.
+      good: Identifies resource contention and separates the workloads with node pools or requests and limits.
+      weak: Simply adds nodes or asks the batch team to run at a different time without fixing isolation.
+    followups:
+      - What metrics would show CPU throttling rather than plain CPU saturation?
+      - The batch team says their jobs now run too slowly. How do you balance that?
+    common_errors:
+      - Setting limits without requests, so the scheduler still packs workloads badly.
+
+  - external_key: technical.platform.tenant_onboarding_automation
+    competency_key: kubernetes
+    topic: Automating tenant onboarding
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When a new team joins your shared platform, what should exist for them by the end of onboarding, and
+      how would you make that happen without a platform engineer doing it by hand?
+    expected_concepts:
+      - namespaces per environment with labels for ownership and cost
+      - RBAC bound to identity-provider groups
+      - default quotas, limit ranges and network policies
+      - CI credentials or deploy identities and secrets paths
+      - catalog entry, dashboards and alert routing
+      - a declarative tenant definition reconciled by GitOps or an operator
+    rubric:
+      excellent: Lists the full set of tenant resources and drives them from a single declarative tenant definition reconciled automatically, so offboarding and changes use the same mechanism.
+      good: Lists most resources and automates them with scripts or templates.
+      weak: Describes a manual checklist or only creates a namespace.
+    followups:
+      - How would offboarding a team work with the same mechanism?
+      - What should a tenant be able to change themselves after onboarding?
+    common_errors:
+      - Automating creation but leaving updates and deletion manual.
+
+  - external_key: technical.platform.quota_sizing_disputes
+    competency_key: kubernetes
+    topic: Setting and adjusting quotas
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Half your tenants say their resource quotas are too tight, while cluster utilisation is only thirty
+      percent because other teams reserve far more than they use. How would you sort that out?
+    expected_concepts:
+      - comparing requested versus actually used CPU and memory
+      - right-sizing recommendations (for example VPA in recommend mode)
+      - quotas based on real usage plus headroom
+      - showback of reserved versus used capacity
+      - a fast self-service path to raise quotas with justification
+    rubric:
+      excellent: Uses request-versus-usage data to right-size, makes over-reservation visible through showback, sets quotas from evidence with headroom and offers a quick self-service path for justified increases.
+      good: Identifies over-requesting as the issue and suggests right-sizing.
+      weak: Raises everyone's quota or adds nodes without addressing over-reservation.
+    followups:
+      - How would you get teams to actually lower their requests?
+      - What risks come with shrinking requests too aggressively?
+    common_errors:
+      - Confusing quota usage, which counts requests, with real resource consumption.
+
+  - external_key: technical.platform.shared_cluster_cost_allocation
+    competency_key: cloud_cost_optimization
+    topic: Attributing shared platform costs
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Finance asks you how much each product team's use of the shared Kubernetes platform costs. Nobody has
+      ever split that bill. How would you produce numbers that teams accept as fair?
+    expected_concepts:
+      - allocating by requests or by the larger of requests and usage
+      - labels or namespaces mapped to teams
+      - handling idle capacity and shared system components
+      - tools such as OpenCost or Kubecost, or cloud billing exports
+      - showback before chargeback, with the method published
+    rubric:
+      excellent: Chooses and justifies an allocation basis, maps workloads to owners through enforced labels, explains how idle and shared overhead are distributed and publishes the method, starting with showback.
+      good: Allocates by namespace using requests or usage with a reasonable tool.
+      weak: Splits the bill evenly or ignores idle and shared costs.
+    followups:
+      - Why might allocating by usage alone reward the wrong behaviour?
+      - Who should pay for the monitoring stack and ingress controllers?
+    common_errors:
+      - Leaving unlabeled workloads unallocated so the numbers never add up to the bill.
+
+  - external_key: technical.platform.quota_and_limitrange_roles
+    competency_key: kubernetes
+    topic: ResourceQuota and LimitRange defaults
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Many platform teams put both a ResourceQuota and a LimitRange in every tenant namespace. What does each
+      one contribute, and what tends to go wrong if you only set one of them?
+    expected_concepts:
+      - ResourceQuota caps the aggregate for a namespace
+      - LimitRange sets per-container defaults and bounds
+      - quota on CPU or memory rejects pods that omit requests
+      - defaults from LimitRange keep scheduling and QoS sensible
+      - object count quotas, for example on load balancers
+    rubric:
+      excellent: Explains aggregate caps versus per-container defaults and bounds, and the concrete failure when a quota exists without defaults (pods rejected for missing requests) or defaults exist without a cap.
+      good: Distinguishes namespace-wide caps from per-pod defaults.
+      weak: Thinks they are the same thing or cannot say how they interact.
+    followups:
+      - Which object counts would you cap besides CPU and memory?
+      - How would a developer find out their deploy was rejected by a quota?
+    common_errors:
+      - Not realising a compute quota forces every pod to declare requests.
+
+  - external_key: technical.platform.virtual_clusters_for_tenants
+    competency_key: kubernetes
+    topic: Virtual clusters and cluster-scoped needs
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Some tenants need things namespaces can't give them, such as installing their own CRDs or having
+      admin-like control. How would you evaluate virtual clusters, hierarchical namespaces or dedicated
+      clusters for those tenants?
+    expected_concepts:
+      - virtual control plane per tenant syncing to a host cluster
+      - what remains shared (nodes, CNI, kernel) and its security implications
+      - hierarchical namespaces for policy inheritance rather than cluster-scoped access
+      - operational overhead and upgrade path of each option
+      - cost compared with dedicated clusters
+    rubric:
+      excellent: Explains how virtual clusters work and what stays shared, compares them with hierarchical namespaces and dedicated clusters on isolation, cost and operations, and matches each to specific tenant requirements.
+      good: Knows virtual clusters give tenants their own API server and weighs them against dedicated clusters.
+      weak: Gives tenants cluster-admin on the shared cluster or does not know the alternatives.
+    followups:
+      - What security boundary does a virtual cluster not give you?
+      - How would node-level isolation fit into this design?
+    common_errors:
+      - Treating a virtual cluster as equivalent to a fully separate cluster for security.
+
+  - external_key: technical.platform.conflicting_operator_versions
+    competency_key: kubernetes
+    topic: Conflicting operator versions across tenants
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Two teams on the same shared cluster both rely on a database operator, but one needs a new major
+      version whose CRD changes are incompatible with the version the other team is pinned to. How would you
+      resolve this?
+    expected_concepts:
+      - CRDs are cluster-scoped, so only one schema version can be served at a time
+      - checking whether the new CRD serves old versions with conversion
+      - platform-owned shared operators with a published upgrade policy
+      - namespace-scoped operator installs and their limits
+      - moving one tenant to a separate or virtual cluster
+      - coordinated migration plan with both teams
+    rubric:
+      excellent: Explains why CRDs make this a cluster-wide conflict, checks for conversion support, proposes a coordinated upgrade or a separate cluster as fallback, and sets a platform policy for owning shared operators.
+      good: Recognises the cluster-scoped conflict and proposes either coordinated upgrade or separation.
+      weak: Suggests installing both versions side by side without seeing the conflict.
+    followups:
+      - Who should own operators that several tenants depend on?
+      - How would you prevent this situation for the next operator?
+    common_errors:
+      - Not realising that CRDs and their webhooks are shared by every namespace.
+
+  - external_key: technical.platform.platform_blast_radius
+    competency_key: system_design
+    topic: Limiting the platform's blast radius
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Last quarter a bad change to a shared platform component took down deploys for every team at once.
+      How would you redesign the platform so a single failure or change affects fewer tenants?
+    expected_concepts:
+      - cells or shards of tenants across clusters or regions
+      - staged rollouts of platform changes by ring
+      - separating control-plane failures from running workloads
+      - static stability so running services survive control-plane loss
+      - per-tenant limits and isolation on shared services
+      - testing platform changes on canary tenants
+    rubric:
+      excellent: Proposes cell-based partitioning of tenants, ring-based rollouts with canary tenants, and static stability so workloads keep running when the platform control plane fails, with clear trade-offs in cost and complexity.
+      good: Suggests staged rollouts and some partitioning of tenants.
+      weak: Proposes more testing or more careful reviews only.
+    followups:
+      - How would you decide which tenants go into the first ring?
+      - What does static stability mean for your deploy service specifically?
+    common_errors:
+      - Coupling running workloads to the availability of the deploy tooling.
+
+  # ------------------------------------------------------------ policy as code
+  - external_key: technical.platform.policy_as_code_example
+    competency_key: security
+    topic: Policy as code fundamentals
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What does policy as code mean in practice? Tell me about a policy you've written or enforced that way,
+      and where it ran.
+    expected_concepts:
+      - rules expressed in code and kept in version control
+      - automated evaluation (admission control, CI, plan checks)
+      - a concrete example such as required labels or no privileged pods
+      - review, testing and history of policy changes
+      - consistent results compared with manual checklists
+    rubric:
+      excellent: Gives a concrete policy, where and when it was evaluated and what happened on violation, and explains the benefits of versioning, testing and review compared with manual checks.
+      good: Explains the idea and names a plausible example and enforcement point.
+      weak: Describes a written guideline document or cannot name an example.
+    followups:
+      - How did developers find out when they violated it?
+      - Did that policy ever block something legitimate? What happened?
+    common_errors:
+      - Confusing policy as code with infrastructure as code.
+
+  - external_key: technical.platform.policy_enforcement_points
+    competency_key: security
+    topic: Where policies are enforced
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      A rule like containers must not run as root could be checked in the editor, in pull requests, in CI,
+      at cluster admission or at runtime. What does each of those places catch, and where would you put it?
+    expected_concepts:
+      - earlier checks give faster feedback but can be bypassed
+      - admission control is the authoritative gate for the cluster
+      - runtime detection catches what slipped through or changed
+      - same policy reused across stages to avoid drift
+      - layering rather than picking a single point
+    rubric:
+      excellent: Explains the feedback speed versus authority trade-off at each stage, recommends layering with admission as the hard gate and earlier checks for fast feedback, and reuses the same policy source everywhere.
+      good: Recommends CI plus admission with a reason for each.
+      weak: Picks one stage only and cannot explain what the others add.
+    followups:
+      - What could bypass a CI-only check?
+      - How do you keep the CI and admission versions of a rule from drifting apart?
+    common_errors:
+      - Relying only on CI checks when people can apply manifests directly.
+
+  - external_key: technical.platform.audit_then_enforce_rollout
+    competency_key: kubernetes
+    topic: Rolling out a new admission policy
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You need to start requiring CPU and memory requests on every pod across forty teams' namespaces. If you
+      turn on enforcement tomorrow, deploys will break. How would you roll that policy out?
+    expected_concepts:
+      - audit or warn mode first to find existing violations
+      - reporting violations per team with clear fix guidance
+      - updating templates and defaults so new work complies
+      - a published enforcement date and gradual enforcement by namespace
+      - an exception path for genuine edge cases
+    rubric:
+      excellent: Starts in audit mode, quantifies and reports violations per team, fixes templates and defaults, enforces gradually against a published date, and keeps a documented exception route.
+      good: Uses audit mode first and communicates a deadline.
+      weak: Enforces immediately or never moves past warnings.
+    followups:
+      - How would developers see warnings during a normal deploy?
+      - Two teams miss the deadline. What do you do?
+    common_errors:
+      - Enforcing without fixing the templates, so newly created services fail too.
+
+  - external_key: technical.platform.policy_exceptions_process
+    competency_key: security
+    topic: Handling policy exceptions
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      However good your policies are, some workloads will legitimately need an exception, for example a
+      monitoring agent that needs host access. How would you design the exception mechanism?
+    expected_concepts:
+      - exceptions declared as code and reviewed
+      - scoped narrowly to specific workloads and rules
+      - expiry dates and periodic review
+      - an approver outside the requesting team for high-risk rules
+      - reporting of all active exceptions
+    rubric:
+      excellent: Makes exceptions explicit, reviewed, narrowly scoped, time-limited and reportable, and distinguishes low-risk self-approved exceptions from high-risk ones needing security sign-off.
+      good: Uses a reviewed allowlist with some scoping.
+      weak: Disables the policy for the whole namespace or grants exceptions informally.
+    followups:
+      - How would you notice an exception that is no longer needed?
+      - What stops a team from labelling everything as exempt?
+    common_errors:
+      - Exemptions keyed on a label that any team can add to their own workloads.
+
+  - external_key: technical.platform.testing_policy_rules
+    competency_key: security
+    topic: Testing policies before rollout
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Policies written in Rego or Kyverno are code too, and a wrong rule can block every deploy. How would
+      you test and release policy changes safely?
+    expected_concepts:
+      - unit tests with passing and failing fixtures
+      - running new policies against real manifests from the cluster or repositories
+      - audit-mode dry run before enforcement
+      - versioned policy bundles released through CI
+      - fail-open or fail-closed choice for the webhook and its availability
+    rubric:
+      excellent: Combines unit tests with fixtures, replays against real existing resources to estimate impact, releases versioned bundles through audit then enforce, and considers webhook failure behaviour.
+      good: Writes unit tests and uses audit mode before enforcing.
+      weak: Tests policies manually in production or not at all.
+    followups:
+      - If the admission webhook itself goes down, should deploys fail?
+      - How would you measure how many deploys a new policy will block?
+    common_errors:
+      - Never testing against real workloads, so unusual but valid manifests get blocked.
+
+  - external_key: technical.platform.terraform_plan_policy_checks
+    competency_key: terraform
+    topic: Policy checks on infrastructure plans
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you stop people from creating things like publicly readable storage buckets or untagged
+      resources through Terraform, ideally before anything is applied?
+    expected_concepts:
+      - evaluating the JSON plan with OPA, conftest or Sentinel
+      - running checks in the pull request pipeline
+      - static scanning tools (tfsec, Checkov) as a complement
+      - cloud-side guardrails such as organisation policies as a backstop
+      - clear failure messages and an exception path
+    rubric:
+      excellent: Evaluates rendered plans in the pull request with a policy engine, adds static scanning, backs it with cloud-level preventive controls and gives developers actionable messages.
+      good: Uses a plan-based policy check or a scanner in CI.
+      weak: Relies on code review alone to catch these.
+    followups:
+      - Why check the plan rather than only the source files?
+      - What catches resources created outside Terraform?
+    common_errors:
+      - Scanning HCL only, missing values that come from variables or modules.
+
+  - external_key: technical.platform.policy_blocks_hotfix
+    competency_key: kubernetes
+    topic: Policy blocking an urgent fix
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      At two in the morning, an engineer trying to ship an urgent fix during an outage is blocked by an
+      admission policy, because their image comes from a registry that isn't allowed. What do you do in the
+      moment, and what do you change afterwards?
+    expected_concepts:
+      - understand why the policy fired before bypassing it
+      - prefer fixing the input (push to the approved registry) if fast
+      - an audited break-glass procedure with time-limited exemption
+      - reviewing the event afterwards
+      - improving the fast path so emergencies stay compliant
+    rubric:
+      excellent: Balances restoring service against security, uses a pre-defined audited break-glass path only if the compliant route is too slow, and afterwards reviews both the policy and the emergency build path.
+      good: Finds a quick compliant route or uses a controlled temporary exemption.
+      weak: Disables the policy cluster-wide or refuses any flexibility while the outage continues.
+    followups:
+      - What should a break-glass procedure record?
+      - How would you rehearse it before a real emergency?
+    common_errors:
+      - Removing the webhook entirely and forgetting to restore it.
+
+  - external_key: technical.platform.policy_engine_choice
+    competency_key: kubernetes
+    topic: Choosing a cluster policy engine
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      If you had to pick between Kyverno and OPA Gatekeeper, or something similar, for cluster policies, how
+      would you think about that choice?
+    expected_concepts:
+      - policy language (YAML-native versus Rego) and team skills
+      - validation, mutation and generation features
+      - reuse of policies outside Kubernetes
+      - reporting, audit and testing tooling
+      - performance and webhook reliability
+    rubric:
+      excellent: Compares language and authoring effort, feature coverage, reuse beyond the cluster, reporting and testing support and operational reliability, and ties the decision to the team's skills and needs.
+      good: Contrasts the policy languages and one or two features.
+      weak: Chooses by name recognition with no criteria.
+    followups:
+      - When would reusing the same language for Terraform and Kubernetes policies matter?
+      - What could go wrong with mutating policies?
+    common_errors:
+      - Ignoring who will write and maintain the policies day to day.
+
+  - external_key: technical.platform.policy_violation_messages
+    competency_key: security
+    topic: Policy messages developers can act on
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When a developer's deploy is rejected by a policy, what should the message they see contain, and why
+      does that matter so much for a platform team?
+    expected_concepts:
+      - which rule failed and on which resource and field
+      - why the rule exists
+      - how to fix it, ideally with an example
+      - a link to documentation or the exception process
+      - reduces support load and bypass attempts
+    rubric:
+      excellent: Specifies the rule, the offending field, the reason, the concrete fix and where to get help, and connects good messages to fewer support tickets and fewer attempts to work around policies.
+      good: Says messages should explain what failed and how to fix it.
+      weak: Thinks a generic denied message is enough.
+    followups:
+      - How would you find out which policy messages confuse people?
+      - Where else in the platform do poor error messages cost you time?
+    common_errors:
+      - Exposing raw policy-engine output that only the platform team can read.
+
+  - external_key: technical.platform.signed_image_admission
+    competency_key: security
+    topic: Admitting only trusted, signed images
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Security wants a guarantee that every image running in production was built by your CI system from a
+      reviewed commit. How would you design that end to end?
+    expected_concepts:
+      - signing images in CI with keyless or managed keys (for example cosign)
+      - provenance attestations such as SLSA with source and builder identity
+      - admission policies that verify signatures and attestations
+      - protecting the build system and its identity
+      - digest pinning rather than mutable tags
+      - handling third-party and base images
+    rubric:
+      excellent: Designs signing and provenance attestation in CI, verification at admission against expected builder and source identities, digest pinning, protection of the build identity and a plan for third-party images.
+      good: Signs images in CI and verifies signatures at admission.
+      weak: Relies on a private registry or image scanning alone as proof of origin.
+    followups:
+      - How do you handle images from vendors you do not build yourself?
+      - What happens to running workloads if your signing key is compromised?
+    common_errors:
+      - Verifying a signature but not which pipeline or repository produced it.
+
+  - external_key: technical.platform.policy_library_governance
+    competency_key: security
+    topic: Governing a shared policy library
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your organisation now has thirty clusters, each with policies that were copied and tweaked by different
+      people. Security, platform and product teams all want to add rules. How would you bring that under
+      control?
+    expected_concepts:
+      - one versioned central policy repository with owners per policy
+      - layers of global baseline, environment and team-specific rules
+      - contribution workflow with review and tests
+      - distribution to clusters through GitOps with version reporting
+      - compliance reporting across the fleet
+    rubric:
+      excellent: Consolidates into a versioned central library with clear owners and layering, defines a tested contribution path, distributes through GitOps with drift and version reporting, and shows fleet-wide compliance status.
+      good: Centralises policies in one repository and distributes them automatically.
+      weak: Proposes documenting the differences or letting each cluster keep its own copy.
+    followups:
+      - How would a product team propose a new rule?
+      - How do you find out which clusters run an outdated policy version?
+    common_errors:
+      - Centralising ownership so tightly that every change waits on one team.
+
+  - external_key: technical.platform.default_deny_network_rollout
+    competency_key: kubernetes
+    topic: Introducing default-deny networking
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your shared cluster currently allows any pod to talk to any other pod. You want default-deny network
+      policies for every tenant without causing outages. How would you get there?
+    expected_concepts:
+      - observing actual traffic flows first (CNI flow logs, Hubble, service mesh telemetry)
+      - generating candidate allow rules from observed traffic
+      - allowing DNS and platform components explicitly
+      - applying per namespace in stages, starting with willing teams
+      - making policies part of the service template
+    rubric:
+      excellent: Maps real traffic before enforcing, generates and reviews allow rules, remembers DNS and platform dependencies, rolls out per namespace with rollback ready, and builds policies into templates for new services.
+      good: Observes traffic, writes allow rules and rolls out gradually.
+      weak: Applies default deny everywhere and fixes breakage as it is reported.
+    followups:
+      - Which flows do people most often forget to allow?
+      - How would a team test new rules before applying them?
+    common_errors:
+      - Forgetting to allow DNS egress, which breaks every service at once.
+
+  - external_key: technical.platform.cluster_admin_request
+    competency_key: kubernetes
+    topic: Request for elevated cluster access
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A team lead asks for cluster-admin on the shared production cluster because their engineers keep
+      getting forbidden errors while debugging. How would you respond?
+    expected_concepts:
+      - finding which actions are actually blocked
+      - granting scoped roles for the missing verbs in their namespaces
+      - read access to logs, events and metrics as a baseline
+      - time-limited elevated access with audit for emergencies
+      - not granting cluster-wide admin to a tenant
+    rubric:
+      excellent: Diagnoses the specific blocked actions, grants least-privilege namespace roles that cover real debugging needs, provides audited just-in-time elevation for emergencies and explains why cluster-admin is not appropriate.
+      good: Declines cluster-admin and offers broader namespace permissions.
+      weak: Grants cluster-admin or refuses without solving the debugging problem.
+    followups:
+      - Which permissions does a developer genuinely need for debugging?
+      - How would you implement time-limited elevation?
+    common_errors:
+      - Treating the request as only a security issue and ignoring the debugging friction behind it.
+
+  - external_key: technical.platform.secrets_self_service_path
+    competency_key: security
+    topic: Giving teams a self-service secrets path
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You find that teams are pasting database passwords into CI variables and Helm values files because
+      there's no easy alternative. What would you offer them instead?
+    expected_concepts:
+      - a central secrets manager with per-team paths
+      - access granted to workload identities rather than shared tokens
+      - injection at runtime (CSI driver, External Secrets, agent)
+      - documented golden-path example and migration help
+      - scanning repositories for leaked secrets and rotating them
+    rubric:
+      excellent: Provides a central store with team-scoped access via workload identity, an easy injection mechanism wired into templates, help migrating existing secrets, and rotation of anything that has already leaked.
+      good: Proposes a secrets manager with injection into workloads.
+      weak: Suggests encrypting the values file or asking teams to be more careful.
+    followups:
+      - What would you do about passwords already committed to Git history?
+      - How would a developer use a secret in local development?
+    common_errors:
+      - Migrating the secrets but not rotating ones that were already exposed.
+
+  - external_key: technical.platform.fleet_tenant_placement
+    competency_key: kubernetes
+    topic: Placing tenants across a cluster fleet
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your platform has grown from one cluster to a fleet of twenty across several regions. How would you
+      decide which tenants land on which clusters, and how would you manage that placement over time?
+    expected_concepts:
+      - placement criteria (region, data residency, tier, capacity, compliance)
+      - declarative placement through fleet tools (ApplicationSets, Karmada, Fleet)
+      - capacity planning and rebalancing between clusters
+      - moving tenants between clusters with minimal disruption
+      - avoiding hidden coupling to specific clusters
+    rubric:
+      excellent: Defines placement criteria, expresses placement declaratively with fleet tooling, plans capacity and rebalancing, and describes how to move a tenant between clusters safely.
+      good: Gives sensible placement criteria and a mechanism to deploy tenants to selected clusters.
+      weak: Places tenants by hand with no criteria or tracking.
+    followups:
+      - What makes moving a stateful tenant between clusters hard?
+      - How would service discovery work for tenants spread across clusters?
+    common_errors:
+      - Hardcoding cluster names in application configuration.
+
+  - external_key: technical.platform.compliance_evidence_automation
+    competency_key: security
+    topic: Producing audit evidence from the platform
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      An auditor wants evidence that every production change was reviewed and that all clusters enforce your
+      security baseline. How would the platform produce that evidence without weeks of manual work?
+    expected_concepts:
+      - change history from Git with enforced reviews and branch protection
+      - deployment records linking artifacts to commits and approvals
+      - policy reports and compliance dashboards across clusters
+      - immutable, retained audit logs
+      - mapping each control to an automated evidence source
+    rubric:
+      excellent: Maps each control to an automated, tamper-resistant evidence source such as protected Git history, deploy records and policy reports, and makes the evidence continuously available rather than assembled at audit time.
+      good: Points to Git history and policy reports as evidence.
+      weak: Plans to gather screenshots and spreadsheets manually before the audit.
+    followups:
+      - How do you prove that nobody deployed outside the pipeline?
+      - How long would you keep this evidence, and where?
+    common_errors:
+      - Evidence that can be edited by the same people being audited.

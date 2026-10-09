@@ -1,0 +1,189 @@
+version: 1
+slug: oncall_backup_lookup
+title: "On-Call Backup Lookup"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [sre, devops, backend]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## On-Call Backup Lookup
+
+  The incident-paging tool keeps the on-call rota in a single table. Each engineer may name a
+  colleague from the same table as their backup, who is paged when they do not acknowledge an alert.
+  When someone leaves the rota their row is deleted, but nobody updates the rows that pointed at
+  them, so some `backup_id` values refer to engineers who no longer exist.
+
+  Table `engineers`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | handle | VARCHAR(40) | unique chat handle, lower-case letters only |
+  | backup_id | INTEGER | `id` of the backup engineer in this same table; NULL when none is set; not enforced by a foreign key |
+
+  Return one row for **every** engineer with the columns `handle` and `backup_handle` (the handle of
+  their backup). `backup_handle` is NULL when `backup_id` is NULL or when it refers to an `id` that is
+  not in the table. An engineer may name themselves as backup; then `backup_handle` is their own
+  handle. Order the result by `handle` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  engineers
+  +----+---------+-----------+
+  | id | handle  | backup_id |
+  +----+---------+-----------+
+  | 1  | kestrel | 3         |
+  | 2  | osprey  | 1         |
+  | 3  | falcon  | NULL      |
+  | 4  | merlin  | 9         |
+  +----+---------+-----------+
+
+  Output
+  +---------+---------------+
+  | handle  | backup_handle |
+  +---------+---------------+
+  | falcon  | NULL          |
+  | kestrel | falcon        |
+  | merlin  | NULL          |
+  | osprey  | kestrel       |
+  +---------+---------------+
+  falcon has no backup. merlin's backup_id 9 refers to an engineer who has left.
+  ```
+
+  ### Example 2
+  ```
+  engineers
+  +----+--------+-----------+
+  | id | handle | backup_id |
+  +----+--------+-----------+
+  | 1  | heron  | 2         |
+  | 2  | egret  | 1         |
+  +----+--------+-----------+
+
+  Output
+  +--------+---------------+
+  | handle | backup_handle |
+  +--------+---------------+
+  | egret  | heron         |
+  | heron  | egret         |
+  +--------+---------------+
+  ```
+
+  ### Constraints
+  - At most `10^4` engineers; the table may be empty.
+  - Several engineers may share the same backup, and backups may form cycles.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return handle and backup_handle (NULL when missing) for every engineer, ordered by handle.
+    SELECT e.handle, b.handle AS backup_handle
+    FROM engineers e
+    JOIN engineers b ON b.id = e.backup_id
+    ORDER BY e.handle;
+reference_solutions:
+  sql: |
+    SELECT e.handle, b.handle AS backup_handle
+    FROM engineers e
+    LEFT JOIN engineers b ON b.id = e.backup_id
+    ORDER BY e.handle;
+sql_setup: |
+  CREATE TABLE engineers (
+    id INTEGER PRIMARY KEY,
+    handle VARCHAR(40) NOT NULL UNIQUE,
+    backup_id INTEGER
+  );
+tests:
+  - id: t1
+    description: "Example 1 - normal backups, NULL backup_id and a dangling backup_id"
+    ordered: true
+    setup_sql: |
+      INSERT INTO engineers (id, handle, backup_id) VALUES
+        (1, 'kestrel', 3), (2, 'osprey', 1), (3, 'falcon', NULL), (4, 'merlin', 9);
+    expected_rows: [["falcon", null], ["kestrel", "falcon"], ["merlin", null], ["osprey", "kestrel"]]
+  - id: t2
+    description: "Example 2 - two engineers back each other up"
+    ordered: true
+    setup_sql: |
+      INSERT INTO engineers (id, handle, backup_id) VALUES (1, 'heron', 2), (2, 'egret', 1);
+    expected_rows: [["egret", "heron"], ["heron", "egret"]]
+  - id: t3
+    hidden: true
+    description: "Empty table - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single engineer without a backup"
+    ordered: true
+    setup_sql: |
+      INSERT INTO engineers (id, handle, backup_id) VALUES (5, 'wren', NULL);
+    expected_rows: [["wren", null]]
+  - id: t5
+    hidden: true
+    description: "Self-backup returns the engineer's own handle"
+    ordered: true
+    setup_sql: |
+      INSERT INTO engineers (id, handle, backup_id) VALUES (1, 'robin', 1), (2, 'lark', NULL);
+    expected_rows: [["lark", null], ["robin", "robin"]]
+  - id: t6
+    hidden: true
+    description: "Every backup_id is dangling - inner join would return nothing"
+    ordered: true
+    setup_sql: |
+      INSERT INTO engineers (id, handle, backup_id) VALUES
+        (1, 'swift', 40), (2, 'finch', 41), (3, 'plover', 42);
+    expected_rows: [["finch", null], ["plover", null], ["swift", null]]
+  - id: t7
+    hidden: true
+    description: "Many engineers share one backup; ordering by handle, not id"
+    ordered: true
+    setup_sql: |
+      INSERT INTO engineers (id, handle, backup_id) VALUES
+        (10, 'zander', 30), (20, 'albatross', 30), (30, 'condor', NULL), (40, 'magpie', 30), (50, 'bittern', 30);
+    expected_rows: [["albatross", "condor"], ["bittern", "condor"], ["condor", null], ["magpie", "condor"], ["zander", "condor"]]
+  - id: t8
+    hidden: true
+    description: "Three-way cycle plus a chain - only direct backups are reported"
+    ordered: true
+    setup_sql: |
+      INSERT INTO engineers (id, handle, backup_id) VALUES
+        (1, 'auk', 2), (2, 'crane', 3), (3, 'dunlin', 1), (4, 'gannet', 1), (5, 'ibis', 4);
+    expected_rows: [["auk", "crane"], ["crane", "dunlin"], ["dunlin", "auk"], ["gannet", "auk"], ["ibis", "gannet"]]
+  - id: t9
+    hidden: true
+    description: "backup_id pointing at a deleted row while ids have gaps"
+    ordered: true
+    setup_sql: |
+      INSERT INTO engineers (id, handle, backup_id) VALUES
+        (2, 'shrike', 7), (4, 'tern', 2), (6, 'puffin', 3), (8, 'vireo', 6);
+    expected_rows: [["puffin", null], ["shrike", null], ["tern", "shrike"], ["vireo", "puffin"]]
+expected_concepts:
+  - "self-join with table aliases"
+  - "LEFT JOIN to keep rows without a match"
+  - "dangling references without a foreign key"
+  - "deterministic ORDER BY"
+optimal_complexity: {time: "O(n log n) for the sort, with a primary-key lookup per engineer", space: "O(n) for the result"}
+rubric:
+  excellent: "Writes a self LEFT JOIN with clear aliases, explains that it covers both NULL and dangling backup ids, orders by handle and suggests a foreign key with ON DELETE SET NULL to prevent dangling ids."
+  good: "Correct query after a hint that an inner join drops engineers without a resolvable backup."
+  weak: "Uses an inner join, joins in the wrong direction (returning who backs up whom reversed), or uses ambiguous column names."
+  criteria:
+    correctness: "All tests pass, including NULL and dangling backup ids, self-backups and cycles."
+    efficiency: "One join on the primary key; no correlated lookups needed."
+    code_quality: "Distinct aliases for the engineer and the backup row and the exact output column names."
+    edge_cases: "Empty table, all-dangling ids, self-references, shared backups and cycles."
+    communication: "Explains the join direction and how referential integrity would change the data."
+hints:
+  - "The backup is just another row of the same table, so you need to look at the table twice: once as the engineer and once as the backup."
+  - "An inner join keeps only engineers whose backup row exists; engineers with no backup or a backup who has left would vanish, so use a join that keeps them."
+  - "Give the table two aliases, left join the backup alias on its id equal to the engineer's backup_id, select the engineer's handle and the backup alias's handle as backup_handle, and order by the engineer's handle."
+followups:
+  - "How would you list each engineer's backup's backup as a third column?"
+  - "Which constraint would stop backup_id from pointing at deleted engineers, and what should happen on delete?"
+  - "How would you find engineers who are nobody's backup?"
+common_errors:
+  - "Using an inner join, which drops engineers with a NULL or dangling backup_id."
+  - "Joining on b.backup_id = e.id, which reports who each engineer backs up instead of their backup."
+  - "Selecting an unqualified handle column, which is ambiguous in a self-join."

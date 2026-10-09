@@ -1,0 +1,122 @@
+version: 1
+slug: retry_backoff_attempt_times
+title: Retry Schedule with Capped Exponential Backoff
+difficulty: easy
+competency_keys: [algorithms, problem_solving, code_quality]
+role_tags: [backend, sre, platform, mobile]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Retry Schedule with Capped Exponential Backoff
+
+  A payments client calls a flaky downstream service and retries with **capped exponential backoff**.
+  To check the retry policy against the service's timeout budget, compute the exact moments at which
+  the client would start each attempt if **every attempt fails**.
+
+  - Attempt 1 starts at time `0`. Every attempt takes `attempt_ms` milliseconds before it fails.
+  - After failed attempt `k` (1-based), the client waits `min(cap_ms, base_ms * 2^(k-1))` milliseconds
+    and then starts attempt `k + 1`. So the delays are `base_ms`, `2 * base_ms`, `4 * base_ms`, ...
+    until they reach `cap_ms`, and `cap_ms` from then on.
+  - The client makes at most `max_attempts` attempts, and it never **starts** an attempt later than
+    `deadline_ms` (an attempt starting exactly at `deadline_ms` is still made).
+
+  Return the start times of all attempts that are made, in order. Attempt 1 is always made.
+
+  With many attempts the uncapped value `base_ms * 2^(k-1)` grows far beyond 64 bits, so compute the
+  delays without overflowing.
+
+  ### Example 1
+  ```
+  Input:  base_ms = 100, cap_ms = 1000, attempt_ms = 50, max_attempts = 6, deadline_ms = 10000
+  Output: [0, 150, 400, 850, 1700, 2750]
+  Explanation: delays are 100, 200, 400, 800 and then the cap 1000; each gap adds the 50 ms attempt.
+  ```
+
+  ### Example 2
+  ```
+  Input:  base_ms = 500, cap_ms = 4000, attempt_ms = 200, max_attempts = 10, deadline_ms = 3000
+  Output: [0, 700, 1900]
+  Explanation: the fourth attempt would start at 1900 + 200 + 2000 = 4100, after the deadline.
+  ```
+
+  ### Constraints
+  - `1 <= base_ms <= cap_ms <= 10^12`
+  - `0 <= attempt_ms <= 10^9`
+  - `1 <= max_attempts <= 1000`
+  - `0 <= deadline_ms <= 10^15`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: retry_attempt_times
+  params:
+    - {name: base_ms, type: long}
+    - {name: cap_ms, type: long}
+    - {name: attempt_ms, type: long}
+    - {name: max_attempts, type: int}
+    - {name: deadline_ms, type: long}
+  return_type: "long[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def retry_attempt_times(base_ms: int, cap_ms: int, attempt_ms: int, max_attempts: int,
+                            deadline_ms: int) -> list[int]:
+        starts = [0]
+        delay = min(base_ms, cap_ms)
+        while len(starts) < max_attempts:
+            next_start = starts[-1] + attempt_ms + delay
+            if next_start > deadline_ms:
+                break
+            starts.append(next_start)
+            # Double, but never past the cap; delay <= cap_ms <= 10^12 so this cannot overflow.
+            delay = min(cap_ms, delay * 2)
+        return starts
+  javascript: |
+    function retryAttemptTimes(baseMs, capMs, attemptMs, maxAttempts, deadlineMs) {
+      const starts = [0];
+      let delay = Math.min(baseMs, capMs);
+      while (starts.length < maxAttempts) {
+        const nextStart = starts[starts.length - 1] + attemptMs + delay;
+        if (nextStart > deadlineMs) break;
+        starts.push(nextStart);
+        delay = Math.min(capMs, delay * 2); // stays <= capMs, well inside exact double range
+      }
+      return starts;
+    }
+tests:
+  - {id: t1, args: [100, 1000, 50, 6, 10000], expected: [0, 150, 400, 850, 1700, 2750], description: "Example 1"}
+  - {id: t2, args: [500, 4000, 200, 10, 3000], expected: [0, 700, 1900], description: "Example 2 - deadline stops the schedule"}
+  - {id: t3, hidden: true, args: [100, 1000, 50, 1, 10000], expected: [0], description: "max_attempts is 1 - only the first attempt"}
+  - {id: t4, hidden: true, args: [100, 1000, 50, 5, 0], expected: [0], description: "Deadline 0 - the first attempt is still made"}
+  - {id: t5, hidden: true, args: [100, 1000, 0, 5, 700], expected: [0, 100, 300, 700], description: "Zero attempt time and an attempt starting exactly at the deadline is included"}
+  - {id: t6, hidden: true, args: [250, 250, 10, 6, 100000], expected: [0, 260, 520, 780, 1040, 1300], description: "base equals cap - constant delay from the start"}
+  - {id: t7, hidden: true, args: [3, 1000000, 1, 12, 1000000000], expected: [0, 4, 11, 24, 49, 98, 195, 388, 773, 1542, 3079, 6152], description: "Cap never reached - pure doubling"}
+  - {id: t8, hidden: true, args: [1000000000, 1000000000000, 1000000000, 70, 1000000000000000], expected: [0, 2000000000, 5000000000, 10000000000, 19000000000, 36000000000, 69000000000, 134000000000, 263000000000, 520000000000, 1033000000000, 2034000000000, 3035000000000, 4036000000000, 5037000000000, 6038000000000, 7039000000000, 8040000000000, 9041000000000, 10042000000000, 11043000000000, 12044000000000, 13045000000000, 14046000000000, 15047000000000, 16048000000000, 17049000000000, 18050000000000, 19051000000000, 20052000000000, 21053000000000, 22054000000000, 23055000000000, 24056000000000, 25057000000000, 26058000000000, 27059000000000, 28060000000000, 29061000000000, 30062000000000, 31063000000000, 32064000000000, 33065000000000, 34066000000000, 35067000000000, 36068000000000, 37069000000000, 38070000000000, 39071000000000, 40072000000000, 41073000000000, 42074000000000, 43075000000000, 44076000000000, 45077000000000, 46078000000000, 47079000000000, 48080000000000, 49081000000000, 50082000000000, 51083000000000, 52084000000000, 53085000000000, 54086000000000, 55087000000000, 56088000000000, 57089000000000, 58090000000000, 59091000000000, 60092000000000], description: "70 attempts - uncapped delay would overflow 64-bit, start times exceed 32-bit"}
+  - {id: t9, hidden: true, args: [1, 1000000000000, 0, 1000, 100000000000000], expected: [0, 1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, 2047, 4095, 8191, 16383, 32767, 65535, 131071, 262143, 524287, 1048575, 2097151, 4194303, 8388607, 16777215, 33554431, 67108863, 134217727, 268435455, 536870911, 1073741823, 2147483647, 4294967295, 8589934591, 17179869183, 34359738367, 68719476735, 137438953471, 274877906943, 549755813887, 1099511627775, 2099511627775, 3099511627775, 4099511627775, 5099511627775, 6099511627775, 7099511627775, 8099511627775, 9099511627775, 10099511627775, 11099511627775, 12099511627775, 13099511627775, 14099511627775, 15099511627775, 16099511627775, 17099511627775, 18099511627775, 19099511627775, 20099511627775, 21099511627775, 22099511627775, 23099511627775, 24099511627775, 25099511627775, 26099511627775, 27099511627775, 28099511627775, 29099511627775, 30099511627775, 31099511627775, 32099511627775, 33099511627775, 34099511627775, 35099511627775, 36099511627775, 37099511627775, 38099511627775, 39099511627775, 40099511627775, 41099511627775, 42099511627775, 43099511627775, 44099511627775, 45099511627775, 46099511627775, 47099511627775, 48099511627775, 49099511627775, 50099511627775, 51099511627775, 52099511627775, 53099511627775, 54099511627775, 55099511627775, 56099511627775, 57099511627775, 58099511627775, 59099511627775, 60099511627775, 61099511627775, 62099511627775, 63099511627775, 64099511627775, 65099511627775, 66099511627775, 67099511627775, 68099511627775, 69099511627775, 70099511627775, 71099511627775, 72099511627775, 73099511627775, 74099511627775, 75099511627775, 76099511627775, 77099511627775, 78099511627775, 79099511627775, 80099511627775, 81099511627775, 82099511627775, 83099511627775, 84099511627775, 85099511627775, 86099511627775, 87099511627775, 88099511627775, 89099511627775, 90099511627775, 91099511627775, 92099511627775, 93099511627775, 94099511627775, 95099511627775, 96099511627775, 97099511627775, 98099511627775, 99099511627775], description: "1 ms base doubles about 40 times to the cap; with 1000 attempts allowed the deadline cuts the capped tail"}
+  - {id: t10, hidden: true, args: [7, 20, 5, 8, 76], expected: [0, 12, 31, 56], description: "Deadline falls between two capped attempts - off-by-one on the comparison"}
+expected_concepts:
+  - simulation with a running delay
+  - capping before doubling to avoid overflow
+  - 64-bit arithmetic for timestamps
+  - inclusive deadline and attempt-count stopping conditions
+optimal_complexity: {time: O(max_attempts), space: O(max_attempts) for the output}
+rubric:
+  excellent: Simulates with a running delay that is doubled and immediately capped, keeps every timestamp in 64-bit integers, checks the deadline before adding an attempt and explains why computing base times 2^(k-1) directly overflows.
+  good: Correct schedule with a small boundary slip (deadline inclusive or the attempt count) fixed after running the tests.
+  weak: Computes base times 2^(k-1) with a shift or power that overflows, forgets the attempt duration, or adds an attempt that starts after the deadline.
+  criteria:
+    correctness: All tests pass, including deadline 0, the inclusive deadline boundary and 70 attempts with a huge uncapped delay.
+    efficiency: Linear in the number of attempts made.
+    code_quality: Clear names for the running delay and next start; the two stop conditions are easy to read.
+    edge_cases: Single attempt, base equal to cap, zero attempt time and a cap that is never reached.
+    communication: Explains the overflow risk and why jitter is usually added in production.
+hints:
+  - Walk the attempts one at a time - each start time is the previous start plus the attempt duration plus the current delay.
+  - Keep the current delay in a variable instead of recomputing a power of two each time, and decide where the cap and the deadline checks belong.
+  - Start with the list containing 0 and a delay equal to the base; while fewer than max_attempts starts exist, compute the next start, stop if it exceeds the deadline, otherwise record it and set the delay to the minimum of the cap and twice the delay.
+followups:
+  - How would you add full jitter so that many clients do not retry in lockstep?
+  - How would you pick base and cap values for a dependency with a 30-second timeout budget?
+  - When should a client stop retrying regardless of the backoff policy (for example non-retryable status codes)?
+common_errors:
+  - Computing base_ms shifted left by k - 1 directly, which overflows 64-bit integers after a few dozen attempts.
+  - Forgetting to add the attempt duration between attempts.
+  - Treating the deadline as exclusive, or checking it after appending the attempt.
+  - Using 32-bit integers for start times that exceed two billion milliseconds.

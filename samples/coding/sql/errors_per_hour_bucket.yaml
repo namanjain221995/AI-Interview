@@ -1,0 +1,263 @@
+version: 1
+slug: errors_per_hour_bucket
+title: Errors per Hour
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [sre, backend, support_engineer]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Errors per Hour
+
+  After a noisy deployment on **4 May 2026**, the on-call engineer wants to see when the errors happened
+  during that day. Application logs are collected into one table.
+
+  Table `app_logs`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | service | VARCHAR(40) | service that wrote the line (not needed for this report) |
+  | level | VARCHAR(10) | one of `DEBUG`, `INFO`, `WARN`, `ERROR`, always upper case |
+  | logged_at | TEXT | UTC timestamp in the fixed format `YYYY-MM-DD HH:MM:SS` |
+
+  Consider only rows that have level `ERROR` **and** whose date (the first 10 characters of `logged_at`)
+  is `2026-05-04`. The hour of a row is the two-character text at positions 12-13 of `logged_at`, i.e.
+  `SUBSTR(logged_at, 12, 2)` (for example `'09'`).
+
+  Return one row per hour of that day with **at least one error**, with columns `hour` (the two-character
+  text, keeping the leading zero) and `error_count`. Order the rows by `hour` ascending. Hours without
+  errors are not listed; rows from other days and other levels are ignored.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite (use string functions, not date functions).
+
+  ### Example 1
+  ```
+  app_logs
+  +----+----------+-------+---------------------+
+  | id | service  | level | logged_at           |
+  +----+----------+-------+---------------------+
+  | 1  | checkout | INFO  | 2026-05-04 09:00:12 |
+  | 2  | checkout | ERROR | 2026-05-04 09:14:55 |
+  | 3  | search   | ERROR | 2026-05-04 09:59:59 |
+  | 4  | auth     | WARN  | 2026-05-04 10:02:00 |
+  | 5  | search   | ERROR | 2026-05-04 14:30:00 |
+  | 6  | checkout | ERROR | 2026-05-03 09:20:00 |
+  | 7  | auth     | ERROR | 2026-05-04 10:00:00 |
+  +----+----------+-------+---------------------+
+
+  Output
+  +------+-------------+
+  | hour | error_count |
+  +------+-------------+
+  | 09   | 2           |
+  | 10   | 1           |
+  | 14   | 1           |
+  +------+-------------+
+  Row 6 is from 3 May and row 4 is a WARN, so neither is counted. 09:59:59 still belongs to hour '09'.
+  ```
+
+  ### Example 2
+  ```
+  app_logs
+  +----+---------+-------+---------------------+
+  | id | service | level | logged_at           |
+  +----+---------+-------+---------------------+
+  | 1  | auth    | ERROR | 2026-05-03 23:59:59 |
+  | 2  | auth    | ERROR | 2026-05-04 00:00:00 |
+  | 3  | search  | ERROR | 2026-05-04 23:59:59 |
+  | 4  | search  | ERROR | 2026-05-05 00:00:00 |
+  +----+---------+-------+---------------------+
+
+  Output
+  +------+-------------+
+  | hour | error_count |
+  +------+-------------+
+  | 00   | 1           |
+  | 23   | 1           |
+  +------+-------------+
+  Only rows 2 and 3 fall on 2026-05-04. The hour keeps its leading zero: '00', not 0.
+  ```
+
+  ### Constraints
+  - `0 <= rows in app_logs <= 10^6`
+  - Every `logged_at` is a valid timestamp in the format `YYYY-MM-DD HH:MM:SS`; rows may be stored in any order.
+  - The table can contain any number of days, including none for 2026-05-04.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return hour ('00'-'23') and error_count for ERROR rows logged on 2026-05-04, ordered by hour.
+    SELECT SUBSTR(logged_at, 12, 2) AS hour, COUNT(*) AS error_count
+    FROM app_logs
+    GROUP BY SUBSTR(logged_at, 12, 2);
+reference_solutions:
+  sql: |
+    SELECT SUBSTR(logged_at, 12, 2) AS hour,
+           COUNT(*) AS error_count
+    FROM app_logs
+    WHERE level = 'ERROR'
+      AND SUBSTR(logged_at, 1, 10) = '2026-05-04'
+    GROUP BY SUBSTR(logged_at, 12, 2)
+    ORDER BY hour;
+sql_setup: |
+  CREATE TABLE app_logs (
+    id INTEGER PRIMARY KEY,
+    service VARCHAR(40) NOT NULL,
+    level VARCHAR(10) NOT NULL,
+    logged_at TEXT NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - only ERROR rows of 2026-05-04 counted; WARN and other days ignored"
+    setup_sql: |
+      INSERT INTO app_logs (id, service, level, logged_at) VALUES
+        (1, 'checkout', 'INFO', '2026-05-04 09:00:12'), (2, 'checkout', 'ERROR', '2026-05-04 09:14:55'), (3, 'search', 'ERROR', '2026-05-04 09:59:59'), (4, 'auth', 'WARN', '2026-05-04 10:02:00'), (5, 'search', 'ERROR', '2026-05-04 14:30:00'),
+        (6, 'checkout', 'ERROR', '2026-05-03 09:20:00'), (7, 'auth', 'ERROR', '2026-05-04 10:00:00');
+    expected_rows: [["09", 2], ["10", 1], ["14", 1]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - first and last second of the day count; neighbouring midnights do not"
+    setup_sql: |
+      INSERT INTO app_logs (id, service, level, logged_at) VALUES
+        (1, 'auth', 'ERROR', '2026-05-03 23:59:59'), (2, 'auth', 'ERROR', '2026-05-04 00:00:00'), (3, 'search', 'ERROR', '2026-05-04 23:59:59'), (4, 'search', 'ERROR', '2026-05-05 00:00:00');
+    expected_rows: [["00", 1], ["23", 1]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Errors only on other days and only non-error levels on the target day - no rows"
+    setup_sql: |
+      INSERT INTO app_logs (id, service, level, logged_at) VALUES
+        (1, 'a', 'ERROR', '2026-05-03 12:00:00'), (2, 'a', 'ERROR', '2026-06-04 12:00:00'), (3, 'a', 'ERROR', '2025-05-04 12:00:00'), (4, 'a', 'INFO', '2026-05-04 12:00:00'), (5, 'a', 'WARN', '2026-05-04 13:00:00'),
+        (6, 'a', 'DEBUG', '2026-05-04 14:00:00');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Many errors in one hour plus same hour on other days (must not be merged across days)"
+    setup_sql: |
+      INSERT INTO app_logs (id, service, level, logged_at) VALUES
+        (1, 'checkout', 'ERROR', '2026-05-04 08:01:00'), (2, 'checkout', 'ERROR', '2026-05-04 08:05:00'), (3, 'checkout', 'ERROR', '2026-05-04 08:09:00'), (4, 'checkout', 'ERROR', '2026-05-04 08:30:00'), (5, 'checkout', 'ERROR', '2026-05-04 08:59:00'),
+        (6, 'checkout', 'ERROR', '2026-05-03 08:10:00'), (7, 'checkout', 'ERROR', '2026-05-05 08:10:00'), (8, 'checkout', 'ERROR', '2026-05-05 08:20:00');
+    expected_rows: [["08", 5]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Rows inserted out of order - hours sorted as two-character text '02' < '10' < '21'"
+    setup_sql: |
+      INSERT INTO app_logs (id, service, level, logged_at) VALUES
+        (1, 'a', 'ERROR', '2026-05-04 21:00:00'), (2, 'a', 'ERROR', '2026-05-04 02:10:00'), (3, 'a', 'ERROR', '2026-05-04 10:00:00'), (4, 'a', 'ERROR', '2026-05-04 02:20:00'), (5, 'a', 'INFO', '2026-05-04 03:00:00');
+    expected_rows: [["02", 2], ["10", 1], ["21", 1]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Errors in all 24 hours of the day"
+    setup_sql: |
+      INSERT INTO app_logs (id, service, level, logged_at) VALUES
+        (1, 'svc', 'ERROR', '2026-05-04 00:00:00'), (2, 'svc', 'ERROR', '2026-05-04 01:07:00'), (3, 'svc', 'ERROR', '2026-05-04 02:14:00'), (4, 'svc', 'ERROR', '2026-05-04 03:21:00'), (5, 'svc', 'ERROR', '2026-05-04 04:28:00'),
+        (6, 'svc', 'ERROR', '2026-05-04 05:35:00'), (7, 'svc', 'ERROR', '2026-05-04 06:42:00'), (8, 'svc', 'ERROR', '2026-05-04 07:49:00'), (9, 'svc', 'ERROR', '2026-05-04 08:56:00'), (10, 'svc', 'ERROR', '2026-05-04 09:03:00'),
+        (11, 'svc', 'ERROR', '2026-05-04 10:10:00'), (12, 'svc', 'ERROR', '2026-05-04 11:17:00'), (13, 'svc', 'ERROR', '2026-05-04 12:24:00'), (14, 'svc', 'ERROR', '2026-05-04 13:31:00'), (15, 'svc', 'ERROR', '2026-05-04 14:38:00'),
+        (16, 'svc', 'ERROR', '2026-05-04 15:45:00'), (17, 'svc', 'ERROR', '2026-05-04 16:52:00'), (18, 'svc', 'ERROR', '2026-05-04 17:59:00'), (19, 'svc', 'ERROR', '2026-05-04 18:06:00'), (20, 'svc', 'ERROR', '2026-05-04 19:13:00'),
+        (21, 'svc', 'ERROR', '2026-05-04 20:20:00'), (22, 'svc', 'ERROR', '2026-05-04 21:27:00'), (23, 'svc', 'ERROR', '2026-05-04 22:34:00'), (24, 'svc', 'ERROR', '2026-05-04 23:41:00'), (25, 'svc', 'ERROR', '2026-05-04 23:00:00');
+    expected_rows: [["00", 1], ["01", 1], ["02", 1], ["03", 1], ["04", 1], ["05", 1], ["06", 1], ["07", 1], ["08", 1], ["09", 1], ["10", 1], ["11", 1], ["12", 1], ["13", 1], ["14", 1], ["15", 1], ["16", 1], ["17", 1], ["18", 1], ["19", 1], ["20", 1], ["21", 1], ["22", 1], ["23", 2]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Stress - 300 rows over three days and four levels"
+    setup_sql: |
+      INSERT INTO app_logs (id, service, level, logged_at) VALUES
+        (1, 'search', 'ERROR', '2026-05-05 08:11:49'), (2, 'checkout', 'ERROR', '2026-05-04 01:24:52'), (3, 'search', 'ERROR', '2026-05-05 08:40:54'), (4, 'checkout', 'ERROR', '2026-05-05 02:08:52'), (5, 'auth', 'ERROR', '2026-05-04 02:35:51'),
+        (6, 'auth', 'INFO', '2026-05-04 09:40:04'), (7, 'search', 'DEBUG', '2026-05-04 10:40:38'), (8, 'auth', 'ERROR', '2026-05-04 22:58:21'), (9, 'checkout', 'INFO', '2026-05-03 10:57:48'), (10, 'search', 'ERROR', '2026-05-04 00:37:49'),
+        (11, 'auth', 'INFO', '2026-05-03 10:13:15'), (12, 'search', 'INFO', '2026-05-04 00:12:47'), (13, 'search', 'WARN', '2026-05-04 08:20:10'), (14, 'auth', 'ERROR', '2026-05-04 01:50:17'), (15, 'search', 'DEBUG', '2026-05-04 00:01:29'),
+        (16, 'auth', 'WARN', '2026-05-04 13:12:19'), (17, 'auth', 'WARN', '2026-05-04 01:58:31'), (18, 'auth', 'INFO', '2026-05-03 18:08:25'), (19, 'auth', 'ERROR', '2026-05-05 23:52:25'), (20, 'checkout', 'ERROR', '2026-05-04 07:43:07'),
+        (21, 'auth', 'ERROR', '2026-05-04 00:19:51'), (22, 'search', 'DEBUG', '2026-05-04 09:05:44'), (23, 'search', 'WARN', '2026-05-04 08:30:04'), (24, 'checkout', 'WARN', '2026-05-03 14:14:34'), (25, 'search', 'INFO', '2026-05-04 18:03:46'),
+        (26, 'search', 'INFO', '2026-05-05 18:14:35'), (27, 'checkout', 'WARN', '2026-05-05 14:29:48'), (28, 'checkout', 'INFO', '2026-05-04 07:23:38'), (29, 'auth', 'INFO', '2026-05-03 23:27:03'), (30, 'auth', 'INFO', '2026-05-04 18:14:39'),
+        (31, 'checkout', 'INFO', '2026-05-04 09:19:27'), (32, 'auth', 'INFO', '2026-05-04 13:06:33'), (33, 'auth', 'ERROR', '2026-05-03 07:35:48'), (34, 'auth', 'INFO', '2026-05-04 13:08:34'), (35, 'search', 'DEBUG', '2026-05-05 13:11:00'),
+        (36, 'checkout', 'WARN', '2026-05-05 09:03:17'), (37, 'checkout', 'WARN', '2026-05-03 14:01:07'), (38, 'auth', 'ERROR', '2026-05-05 23:13:49'), (39, 'checkout', 'INFO', '2026-05-03 00:55:41'), (40, 'search', 'ERROR', '2026-05-03 10:03:47'),
+        (41, 'search', 'ERROR', '2026-05-03 07:17:22'), (42, 'search', 'INFO', '2026-05-04 14:25:58'), (43, 'search', 'WARN', '2026-05-03 14:05:48'), (44, 'search', 'WARN', '2026-05-03 22:20:20'), (45, 'checkout', 'DEBUG', '2026-05-03 09:59:31'),
+        (46, 'checkout', 'DEBUG', '2026-05-04 13:04:43'), (47, 'search', 'WARN', '2026-05-05 08:23:08'), (48, 'auth', 'ERROR', '2026-05-04 14:09:50'), (49, 'auth', 'INFO', '2026-05-04 01:57:24'), (50, 'checkout', 'INFO', '2026-05-04 22:37:34'),
+        (51, 'search', 'ERROR', '2026-05-04 13:59:26'), (52, 'auth', 'INFO', '2026-05-03 18:09:49'), (53, 'auth', 'INFO', '2026-05-04 10:48:28'), (54, 'search', 'ERROR', '2026-05-04 08:16:32'), (55, 'checkout', 'DEBUG', '2026-05-04 09:21:31'),
+        (56, 'auth', 'DEBUG', '2026-05-03 10:24:15'), (57, 'checkout', 'ERROR', '2026-05-04 01:18:21'), (58, 'checkout', 'DEBUG', '2026-05-05 09:47:17'), (59, 'auth', 'ERROR', '2026-05-04 10:32:40'), (60, 'auth', 'DEBUG', '2026-05-04 10:40:49'),
+        (61, 'auth', 'INFO', '2026-05-04 07:55:23'), (62, 'checkout', 'INFO', '2026-05-05 10:19:25'), (63, 'auth', 'DEBUG', '2026-05-04 09:37:03'), (64, 'search', 'WARN', '2026-05-04 22:27:39'), (65, 'checkout', 'INFO', '2026-05-04 23:48:26'),
+        (66, 'search', 'INFO', '2026-05-04 07:47:56'), (67, 'search', 'WARN', '2026-05-04 07:04:29'), (68, 'checkout', 'WARN', '2026-05-04 09:37:30'), (69, 'checkout', 'DEBUG', '2026-05-05 22:56:27'), (70, 'search', 'WARN', '2026-05-05 07:31:21'),
+        (71, 'checkout', 'ERROR', '2026-05-04 09:54:11'), (72, 'search', 'INFO', '2026-05-05 00:55:41'), (73, 'checkout', 'ERROR', '2026-05-05 01:31:01'), (74, 'checkout', 'DEBUG', '2026-05-04 13:16:09'), (75, 'checkout', 'INFO', '2026-05-03 01:05:57'),
+        (76, 'auth', 'WARN', '2026-05-04 18:19:41'), (77, 'auth', 'INFO', '2026-05-05 14:02:49'), (78, 'auth', 'INFO', '2026-05-03 23:39:58'), (79, 'search', 'DEBUG', '2026-05-03 23:39:22'), (80, 'checkout', 'WARN', '2026-05-05 07:02:23'),
+        (81, 'search', 'INFO', '2026-05-04 13:23:14'), (82, 'checkout', 'ERROR', '2026-05-03 18:22:33'), (83, 'auth', 'DEBUG', '2026-05-04 10:05:02'), (84, 'search', 'WARN', '2026-05-05 01:09:41'), (85, 'checkout', 'ERROR', '2026-05-04 14:43:56'),
+        (86, 'checkout', 'ERROR', '2026-05-04 00:49:06'), (87, 'auth', 'INFO', '2026-05-04 13:19:19'), (88, 'checkout', 'DEBUG', '2026-05-04 14:24:00'), (89, 'auth', 'ERROR', '2026-05-05 01:48:20'), (90, 'checkout', 'ERROR', '2026-05-05 00:34:41'),
+        (91, 'checkout', 'INFO', '2026-05-05 08:46:55'), (92, 'auth', 'WARN', '2026-05-04 01:02:54'), (93, 'search', 'WARN', '2026-05-04 18:47:26'), (94, 'search', 'ERROR', '2026-05-03 01:51:03'), (95, 'auth', 'INFO', '2026-05-05 14:16:36'),
+        (96, 'search', 'INFO', '2026-05-04 18:38:08'), (97, 'auth', 'ERROR', '2026-05-04 09:20:30'), (98, 'checkout', 'WARN', '2026-05-04 07:48:33'), (99, 'search', 'INFO', '2026-05-05 07:52:27'), (100, 'checkout', 'ERROR', '2026-05-03 07:00:16'),
+        (101, 'search', 'ERROR', '2026-05-03 08:53:27'), (102, 'auth', 'DEBUG', '2026-05-05 23:33:49'), (103, 'search', 'WARN', '2026-05-03 00:44:37'), (104, 'search', 'ERROR', '2026-05-04 22:37:38'), (105, 'search', 'INFO', '2026-05-04 18:36:28'),
+        (106, 'checkout', 'DEBUG', '2026-05-05 01:29:32'), (107, 'auth', 'INFO', '2026-05-04 23:00:56'), (108, 'auth', 'INFO', '2026-05-03 02:44:25'), (109, 'checkout', 'INFO', '2026-05-03 08:45:01'), (110, 'checkout', 'DEBUG', '2026-05-05 09:27:44'),
+        (111, 'search', 'WARN', '2026-05-04 08:30:05'), (112, 'checkout', 'INFO', '2026-05-04 01:19:06'), (113, 'search', 'WARN', '2026-05-04 14:20:28'), (114, 'search', 'INFO', '2026-05-04 14:51:57'), (115, 'auth', 'INFO', '2026-05-04 23:13:13'),
+        (116, 'auth', 'INFO', '2026-05-03 00:02:12'), (117, 'auth', 'INFO', '2026-05-04 09:11:10'), (118, 'checkout', 'ERROR', '2026-05-03 13:45:48'), (119, 'auth', 'INFO', '2026-05-05 10:34:29'), (120, 'auth', 'DEBUG', '2026-05-03 00:10:18'),
+        (121, 'search', 'DEBUG', '2026-05-05 22:11:51'), (122, 'auth', 'INFO', '2026-05-04 23:54:21'), (123, 'search', 'INFO', '2026-05-04 13:52:18'), (124, 'auth', 'INFO', '2026-05-05 07:27:58'), (125, 'auth', 'INFO', '2026-05-04 13:03:45'),
+        (126, 'search', 'ERROR', '2026-05-04 02:02:00'), (127, 'auth', 'DEBUG', '2026-05-04 01:07:32'), (128, 'search', 'ERROR', '2026-05-04 01:10:31'), (129, 'search', 'ERROR', '2026-05-05 09:52:54'), (130, 'search', 'INFO', '2026-05-05 07:01:50'),
+        (131, 'checkout', 'ERROR', '2026-05-04 14:49:33'), (132, 'search', 'INFO', '2026-05-03 10:17:37'), (133, 'search', 'INFO', '2026-05-04 14:09:42'), (134, 'auth', 'INFO', '2026-05-04 08:53:30'), (135, 'auth', 'INFO', '2026-05-04 13:00:33'),
+        (136, 'search', 'ERROR', '2026-05-04 10:00:13'), (137, 'auth', 'INFO', '2026-05-03 13:51:40'), (138, 'auth', 'INFO', '2026-05-04 08:19:44'), (139, 'search', 'INFO', '2026-05-04 00:04:48'), (140, 'auth', 'INFO', '2026-05-05 00:22:55'),
+        (141, 'search', 'WARN', '2026-05-04 18:17:58'), (142, 'checkout', 'ERROR', '2026-05-04 18:00:16'), (143, 'auth', 'WARN', '2026-05-04 00:14:35'), (144, 'search', 'INFO', '2026-05-04 22:51:05'), (145, 'auth', 'INFO', '2026-05-04 00:51:58'),
+        (146, 'auth', 'WARN', '2026-05-04 14:00:23'), (147, 'auth', 'INFO', '2026-05-05 01:56:42'), (148, 'auth', 'ERROR', '2026-05-04 22:34:24'), (149, 'checkout', 'INFO', '2026-05-04 18:36:44'), (150, 'auth', 'ERROR', '2026-05-04 13:55:19'),
+        (151, 'checkout', 'DEBUG', '2026-05-03 02:12:50'), (152, 'search', 'INFO', '2026-05-04 09:31:00'), (153, 'search', 'ERROR', '2026-05-03 10:37:45'), (154, 'search', 'WARN', '2026-05-04 01:31:25'), (155, 'checkout', 'INFO', '2026-05-03 14:39:59'),
+        (156, 'search', 'DEBUG', '2026-05-03 01:39:52'), (157, 'auth', 'WARN', '2026-05-04 02:38:12'), (158, 'checkout', 'WARN', '2026-05-05 23:53:17'), (159, 'checkout', 'INFO', '2026-05-04 07:23:34'), (160, 'checkout', 'INFO', '2026-05-04 14:05:40'),
+        (161, 'search', 'WARN', '2026-05-05 08:26:59'), (162, 'auth', 'INFO', '2026-05-04 18:44:15'), (163, 'search', 'INFO', '2026-05-04 08:19:10'), (164, 'auth', 'INFO', '2026-05-04 18:21:14'), (165, 'auth', 'INFO', '2026-05-04 00:49:22'),
+        (166, 'auth', 'INFO', '2026-05-04 13:25:17'), (167, 'search', 'DEBUG', '2026-05-04 07:36:36'), (168, 'search', 'INFO', '2026-05-05 09:35:50'), (169, 'checkout', 'INFO', '2026-05-05 00:43:13'), (170, 'search', 'ERROR', '2026-05-03 01:20:45'),
+        (171, 'auth', 'DEBUG', '2026-05-03 07:09:22'), (172, 'search', 'ERROR', '2026-05-04 00:55:26'), (173, 'checkout', 'INFO', '2026-05-03 23:26:53'), (174, 'search', 'INFO', '2026-05-04 09:09:45'), (175, 'checkout', 'DEBUG', '2026-05-05 10:52:26'),
+        (176, 'search', 'INFO', '2026-05-03 00:33:51'), (177, 'auth', 'INFO', '2026-05-05 23:23:22'), (178, 'search', 'DEBUG', '2026-05-04 00:32:41'), (179, 'auth', 'ERROR', '2026-05-04 00:20:14'), (180, 'auth', 'DEBUG', '2026-05-04 18:32:48'),
+        (181, 'auth', 'INFO', '2026-05-03 10:15:03'), (182, 'checkout', 'INFO', '2026-05-04 01:40:00'), (183, 'auth', 'DEBUG', '2026-05-04 18:13:20'), (184, 'auth', 'ERROR', '2026-05-03 00:08:11'), (185, 'auth', 'WARN', '2026-05-04 10:03:46'),
+        (186, 'checkout', 'ERROR', '2026-05-04 07:17:55'), (187, 'auth', 'ERROR', '2026-05-05 22:41:12'), (188, 'checkout', 'INFO', '2026-05-04 07:27:29'), (189, 'auth', 'DEBUG', '2026-05-05 10:49:06'), (190, 'auth', 'WARN', '2026-05-05 02:43:49'),
+        (191, 'checkout', 'DEBUG', '2026-05-04 08:12:44'), (192, 'search', 'DEBUG', '2026-05-04 14:10:50'), (193, 'checkout', 'WARN', '2026-05-04 02:23:22'), (194, 'auth', 'INFO', '2026-05-03 08:58:16'), (195, 'search', 'INFO', '2026-05-03 22:19:34'),
+        (196, 'checkout', 'WARN', '2026-05-04 14:32:05'), (197, 'auth', 'INFO', '2026-05-03 18:53:17'), (198, 'search', 'INFO', '2026-05-04 22:11:03'), (199, 'checkout', 'ERROR', '2026-05-04 13:30:16'), (200, 'auth', 'INFO', '2026-05-03 01:24:11'),
+        (201, 'auth', 'DEBUG', '2026-05-04 00:29:55'), (202, 'auth', 'DEBUG', '2026-05-04 23:27:59'), (203, 'search', 'DEBUG', '2026-05-04 09:55:31'), (204, 'search', 'ERROR', '2026-05-03 08:39:51'), (205, 'auth', 'INFO', '2026-05-04 01:58:32'),
+        (206, 'search', 'INFO', '2026-05-04 07:08:09'), (207, 'checkout', 'ERROR', '2026-05-04 01:21:10'), (208, 'search', 'INFO', '2026-05-04 09:38:43'), (209, 'search', 'ERROR', '2026-05-04 22:39:49'), (210, 'search', 'DEBUG', '2026-05-03 10:29:57'),
+        (211, 'search', 'INFO', '2026-05-04 23:09:49'), (212, 'checkout', 'INFO', '2026-05-05 08:58:19'), (213, 'auth', 'WARN', '2026-05-04 07:34:36'), (214, 'search', 'INFO', '2026-05-03 01:17:34'), (215, 'checkout', 'INFO', '2026-05-04 08:27:13'),
+        (216, 'auth', 'INFO', '2026-05-04 18:26:09'), (217, 'search', 'INFO', '2026-05-04 07:56:12'), (218, 'auth', 'WARN', '2026-05-03 13:11:54'), (219, 'auth', 'ERROR', '2026-05-04 22:55:21'), (220, 'checkout', 'ERROR', '2026-05-04 13:10:36'),
+        (221, 'checkout', 'WARN', '2026-05-05 13:14:32'), (222, 'checkout', 'ERROR', '2026-05-04 13:00:17'), (223, 'search', 'ERROR', '2026-05-05 08:53:08'), (224, 'search', 'WARN', '2026-05-04 07:54:50'), (225, 'auth', 'ERROR', '2026-05-04 01:17:36'),
+        (226, 'auth', 'ERROR', '2026-05-05 08:42:42'), (227, 'checkout', 'INFO', '2026-05-04 14:40:18'), (228, 'auth', 'DEBUG', '2026-05-03 09:44:08'), (229, 'search', 'INFO', '2026-05-05 01:18:37'), (230, 'auth', 'INFO', '2026-05-05 13:04:10'),
+        (231, 'search', 'DEBUG', '2026-05-03 01:26:49'), (232, 'search', 'INFO', '2026-05-05 01:16:29'), (233, 'auth', 'INFO', '2026-05-04 18:17:16'), (234, 'search', 'WARN', '2026-05-05 01:27:26'), (235, 'checkout', 'ERROR', '2026-05-04 09:51:40'),
+        (236, 'checkout', 'INFO', '2026-05-04 14:08:29'), (237, 'search', 'DEBUG', '2026-05-05 14:00:42'), (238, 'search', 'INFO', '2026-05-04 14:35:16'), (239, 'checkout', 'ERROR', '2026-05-04 18:30:27'), (240, 'search', 'INFO', '2026-05-04 09:01:44'),
+        (241, 'auth', 'INFO', '2026-05-03 10:45:54'), (242, 'checkout', 'INFO', '2026-05-04 08:25:16'), (243, 'checkout', 'INFO', '2026-05-04 01:51:21'), (244, 'auth', 'INFO', '2026-05-04 07:27:37'), (245, 'auth', 'ERROR', '2026-05-04 01:33:14'),
+        (246, 'checkout', 'INFO', '2026-05-05 00:33:45'), (247, 'search', 'ERROR', '2026-05-03 10:58:58'), (248, 'checkout', 'ERROR', '2026-05-05 18:01:14'), (249, 'search', 'INFO', '2026-05-04 00:37:46'), (250, 'auth', 'INFO', '2026-05-03 13:30:46'),
+        (251, 'checkout', 'INFO', '2026-05-03 08:00:27'), (252, 'search', 'ERROR', '2026-05-04 22:23:45'), (253, 'search', 'ERROR', '2026-05-05 18:18:03'), (254, 'checkout', 'WARN', '2026-05-03 22:18:14'), (255, 'checkout', 'DEBUG', '2026-05-04 01:06:03'),
+        (256, 'search', 'DEBUG', '2026-05-05 10:51:16'), (257, 'auth', 'INFO', '2026-05-05 02:02:05'), (258, 'checkout', 'DEBUG', '2026-05-04 01:59:54'), (259, 'search', 'INFO', '2026-05-05 02:24:21'), (260, 'search', 'ERROR', '2026-05-03 00:58:39'),
+        (261, 'auth', 'INFO', '2026-05-03 14:19:14'), (262, 'search', 'WARN', '2026-05-04 07:56:52'), (263, 'auth', 'WARN', '2026-05-03 13:34:47'), (264, 'checkout', 'DEBUG', '2026-05-04 10:08:57'), (265, 'auth', 'DEBUG', '2026-05-04 07:16:18'),
+        (266, 'search', 'ERROR', '2026-05-03 22:33:26'), (267, 'auth', 'INFO', '2026-05-03 02:29:25'), (268, 'auth', 'DEBUG', '2026-05-04 23:51:00'), (269, 'checkout', 'INFO', '2026-05-05 07:10:53'), (270, 'auth', 'WARN', '2026-05-04 13:15:54'),
+        (271, 'checkout', 'INFO', '2026-05-04 18:39:05'), (272, 'search', 'INFO', '2026-05-04 07:54:38'), (273, 'search', 'ERROR', '2026-05-04 13:49:42'), (274, 'auth', 'INFO', '2026-05-05 22:35:58'), (275, 'checkout', 'INFO', '2026-05-04 09:53:24'),
+        (276, 'checkout', 'INFO', '2026-05-05 23:37:33'), (277, 'auth', 'INFO', '2026-05-04 01:32:50'), (278, 'search', 'ERROR', '2026-05-05 18:12:51'), (279, 'search', 'INFO', '2026-05-04 02:56:24'), (280, 'checkout', 'INFO', '2026-05-04 10:33:25'),
+        (281, 'search', 'ERROR', '2026-05-03 18:22:33'), (282, 'search', 'DEBUG', '2026-05-04 14:51:47'), (283, 'auth', 'ERROR', '2026-05-05 08:13:58'), (284, 'auth', 'ERROR', '2026-05-05 00:09:09'), (285, 'auth', 'WARN', '2026-05-05 02:08:32'),
+        (286, 'search', 'DEBUG', '2026-05-03 13:48:55'), (287, 'auth', 'INFO', '2026-05-04 23:38:25'), (288, 'checkout', 'INFO', '2026-05-04 22:58:49'), (289, 'search', 'WARN', '2026-05-04 13:26:46'), (290, 'checkout', 'DEBUG', '2026-05-04 10:37:07'),
+        (291, 'checkout', 'WARN', '2026-05-04 14:49:28'), (292, 'checkout', 'INFO', '2026-05-03 10:22:29'), (293, 'search', 'DEBUG', '2026-05-04 23:46:48'), (294, 'auth', 'INFO', '2026-05-04 01:08:23'), (295, 'checkout', 'ERROR', '2026-05-05 09:53:13'),
+        (296, 'auth', 'WARN', '2026-05-04 09:10:43'), (297, 'auth', 'INFO', '2026-05-04 07:42:22'), (298, 'auth', 'INFO', '2026-05-03 09:23:02'), (299, 'auth', 'WARN', '2026-05-04 07:42:31'), (300, 'auth', 'WARN', '2026-05-05 23:33:19');
+    expected_rows: [["00", 5], ["01", 7], ["02", 2], ["07", 2], ["08", 1], ["09", 3], ["10", 2], ["13", 6], ["14", 3], ["18", 2], ["22", 6]]
+expected_concepts:
+  - filtering on a substring of a fixed-format timestamp
+  - GROUP BY on a computed expression
+  - half-open date ranges versus BETWEEN
+  - deterministic ORDER BY on text keys
+optimal_complexity: {time: "O(n) scan, or O(log n + k) with an index on logged_at and a range predicate", space: "O(24)"}
+rubric:
+  excellent: Filters to ERROR rows of the target day (ideally with a sargable half-open range on logged_at), groups by SUBSTR(logged_at, 12, 2), orders by hour, and explains why BETWEEN with the next midnight double counts.
+  good: Correct query after a hint about the day filter or about the hour expression.
+  weak: Forgets the day or level filter, uses an inclusive end at the next midnight, picks the wrong substring positions or omits ORDER BY.
+  criteria:
+    correctness: All tests pass, including midnight boundaries, other days and non-error levels.
+    efficiency: Mentions that a range predicate on logged_at can use an index while SUBSTR on the column cannot.
+    code_quality: Clear aliases and one consistent hour expression.
+    edge_cases: Empty table, no errors on the day, all 24 hours and out-of-order rows.
+    communication: Explains why the leading zero matters and how text ordering works for fixed-width hours.
+hints:
+  - Two filters decide which rows matter (the level and the day), and one expression decides which bucket a row falls into.
+  - Both the date and the hour can be read from fixed positions of the timestamp text. Be careful that a range ending at the next midnight is not inclusive, or the first second of 5 May sneaks in.
+  - Keep rows whose level is ERROR and whose first ten characters equal the target date (or that fall in a half-open range from that midnight to the next), group by the two characters starting at position 12, count the rows and order by that hour text.
+followups:
+  - How would you include hours with zero errors so the chart has 24 bars?
+  - How would you rewrite the filter so an index on logged_at can be used?
+  - How would you break the counts down per service as well?
+common_errors:
+  - Forgetting to restrict to 2026-05-04, which merges the same hour from different days.
+  - Using BETWEEN '2026-05-04 00:00:00' AND '2026-05-05 00:00:00', which also counts the first second of the next day.
+  - Taking the wrong substring positions, for example SUBSTR(logged_at, 11, 2), which includes the space.
+  - Casting the hour to an integer, which drops the leading zero the output requires.
+  - Omitting ORDER BY hour.

@@ -1,0 +1,164 @@
+version: 1
+slug: artifact_glob_path_match
+title: Artifact Glob Path Match
+difficulty: hard
+competency_keys: [algorithms, problem_solving]
+role_tags: [devops, platform, backend]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Artifact Glob Path Match
+
+  A build server keeps artifacts only when their path matches one of the retention rules. Rules are
+  written as glob patterns over `/`-separated paths, and you must implement the matcher without using a
+  regular-expression engine.
+
+  Split both the pattern and the path on `/` into **segments**. Pattern segments mean:
+
+  - A segment that is **exactly** `**` matches **zero or more whole path segments**. So `dist/**`
+    matches `dist` itself as well as everything below it, and `a/**/b` matches `a/b`.
+  - In any other segment, `?` matches exactly one character, `*` matches any run of characters
+    (possibly empty), and every other character matches itself. These never cross a `/`, so `**` that
+    is only part of a segment (such as `a**b`) behaves like two single stars.
+
+  Return `true` if the **entire** path matches the **entire** pattern, otherwise `false`.
+
+  ### Example 1
+  ```
+  Input:  pattern = "build/**/*.jar", path = "build/libs/app-1.2.jar"
+  Output: true
+  ```
+
+  ### Example 2
+  ```
+  Input:  pattern = "logs/*/app?.log", path = "logs/2024/06/app1.log"
+  Output: false
+  Explanation: the single * cannot match "2024/06" because it would cross a slash
+  ```
+
+  ### Example 3
+  ```
+  Input:  pattern = "src/**/test_*.py", path = "src/test_api.py"
+  Output: true
+  Explanation: ** matches zero segments
+  ```
+
+  ### Constraints
+  - `1 <= pattern.length, path.length <= 300`
+  - Neither string starts or ends with `/`, and neither contains an empty segment (`//`)
+  - The pattern contains lowercase letters, digits, `.`, `_`, `-`, `/`, `?` and `*`
+  - The path contains the same characters except `?` and `*`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: glob_path_match
+  params:
+    - {name: pattern, type: string}
+    - {name: path, type: string}
+  return_type: bool
+  comparison: exact
+reference_solutions:
+  python: |
+    def glob_path_match(pattern: str, path: str) -> bool:
+        def segment_match(pat: str, text: str) -> bool:
+            # can[j] is True when pat[:i] matches text[:j]
+            can = [True] + [False] * len(text)
+            for ch in pat:
+                if ch == "*":
+                    for j in range(1, len(text) + 1):
+                        can[j] = can[j] or can[j - 1]
+                else:
+                    for j in range(len(text), 0, -1):
+                        can[j] = can[j - 1] and (ch == "?" or ch == text[j - 1])
+                    can[0] = False
+            return can[len(text)]
+
+        pats = pattern.split("/")
+        segs = path.split("/")
+        m, n = len(pats), len(segs)
+        # ok[i][j] is True when pats[i:] matches segs[j:]
+        ok = [[False] * (n + 1) for _ in range(m + 1)]
+        ok[m][n] = True
+        for i in range(m - 1, -1, -1):
+            for j in range(n, -1, -1):
+                if pats[i] == "**":
+                    ok[i][j] = ok[i + 1][j] or (j < n and ok[i][j + 1])
+                else:
+                    ok[i][j] = j < n and ok[i + 1][j + 1] and segment_match(pats[i], segs[j])
+        return ok[0][0]
+  javascript: |
+    function globPathMatch(pattern, path) {
+      const segmentMatch = (pat, text) => {
+        const can = new Array(text.length + 1).fill(false);
+        can[0] = true;
+        for (const ch of pat) {
+          if (ch === "*") {
+            for (let j = 1; j <= text.length; j++) can[j] = can[j] || can[j - 1];
+          } else {
+            for (let j = text.length; j > 0; j--) {
+              can[j] = can[j - 1] && (ch === "?" || ch === text[j - 1]);
+            }
+            can[0] = false;
+          }
+        }
+        return can[text.length];
+      };
+      const pats = pattern.split("/");
+      const segs = path.split("/");
+      const m = pats.length;
+      const n = segs.length;
+      const ok = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(false));
+      ok[m][n] = true;
+      for (let i = m - 1; i >= 0; i--) {
+        for (let j = n; j >= 0; j--) {
+          if (pats[i] === "**") {
+            ok[i][j] = ok[i + 1][j] || (j < n && ok[i][j + 1]);
+          } else {
+            ok[i][j] = j < n && ok[i + 1][j + 1] && segmentMatch(pats[i], segs[j]);
+          }
+        }
+      }
+      return ok[0][0];
+    }
+tests:
+  - {id: t1, args: ["build/**/*.jar", "build/libs/app-1.2.jar"], expected: true, description: "Example 1 - double star spans one segment"}
+  - {id: t2, args: ["logs/*/app?.log", "logs/2024/06/app1.log"], expected: false, description: "Example 2 - single star never crosses a slash"}
+  - {id: t3, args: ["src/**/test_*.py", "src/test_api.py"], expected: true, description: "Example 3 - double star matches zero segments"}
+  - {id: t4, hidden: true, args: ["**", "a/b/c.txt"], expected: true, description: "Lone double star matches any path"}
+  - {id: t5, hidden: true, args: ["dist/**", "dist"], expected: true, description: "Trailing double star matches the directory itself"}
+  - {id: t6, hidden: true, args: ["*.log", "dir/x.log"], expected: false, description: "Single-segment pattern does not match a nested path"}
+  - {id: t7, hidden: true, args: ["cache/a**b/x", "cache/a/q/b/x"], expected: false, description: "Double star inside a segment behaves like single stars and cannot cross slashes"}
+  - {id: t8, hidden: true, args: ["cache/a**b/x", "cache/a-tmp-b/x"], expected: true, description: "Double star inside a segment matches within the segment"}
+  - {id: t9, hidden: true, args: ["a/**/**/b/**/c?", "a/b/c1"], expected: true, description: "Consecutive and multiple double stars all matching zero segments"}
+  - {id: t10, hidden: true, args: ["**/*a*a*a*a*a*a*b", "aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], expected: false, description: "Backtracking stress - many stars, deep path, no match (exponential for naive recursion)"}
+  - {id: t11, hidden: true, args: ["releases/v?.*/*.tar.gz", "releases/v2.10/core.tar.gz"], expected: true, description: "Dots are literal; question mark matches exactly one character"}
+  - {id: t12, hidden: true, args: ["a/b", "a/b/c"], expected: false, description: "Pattern exhausted before the path - no match"}
+expected_concepts:
+  - "two-level matching: segments, then characters within a segment"
+  - "dynamic programming over (pattern position, path position)"
+  - "wildcard star as zero-or-more with memoisation instead of blind backtracking"
+  - "boundary cases such as double star matching zero segments"
+optimal_complexity: {time: "O(P * L) where P is the pattern length and L the path length", space: "O(P * L), reducible to O(L) per row"}
+rubric:
+  excellent: "Separates segment-level matching for double star from character-level matching inside a segment, uses dynamic programming or memoised recursion at both levels, handles double star matching zero segments and partial double stars, and explains why naive backtracking is exponential."
+  good: "Correct recursive solution with memoisation, or a correct DP after a hint about zero-segment matches or slash crossing."
+  weak: "Converts to a regular expression, lets single star cross slashes, or uses unmemoised backtracking that times out on many stars."
+  criteria:
+    correctness: "All tests pass, including zero-segment double stars, trailing double stars and partial double stars."
+    efficiency: "Polynomial time via DP or memoisation; no exponential backtracking."
+    code_quality: "Clear split between the segment matcher and the path matcher with well-named state."
+    edge_cases: "Lone double star, consecutive double stars, patterns longer or shorter than the path and literal dots."
+    communication: "States the DP state and transition precisely and walks through a zero-segment example."
+hints:
+  - "Treat the problem on two levels: whole segments for the double-star rule, and individual characters for single stars and question marks inside one segment."
+  - "Plain backtracking explodes when the pattern has many stars. Define a table indexed by how much of the pattern and how much of the input has been consumed, and fill it so each state is solved once."
+  - "For segments, a double-star segment at position i matches path position j if the rest of the pattern matches from j (zero segments) or the same double star matches from j plus one (it swallows one more segment). Any other segment must match the current path segment by the classic character-level wildcard table and the rest must match from the next positions."
+followups:
+  - "How would you add character classes such as [0-9] or negation such as [!a]?"
+  - "How would you evaluate thousands of rules against millions of paths efficiently?"
+  - "How should a rule that starts with a slash, anchored at the repository root, behave?"
+  - "Can you reduce the memory to a single row of the table?"
+common_errors:
+  - "Letting single star match across slashes."
+  - "Not allowing double star to match zero segments, so a/**/b fails on a/b."
+  - "Treating a**b as a cross-directory wildcard."
+  - "Unmemoised recursion that is exponential on patterns with many stars."
+  - "Converting the pattern to a regular expression despite the restriction."

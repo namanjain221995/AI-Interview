@@ -1,0 +1,139 @@
+version: 1
+slug: most_specific_cidr_match
+title: "Most Specific CIDR Match"
+difficulty: medium
+competency_keys: [algorithms, problem_solving]
+role_tags: [network, security, cloud, devops]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Most Specific CIDR Match
+
+  An edge firewall keeps an ordered list of rules, and each rule applies to one IPv4 network block
+  written in CIDR notation, such as `10.0.0.0/8`. The number after the slash is the **prefix length**
+  `p` (from `0` to `32`): a block contains an address when the first `p` bits of the address equal the
+  first `p` bits of the block's address. A `/0` block therefore contains every address and a `/32`
+  block contains exactly one.
+
+  Blocks are typed by hand, so the bits after the prefix are not always zero: `10.1.2.3/8` is simply the
+  same network as `10.0.0.0/8`. Ignore those host bits.
+
+  Given a client address `ip` and the list `blocks`, return the **index** of the block that contains
+  `ip` with the **longest** prefix length. If several containing blocks share that longest prefix
+  length, return the **smallest** index among them. Return `-1` if no block contains `ip`.
+
+  ### Example 1
+  ```
+  Input:  ip = "10.20.30.40", blocks = ["0.0.0.0/0", "10.0.0.0/8", "10.20.0.0/16", "10.21.0.0/16"]
+  Output: 2
+  Explanation: Blocks 0, 1 and 2 contain the address; block 2 has the longest prefix (/16).
+  ```
+
+  ### Example 2
+  ```
+  Input:  ip = "192.168.1.77", blocks = ["192.168.0.0/24", "172.16.0.0/12"]
+  Output: -1
+  Explanation: 192.168.1.77 is outside 192.168.0.0/24, which covers 192.168.0.0 to 192.168.0.255.
+  ```
+
+  ### Example 3
+  ```
+  Input:  ip = "172.20.5.9", blocks = ["172.20.5.16/28", "172.16.0.0/12", "172.31.255.255/12"]
+  Output: 1
+  Explanation: Block 0 covers only 172.20.5.16 to 172.20.5.31. Blocks 1 and 2 are the same /12
+  network once host bits are ignored, so the earlier one wins.
+  ```
+
+  ### Constraints
+  - `ip` is a valid dotted IPv4 address: four decimal octets from `0` to `255` without leading zeros.
+  - `0 <= blocks.length <= 10^4`
+  - Every block is `a.b.c.d/p` with a valid dotted address and `0 <= p <= 32`.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: matching_cidr_index
+  params:
+    - {name: ip, type: "string"}
+    - {name: blocks, type: "string[]"}
+  return_type: "int"
+  comparison: exact
+reference_solutions:
+  python: |
+    def matching_cidr_index(ip: str, blocks: list[str]) -> int:
+        def to_int(dotted: str) -> int:
+            value = 0
+            for octet in dotted.split("."):
+                value = value * 256 + int(octet)
+            return value
+
+        address = to_int(ip)
+        best_index, best_prefix = -1, -1
+        for index, block in enumerate(blocks):
+            network, prefix_text = block.split("/")
+            prefix = int(prefix_text)
+            # Keep the top `prefix` bits; a /0 mask is zero and matches everything.
+            mask = ((1 << 32) - 1) ^ ((1 << (32 - prefix)) - 1)
+            if (to_int(network) & mask) == (address & mask) and prefix > best_prefix:
+                best_index, best_prefix = index, prefix
+        return best_index
+  javascript: |
+    function matchingCidrIndex(ip, blocks) {
+      // Work with numbers in [0, 2^32) and avoid 32-bit signed bit operations.
+      const toInt = (dotted) => dotted.split(".").reduce((acc, octet) => acc * 256 + Number(octet), 0);
+      const address = toInt(ip);
+      let bestIndex = -1;
+      let bestPrefix = -1;
+      blocks.forEach((block, index) => {
+        const [network, prefixText] = block.split("/");
+        const prefix = Number(prefixText);
+        const size = 2 ** (32 - prefix); // addresses covered by the block
+        const sameNetwork = Math.floor(toInt(network) / size) === Math.floor(address / size);
+        if (sameNetwork && prefix > bestPrefix) {
+          bestIndex = index;
+          bestPrefix = prefix;
+        }
+      });
+      return bestIndex;
+    }
+tests:
+  - {id: t1, args: ["10.20.30.40", ["0.0.0.0/0", "10.0.0.0/8", "10.20.0.0/16", "10.21.0.0/16"]], expected: 2, description: "Example 1"}
+  - {id: t2, args: ["192.168.1.77", ["192.168.0.0/24", "172.16.0.0/12"]], expected: -1, description: "Example 2 - no block contains the address"}
+  - {id: t3, args: ["172.20.5.9", ["172.20.5.16/28", "172.16.0.0/12", "172.31.255.255/12"]], expected: 1, description: "Example 3 - longer non-matching prefix, host bits ignored, tie broken by index"}
+  - {id: t4, hidden: true, args: ["8.8.8.8", []], expected: -1, description: "Empty rule list"}
+  - {id: t5, hidden: true, args: ["203.0.113.9", ["203.0.113.8/32", "203.0.113.9/32", "203.0.113.0/24"]], expected: 1, description: "Exact /32 match beats a /24; a neighbouring /32 does not match"}
+  - {id: t6, hidden: true, args: ["255.255.255.255", ["255.255.255.254/31", "128.0.0.0/1", "0.0.0.0/1"]], expected: 0, description: "Highest address; /31 and /1 boundaries; signed 32-bit pitfalls"}
+  - {id: t7, hidden: true, args: ["0.0.0.0", ["0.0.0.1/32", "1.2.3.4/0", "0.0.0.0/7"]], expected: 2, description: "Lowest address; a /0 block with non-zero host bits matches everything"}
+  - {id: t8, hidden: true, args: ["10.0.0.1", ["10.0.0.0/8", "10.255.255.255/8", "10.0.0.0/8"]], expected: 0, description: "Three identical networks written differently - earliest index wins"}
+  - {id: t9, hidden: true, args: ["192.0.2.130", ["192.0.2.0/25", "192.0.2.128/26", "192.0.2.192/26", "192.0.2.0/24"]], expected: 1, description: "Adjacent subnets split mid-octet: only the /26 starting at .128 contains .130"}
+  - {id: t10, hidden: true, args: ["100.64.10.10", ["100.0.0.0/10", "100.128.0.0/10", "99.0.0.0/8"]], expected: -1, description: "Prefix not aligned to an octet; none of the blocks contains the address"}
+  - {id: t11, hidden: true, args: ["10.42.37.201", ["10.0.0.0/8", "10.1.7.0/9", "10.2.14.0/10", "10.3.21.0/11", "10.4.28.0/12", "10.5.35.0/13", "10.6.42.0/14", "10.7.49.0/15", "10.8.56.0/16", "10.9.63.0/17", "10.10.70.0/18", "10.11.77.0/19", "10.12.84.0/20", "10.13.91.0/21", "10.14.98.0/22", "10.15.105.0/23", "10.16.112.0/24", "10.17.119.0/8", "10.18.126.0/9", "10.19.133.0/10", "10.20.140.0/11", "10.21.147.0/12", "10.22.154.0/13", "10.23.161.0/14", "10.24.168.0/15", "10.25.175.0/16", "10.26.182.0/17", "10.27.189.0/18", "10.28.196.0/19", "10.29.203.0/20", "10.30.210.0/21", "10.31.217.0/22", "10.32.224.0/23", "10.33.231.0/24", "10.34.238.0/8", "10.35.245.0/9", "10.36.252.0/10", "10.37.3.0/11", "10.38.10.0/12", "10.39.17.0/13", "10.40.24.0/14", "10.41.31.0/15", "10.42.38.0/16", "10.43.45.0/17", "10.44.52.0/18", "10.45.59.0/19", "10.46.66.0/20", "10.47.73.0/21", "10.48.80.0/22", "10.49.87.0/23", "10.50.94.0/24", "10.51.101.0/8", "10.52.108.0/9", "10.53.115.0/10", "10.54.122.0/11", "10.55.129.0/12", "10.56.136.0/13", "10.57.143.0/14", "10.58.150.0/15", "10.59.157.0/16", "10.42.37.200/31", "10.42.37.201/32", "10.42.37.201/32", "0.0.0.0/0"]], expected: 61, description: "Stress: 64 blocks; the duplicate /32 rules tie and the earlier one wins"}
+expected_concepts:
+  - "converting a dotted IPv4 address to a 32-bit unsigned integer"
+  - "building a prefix mask (handling /0 and /32)"
+  - "masking both addresses before comparing (ignoring host bits)"
+  - "longest-prefix match with deterministic tie-breaking"
+  - "unsigned versus signed 32-bit arithmetic pitfalls"
+optimal_complexity: {time: "O(n) for n blocks", space: "O(1)"}
+rubric:
+  excellent: "Parses addresses into 32-bit unsigned integers, builds masks that are correct for /0 and /32, masks both sides so host bits are ignored, keeps the best prefix with a strict comparison for earliest-index ties, and discusses signed-shift pitfalls and a trie for many lookups."
+  good: "Correct masking solution that needs a nudge on /0, signed integers or the tie-breaking rule."
+  weak: "Compares addresses as strings or by whole octets only, breaks on /0 or on addresses at or above 128.0.0.0, or ignores the host-bit rule."
+  criteria:
+    correctness: "All tests pass, including /0, /31, /32, the top of the address range and duplicate networks."
+    efficiency: "A single pass over the blocks with constant work per block."
+    code_quality: "One helper converts dotted addresses; mask construction is explicit and commented."
+    edge_cases: "Empty list, host bits set in the block address, ties between equal prefixes, 255.255.255.255 and 0.0.0.0."
+    communication: "Explains why masking both sides is required and how language integer semantics affect the mask."
+hints:
+  - "Think of an IPv4 address as one 32-bit number instead of four separate octets. What does the prefix length tell you about which bits must agree?"
+  - "Turn the address and each block address into integers, then keep only the leading prefix bits of both before comparing them. Be careful with prefix 0 and with languages whose shifts are signed or wrap at 32."
+  - "For each block, build a mask with the top prefix bits set to one and the rest zero (prefix 0 gives an all-zero mask). The block contains the address when both values agree after applying the mask. Track the largest matching prefix and replace the current answer only on a strictly larger prefix, so the earliest index wins ties."
+followups:
+  - "How would you answer a million lookups per second against a hundred thousand blocks?"
+  - "How does a binary trie keyed on address bits implement longest-prefix match?"
+  - "What changes for IPv6 addresses with 128 bits?"
+  - "How would you detect rules that can never match because an earlier, more specific rule shadows them?"
+common_errors:
+  - "Shifting by 32 to build the /0 mask, which is a no-op or undefined behaviour in several languages."
+  - "Using signed 32-bit integers so addresses at or above 128.0.0.0 become negative and comparisons break."
+  - "Comparing only whole octets, which fails for prefixes such as /12 or /26."
+  - "Not masking the block's own address, so blocks written with host bits never match."
+  - "Using a non-strict comparison when tracking the best prefix, which returns the last tied index."

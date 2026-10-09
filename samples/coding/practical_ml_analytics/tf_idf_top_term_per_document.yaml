@@ -1,0 +1,158 @@
+version: 1
+slug: tf_idf_top_term_per_document
+title: Most Distinctive Term per Release Note
+difficulty: medium
+competency_keys: [machine_learning, algorithms, data_structures]
+role_tags: [llm, data_scientist, ml, data]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Most Distinctive Term per Release Note
+
+  The release-notes search index shows one keyword next to each note. A word that appears in every
+  note ("fixed", "the") is useless as a keyword; a word that is frequent in **this** note but rare in
+  the others is ideal. Score words with TF-IDF and pick the best word for every note.
+
+  **Tokenising.** Lowercase each document. A term is a maximal run of the letters `a-z`; every other
+  character (digits, spaces, punctuation) only separates terms. So `"v2.1: Fixed SSO-login"` gives
+  `v`, `fixed`, `sso`, `login`.
+
+  **Scoring.** Let `N` be the number of documents (including empty ones). For a term `t` in document `d`:
+
+  - `tf(t, d) = (occurrences of t in d) / (number of terms in d)`
+  - `df(t)` = the number of documents that contain `t` at least once
+  - `idf(t) = ln((1 + N) / (1 + df(t))) + 1` (natural logarithm)
+  - `score(t, d) = tf(t, d) * idf(t)`
+
+  For every document, in input order, return the term with the **highest** score. If several terms
+  share the highest score, return the lexicographically smallest of them. If a document has no terms,
+  return the empty string `""` for it.
+
+  Use double-precision floating point. In the tests, two scores in the same document are either
+  exactly equal (same occurrence count and same `df`) or differ clearly, so you do not need an
+  epsilon.
+
+  ### Example 1
+  ```
+  Input:  documents = ["Fixed login timeout on mobile", "Fixed crash in export. Export now faster", "Fixed typo"]
+  Output: ["login", "export", "typo"]
+  Explanation: "fixed" is in all 3 notes, so its idf is the minimum (1.0).
+               Note 1: login, mobile, on and timeout tie and "login" is the smallest.
+               Note 2: "export" appears twice. Note 3: "typo" beats "fixed".
+  ```
+
+  ### Example 2
+  ```
+  Input:  documents = ["Bump to v2.0.1", "", "SSO: sso sso"]
+  Output: ["bump", "", "sso"]
+  Explanation: note 1 has terms bump, to, v; all appear in one document so they tie
+               and "bump" wins. Note 2 has no terms. Note 3 is three copies of "sso".
+  ```
+
+  ### Constraints
+  - `0 <= documents.length <= 2000`
+  - `0 <= documents[i].length <= 5000`, printable ASCII only
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: top_tfidf_terms
+  params:
+    - {name: documents, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import math
+    import re
+    from collections import Counter
+
+    TOKEN = re.compile(r"[a-z]+")
+
+
+    def top_tfidf_terms(documents: list[str]) -> list[str]:
+        token_lists = [TOKEN.findall(doc.lower()) for doc in documents]
+        n = len(documents)
+        document_frequency: Counter[str] = Counter()
+        for tokens in token_lists:
+            document_frequency.update(set(tokens))
+        result: list[str] = []
+        for tokens in token_lists:
+            if not tokens:
+                result.append("")
+                continue
+            counts = Counter(tokens)
+            best_term = ""
+            best_score = -1.0
+            for term in sorted(counts):  # ascending, so only a strictly higher score replaces
+                idf = math.log((1 + n) / (1 + document_frequency[term])) + 1
+                score = counts[term] / len(tokens) * idf
+                if score > best_score:
+                    best_term, best_score = term, score
+            result.append(best_term)
+        return result
+  javascript: |
+    function topTfidfTerms(documents) {
+      const tokenLists = documents.map((doc) => doc.toLowerCase().match(/[a-z]+/g) || []);
+      const n = documents.length;
+      const df = new Map();
+      for (const tokens of tokenLists) {
+        for (const term of new Set(tokens)) df.set(term, (df.get(term) || 0) + 1);
+      }
+      return tokenLists.map((tokens) => {
+        if (tokens.length === 0) return "";
+        const counts = new Map();
+        for (const t of tokens) counts.set(t, (counts.get(t) || 0) + 1);
+        let bestTerm = "";
+        let bestScore = -1;
+        for (const term of [...counts.keys()].sort()) {
+          const idf = Math.log((1 + n) / (1 + df.get(term))) + 1;
+          const score = (counts.get(term) / tokens.length) * idf;
+          if (score > bestScore) {
+            bestTerm = term;
+            bestScore = score;
+          }
+        }
+        return bestTerm;
+      });
+    }
+tests:
+  - {id: t1, args: [["Fixed login timeout on mobile", "Fixed crash in export. Export now faster", "Fixed typo"]], expected: ["login", "export", "typo"], description: "Example 1 - common word fixed is outscored; repeated word wins; tie broken alphabetically"}
+  - {id: t2, args: [["Bump to v2.0.1", "", "SSO: sso sso"]], expected: ["bump", "", "sso"], description: "Example 2 - digits are separators, empty document returns empty string, case-folded repeats"}
+  - {id: t3, hidden: true, args: [[]], expected: [], description: "No documents - empty list"}
+  - {id: t4, hidden: true, args: [["2024 1.2.3", "!!!"]], expected: ["", ""], description: "Documents with no letters at all - every result is the empty string"}
+  - {id: t5, hidden: true, args: [["cache cache"]], expected: ["cache"], description: "Single document - idf is the same for every term, so tf decides"}
+  - {id: t6, hidden: true, args: [["alpha beta", "beta alpha", "alpha beta gamma"]], expected: ["alpha", "alpha", "gamma"], description: "A term unique to one document (gamma) beats more frequent shared terms; identical documents tie to the smallest term"}
+  - {id: t7, hidden: true, args: [["retry retry retry queue", "queue worker", "queue worker retry", "worker pool"]], expected: ["retry", "queue", "retry", "pool"], description: "Higher tf of a common term beats a rare term only when the counts make up for the idf gap"}
+  - {id: t8, hidden: true, args: [["Upgraded the database driver and the database pool", "The scheduler now skips the paused jobs", "The API returns the full error the client sent", "Removed the legacy flag"]], expected: ["database", "the", "the", "flag"], description: "Stop word the is in every note (idf exactly 1) yet still wins in notes 2 and 3 where it repeats - the smoothed idf never reaches zero"}
+  - {id: t9, hidden: true, args: [["zeta zeta yak", "yak", "zeta"]], expected: ["zeta", "yak", "zeta"], description: "Equal df for both terms - the higher count wins even though it is lexicographically larger"}
+  - {id: t10, hidden: true, args: [["service auth updated rollout complete", "service billing updated rollout canary complete", "service search updated rollout canary canary complete", "service notify updated rollout canary canary canary complete", "service gateway updated rollout complete", "service auth updated rollout canary complete", "service billing updated rollout canary canary complete", "service search updated rollout canary canary canary complete", "service notify updated rollout complete", "service gateway updated rollout canary complete", "service auth updated rollout canary canary complete", "service billing updated rollout canary canary canary complete", "service search updated rollout complete", "service notify updated rollout canary complete", "service gateway updated rollout canary canary complete", "service auth updated rollout canary canary canary complete", "service billing updated rollout complete", "service search updated rollout canary complete", "service notify updated rollout canary canary complete", "service gateway updated rollout canary canary canary complete", "service auth updated rollout complete", "service billing updated rollout canary complete", "service search updated rollout canary canary complete", "service notify updated rollout canary canary canary complete", "service gateway updated rollout complete", "service auth updated rollout canary complete", "service billing updated rollout canary canary complete", "service search updated rollout canary canary canary complete", "service notify updated rollout complete", "service gateway updated rollout canary complete", "", "rollback billing billing"]], expected: ["auth", "billing", "canary", "canary", "gateway", "auth", "canary", "canary", "notify", "gateway", "canary", "canary", "search", "notify", "canary", "canary", "billing", "search", "canary", "canary", "auth", "billing", "canary", "canary", "gateway", "auth", "canary", "canary", "notify", "gateway", "", "billing"], description: "Stress - 32 notes with shared words, varying repeat counts and one empty note"}
+expected_concepts:
+  - "term frequency normalised by document length"
+  - "document frequency counted once per document"
+  - "smoothed inverse document frequency"
+  - "two passes: corpus statistics first, then per-document scoring"
+  - "deterministic tie-breaking on the term"
+optimal_complexity: {time: "O(T + U log U)", space: "O(V)"}
+rubric:
+  excellent: "Computes document frequency in a first pass with one count per document, scores each document's distinct terms with the exact formula, breaks ties by the smallest term, returns empty strings for empty documents and explains why common terms are suppressed."
+  good: "Correct TF-IDF with a small slip fixed after a hint, such as counting df per occurrence or forgetting the tie-break."
+  weak: "Uses raw counts without idf, counts df per occurrence, recomputes df for each document by rescanning the corpus, or crashes on empty documents."
+  criteria:
+    correctness: "All tests pass, including empty documents, documents without letters and ties."
+    efficiency: "One pass to build document frequencies and one pass to score, instead of rescanning all documents for every term."
+    code_quality: "Tokenisation, df counting and scoring are separate helpers or clearly separated blocks with named quantities."
+    edge_cases: "No documents, documents with no terms, a single document, identical documents and a stop word that appears everywhere."
+    communication: "Explains what tf and idf each reward and why the smoothing keeps the idf finite and positive."
+hints:
+  - "A term's score depends on two things: how often it appears in this document and in how many documents it appears at all. Which of these can be computed once for the whole corpus?"
+  - "Make a first pass that counts, for each term, the number of documents containing it (count each document once, for example via a set of its terms). Then score the terms of each document separately."
+  - "Tokenise every document, build the document-frequency map from the set of terms per document, then for each document count its terms, compute count divided by the document's term total times the smoothed idf with the natural log, and keep the best score, replacing it only on a strictly higher score while visiting terms in ascending order. Return the empty string when a document has no terms."
+followups:
+  - "How would you return the top three terms per document instead of one?"
+  - "How would you update the scores incrementally when a new release note is added?"
+  - "Why does the smoothing add one to both N and df, and what would happen without it?"
+  - "How would you use these TF-IDF vectors to find the most similar earlier release note?"
+common_errors:
+  - "Counting document frequency once per occurrence instead of once per document."
+  - "Using log base 10 or forgetting the plus one after the logarithm."
+  - "Using raw counts instead of dividing by the number of terms in the document."
+  - "Ignoring the tie-break or breaking ties by first occurrence."
+  - "Returning nothing or crashing for a document with no letters."

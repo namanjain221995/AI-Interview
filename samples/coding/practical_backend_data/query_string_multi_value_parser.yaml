@@ -1,0 +1,172 @@
+version: 1
+slug: query_string_multi_value_parser
+title: "Query String Parser with Repeated Keys"
+difficulty: easy
+competency_keys: [problem_solving, code_quality, debugging]
+role_tags: [backend, frontend, fullstack, qa]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Query String Parser with Repeated Keys
+
+  A search page submits its filters as a form, and the browser serialises the form into a query string.
+  Checkbox groups repeat the same field, and the front-end library writes array fields with a `[]`
+  suffix, so the backend receives strings such as `brand=acme&tag[]=red&tag[]=blue+sky`. The backend
+  team wants a small, dependency-free parser that groups every value by its field.
+
+  Write `parse_query(query)`. The input is the query string **without** a leading `?`. Process it as
+  follows:
+
+  1. Split `query` on `&`. Skip empty segments (for example from `a=1&&b=2` or a trailing `&`).
+  2. Split each segment at its **first** `=` into a raw key and a raw value. A segment without `=` has
+     the value `""`.
+  3. Decode the key and the value separately in **one left-to-right pass**: `+` becomes a space and
+     `%XX` (two hexadecimal digits, upper or lower case) becomes the character with that code. Decoded
+     characters are never decoded again, so `%2B` becomes a literal `+` and `%25` a literal `%`.
+  4. If the decoded key ends with `[]`, remove that one suffix, so `tag[]` and `tag` are the same field.
+  5. If the resulting key is empty, skip the pair.
+
+  Return one row per distinct key, `[key, value1, value2, ...]`. Rows are ordered by the **first
+  appearance** of their key and values are listed in input order. An empty query returns `[]`.
+
+  ### Example 1
+  ```
+  Input:  query = "brand=acme&tag[]=red&tag[]=blue+sky&brand=globex"
+  Output: [["brand", "acme", "globex"], ["tag", "red", "blue sky"]]
+  Explanation: tag[] is the field tag; rows follow the first appearance of brand, then tag
+  ```
+
+  ### Example 2
+  ```
+  Input:  query = "q=50%25+off&&debug&sort=price%3Aasc&=orphan&tag=new&tag%5B%5D=sale"
+  Output: [["q", "50% off"], ["debug", ""], ["sort", "price:asc"], ["tag", "new", "sale"]]
+  Explanation: %25 is %, %3A is :, "debug" has value "", "=orphan" has an empty key, tag%5B%5D decodes to tag[]
+  ```
+
+  ### Example 3
+  ```
+  Input:  query = ""
+  Output: []
+  Explanation: no segments at all
+  ```
+
+  ### Constraints
+  - `0 <= query.length <= 4000`
+  - `query` contains printable ASCII characters only and no `#`
+  - Every `%` is followed by two hexadecimal digits encoding a printable ASCII character (`20` to `7E`)
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: parse_query
+  params:
+    - {name: query, type: "string"}
+  return_type: "string[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def _decode(text: str) -> str:
+        out: list[str] = []
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if ch == "+":
+                out.append(" ")
+                i += 1
+            elif ch == "%":
+                out.append(chr(int(text[i + 1:i + 3], 16)))
+                i += 3
+            else:
+                out.append(ch)
+                i += 1
+        return "".join(out)
+
+
+    def parse_query(query: str) -> list[list[str]]:
+        rows: dict[str, list[str]] = {}  # dicts keep first-insertion order
+        for segment in query.split("&"):
+            if not segment:
+                continue
+            raw_key, _, raw_value = segment.partition("=")
+            key = _decode(raw_key)
+            if key.endswith("[]"):
+                key = key[:-2]
+            if not key:
+                continue
+            rows.setdefault(key, [key]).append(_decode(raw_value))
+        return list(rows.values())
+  javascript: |
+    function decodePart(text) {
+      let out = "";
+      let i = 0;
+      while (i < text.length) {
+        const ch = text[i];
+        if (ch === "+") {
+          out += " ";
+          i += 1;
+        } else if (ch === "%") {
+          out += String.fromCharCode(parseInt(text.slice(i + 1, i + 3), 16));
+          i += 3;
+        } else {
+          out += ch;
+          i += 1;
+        }
+      }
+      return out;
+    }
+
+    function parseQuery(query) {
+      const rows = new Map();
+      for (const segment of query.split("&")) {
+        if (segment.length === 0) continue;
+        const eq = segment.indexOf("=");
+        const rawKey = eq === -1 ? segment : segment.slice(0, eq);
+        const rawValue = eq === -1 ? "" : segment.slice(eq + 1);
+        let key = decodePart(rawKey);
+        if (key.endsWith("[]")) key = key.slice(0, -2);
+        if (key.length === 0) continue;
+        if (!rows.has(key)) rows.set(key, [key]);
+        rows.get(key).push(decodePart(rawValue));
+      }
+      return [...rows.values()];
+    }
+tests:
+  - {id: t1, args: ["brand=acme&tag[]=red&tag[]=blue+sky&brand=globex"], expected: [["brand", "acme", "globex"], ["tag", "red", "blue sky"]], description: "Example 1 - repeated key, array suffix and plus-as-space"}
+  - {id: t2, args: ["q=50%25+off&&debug&sort=price%3Aasc&=orphan&tag=new&tag%5B%5D=sale"], expected: [["q", "50% off"], ["debug", ""], ["sort", "price:asc"], ["tag", "new", "sale"]], description: "Example 2 - escapes, empty segment, key without '=', empty key skipped, encoded [] suffix"}
+  - {id: t3, args: [""], expected: [], description: "Example 3 - empty query"}
+  - {id: t4, hidden: true, args: ["&&&"], expected: [], description: "Only separators - every segment empty, returns []"}
+  - {id: t5, hidden: true, args: ["a=1=2=3&b=&c"], expected: [["a", "1=2=3"], ["b", ""], ["c", ""]], description: "Split only at the first '='; empty value after '=' and no '=' both give \"\""}
+  - {id: t6, hidden: true, args: ["x=%2B1&x=+1&x=%2b%2B"], expected: [["x", "+1", " 1", "++"]], description: "Encoded plus stays a literal plus, raw plus becomes a space; lower-case hex accepted"}
+  - {id: t7, hidden: true, args: ["[]=lost&%5B%5D=gone&ids[][]=7&first+name=Ada&first%20name=Lin"], expected: [["ids[]", "7"], ["first name", "Ada", "Lin"]], description: "Key that is only [] becomes empty and is skipped; only one [] suffix removed; + and %20 give the same key"}
+  - {id: t8, hidden: true, args: ["k=%2525&k=100%25"], expected: [["k", "%25", "100%"]], description: "Single-pass decoding - %2525 becomes the literal text %25, not %"}
+  - {id: t9, hidden: true, args: ["Page=1&page=2&PAGE=3"], expected: [["Page", "1"], ["page", "2"], ["PAGE", "3"]], description: "Keys are case sensitive - three separate rows in first-appearance order"}
+  - {id: t10, hidden: true, args: ["b=2&a=1&b[]=3&c[]&a=%20"], expected: [["b", "2", "3"], ["a", "1", " "], ["c", ""]], description: "Rows by first appearance not alphabetical; array key without '=' has empty value; value is a single space"}
+  - {id: t11, hidden: true, args: ["f0=v0%2C0+x&f1[]=v1%2C1+x&f2=v2%2C2+x&f3[]=v3%2C3+x&f4=v4%2C0+x&f5[]=v5%2C1+x&f6=v6%2C2+x&f7[]=v7%2C3+x&f8=v8%2C0+x&f0[]=v9%2C1+x&f1=v10%2C2+x&f2[]=v11%2C3+x&f3=v12%2C0+x&f4[]=v13%2C1+x&f5=v14%2C2+x&f6[]=v15%2C3+x&f7=v16%2C0+x&f8[]=v17%2C1+x&f0=v18%2C2+x&f1[]=v19%2C3+x&f2=v20%2C0+x&f3[]=v21%2C1+x&f4=v22%2C2+x&f5[]=v23%2C3+x&f6=v24%2C0+x&f7[]=v25%2C1+x&f8=v26%2C2+x&f0[]=v27%2C3+x&f1=v28%2C0+x&f2[]=v29%2C1+x&f3=v30%2C2+x&f4[]=v31%2C3+x&f5=v32%2C0+x&f6[]=v33%2C1+x&f7=v34%2C2+x&f8[]=v35%2C3+x&f0=v36%2C0+x&f1[]=v37%2C1+x&f2=v38%2C2+x&f3[]=v39%2C3+x&f4=v40%2C0+x&f5[]=v41%2C1+x&f6=v42%2C2+x&f7[]=v43%2C3+x&f8=v44%2C0+x&f0[]=v45%2C1+x&f1=v46%2C2+x&f2[]=v47%2C3+x&f3=v48%2C0+x&f4[]=v49%2C1+x&f5=v50%2C2+x&f6[]=v51%2C3+x&f7=v52%2C0+x&f8[]=v53%2C1+x&f0=v54%2C2+x&f1[]=v55%2C3+x&f2=v56%2C0+x&f3[]=v57%2C1+x&f4=v58%2C2+x&f5[]=v59%2C3+x"], expected: [["f0", "v0,0 x", "v9,1 x", "v18,2 x", "v27,3 x", "v36,0 x", "v45,1 x", "v54,2 x"], ["f1", "v1,1 x", "v10,2 x", "v19,3 x", "v28,0 x", "v37,1 x", "v46,2 x", "v55,3 x"], ["f2", "v2,2 x", "v11,3 x", "v20,0 x", "v29,1 x", "v38,2 x", "v47,3 x", "v56,0 x"], ["f3", "v3,3 x", "v12,0 x", "v21,1 x", "v30,2 x", "v39,3 x", "v48,0 x", "v57,1 x"], ["f4", "v4,0 x", "v13,1 x", "v22,2 x", "v31,3 x", "v40,0 x", "v49,1 x", "v58,2 x"], ["f5", "v5,1 x", "v14,2 x", "v23,3 x", "v32,0 x", "v41,1 x", "v50,2 x", "v59,3 x"], ["f6", "v6,2 x", "v15,3 x", "v24,0 x", "v33,1 x", "v42,2 x", "v51,3 x"], ["f7", "v7,3 x", "v16,0 x", "v25,1 x", "v34,2 x", "v43,3 x", "v52,0 x"], ["f8", "v8,0 x", "v17,1 x", "v26,2 x", "v35,3 x", "v44,0 x", "v53,1 x"]], description: "60 pairs over 9 keys mixing plain and [] forms with escaped commas and plus signs"}
+expected_concepts:
+  - "splitting at the first occurrence of a delimiter"
+  - "single-pass percent decoding and plus-as-space"
+  - "grouping values under keys while preserving insertion order"
+  - "normalising array-style key suffixes"
+  - "skipping empty segments and empty keys"
+optimal_complexity: {time: "O(n)", space: "O(n)"}
+rubric:
+  excellent: "Follows the five steps in order, splits only at the first '=', decodes in a single pass so escaped plus and percent stay literal, strips one [] suffix after decoding, skips empty keys and keeps first-appearance order with an insertion-ordered map."
+  good: "Correct parser that needs a nudge on one rule such as the first '=', double decoding, the [] suffix or row order."
+  weak: "Splits on every '=', decodes twice or decodes before splitting, sorts the keys, drops keys without '=' or fails on empty segments."
+  criteria:
+    correctness: "All tests pass, including escaped plus and percent, empty keys and array suffixes."
+    efficiency: "Each character is examined a constant number of times; grouping uses a hash map."
+    code_quality: "Decoding lives in one small helper used for both keys and values; the pipeline steps are visible in order."
+    edge_cases: "Empty query, separators only, values containing '=', keys that are only [], and keys differing only in case."
+    communication: "Explains why decoding must happen after splitting and why it must not run twice."
+hints:
+  - "Treat the specification as a pipeline: split into segments, split each segment into key and value, decode, normalise the key, then group."
+  - "Splitting must happen before decoding, otherwise an encoded ampersand or equals sign would be mistaken for a separator; write one decoding helper that walks the text once and use it for both parts."
+  - "For every non-empty segment, cut at the first equals sign (no sign means an empty value), decode both halves in a single scan that turns plus into a space and a percent sign plus two hex digits into one character, drop one trailing [] from the key, skip empty keys, and append the value to an insertion-ordered map whose entries start with the key."
+followups:
+  - "How should the parser behave when a '%' is not followed by two hex digits?"
+  - "How would you decode UTF-8 byte sequences such as %C3%A9 into one character?"
+  - "What security problems can arise when a backend merges repeated parameters differently from a proxy in front of it?"
+common_errors:
+  - "Decoding the whole query before splitting, so %26 or %3D create extra segments or pairs."
+  - "Splitting each segment on every '=' and losing the rest of a value that contains '='."
+  - "Decoding twice, turning %2525 into % or %2B into a space."
+  - "Sorting keys alphabetically instead of keeping first-appearance order."
+  - "Removing the [] suffix before decoding, which misses the encoded form %5B%5D."

@@ -1,0 +1,206 @@
+version: 1
+slug: normalized_tag_counts
+title: Normalized Tag Counts
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data, backend, data_analyst]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Normalized Tag Counts
+
+  The internal knowledge base lets authors type tags freely, so the same topic shows up as `SQL`,
+  ` sql ` and `Sql`. Before the tag cloud is rebuilt, the docs team wants a clean count.
+
+  Table `article_tags`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | article_id | INTEGER | the tagged article (not unique: one row per tag on an article) |
+  | tag | VARCHAR(50) | free text, never NULL, may be blank or padded with spaces |
+
+  The **normalized tag** is the tag with leading and trailing spaces removed, then lower-cased. Rows
+  whose normalized tag is empty are ignored.
+
+  Return `tag` (the normalized tag) and `article_count`, the number of **distinct articles** carrying
+  that normalized tag. An article tagged with two spellings of the same tag counts **once**. Order the
+  rows by `article_count` descending, then by `tag` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  article_tags
+  +------------+----------+
+  | article_id | tag      |
+  +------------+----------+
+  | 1          | SQL      |
+  | 1          |  sql     |
+  | 2          | Sql      |
+  | 2          | indexing |
+  | 3          | Indexing |
+  | 3          | replicas |
+  | 4          | sql      |
+  +------------+----------+
+
+  Output
+  +----------+---------------+
+  | tag      | article_count |
+  +----------+---------------+
+  | sql      | 3             |
+  | indexing | 2             |
+  | replicas | 1             |
+  +----------+---------------+
+  Article 1 is tagged "SQL" and " sql " but is counted once for sql.
+  ```
+
+  ### Example 2
+  ```
+  article_tags
+  +------------+--------+
+  | article_id | tag    |
+  +------------+--------+
+  | 7          | Deploy |
+  | 8          |        |
+  | 8          | alerts |
+  | 9          | deploy |
+  | 9          | ALERTS |
+  +------------+--------+
+
+  Output
+  +--------+---------------+
+  | tag    | article_count |
+  +--------+---------------+
+  | alerts | 2             |
+  | deploy | 2             |
+  +--------+---------------+
+  The blank tag on article 8 is ignored.
+  ```
+
+  ### Constraints
+  - Tags contain ASCII letters, digits and spaces only; padding is spaces, never tabs or newlines.
+  - Spaces inside a tag are kept (`"load balancer"` and `"loadbalancer"` are different tags).
+  - The table may be empty.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return tag and article_count per normalized tag, ordered by article_count DESC, tag.
+    SELECT tag, COUNT(*) AS article_count
+    FROM article_tags
+    GROUP BY tag;
+reference_solutions:
+  sql: |
+    WITH cleaned AS (
+      SELECT article_id, LOWER(TRIM(tag)) AS norm_tag
+      FROM article_tags
+    )
+    SELECT norm_tag AS tag, COUNT(DISTINCT article_id) AS article_count
+    FROM cleaned
+    WHERE norm_tag <> ''
+    GROUP BY norm_tag
+    ORDER BY article_count DESC, norm_tag ASC;
+sql_setup: |
+  CREATE TABLE article_tags (
+    article_id INTEGER NOT NULL,
+    tag VARCHAR(50) NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - case and padding variants, one article tagged twice with variants of sql"
+    setup_sql: |
+      INSERT INTO article_tags (article_id, tag) VALUES
+        (1, 'SQL'), (1, ' sql '), (2, 'Sql'), (2, 'indexing'), (3, 'Indexing'), (3, 'replicas'), (4, 'sql');
+    expected_rows: [["sql", 3], ["indexing", 2], ["replicas", 1]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - blank tag ignored, tie on count broken by tag"
+    setup_sql: |
+      INSERT INTO article_tags (article_id, tag) VALUES
+        (7, 'Deploy'), (8, ''), (8, 'alerts'), (9, 'deploy'), (9, 'ALERTS');
+    expected_rows: [["alerts", 2], ["deploy", 2]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Only blank and space-only tags - no rows (space-only must be dropped after trimming)"
+    setup_sql: |
+      INSERT INTO article_tags (article_id, tag) VALUES (1, ''), (2, '   '), (3, ' ');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Exact duplicate rows for one article count once (COUNT(*) would give 3)"
+    setup_sql: |
+      INSERT INTO article_tags (article_id, tag) VALUES (5, 'kafka'), (5, 'kafka'), (5, 'Kafka '), (6, 'redis');
+    expected_rows: [["kafka", 1], ["redis", 1]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Inner spaces are kept - 'load balancer' and 'loadbalancer' stay separate"
+    setup_sql: |
+      INSERT INTO article_tags (article_id, tag) VALUES
+        (1, 'Load Balancer'), (2, '  load balancer'), (3, 'loadbalancer'), (4, 'LOAD BALANCER  ');
+    expected_rows: [["load balancer", 3], ["loadbalancer", 1]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Several ties on count sorted alphabetically by normalized tag, not by first appearance"
+    setup_sql: |
+      INSERT INTO article_tags (article_id, tag) VALUES
+        (1, 'Zookeeper'), (2, 'zookeeper'), (1, 'Backups'), (3, 'backups'), (4, 'MIGRATIONS'), (5, 'migrations'),
+        (6, 'pgbouncer'), (6, 'PgBouncer'), (7, 'grafana');
+    expected_rows: [["backups", 2], ["migrations", 2], ["zookeeper", 2], ["grafana", 1], ["pgbouncer", 1]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Digits in tags and a single article with many distinct tags"
+    setup_sql: |
+      INSERT INTO article_tags (article_id, tag) VALUES
+        (10, 'http2'), (10, 'HTTP3'), (10, 'tls13'), (11, ' Http2 '), (12, 'http2'), (12, 'TLS13');
+    expected_rows: [["http2", 3], ["tls13", 2], ["http3", 1]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Larger set - counts from 1 to 5 with many spellings and repeated tags per article"
+    setup_sql: |
+      INSERT INTO article_tags (article_id, tag) VALUES
+        (1, 'postgres'), (2, 'Postgres'), (3, ' POSTGRES'), (4, 'postgres '), (5, 'PostgreS'), (5, 'postgres'),
+        (1, 'backups'), (2, 'Backups'), (3, 'BACKUPS'), (4, ' backups '),
+        (1, 'cdn'), (6, 'CDN'), (7, 'cdn'),
+        (8, 'oncall'), (8, 'OnCall'), (9, 'oncall'),
+        (10, 'terraform'), (10, ''), (11, '  ');
+    expected_rows: [["postgres", 5], ["backups", 4], ["cdn", 3], ["oncall", 2], ["terraform", 1]]
+expected_concepts:
+  - "string normalisation with LOWER and TRIM"
+  - "GROUP BY on a derived expression"
+  - "COUNT(DISTINCT ...) versus COUNT(*)"
+  - "filtering blank values before grouping"
+  - "deterministic multi-key ORDER BY"
+optimal_complexity: {time: "O(n log n) for grouping and sorting", space: "O(n)"}
+rubric:
+  excellent: "Normalises with LOWER(TRIM(tag)) once (CTE or derived table), drops empty results, counts DISTINCT article_id per normalized tag, orders by count descending then tag, and suggests normalising tags on write with a unique constraint on (article_id, normalized tag)."
+  good: "Correct query after a hint about counting distinct articles or dropping space-only tags."
+  weak: "Groups on the raw tag, uses COUNT(*) so variants on one article double count, filters only tag = '' and keeps space-only tags, or leaves ties unordered."
+  criteria:
+    correctness: "All tests pass, including variants on one article, exact duplicates and space-only tags."
+    efficiency: "A single grouped pass over the table."
+    code_quality: "The normalisation expression is written once and the output columns use the required names."
+    edge_cases: "Empty table, blank and space-only tags, inner spaces kept and ties on count."
+    communication: "Explains why DISTINCT is needed and where the clean-up belongs long term."
+hints:
+  - "Two spellings only collapse into one group after you rewrite every tag into a single canonical form."
+  - "Trim and lower-case the tag, discard the ones that become empty, and remember the question counts articles rather than rows."
+  - "In a CTE select article_id and LOWER(TRIM(tag)); from it keep rows whose normalized value is not the empty string, group by that value, count distinct article ids, and sort by that count descending and then by the tag."
+followups:
+  - "How would you prevent new inconsistent tags from being written?"
+  - "How would you list the original spellings that were merged into each normalized tag?"
+  - "What would change if tags could contain non-ASCII letters?"
+common_errors:
+  - "Using COUNT(*) instead of COUNT(DISTINCT article_id), so an article tagged with two variants counts twice."
+  - "Filtering tag <> '' before trimming, which keeps tags made only of spaces."
+  - "Grouping by the raw tag, so case variants stay separate."
+  - "Ordering only by count, leaving ties in an undefined order."

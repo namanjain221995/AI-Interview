@@ -1,0 +1,184 @@
+version: 1
+slug: region_revenue_share
+title: Regional Revenue Share
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, business_analyst, product_manager]
+time_limit_minutes: 13
+prompt_markdown: |
+  ## Regional Revenue Share
+
+  The quarterly business review needs to show how much of total revenue each sales region brought in.
+  Every order is one row in table `orders`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | region | VARCHAR(30) | sales region code (lowercase letters only) |
+  | amount_cents | INTEGER | order value in cents, always `>= 1` |
+
+  For every region that has at least one order return:
+
+  - `region`,
+  - `revenue_cents`: the sum of `amount_cents` of the region's orders,
+  - `share_pct`: `100 * revenue_cents / total_revenue_cents` as a **whole number rounded down**
+    (integer division), where `total_revenue_cents` is the sum over all orders of all regions.
+
+  Because of rounding down, the shares do not always add up to 100. Order the result by
+  `revenue_cents` descending, then `region` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  orders
+  +----+--------+--------------+
+  | id | region | amount_cents |
+  +----+--------+--------------+
+  | 1  | emea   | 5000         |
+  | 2  | amer   | 6000         |
+  | 3  | apac   | 1500         |
+  | 4  | emea   | 2500         |
+  +----+--------+--------------+
+
+  Output
+  +--------+---------------+-----------+
+  | region | revenue_cents | share_pct |
+  +--------+---------------+-----------+
+  | emea   | 7500          | 50        |
+  | amer   | 6000          | 40        |
+  | apac   | 1500          | 10        |
+  +--------+---------------+-----------+
+  ```
+
+  ### Example 2
+  ```
+  orders
+  +----+--------+--------------+
+  | id | region | amount_cents |
+  +----+--------+--------------+
+  | 1  | emea   | 100          |
+  | 2  | apac   | 100          |
+  | 3  | amer   | 100          |
+  +----+--------+--------------+
+
+  Output
+  +--------+---------------+-----------+
+  | region | revenue_cents | share_pct |
+  +--------+---------------+-----------+
+  | amer   | 100           | 33        |
+  | apac   | 100           | 33        |
+  | emea   | 100           | 33        |
+  +--------+---------------+-----------+
+  Each share is 33.33...%, rounded down to 33; equal revenues are ordered by region.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^5`
+  - `1 <= amount_cents <= 2 * 10^9`; region and overall totals can exceed 32-bit integers.
+  - `region` contains lowercase letters only and is never NULL.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return region, revenue_cents and share_pct (100 * region revenue / total revenue, rounded down), ordered by revenue_cents DESC, region.
+    SELECT region, SUM(amount_cents) AS revenue_cents, 0 AS share_pct
+    FROM orders
+    GROUP BY region
+    ORDER BY revenue_cents DESC, region;
+reference_solutions:
+  sql: |
+    SELECT o.region,
+           SUM(o.amount_cents) AS revenue_cents,
+           100 * SUM(o.amount_cents) / (SELECT SUM(t.amount_cents) FROM orders t) AS share_pct
+    FROM orders o
+    GROUP BY o.region
+    ORDER BY revenue_cents DESC, o.region;
+sql_setup: |
+  CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    region VARCHAR(30) NOT NULL,
+    amount_cents INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - exact shares, several orders per region"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, region, amount_cents) VALUES (1, 'emea', 5000), (2, 'amer', 6000), (3, 'apac', 1500), (4, 'emea', 2500);
+    expected_rows: [["emea", 7500, 50], ["amer", 6000, 40], ["apac", 1500, 10]]
+  - id: t2
+    description: "Example 2 - equal revenues, shares rounded down, ties ordered by region"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, region, amount_cents) VALUES (1, 'emea', 100), (2, 'apac', 100), (3, 'amer', 100);
+    expected_rows: [["amer", 100, 33], ["apac", 100, 33], ["emea", 100, 33]]
+  - id: t3
+    hidden: true
+    description: "Empty table returns no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single region owns 100 percent"
+    ordered: true
+    setup_sql: "INSERT INTO orders (id, region, amount_cents) VALUES (1, 'latam', 4321), (2, 'latam', 1);"
+    expected_rows: [["latam", 4322, 100]]
+  - id: t5
+    hidden: true
+    description: "Round down, not to nearest - 2/3 gives 66 and 1/3 gives 33"
+    ordered: true
+    setup_sql: "INSERT INTO orders (id, region, amount_cents) VALUES (1, 'amer', 200), (2, 'emea', 100);"
+    expected_rows: [["amer", 200, 66], ["emea", 100, 33]]
+  - id: t6
+    hidden: true
+    description: "Tiny region share below 1 percent becomes 0 (multiplying after dividing would zero every share)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, region, amount_cents) VALUES (1, 'amer', 99000), (2, 'anz', 999), (3, 'amer', 1);
+    expected_rows: [["amer", 99001, 99], ["anz", 999, 0]]
+  - id: t7
+    hidden: true
+    description: "Large values - region totals and 100 * revenue exceed 32-bit integers"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, region, amount_cents) VALUES
+        (1, 'amer', 2000000000), (2, 'amer', 2000000000), (3, 'amer', 2000000000),
+        (4, 'emea', 1999999999), (5, 'apac', 7);
+    expected_rows: [["amer", 6000000000, 74], ["emea", 1999999999, 24], ["apac", 7, 0]]
+  - id: t8
+    hidden: true
+    description: "Mixed ties on revenue among several regions with interleaved orders"
+    ordered: true
+    setup_sql: |
+      INSERT INTO orders (id, region, amount_cents) VALUES
+        (1, 'nordics', 300), (2, 'dach', 500), (3, 'iberia', 200), (4, 'benelux', 300), (5, 'iberia', 100),
+        (6, 'dach', 200), (7, 'uki', 700), (8, 'nordics', 400), (9, 'benelux', 400), (10, 'uki', 1);
+    expected_rows: [["uki", 701, 22], ["benelux", 700, 22], ["dach", 700, 22], ["nordics", 700, 22], ["iberia", 300, 9]]
+expected_concepts:
+  - "GROUP BY with SUM"
+  - "grand total via scalar subquery or window over grouped rows"
+  - "integer division and order of operations"
+  - "64-bit aggregates"
+optimal_complexity: {time: "O(n + r log r) for n orders and r regions", space: "O(r)"}
+rubric:
+  excellent: "Groups by region, divides by the grand total from a scalar subquery or a window over the grouped rows, multiplies by 100 before dividing, keeps integer semantics and notes engine differences (PostgreSQL's SUM of BIGINT returns NUMERIC)."
+  good: "Correct query after a hint about the grand total or the order of multiplication and division."
+  weak: "Divides before multiplying (every share becomes 0), rounds instead of rounding down, or computes the total per region."
+  criteria:
+    correctness: "All tests pass, including truncation, tiny shares, ties and large totals."
+    efficiency: "Scans the table a bounded number of times; no correlated subquery per order."
+    code_quality: "Clear aliases and an explicit ORDER BY with the tie-breaker."
+    edge_cases: "Empty table, single region, equal revenues and values beyond 32-bit."
+    communication: "Explains why the shares need not sum to 100 and how integer division behaves."
+hints:
+  - "Each region's row needs two numbers: its own revenue and the revenue of the whole table."
+  - "Get the grand total once - a scalar subquery or a window over the grouped rows works - and watch the order of multiplication and division with integers."
+  - "Group by region, take SUM(amount_cents), and compute 100 * SUM(amount_cents) / (SELECT SUM(amount_cents) FROM orders); order by revenue_cents DESC, region."
+followups:
+  - "How would you return shares with two decimal places in a way that works on both engines?"
+  - "How would you make the displayed shares add up to exactly 100?"
+  - "What happens if refunds are stored as negative amounts and the total becomes zero?"
+common_errors:
+  - "Computing revenue_cents / total * 100, which is 0 for every region under integer division."
+  - "Using ROUND, which turns 66.67 into 67 instead of 66."
+  - "Writing SUM(...) OVER () without grouping, which returns one row per order."

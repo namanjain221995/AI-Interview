@@ -1,0 +1,206 @@
+version: 1
+slug: conflicting_duplicate_records
+title: Conflicting Supplier Prices
+difficulty: easy
+competency_keys: [sql, databases, debugging]
+role_tags: [data, qa, dba]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Conflicting Supplier Prices
+
+  Procurement loads supplier price files into table `supplier_prices` every night. Because files
+  overlap, the same `(supplier, sku)` pair often appears several times:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | supplier | VARCHAR(40) | supplier code |
+  | sku | VARCHAR(40) | stock keeping unit |
+  | price_cents | INTEGER | **NULL** when the file row had no price |
+  | loaded_on | TEXT | load date as `YYYY-MM-DD` |
+
+  Repeated rows that carry the **same** price are harmless. A pair is a **conflict** when its rows
+  carry **at least two different non-NULL prices**; rows with a NULL price never count as a price,
+  so a pair whose only disagreement is a missing price is not a conflict.
+
+  Return one row per conflicting pair with columns `supplier`, `sku`, `distinct_prices` (how many
+  different non-NULL prices the pair has), `min_price` and `max_price` (over its non-NULL prices),
+  ordered by `supplier` ascending, then `sku` ascending. Return no rows when nothing conflicts.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  supplier_prices
+  +----+----------+---------+-------------+------------+
+  | id | supplier | sku     | price_cents | loaded_on  |
+  +----+----------+---------+-------------+------------+
+  | 1  | acme     | BOLT-10 | 120         | 2026-03-01 |
+  | 2  | acme     | BOLT-10 | 120         | 2026-03-02 |
+  | 3  | acme     | NUT-4   | 35          | 2026-03-01 |
+  | 4  | acme     | NUT-4   | 40          | 2026-03-02 |
+  | 5  | acme     | NUT-4   | 35          | 2026-03-03 |
+  | 6  | bolton   | BOLT-10 | 118         | 2026-03-01 |
+  | 7  | bolton   | GEAR-2  | 990         | 2026-03-01 |
+  | 8  | bolton   | GEAR-2  | NULL        | 2026-03-02 |
+  +----+----------+---------+-------------+------------+
+
+  Output
+  +----------+-------+-----------------+-----------+-----------+
+  | supplier | sku   | distinct_prices | min_price | max_price |
+  +----------+-------+-----------------+-----------+-----------+
+  | acme     | NUT-4 | 2               | 35        | 40        |
+  +----------+-------+-----------------+-----------+-----------+
+  acme/BOLT-10 repeats one price, bolton/GEAR-2 only adds a missing price, and BOLT-10 at two
+  different suppliers is two separate pairs.
+  ```
+
+  ### Example 2
+  ```
+  supplier_prices
+  +----+----------+-------+-------------+------------+
+  | id | supplier | sku   | price_cents | loaded_on  |
+  +----+----------+-------+-------------+------------+
+  | 1  | zenith   | CAP-1 | 500         | 2026-04-10 |
+  | 2  | zenith   | CAP-1 | 450         | 2026-04-11 |
+  | 3  | zenith   | CAP-1 | 525         | 2026-04-12 |
+  | 4  | zenith   | CAP-1 | 450         | 2026-04-13 |
+  +----+----------+-------+-------------+------------+
+
+  Output
+  +----------+-------+-----------------+-----------+-----------+
+  | supplier | sku   | distinct_prices | min_price | max_price |
+  +----------+-------+-----------------+-----------+-----------+
+  | zenith   | CAP-1 | 3               | 450       | 525       |
+  +----------+-------+-----------------+-----------+-----------+
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return supplier, sku, distinct_prices, min_price and max_price for every pair with
+    -- at least two different non-NULL prices, ordered by supplier, then sku.
+    SELECT supplier, sku, COUNT(*) AS distinct_prices, MIN(price_cents) AS min_price,
+           MAX(price_cents) AS max_price
+    FROM supplier_prices
+    GROUP BY supplier, sku
+    HAVING COUNT(*) >= 2
+    ORDER BY supplier, sku;
+reference_solutions:
+  sql: |
+    SELECT supplier,
+           sku,
+           COUNT(DISTINCT price_cents) AS distinct_prices,
+           MIN(price_cents) AS min_price,
+           MAX(price_cents) AS max_price
+    FROM supplier_prices
+    GROUP BY supplier, sku
+    HAVING COUNT(DISTINCT price_cents) >= 2
+    ORDER BY supplier, sku;
+sql_setup: |
+  CREATE TABLE supplier_prices (
+    id INTEGER PRIMARY KEY,
+    supplier VARCHAR(40) NOT NULL,
+    sku VARCHAR(40) NOT NULL,
+    price_cents INTEGER,
+    loaded_on TEXT NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - pure duplicates, a NULL-only difference and the same sku at two suppliers are not conflicts"
+    setup_sql: |
+      INSERT INTO supplier_prices (id, supplier, sku, price_cents, loaded_on) VALUES
+        (1, 'acme', 'BOLT-10', 120, '2026-03-01'), (2, 'acme', 'BOLT-10', 120, '2026-03-02'),
+        (3, 'acme', 'NUT-4', 35, '2026-03-01'), (4, 'acme', 'NUT-4', 40, '2026-03-02'),
+        (5, 'acme', 'NUT-4', 35, '2026-03-03'), (6, 'bolton', 'BOLT-10', 118, '2026-03-01'),
+        (7, 'bolton', 'GEAR-2', 990, '2026-03-01'), (8, 'bolton', 'GEAR-2', NULL, '2026-03-02');
+    expected_rows: [["acme", "NUT-4", 2, 35, 40]]
+    ordered: true
+  - id: t2
+    description: "Example 2 - three different prices with a repeat"
+    setup_sql: |
+      INSERT INTO supplier_prices (id, supplier, sku, price_cents, loaded_on) VALUES
+        (1, 'zenith', 'CAP-1', 500, '2026-04-10'), (2, 'zenith', 'CAP-1', 450, '2026-04-11'),
+        (3, 'zenith', 'CAP-1', 525, '2026-04-12'), (4, 'zenith', 'CAP-1', 450, '2026-04-13');
+    expected_rows: [["zenith", "CAP-1", 3, 450, 525]]
+    ordered: true
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    expected_rows: []
+    ordered: true
+  - id: t4
+    hidden: true
+    description: "Every row is a single or a pure duplicate - no conflicts (COUNT(*) trap)"
+    setup_sql: |
+      INSERT INTO supplier_prices (id, supplier, sku, price_cents, loaded_on) VALUES
+        (1, 'acme', 'A', 100, '2026-01-01'), (2, 'acme', 'A', 100, '2026-01-02'), (3, 'acme', 'A', 100, '2026-01-03'),
+        (4, 'acme', 'B', 7, '2026-01-01'), (5, 'kite', 'A', 250, '2026-01-01');
+    expected_rows: []
+    ordered: true
+  - id: t5
+    hidden: true
+    description: "Pairs with only NULL prices or one price plus NULLs are not conflicts; NULLs ignored in min/max of a real conflict"
+    setup_sql: |
+      INSERT INTO supplier_prices (id, supplier, sku, price_cents, loaded_on) VALUES
+        (1, 'acme', 'N1', NULL, '2026-02-01'), (2, 'acme', 'N1', NULL, '2026-02-02'),
+        (3, 'acme', 'N2', 60, '2026-02-01'), (4, 'acme', 'N2', NULL, '2026-02-02'), (5, 'acme', 'N2', 60, '2026-02-03'),
+        (6, 'acme', 'N3', NULL, '2026-02-01'), (7, 'acme', 'N3', 80, '2026-02-02'), (8, 'acme', 'N3', 75, '2026-02-03');
+    expected_rows: [["acme", "N3", 2, 75, 80]]
+    ordered: true
+  - id: t6
+    hidden: true
+    description: "Same sku conflicting at one supplier only; grouping must use both supplier and sku"
+    setup_sql: |
+      INSERT INTO supplier_prices (id, supplier, sku, price_cents, loaded_on) VALUES
+        (1, 'acme', 'PIPE-3', 300, '2026-05-01'), (2, 'bolton', 'PIPE-3', 310, '2026-05-01'),
+        (3, 'bolton', 'PIPE-3', 305, '2026-05-02'), (4, 'cobalt', 'PIPE-3', 300, '2026-05-01');
+    expected_rows: [["bolton", "PIPE-3", 2, 305, 310]]
+    ordered: true
+  - id: t7
+    hidden: true
+    description: "Several conflicts ordered by supplier then sku; inserted in scrambled order; zero and large prices"
+    setup_sql: |
+      INSERT INTO supplier_prices (id, supplier, sku, price_cents, loaded_on) VALUES
+        (1, 'delta', 'Z-9', 0, '2026-06-01'), (2, 'beta', 'M-1', 1999999999, '2026-06-01'),
+        (3, 'delta', 'A-1', 10, '2026-06-01'), (4, 'beta', 'M-1', 1999999000, '2026-06-02'),
+        (5, 'delta', 'Z-9', 15, '2026-06-02'), (6, 'delta', 'A-1', 11, '2026-06-02'),
+        (7, 'beta', 'C-4', 42, '2026-06-01'), (8, 'beta', 'C-4', 42, '2026-06-02');
+    expected_rows: [["beta", "M-1", 2, 1999999000, 1999999999], ["delta", "A-1", 2, 10, 11], ["delta", "Z-9", 2, 0, 15]]
+    ordered: true
+  - id: t8
+    hidden: true
+    description: "Sku codes differing only by suffix are different pairs"
+    setup_sql: |
+      INSERT INTO supplier_prices (id, supplier, sku, price_cents, loaded_on) VALUES
+        (1, 'acme', 'WIRE', 50, '2026-07-01'), (2, 'acme', 'WIRE-X', 55, '2026-07-01'),
+        (3, 'acme', 'WIRE', 50, '2026-07-02'), (4, 'acme', 'WIRE-X', 56, '2026-07-02');
+    expected_rows: [["acme", "WIRE-X", 2, 55, 56]]
+    ordered: true
+expected_concepts:
+  - GROUP BY on a composite key
+  - HAVING with COUNT(DISTINCT ...)
+  - aggregate functions ignore NULL
+  - deterministic ORDER BY
+optimal_complexity: {time: "O(n log n) for the grouping sort (O(n) with hashing)", space: O(n)}
+rubric:
+  excellent: Groups by (supplier, sku), filters with HAVING COUNT(DISTINCT price_cents) >= 2, explains that COUNT(DISTINCT), MIN and MAX skip NULLs, and mentions a unique constraint or upsert to stop duplicates at load time.
+  good: Correct query after a hint about COUNT(*) versus COUNT(DISTINCT) or about NULL prices.
+  weak: Counts rows instead of distinct prices, treats NULL as a conflicting price, or groups by sku alone.
+  criteria:
+    correctness: All tests pass, including pure duplicates, NULL-only differences and the same sku at several suppliers.
+    efficiency: A single grouped pass over the table instead of a self-join of every pair of rows.
+    code_quality: Clear aliases matching the requested column names.
+    edge_cases: Empty table, all-NULL pairs, zero prices and very large prices.
+    communication: Explains how aggregates treat NULL and why the composite key matters.
+hints:
+  - A conflict is a property of a whole (supplier, sku) group, not of a single row.
+  - Counting rows tells you a pair is repeated, not that it disagrees; count the different prices instead, and remember what aggregates do with NULL.
+  - GROUP BY supplier and sku, keep groups with HAVING COUNT(DISTINCT price_cents) >= 2, and select that count together with MIN and MAX of the price, ordered by supplier and sku.
+followups:
+  - How would you return the load date on which each conflicting price first appeared?
+  - How would you prevent conflicting rows from being loaded in the first place?
+  - Should a NULL price be treated as a data quality issue of its own, and how would you report it?
+common_errors:
+  - Using COUNT(*) >= 2, which flags harmless pure duplicates.
+  - Using COUNT(DISTINCT COALESCE(price_cents, -1)), which turns a missing price into a fake conflict.
+  - Grouping by sku only, which merges prices from different suppliers.

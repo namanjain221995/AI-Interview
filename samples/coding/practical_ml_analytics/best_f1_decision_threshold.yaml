@@ -1,0 +1,158 @@
+version: 1
+slug: best_f1_decision_threshold
+title: Best F1 Alert Threshold
+difficulty: medium
+competency_keys: [machine_learning, algorithms, problem_solving]
+role_tags: [ml, data_scientist, sre]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Best F1 Alert Threshold
+
+  An anomaly-detection model scores every five-minute window of a service's metrics, and the on-call
+  team has labelled past windows: `1` if an incident really happened, `0` otherwise. Before the model
+  pages anyone, the team must pick an alert threshold.
+
+  With threshold `t`, a window is **flagged** when `score >= t`. Counting over all windows:
+
+  - `TP` = flagged windows labelled `1`, `FP` = flagged windows labelled `0`,
+    `FN` = unflagged windows labelled `1`.
+  - `F1 = 2 * TP / (2 * TP + FP + FN)`.
+
+  Consider only thresholds equal to one of the **distinct scores**. Return the threshold with the
+  **highest F1**. If several thresholds reach the same F1 (equal as exact fractions), return the
+  **largest** of them, because it pages people less often. Return `-1.0` if no window is labelled
+  `1` (including when there are no windows at all).
+
+  Compute F1 from the integer counts; two values that are mathematically equal must count as a tie
+  (formulas built from rounded precision and recall can disagree in the last bit). The history can
+  hold `10^5` windows, so aim for `O(n log n)`.
+
+  ### Example 1
+  ```
+  Input:  scores = [0.9, 0.8, 0.6, 0.4, 0.2], labels = [1, 0, 1, 1, 0]
+  Output: 0.4
+  Explanation: thresholds 0.9, 0.8, 0.6, 0.4, 0.2 give F1 = 2/4, 2/5, 4/6, 6/7 and 6/8.
+  The best is 6/7 at 0.4.
+  ```
+
+  ### Example 2
+  ```
+  Input:  scores = [0.2, 0.9, 0.4, 0.6], labels = [1, 1, 0, 0]
+  Output: 0.9
+  Explanation: threshold 0.9 flags one window (TP 1, FN 1): F1 = 2/3. Threshold 0.2 flags all four
+  (TP 2, FP 2): F1 = 4/6 = 2/3 as well. 0.6 and 0.4 score lower. The tie goes to the larger
+  threshold, 0.9.
+  ```
+
+  ### Example 3
+  ```
+  Input:  scores = [0.7, 0.1], labels = [0, 0]
+  Output: -1.0
+  Explanation: no window is labelled as an incident.
+  ```
+
+  ### Constraints
+  - `0 <= scores.length == labels.length <= 10^5`
+  - `0.0 <= scores[i] <= 1.0`
+  - `labels[i]` is `0` or `1`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: best_f1_threshold
+  params:
+    - {name: scores, type: "float[]"}
+    - {name: labels, type: "int[]"}
+  return_type: float
+  comparison: float_tolerance
+reference_solutions:
+  python: |
+    def best_f1_threshold(scores: list[float], labels: list[int]) -> float:
+        positives = sum(labels)
+        if positives == 0:
+            return -1.0
+        pairs = sorted(zip(scores, labels), reverse=True)
+        best_threshold = -1.0
+        best_num, best_den = -1, 1   # best F1 as the fraction best_num / best_den
+        tp = flagged = 0
+        i = 0
+        while i < len(pairs):
+            threshold = pairs[i][0]
+            while i < len(pairs) and pairs[i][0] == threshold:
+                tp += pairs[i][1]
+                flagged += 1
+                i += 1
+            # 2TP + FP + FN simplifies to flagged + positives.
+            num, den = 2 * tp, flagged + positives
+            if num * best_den > best_num * den:   # strictly better; ties keep the larger threshold
+                best_num, best_den, best_threshold = num, den, threshold
+        return best_threshold
+  javascript: |
+    function bestF1Threshold(scores, labels) {
+      let positives = 0;
+      for (const label of labels) positives += label;
+      if (positives === 0) return -1;
+      const order = scores.map((_, i) => i).sort((a, b) => scores[b] - scores[a]);
+      let bestThreshold = -1;
+      let bestNum = -1;
+      let bestDen = 1;
+      let tp = 0;
+      let flagged = 0;
+      let i = 0;
+      while (i < order.length) {
+        const threshold = scores[order[i]];
+        while (i < order.length && scores[order[i]] === threshold) {
+          tp += labels[order[i]];
+          flagged++;
+          i++;
+        }
+        const num = 2 * tp;
+        const den = flagged + positives;
+        if (num * bestDen > bestNum * den) {
+          bestNum = num;
+          bestDen = den;
+          bestThreshold = threshold;
+        }
+      }
+      return bestThreshold;
+    }
+tests:
+  - {id: t1, args: [[0.9, 0.8, 0.6, 0.4, 0.2], [1, 0, 1, 1, 0]], expected: 0.4, description: "Example 1 - best F1 at an interior threshold"}
+  - {id: t2, args: [[0.2, 0.9, 0.4, 0.6], [1, 1, 0, 0]], expected: 0.9, description: "Example 2 - unsorted input and an F1 tie at 2/3 resolved to the larger threshold"}
+  - {id: t3, args: [[0.7, 0.1], [0, 0]], expected: -1.0, description: "Example 3 - no incident labels returns -1.0"}
+  - {id: t4, hidden: true, args: [[], []], expected: -1.0, description: "Empty history returns -1.0"}
+  - {id: t5, hidden: true, args: [[0.35], [1]], expected: 0.35, description: "Single positive window - its score is the threshold"}
+  - {id: t6, hidden: true, args: [[0.6, 0.3, 0.9, 0.3], [1, 1, 1, 1]], expected: 0.3, description: "Every window is an incident - only the lowest threshold reaches F1 = 1"}
+  - {id: t7, hidden: true, args: [[0.8, 0.8, 0.8, 0.5, 0.5, 0.1], [1, 0, 1, 1, 0, 0]], expected: 0.5, description: "Duplicate scores with mixed labels - a threshold flags the whole group at once (cannot split 0.8 or 0.5)"}
+  - {id: t8, hidden: true, args: [[0.0, 0.0, 1.0, 0.0], [0, 1, 0, 0]], expected: 0.0, description: "Scores at the bounds 0.0 and 1.0 - the only positive sits in the lowest group so 0.0 is returned, not -1.0"}
+  - {id: t9, hidden: true, args: [[0.3, 0.9, 0.5, 0.2, 0.7, 0.4, 0.6, 0.8], [0, 1, 1, 1, 0, 0, 1, 0]], expected: 0.5, description: "Exact tie at 2/3 between 0.5 and 0.2 - computing F1 via floating-point precision and recall breaks the tie the wrong way and returns 0.2"}
+  - {id: t10, hidden: true, args: [[0.75, 0.6, 0.95, 0.7, 0.85, 0.9, 0.65, 0.8], [1, 1, 1, 0, 0, 1, 0, 0]], expected: 0.9, description: "Three-way exact tie at 2/3 (thresholds 0.9, 0.75 and 0.6) - the largest, 0.9, must win"}
+  - {id: t11, hidden: true, args: [[0.19, 0.59, 0.26, 0.48, 0.6, 0.39, 0.25, 0.53, 0.26, 0.38, 0.4, 0.16, 0.3, 0.52, 0.39, 0.17, 0.17, 0.24, 0.36, 0.28, 0.4, 0.42, 0.58, 0.44, 0.55, 0.26, 0.23, 0.0, 0.38, 0.47, 0.99, 0.55, 0.68, 0.16, 0.36, 0.57, 0.62, 0.1, 0.77, 0.5, 0.76, 0.87, 0.72, 0.38, 0.41, 0.55, 0.19, 0.62, 0.4, 0.16, 0.36, 0.3, 0.44, 0.27, 0.22, 0.47, 0.28, 0.4, 0.02, 0.0, 0.49, 0.26, 0.43, 0.31, 0.37, 0.38, 0.32, 0.23, 0.45, 0.43, 0.64, 0.16, 0.7, 1.0, 0.39, 0.25, 0.35, 0.49, 0.22, 0.14, 0.45, 0.4, 0.36, 0.59, 0.55, 0.19, 0.34, 0.58, 0.28, 0.09, 0.27, 0.23, 0.65, 0.22, 0.36, 0.37, 0.38, 0.12, 0.18, 0.41, 0.76, 0.26, 0.26, 0.64, 0.55, 0.15, 0.23, 0.23, 0.21, 0.07, 0.67, 0.59, 0.19, 0.82, 0.72, 0.28, 0.47, 0.58, 0.45, 0.84, 0.53, 0.38, 0.93, 0.35, 0.4, 0.15, 0.54, 0.5, 0.31, 0.3, 0.71, 0.34, 0.5, 0.54, 0.39, 0.48, 0.38, 0.48, 0.38, 0.49, 0.49, 0.49, 0.16, 0.42, 0.63, 0.58, 0.41, 0.52, 0.19, 0.45, 0.61, 0.4, 0.8, 0.45, 0.69, 0.43, 0.34, 0.53, 0.24, 0.32, 0.87, 0.45, 0.28, 0.47, 0.38, 0.25, 0.3, 0.57, 0.55, 0.0, 0.33, 0.48, 0.44, 0.34, 0.22, 0.24, 0.83, 0.29, 0.71, 0.32, 0.55, 0.32, 0.4, 1.0, 0.24, 0.48, 0.26, 0.45, 0.49, 0.23, 0.3, 0.58, 0.33, 0.48, 0.49, 0.27, 0.34, 0.64, 0.49, 0.88, 0.65, 0.79, 0.88, 0.22, 0.34, 0.26, 0.4, 0.0, 0.49, 0.71, 0.52, 0.13, 0.56, 0.43, 0.62, 0.41, 0.27, 0.37, 0.33, 0.35, 0.54, 0.23, 0.11, 0.25, 0.47, 0.67, 0.32, 0.27, 0.6, 0.69, 0.3, 0.34, 0.23, 0.3, 0.11, 0.3, 0.77, 0.26, 0.33, 0.38, 0.25, 0.41, 0.58, 0.36, 0.45, 0.26, 0.84, 0.21, 0.17, 0.42, 0.34, 0.22, 0.34, 0.4, 0.7, 0.33, 0.62, 0.55, 0.34, 0.41, 0.44, 0.4, 0.28, 0.42, 0.22, 0.14, 0.31, 0.93, 0.42, 0.44, 0.33, 0.14, 0.45, 0.37, 0.7, 0.36, 0.44, 0.3, 0.75, 0.44, 0.3, 0.4, 0.26, 0.41, 0.28, 0.27, 0.46, 0.38, 0.25, 0.28, 0.33, 0.52, 0.23, 0.45, 0.19, 0.42, 0.1, 0.46, 0.24, 0.16, 0.36, 0.3, 0.36, 0.45, 0.2, 0.74, 0.7, 0.5, 0.28, 0.23, 0.39, 0.38, 0.17, 0.33, 0.49, 0.56, 0.57, 0.49, 0.0, 0.89, 0.37, 0.1, 0.04, 0.25, 0.22, 0.38, 0.63, 0.44, 0.26, 0.52, 0.57, 0.24, 0.23, 0.61, 0.78, 0.34, 0.4, 0.26, 0.65, 0.73, 0.74, 0.29, 0.32, 0.28, 0.39, 0.28, 0.18, 0.28, 0.31, 0.79, 0.16, 0.4, 0.55, 0.49, 0.37, 0.01, 0.51, 0.17, 0.31, 0.38, 0.44, 0.35, 0.4, 0.33, 0.36, 0.26, 0.24, 0.46, 0.18, 0.4, 0.05, 0.47, 0.36, 0.54, 0.49, 0.16, 0.5, 0.75, 0.17, 0.83, 0.38, 0.28, 0.46, 0.33, 0.48, 0.37, 0.34, 0.71, 0.33, 0.43, 0.3, 0.53, 0.35, 0.33, 0.14, 0.41, 0.17, 0.96, 0.4, 0.88, 0.76, 0.25, 0.32, 0.34, 0.18, 0.7, 0.48, 0.23, 0.49, 0.38, 0.68, 1.0, 0.34, 0.19, 0.19, 0.78, 0.49, 0.49, 0.29, 0.3, 0.4, 0.34, 0.4, 0.31, 0.42, 0.82, 0.54, 0.36, 0.39, 0.46, 0.42, 0.45, 0.27, 0.23, 0.03, 0.25, 0.32, 0.27, 0.33, 0.31, 0.65, 0.25, 0.43, 0.12, 0.56, 0.54, 0.32, 0.29, 0.15, 0.34, 0.09, 0.21, 0.31, 0.81, 0.26, 0.38, 0.43, 0.47, 1.0, 0.15, 0.51, 0.37, 0.17, 0.28, 0.29, 0.57, 0.32, 0.85, 0.33, 0.33, 0.19, 0.63, 0.48, 0.79, 0.4, 0.28, 0.34, 0.15, 0.23, 0.28, 0.37, 0.38, 0.56, 0.36, 0.06, 0.44, 0.42, 0.86, 0.44, 0.39, 0.17, 0.68, 0.13, 0.39, 0.36, 0.65, 0.73, 0.51, 0.43, 0.22], [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0]], expected: 0.58, description: "Stress - 500 windows, 15 percent incidents, scores rounded to 2 decimals with many duplicates"}
+expected_concepts:
+  - sorting by score and sweeping thresholds from high to low
+  - prefix counts of flagged windows and true positives
+  - F1 rewritten as 2TP / (flagged + positives)
+  - exact comparison of fractions by cross-multiplication
+  - processing groups of equal scores together
+optimal_complexity: {time: O(n log n), space: O(n)}
+rubric:
+  excellent: Sorts once, sweeps distinct scores from the top while maintaining TP and flagged counts, evaluates every threshold in O(1), compares F1 values exactly (fractions or cross-multiplication), applies the larger-threshold tie-break and explains the trade-off between paging fatigue and missed incidents.
+  good: Correct O(n log n) sweep that needs a hint about equal-score groups, the tie-break direction or floating-point ties.
+  weak: Recomputes the confusion matrix from scratch for each threshold (O(n^2)), splits a group of equal scores across thresholds, returns the smallest tied threshold, or divides by zero when there are no positives.
+  criteria:
+    correctness: All tests pass, including duplicate scores, exact F1 ties and histories without incidents.
+    efficiency: One sort and one linear sweep with constant work per distinct score.
+    code_quality: Clear running counters and a comparison that makes the tie-break rule obvious.
+    edge_cases: Empty input, a single window, all windows positive, scores of exactly 0.0 and 1.0.
+    communication: Explains why the threshold is only evaluated at distinct scores and why F1 suits rare incidents better than accuracy.
+hints:
+  - Lowering the threshold only ever adds windows to the flagged set, so think about visiting candidate thresholds in descending order and updating counts instead of recounting.
+  - Once you know how many windows are flagged and how many of them are incidents, F1 needs no other information, because FP plus FN can be written using the flagged count and the total number of incidents.
+  - Sort by score descending, consume each group of equal scores together while adding to the flagged and true-positive counts, compute F1 as two times TP over flagged plus total positives, and replace the best only when the new value is strictly greater (compare the fractions by cross-multiplying) so that ties keep the larger threshold found first.
+followups:
+  - The team says a missed incident costs ten times more than a false page; how would you change the objective?
+  - How would you choose a threshold that guarantees at least 90 percent recall with the best precision?
+  - Why might the best threshold on historical data drift after the model is retrained?
+common_errors:
+  - Treating each window separately and splitting a group of equal scores across two thresholds.
+  - Returning the smallest threshold on a tie instead of the largest.
+  - Computing F1 from floating-point precision and recall and missing exact ties.
+  - Recounting TP and FP for every candidate threshold, which is quadratic.

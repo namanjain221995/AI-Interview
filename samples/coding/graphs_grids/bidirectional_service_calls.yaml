@@ -1,0 +1,189 @@
+version: 1
+slug: bidirectional_service_calls
+title: "Bidirectional Service Calls (SQL)"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, backend, dba, sre]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Bidirectional Service Calls
+
+  A tracing pipeline records which microservice called which other service. Architects want to find pairs
+  of services that call **each other**, because such mutual dependencies make deployments and outages
+  harder to reason about.
+
+  Table `service_calls`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | caller | TEXT | service that made the call |
+  | callee | TEXT | service that was called |
+
+  The table has no primary key: the same call can be recorded many times, and a service may call
+  itself. Service names are lowercase ASCII letters only.
+
+  Two **different** services `x` and `y` are a mutual pair when there is at least one row with
+  `x` calling `y` **and** at least one row with `y` calling `x`. Return each mutual pair **exactly once**
+  as the columns `service_a` and `service_b`, with `service_a < service_b` (alphabetical order). Order
+  the rows by `service_a`, then `service_b`, both ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  service_calls
+  +---------+---------+
+  | caller  | callee  |
+  +---------+---------+
+  | api     | auth    |
+  | auth    | api     |
+  | api     | billing |
+  | ledger  | billing |
+  | billing | ledger  |
+  | billing | ledger  |
+  | cache   | cache   |
+  +---------+---------+
+
+  Output
+  +-----------+-----------+
+  | service_a | service_b |
+  +-----------+-----------+
+  | api       | auth      |
+  | billing   | ledger    |
+  +-----------+-----------+
+  api calls billing, but billing never calls api. cache calling itself is not a pair.
+  The repeated billing -> ledger rows still produce one output row.
+  ```
+
+  ### Example 2
+  ```
+  service_calls
+  +---------+---------+
+  | caller  | callee  |
+  +---------+---------+
+  | web     | api     |
+  | api     | db      |
+  | db      | web     |
+  +---------+---------+
+
+  Output: no rows (the calls form a cycle, but no two services call each other directly).
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return each mutual pair once as service_a < service_b, ordered by service_a, service_b.
+    SELECT caller AS service_a, callee AS service_b
+    FROM service_calls
+    ORDER BY service_a, service_b;
+reference_solutions:
+  sql: |
+    SELECT DISTINCT a.caller AS service_a, a.callee AS service_b
+    FROM service_calls a
+    JOIN service_calls b
+      ON b.caller = a.callee
+     AND b.callee = a.caller
+    WHERE a.caller < a.callee
+    ORDER BY service_a, service_b;
+sql_setup: |
+  CREATE TABLE service_calls (
+    caller TEXT NOT NULL,
+    callee TEXT NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1"
+    setup_sql: |
+      INSERT INTO service_calls (caller, callee) VALUES
+        ('api', 'auth'), ('auth', 'api'), ('api', 'billing'), ('ledger', 'billing'),
+        ('billing', 'ledger'), ('billing', 'ledger'), ('cache', 'cache');
+    expected_rows: [["api", "auth"], ["billing", "ledger"]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - a three-service cycle has no mutual pair"
+    setup_sql: |
+      INSERT INTO service_calls (caller, callee) VALUES ('web', 'api'), ('api', 'db'), ('db', 'web');
+    expected_rows: []
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Only self-calls, repeated - never a pair"
+    setup_sql: |
+      INSERT INTO service_calls (caller, callee) VALUES ('cache', 'cache'), ('cache', 'cache'), ('queue', 'queue');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Both directions recorded many times still yields one row"
+    setup_sql: |
+      INSERT INTO service_calls (caller, callee) VALUES
+        ('search', 'index'), ('index', 'search'), ('search', 'index'), ('index', 'search'), ('index', 'search');
+    expected_rows: [["index", "search"]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "One hub mutual with several services - ordering by service_b within the same service_a"
+    setup_sql: |
+      INSERT INTO service_calls (caller, callee) VALUES
+        ('gateway', 'users'), ('users', 'gateway'), ('orders', 'gateway'), ('gateway', 'orders'),
+        ('gateway', 'carts'), ('carts', 'gateway'), ('gateway', 'metrics');
+    expected_rows: [["carts", "gateway"], ["gateway", "orders"], ["gateway", "users"]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Prefix names (auth vs authz) and pair order independent of insertion order"
+    setup_sql: |
+      INSERT INTO service_calls (caller, callee) VALUES
+        ('authz', 'auth'), ('auth', 'authz'), ('zeta', 'alpha'), ('alpha', 'zeta'), ('auth', 'alpha');
+    expected_rows: [["alpha", "zeta"], ["auth", "authz"]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "One-way calls only, including a long chain"
+    setup_sql: |
+      INSERT INTO service_calls (caller, callee) VALUES
+        ('a', 'b'), ('b', 'c'), ('c', 'd'), ('d', 'e'), ('a', 'c'), ('a', 'e');
+    expected_rows: []
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Mixture of mutual pairs, self-calls and one-way calls"
+    setup_sql: |
+      INSERT INTO service_calls (caller, callee) VALUES
+        ('mail', 'mail'), ('mail', 'alerts'), ('alerts', 'mail'), ('alerts', 'sms'),
+        ('sms', 'push'), ('push', 'sms'), ('push', 'push'), ('alerts', 'alerts');
+    expected_rows: [["alerts", "mail"], ["push", "sms"]]
+expected_concepts:
+  - "self-join on the same table with swapped columns"
+  - "DISTINCT to collapse duplicate rows"
+  - "canonical ordering of an unordered pair (a < b)"
+  - "deterministic ORDER BY"
+optimal_complexity: {time: "O(n log n) with an index on (caller, callee)", space: "O(n)"}
+rubric:
+  excellent: "Self-joins the table with caller and callee swapped, keeps only caller < callee to emit each pair once and drop self-calls, de-duplicates with DISTINCT, orders deterministically and mentions an index on (caller, callee)."
+  good: "Correct query after a hint about duplicates or about returning each pair only once."
+  weak: "Returns each pair twice (both orientations), includes self-calls, or produces duplicate rows from repeated calls."
+  criteria:
+    correctness: "All tests pass, including repeated calls, self-calls and prefix names."
+    efficiency: "A single set-based self-join or EXISTS; no per-row procedural logic."
+    code_quality: "Readable aliases and an explicit join condition for both directions."
+    edge_cases: "Empty table, only self-calls, cycles longer than two and hubs with several partners."
+    communication: "Explains why caller < callee both removes mirror duplicates and self-calls."
+hints:
+  - "You need to find a row and a second row in the same table where the roles of caller and callee are swapped."
+  - "Join the table to itself so the second copy's caller equals the first copy's callee and vice versa; then think about how to keep only one orientation of each pair and what repeated rows do to the result."
+  - "Keep only rows of the first copy whose caller sorts before its callee, which removes mirrored rows and self-calls together, add DISTINCT to collapse repeated calls, and order by the two output columns."
+followups:
+  - "How would you rewrite this with EXISTS, and which version would you expect to be faster with an index?"
+  - "How would you count the calls in each direction for every mutual pair?"
+  - "How would you find longer cycles such as a calls b, b calls c, c calls a?"
+common_errors:
+  - "Using caller <> callee instead of caller < callee, which returns every pair twice."
+  - "Forgetting DISTINCT, so repeated calls multiply the output rows."
+  - "Joining on only one column, which matches unrelated calls."
+  - "Omitting ORDER BY when the output order is part of the contract."

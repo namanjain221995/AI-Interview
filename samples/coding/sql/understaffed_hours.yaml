@@ -1,0 +1,265 @@
+version: 1
+slug: understaffed_hours
+title: "Understaffed Support Hours"
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [support_engineer, sre, business_analyst]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Understaffed Support Hours
+
+  The support desk plans tomorrow's rota in two tables. Every shift covers a block of whole hours of
+  the same day, and the workforce planner has set a minimum headcount for some of the hours. Before
+  the rota is published, the team lead wants to see every hour that does not reach its minimum.
+
+  Table `shifts`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | engineer | VARCHAR(40) | handle of the engineer working the shift |
+  | start_hour | INTEGER | first hour covered, `0..23` |
+  | end_hour | INTEGER | hour at which the shift ends, `start_hour < end_hour <= 24` |
+
+  Table `coverage_requirements`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | hour | INTEGER | primary key, `0..23` |
+  | required | INTEGER | minimum number of engineers for that hour, `>= 0` |
+
+  A shift is a **half-open** range: it covers every hour `h` with `start_hour <= h < end_hour`, so a
+  shift from 9 to 17 covers hours 9 through 16 and not hour 17.
+
+  The **staffed** count of an hour is the number of **distinct engineers** with at least one shift
+  covering it. The same engineer can appear in several (even overlapping) shifts but is only one
+  person, so they count once per hour.
+
+  Return `hour`, `staffed` and `required` for every hour listed in `coverage_requirements` whose
+  staffed count is **strictly below** `required`. Hours that nobody covers must appear with
+  `staffed = 0`. Hours without a requirement row are not reported. Order the result by `hour`
+  ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  shifts
+  +----+----------+------------+----------+
+  | id | engineer | start_hour | end_hour |
+  +----+----------+------------+----------+
+  | 1  | ana      | 8          | 12       |
+  | 2  | ben      | 9          | 17       |
+  | 3  | chen     | 12         | 20       |
+  | 4  | dev      | 16         | 20       |
+  +----+----------+------------+----------+
+
+  coverage_requirements
+  +------+----------+
+  | hour | required |
+  +------+----------+
+  | 8    | 2        |
+  | 9    | 2        |
+  | 12   | 2        |
+  | 13   | 1        |
+  | 16   | 4        |
+  | 20   | 1        |
+  | 21   | 1        |
+  +------+----------+
+
+  Output
+  +------+---------+----------+
+  | hour | staffed | required |
+  +------+---------+----------+
+  | 8    | 1       | 2        |
+  | 16   | 3       | 4        |
+  | 20   | 0       | 1        |
+  | 21   | 0       | 1        |
+  +------+---------+----------+
+  Hour 12 is not covered by ana (her shift ends at 12). Hours 20 and 21 have nobody, so they appear
+  with staffed 0.
+  ```
+
+  ### Example 2
+  ```
+  shifts
+  +----+----------+------------+----------+
+  | id | engineer | start_hour | end_hour |
+  +----+----------+------------+----------+
+  | 1  | kim      | 0          | 6        |
+  | 2  | kim      | 4          | 8        |
+  | 3  | lee      | 6          | 10       |
+  +----+----------+------------+----------+
+
+  coverage_requirements
+  +------+----------+
+  | hour | required |
+  +------+----------+
+  | 0    | 1        |
+  | 4    | 2        |
+  | 5    | 2        |
+  | 6    | 2        |
+  | 9    | 1        |
+  +------+----------+
+
+  Output
+  +------+---------+----------+
+  | hour | staffed | required |
+  +------+---------+----------+
+  | 4    | 1       | 2        |
+  | 5    | 1       | 2        |
+  +------+---------+----------+
+  kim's two shifts overlap at hours 4 and 5, but kim is one engineer, so those hours have staffed 1.
+  ```
+
+  ### Constraints
+  - At most `10^4` shifts and 24 requirement rows; either table may be empty.
+  - `0 <= start_hour < end_hour <= 24` and `0 <= hour <= 23`.
+  - `0 <= required <= 1000`.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return hour, staffed (distinct engineers on shift) and required for every
+    -- understaffed hour, ordered by hour.
+    SELECT r.hour, COUNT(*) AS staffed, r.required
+    FROM coverage_requirements r
+    JOIN shifts s ON s.start_hour <= r.hour AND r.hour <= s.end_hour
+    GROUP BY r.hour, r.required
+    ORDER BY r.hour;
+reference_solutions:
+  sql: |
+    SELECT r.hour,
+           COUNT(DISTINCT s.engineer) AS staffed,
+           r.required
+    FROM coverage_requirements r
+    LEFT JOIN shifts s
+      ON s.start_hour <= r.hour AND r.hour < s.end_hour
+    GROUP BY r.hour, r.required
+    HAVING COUNT(DISTINCT s.engineer) < r.required
+    ORDER BY r.hour;
+sql_setup: |
+  CREATE TABLE shifts (
+    id INTEGER PRIMARY KEY,
+    engineer VARCHAR(40) NOT NULL,
+    start_hour INTEGER NOT NULL,
+    end_hour INTEGER NOT NULL
+  );
+  CREATE TABLE coverage_requirements (
+    hour INTEGER PRIMARY KEY,
+    required INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - half-open shift ends, uncovered evening hours reported with 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO shifts (id, engineer, start_hour, end_hour) VALUES
+        (1, 'ana', 8, 12), (2, 'ben', 9, 17), (3, 'chen', 12, 20), (4, 'dev', 16, 20);
+      INSERT INTO coverage_requirements (hour, required) VALUES
+        (8, 2), (9, 2), (12, 2), (13, 1), (16, 4),
+        (20, 1), (21, 1);
+    expected_rows: [[8, 1, 2], [16, 3, 4], [20, 0, 1], [21, 0, 1]]
+  - id: t2
+    description: "Example 2 - overlapping shifts of the same engineer count once"
+    ordered: true
+    setup_sql: |
+      INSERT INTO shifts (id, engineer, start_hour, end_hour) VALUES
+        (1, 'kim', 0, 6), (2, 'kim', 4, 8), (3, 'lee', 6, 10);
+      INSERT INTO coverage_requirements (hour, required) VALUES
+        (0, 1), (4, 2), (5, 2), (6, 2), (9, 1);
+    expected_rows: [[4, 1, 2], [5, 1, 2]]
+  - id: t3
+    hidden: true
+    description: "Empty tables - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "No shifts at all - every hour with required > 0 appears with staffed 0 (inner join loses them); required 0 is not reported"
+    ordered: true
+    setup_sql: |
+      INSERT INTO coverage_requirements (hour, required) VALUES
+        (0, 1), (1, 0), (23, 2);
+    expected_rows: [[0, 0, 1], [23, 0, 2]]
+  - id: t5
+    hidden: true
+    description: "Shifts but no requirement rows - nothing to report"
+    ordered: true
+    setup_sql: |
+      INSERT INTO shifts (id, engineer, start_hour, end_hour) VALUES
+        (1, 'ana', 0, 24), (2, 'ben', 3, 9);
+    expected_rows: []
+  - id: t6
+    hidden: true
+    description: "Boundaries - a 0-24 shift covers hour 23, a 5-6 shift covers only hour 5, end_hour is exclusive"
+    ordered: true
+    setup_sql: |
+      INSERT INTO shifts (id, engineer, start_hour, end_hour) VALUES
+        (1, 'ana', 0, 24), (2, 'ben', 5, 6), (3, 'chen', 22, 24);
+      INSERT INTO coverage_requirements (hour, required) VALUES
+        (0, 1), (5, 2), (6, 2), (22, 2), (23, 3);
+    expected_rows: [[6, 1, 2], [23, 2, 3]]
+  - id: t7
+    hidden: true
+    description: "Staffed exactly equal to required or above it is not reported; only strict shortfalls"
+    ordered: true
+    setup_sql: |
+      INSERT INTO shifts (id, engineer, start_hour, end_hour) VALUES
+        (1, 'ana', 9, 12), (2, 'ben', 9, 12), (3, 'chen', 10, 11);
+      INSERT INTO coverage_requirements (hour, required) VALUES
+        (9, 2), (10, 3), (11, 3), (12, 0), (13, 0);
+    expected_rows: [[11, 2, 3]]
+  - id: t8
+    hidden: true
+    description: "Same engineer listed three times (duplicate and overlapping rows) plus another engineer - COUNT(*) overcounts"
+    ordered: true
+    setup_sql: |
+      INSERT INTO shifts (id, engineer, start_hour, end_hour) VALUES
+        (1, 'ivo', 14, 18), (2, 'ivo', 14, 18), (3, 'ivo', 16, 20), (4, 'jo', 17, 19);
+      INSERT INTO coverage_requirements (hour, required) VALUES
+        (14, 2), (16, 2), (17, 2), (18, 2), (19, 2);
+    expected_rows: [[14, 1, 2], [16, 1, 2], [19, 1, 2]]
+  - id: t9
+    hidden: true
+    description: "Full day - 18 random shifts against 24 requirement rows (mixed shortfalls)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO shifts (id, engineer, start_hour, end_hour) VALUES
+        (1, 'chen', 10, 16), (2, 'ana', 20, 24), (3, 'ben', 17, 23), (4, 'ana', 18, 24), (5, 'ana', 6, 10), (6, 'gus', 13, 17),
+        (7, 'ben', 7, 15), (8, 'ana', 13, 21), (9, 'dev', 3, 11), (10, 'jo', 20, 24), (11, 'jo', 18, 24), (12, 'dev', 1, 5),
+        (13, 'chen', 17, 23), (14, 'chen', 13, 21), (15, 'jo', 3, 9), (16, 'chen', 17, 21), (17, 'jo', 18, 24), (18, 'fay', 6, 10);
+      INSERT INTO coverage_requirements (hour, required) VALUES
+        (0, 4), (1, 5), (2, 0), (3, 4), (4, 0), (5, 4),
+        (6, 1), (7, 3), (8, 5), (9, 4), (10, 3), (11, 2),
+        (12, 3), (13, 4), (14, 3), (15, 2), (16, 2), (17, 1),
+        (18, 1), (19, 5), (20, 1), (21, 0), (22, 4), (23, 2);
+    expected_rows: [[0, 0, 4], [1, 1, 5], [3, 2, 4], [5, 2, 4], [12, 2, 3], [19, 4, 5]]
+expected_concepts:
+  - "LEFT JOIN with a range (non-equi) join condition"
+  - "half-open interval containment (start <= h < end)"
+  - "COUNT(DISTINCT ...) over the outer-joined side so uncovered hours give 0"
+  - "HAVING to filter on an aggregate"
+optimal_complexity: {time: "O(h * s) for the range join, h requirement hours and s shifts (h <= 24)", space: "O(h) for the grouped result"}
+rubric:
+  excellent: "Drives the query from coverage_requirements with a LEFT JOIN on the half-open range, counts distinct engineers so uncovered hours give 0 and duplicate shifts count once, filters with HAVING and orders by hour; explains each choice."
+  good: "Correct query after a hint about uncovered hours disappearing, the exclusive end hour or counting the same engineer twice."
+  weak: "Uses an inner join (losing hours nobody covers), includes end_hour in the range, counts shift rows instead of engineers, or filters the count in WHERE."
+  criteria:
+    correctness: "All tests pass, including uncovered hours, the exclusive end boundary and overlapping shifts of one engineer."
+    efficiency: "One set-based range join and aggregation; mentions that a calendar of 24 hours keeps the join small or that an index on (start_hour, end_hour) helps."
+    code_quality: "Readable join condition, exact output column names and a deterministic ORDER BY."
+    edge_cases: "Empty tables, required 0, shifts covering the whole day, exact equality with the minimum."
+    communication: "Explains why COUNT(DISTINCT s.engineer) on the outer side yields 0 while COUNT(*) would yield 1."
+hints:
+  - "Start from the hours that have a requirement, not from the shifts: every reported row is one of those hours, even when nobody is on shift."
+  - "Join each requirement hour to the shifts whose range contains it, keeping hours with no match; remember the end hour is not covered and the same engineer may appear in several shifts."
+  - "LEFT JOIN shifts ON start_hour <= hour AND hour < end_hour, group by the hour and its required value, count distinct engineers from the shifts side, keep groups where that count is below required, and order by hour."
+followups:
+  - "How would you change the query if shifts could cross midnight (for example 22 to 6)?"
+  - "How would you report the shortfall as a single number of missing engineer-hours for the whole day?"
+  - "If requirements were per skill (for example billing, networking), what would change in the join?"
+common_errors:
+  - "Using an inner join, so hours that nobody covers disappear instead of showing staffed 0."
+  - "Writing hour <= end_hour, which counts an engineer for the hour their shift has already ended."
+  - "Counting shift rows with COUNT(*), which counts an engineer twice for overlapping shifts and returns 1 for uncovered hours after a LEFT JOIN."
+  - "Putting the shortfall condition in WHERE, where the aggregate is not available."

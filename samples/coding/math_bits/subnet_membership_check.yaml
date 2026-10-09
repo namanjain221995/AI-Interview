@@ -1,0 +1,166 @@
+version: 1
+slug: subnet_membership_check
+title: "Subnet Membership Check"
+difficulty: medium
+competency_keys: [algorithms, problem_solving]
+role_tags: [network, security, devops, cloud]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Subnet Membership Check
+
+  A firewall rule admits traffic from exactly one IPv4 network, written in CIDR notation as
+  `a.b.c.d/p`. An address is **inside** the network when its first `p` bits (counting from the most
+  significant bit of the 32-bit address) equal the first `p` bits of `a.b.c.d`. So `/0` admits every
+  address and `/32` admits exactly one. Operators sometimes type the rule with host bits set, such as
+  `192.168.5.77/24`; that means the same network as `192.168.5.0/24`, so ignore the bits after the
+  prefix instead of rejecting the rule.
+
+  The rule is replayed against client addresses copied from a raw access log, and some log entries are
+  damaged. An entry is a **valid** address only if it consists of exactly four parts separated by
+  single dots, where every part:
+
+  - is 1 to 3 ASCII digits `0`-`9` (no spaces, signs or other characters),
+  - has no leading zero unless the part is exactly `0`, and
+  - has a value from `0` to `255`.
+
+  Given the rule `cidr` and the list `ips`, return a list of booleans of the same length, in input
+  order: `true` when the entry is a valid address inside the network, and `false` when it is outside
+  the network or malformed.
+
+  ### Example 1
+  ```
+  Input:  cidr = "10.20.0.0/14", ips = ["10.21.7.9", "10.24.0.1", "10.23.255.255", "10.19.255.255"]
+  Output: [true, false, true, false]
+  Explanation: A /14 keeps the top 6 bits of the second octet, so the network spans 10.20.0.0 to
+  10.23.255.255.
+  ```
+
+  ### Example 2
+  ```
+  Input:  cidr = "192.168.5.77/24", ips = ["192.168.5.1", "192.168.6.1", "192.168.5.256", "192.168.05.1"]
+  Output: [true, false, false, false]
+  Explanation: The rule means 192.168.5.0/24. The last two entries are malformed (256 is out of range,
+  05 has a leading zero).
+  ```
+
+  ### Example 3
+  ```
+  Input:  cidr = "0.0.0.0/0", ips = ["8.8.8.8", "255.255.255.255", "1.2.3"]
+  Output: [true, true, false]
+  Explanation: /0 admits every valid address, but "1.2.3" has only three parts.
+  ```
+
+  ### Constraints
+  - `cidr` is always well formed: a valid address as defined above, `/`, and `0 <= p <= 32`.
+  - `0 <= ips.length <= 10^4`
+  - `0 <= ips[i].length <= 20`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: ips_in_subnet
+  params:
+    - {name: cidr, type: "string"}
+    - {name: ips, type: "string[]"}
+  return_type: "bool[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def ips_in_subnet(cidr: str, ips: list[str]) -> list[bool]:
+        def parse(text: str) -> int | None:
+            """Dotted quad -> unsigned 32-bit integer, or None when malformed."""
+            parts = text.split(".")
+            if len(parts) != 4:
+                return None
+            value = 0
+            for part in parts:
+                # str.isdigit() accepts non-ASCII digits and int() accepts signs and spaces: check by hand.
+                if not 1 <= len(part) <= 3 or any(ch not in "0123456789" for ch in part):
+                    return None
+                if len(part) > 1 and part[0] == "0":
+                    return None
+                octet = int(part)
+                if octet > 255:
+                    return None
+                value = value * 256 + octet
+            return value
+
+        network_text, prefix_text = cidr.split("/")
+        prefix = int(prefix_text)
+        # Top `prefix` bits set; prefix 0 gives an all-zero mask that matches everything.
+        mask = (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF
+        network = parse(network_text) & mask
+        result = []
+        for ip in ips:
+            address = parse(ip)
+            result.append(address is not None and (address & mask) == network)
+        return result
+  javascript: |
+    function ipsInSubnet(cidr, ips) {
+      const parse = (text) => {
+        const parts = text.split(".");
+        if (parts.length !== 4) {
+          return null;
+        }
+        let value = 0;
+        for (const part of parts) {
+          if (!/^[0-9]{1,3}$/.test(part) || (part.length > 1 && part[0] === "0")) {
+            return null;
+          }
+          const octet = Number(part);
+          if (octet > 255) {
+            return null;
+          }
+          value = value * 256 + octet; // arithmetic keeps values unsigned (no 32-bit sign issues)
+        }
+        return value;
+      };
+      const [networkText, prefixText] = cidr.split("/");
+      const prefix = Number(prefixText);
+      const blockSize = 2 ** (32 - prefix); // addresses per network; 2^32 for /0
+      const networkId = Math.floor(parse(networkText) / blockSize);
+      return ips.map((ip) => {
+        const address = parse(ip);
+        return address !== null && Math.floor(address / blockSize) === networkId;
+      });
+    }
+tests:
+  - {id: t1, args: ["10.20.0.0/14", ["10.21.7.9", "10.24.0.1", "10.23.255.255", "10.19.255.255"]], expected: [true, false, true, false], description: "Example 1"}
+  - {id: t2, args: ["192.168.5.77/24", ["192.168.5.1", "192.168.6.1", "192.168.5.256", "192.168.05.1"]], expected: [true, false, false, false], description: "Example 2 - host bits in the rule, out-of-range and leading-zero octets"}
+  - {id: t3, args: ["0.0.0.0/0", ["8.8.8.8", "255.255.255.255", "1.2.3"]], expected: [true, true, false], description: "Example 3 - /0 admits all valid addresses"}
+  - {id: t4, hidden: true, args: ["10.0.0.0/8", []], expected: [], description: "Empty address list"}
+  - {id: t5, hidden: true, args: ["203.0.113.9/32", ["203.0.113.9", "203.0.113.8", "203.0.113.10", "203.0.113.09"]], expected: [true, false, false, false], description: "/32 admits exactly one address; a leading-zero spelling of it is malformed"}
+  - {id: t6, hidden: true, args: ["128.0.0.0/1", ["128.0.0.0", "255.255.255.255", "127.255.255.255", "200.1.2.3"]], expected: [true, true, false, true], description: "/1 on the high half - signed 32-bit comparison pitfall"}
+  - {id: t7, hidden: true, args: ["198.51.100.130/31", ["198.51.100.130", "198.51.100.131", "198.51.100.129", "198.51.100.132"]], expected: [true, true, false, false], description: "/31 with host bit set in the rule - only .130 and .131 are inside"}
+  - {id: t8, hidden: true, args: ["0.0.0.0/0", ["", "1..2.3", "1.2.3.4.", ".1.2.3", " 1.2.3.4", "1.2.3.4 ", "+1.2.3.4", "1.2.3.-0", "a.b.c.d", "1.2.3.4.5", "0.0.0.00", "1.2.3.1000", "0.0.0.0", "\u0661.2.3.4"]], expected: [false, false, false, false, false, false, false, false, false, false, false, false, true, false], description: "Malformed entries under /0: empty, empty parts, extra dots, spaces, signs, letters, '00', 4 digits, non-ASCII digit; only 0.0.0.0 is valid"}
+  - {id: t9, hidden: true, args: ["10.0.0.0/8", ["010.1.1.1", "10.0.0.0", "10.255.255.255", "11.0.0.0", "9.255.255.255"]], expected: [false, true, true, false, false], description: "Network boundaries of a /8 and a leading zero in the first octet"}
+  - {id: t10, hidden: true, args: ["172.16.0.0/12", ["172.16.0.0", "172.23.37.91", "172.30.74.182", "172.17.111.17", "172.24.148.108", "172.31.185.199", "172.18.222.34", "172.25.3.125", "172.32.40.216", "172.19.77.51", "172.26.114.142", "172.33.151.233", "172.20.188.68", "172.27.225.159", "172.34.6.250", "172.21.43.85", "172.28.80.176", "172.35.117.11", "172.22.154.102", "172.29.191.193", "172.16.228.28", "172.23.9.119", "172.30.46.210", "172.17.83.45", "172.24.120.136", "172.31.157.227", "172.18.194.62", "172.25.231.153", "172.32.12.244", "172.19.49.79", "172.26.86.170", "172.33.123.5", "172.20.160.96", "172.27.197.187", "172.34.234.22", "172.21.15.113", "172.28.52.204", "172.35.89.39", "172.22.126.130", "172.29.163.221", "172.16.200.56", "172.23.237.147", "172.30.18.238", "172.17.55.73", "172.24.92.164", "172.31.129.255", "172.18.166.90", "172.25.203.181", "172.32.240.16", "172.19.21.107", "172.26.58.198", "172.33.95.33", "172.20.132.124", "172.27.169.215", "172.34.206.50", "172.21.243.141", "172.31.255.255", "172.32.0.0", "172.15.255.255", "172.16.0.0"]], expected: [true, true, true, true, true, true, true, true, false, true, true, false, true, true, false, true, true, false, true, true, true, true, true, true, true, true, true, true, false, true, true, false, true, true, false, true, true, false, true, true, true, true, true, true, true, true, true, true, false, true, true, false, true, true, false, true, true, false, false, true], description: "Stress: 60 addresses around a /12 (172.16.0.0 - 172.31.255.255)"}
+expected_concepts:
+  - "parsing and validating dotted-quad IPv4 strings"
+  - "converting an address to an unsigned 32-bit integer"
+  - "building a prefix mask that works for /0 and /32"
+  - "masking both the rule and the address before comparing"
+  - "signed versus unsigned 32-bit arithmetic pitfalls"
+optimal_complexity: {time: "O(n * L) for n entries of length at most L", space: "O(n) for the output"}
+rubric:
+  excellent: "Writes one strict parser (exactly four parts, ASCII digits only, no leading zeros, range check), converts to unsigned 32-bit integers, builds a mask that is correct for /0 and /32, masks the rule's own address, and discusses why library parsers or int conversion can accept invalid input."
+  good: "Correct membership logic with a parser that misses one or two malformed cases, or needs a nudge on /0 or the high half of the address space."
+  weak: "Compares addresses as strings or whole octets, crashes on malformed entries, rejects rules with host bits set, or breaks for addresses at or above 128.0.0.0."
+  criteria:
+    correctness: "All tests pass, including /0, /1, /31, /32, host bits in the rule and every malformed entry."
+    efficiency: "Linear in the total input length; the rule is parsed once."
+    code_quality: "Parsing, mask construction and comparison are separate and readable."
+    edge_cases: "Empty list, empty strings, leading zeros, out-of-range octets, extra or missing parts and non-ASCII digits."
+    communication: "Explains the mask construction and why validation must be stricter than the language's integer parser."
+hints:
+  - "Treat an address as one 32-bit number instead of four separate numbers. Which bits must match for an address to be inside a network with prefix p?"
+  - "Write a strict parser that returns nothing for a damaged entry and an unsigned integer otherwise. Then compare only the leading p bits of the address and of the rule's address, which ignores host bits in the rule automatically."
+  - "Split each entry on dots and require exactly four parts, each one to three ASCII digits, no leading zero unless it is a single zero, and a value up to 255; accumulate the value as previous times 256 plus the part. Build a mask with the top p bits set (p equal to 0 gives zero, so avoid shifting by 32) or divide both values by 2 to the power 32 minus p. An entry is inside when it parsed and both masked values are equal."
+followups:
+  - "How would you check each address against thousands of rules efficiently?"
+  - "How would you extend the parser and the comparison to IPv6?"
+  - "Why might security tools deliberately reject addresses with leading zeros instead of interpreting them?"
+common_errors:
+  - "Relying on a general integer parser that accepts signs, spaces or non-ASCII digits."
+  - "Shifting by 32 to build the /0 mask, which is a no-op or undefined in several languages."
+  - "Using signed 32-bit integers so addresses at or above 128.0.0.0 compare incorrectly."
+  - "Not masking the rule's address, so rules written with host bits never match."
+  - "Accepting leading zeros or octets above 255, or crashing on an empty string."

@@ -1,0 +1,114 @@
+version: 1
+slug: redact_sensitive_log_params
+title: "Redact Sensitive Log Parameters"
+difficulty: easy
+competency_keys: [problem_solving, code_quality]
+role_tags: [security, backend, sre, support_engineer]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Redact Sensitive Log Parameters
+
+  Application logs are shipped to a shared aggregator that many teams can search. Before a line leaves
+  the host, credentials written as `name=value` parameters must be masked.
+
+  A log `line` is made of **words** separated by space characters. Write
+  `redact_sensitive_log_params(line)` that returns the line with these changes:
+
+  - A word is a **parameter** if it contains at least one `=`. Its **name** is the part before the
+    **first** `=` and its value is everything after that `=`.
+  - A parameter is **sensitive** if its name, compared case-insensitively, is exactly one of `password`,
+    `token`, `secret` or `api_key`. Names that merely contain a keyword (such as `my_token` or `tokens`)
+    are not sensitive.
+  - In every sensitive parameter, the value is replaced by `***`, even if the value is empty or contains
+    more `=` signs. The name keeps its original spelling.
+  - Every other word, and every space character (including leading, trailing and repeated spaces), is
+    left exactly as it is.
+
+  ### Example 1
+  ```
+  Input:  line = "user=deploy_bot password=hunter2 action=login"
+  Output: "user=deploy_bot password=*** action=login"
+  ```
+
+  ### Example 2
+  ```
+  Input:  line = "POST /v1/keys API_KEY=ab=cd== token= retries=3"
+  Output: "POST /v1/keys API_KEY=*** token=*** retries=3"
+  Explanation: API_KEY matches case-insensitively and its whole value is masked; the empty token value is masked too
+  ```
+
+  ### Constraints
+  - `0 <= line.length <= 10^4`
+  - `line` consists of printable ASCII characters; the only whitespace is the space character.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: redact_sensitive_log_params
+  params:
+    - {name: line, type: "string"}
+  return_type: "string"
+  comparison: exact
+reference_solutions:
+  python: |
+    SENSITIVE = {"password", "token", "secret", "api_key"}
+
+
+    def redact_sensitive_log_params(line: str) -> str:
+        words = line.split(" ")  # splitting on each single space keeps runs of spaces as empty words
+        for i, word in enumerate(words):
+            name, sep, _ = word.partition("=")
+            if sep and name.lower() in SENSITIVE:
+                words[i] = name + "=***"
+        return " ".join(words)
+  javascript: |
+    function redactSensitiveLogParams(line) {
+      const sensitive = new Set(["password", "token", "secret", "api_key"]);
+      const words = line.split(" ");
+      for (let i = 0; i < words.length; i++) {
+        const eq = words[i].indexOf("=");
+        if (eq === -1) continue;
+        const name = words[i].slice(0, eq);
+        if (sensitive.has(name.toLowerCase())) words[i] = name + "=***";
+      }
+      return words.join(" ");
+    }
+tests:
+  - {id: t1, args: ["user=deploy_bot password=hunter2 action=login"], expected: "user=deploy_bot password=*** action=login", description: "Example 1 - one sensitive parameter in the middle"}
+  - {id: t2, args: ["POST /v1/keys API_KEY=ab=cd== token= retries=3"], expected: "POST /v1/keys API_KEY=*** token=*** retries=3", description: "Example 2 - upper-case name, value containing '=', empty value"}
+  - {id: t3, hidden: true, args: [""], expected: "", description: "Empty line stays empty"}
+  - {id: t4, hidden: true, args: ["GET /health status=200 latency_ms=4"], expected: "GET /health status=200 latency_ms=4", description: "No sensitive parameters - line unchanged"}
+  - {id: t5, hidden: true, args: ["passwords=a my_token=b secret_id=c tokens=d api-key=e"], expected: "passwords=a my_token=b secret_id=c tokens=d api-key=e", description: "Names that only contain or resemble a keyword are not masked"}
+  - {id: t6, hidden: true, args: ["PaSsWoRd=x Secret=y TOKEN=z"], expected: "PaSsWoRd=*** Secret=*** TOKEN=***", description: "Mixed-case names are masked and keep their original spelling"}
+  - {id: t7, hidden: true, args: ["password token =secret secret"], expected: "password token =secret secret", description: "Keywords without '=' and a word with an empty name are not parameters"}
+  - {id: t8, hidden: true, args: ["  token=abc  user=ci   secret=x "], expected: "  token=***  user=ci   secret=*** ", description: "Leading, trailing and repeated spaces are preserved exactly"}
+  - {id: t9, hidden: true, args: ["token=a token=b token=c"], expected: "token=*** token=*** token=***", description: "Every occurrence is masked, not just the first"}
+  - {id: t10, hidden: true, args: ["msg=token=leaked api_key=k=v=w"], expected: "msg=token=leaked api_key=***", description: "Name is taken before the first '=' only: msg is not sensitive, api_key is"}
+  - {id: t11, hidden: true, args: ["tokens=9 PASSWORD=p@ss=word user=svc_ingest passwd=x Token=t0k3n status=200 passwd=x secret_ref=vault:7 tokens=9 api_key= passwd=x passwd=x Api_Key=AKIA42 PASSWORD=p@ss=word tokens=9 PASSWORD=p@ss=word Api_Key=AKIA42 status=200 Token=t0k3n retry=2 path=/v1/orders POST status=200 secret_ref=vault:7 passwd=x Api_Key=AKIA42 trace=9f1c Api_Key=AKIA42 secret=s3 PASSWORD=p@ss=word user=svc_ingest latency_ms=37 path=/v1/orders PASSWORD=p@ss=word passwd=x api_key= secret_ref=vault:7 trace=9f1c POST trace=9f1c Api_Key=AKIA42 user=svc_ingest trace=9f1c tokens=9 - status=200 secret_ref=vault:7 retry=2 - latency_ms=37 api_key= secret_ref=vault:7 POST latency_ms=37 Token=t0k3n passwd=x passwd=x Token=t0k3n user=svc_ingest Token=t0k3n trace=9f1c PASSWORD=p@ss=word status=200 POST trace=9f1c trace=9f1c latency_ms=37 path=/v1/orders path=/v1/orders Api_Key=AKIA42 - secret_ref=vault:7 tokens=9 path=/v1/orders POST status=200 Token=t0k3n latency_ms=37 path=/v1/orders api_key= trace=9f1c POST secret_ref=vault:7 PASSWORD=p@ss=word path=/v1/orders - - user=svc_ingest PASSWORD=p@ss=word Api_Key=AKIA42 Api_Key=AKIA42 secret=s3 Api_Key=AKIA42 latency_ms=37 secret_ref=vault:7 trace=9f1c tokens=9 POST trace=9f1c secret_ref=vault:7 POST - status=200 trace=9f1c - status=200 Api_Key=AKIA42 PASSWORD=p@ss=word path=/v1/orders - secret=s3 user=svc_ingest user=svc_ingest secret_ref=vault:7 passwd=x status=200 path=/v1/orders status=200 user=svc_ingest secret_ref=vault:7 secret=s3 POST - retry=2 user=svc_ingest retry=2 - user=svc_ingest secret_ref=vault:7 POST Api_Key=AKIA42 latency_ms=37 status=200 PASSWORD=p@ss=word POST tokens=9 secret_ref=vault:7 tokens=9 - retry=2 trace=9f1c latency_ms=37 latency_ms=37 - - tokens=9 secret=s3 retry=2 Token=t0k3n -"], expected: "tokens=9 PASSWORD=*** user=svc_ingest passwd=x Token=*** status=200 passwd=x secret_ref=vault:7 tokens=9 api_key=*** passwd=x passwd=x Api_Key=*** PASSWORD=*** tokens=9 PASSWORD=*** Api_Key=*** status=200 Token=*** retry=2 path=/v1/orders POST status=200 secret_ref=vault:7 passwd=x Api_Key=*** trace=9f1c Api_Key=*** secret=*** PASSWORD=*** user=svc_ingest latency_ms=37 path=/v1/orders PASSWORD=*** passwd=x api_key=*** secret_ref=vault:7 trace=9f1c POST trace=9f1c Api_Key=*** user=svc_ingest trace=9f1c tokens=9 - status=200 secret_ref=vault:7 retry=2 - latency_ms=37 api_key=*** secret_ref=vault:7 POST latency_ms=37 Token=*** passwd=x passwd=x Token=*** user=svc_ingest Token=*** trace=9f1c PASSWORD=*** status=200 POST trace=9f1c trace=9f1c latency_ms=37 path=/v1/orders path=/v1/orders Api_Key=*** - secret_ref=vault:7 tokens=9 path=/v1/orders POST status=200 Token=*** latency_ms=37 path=/v1/orders api_key=*** trace=9f1c POST secret_ref=vault:7 PASSWORD=*** path=/v1/orders - - user=svc_ingest PASSWORD=*** Api_Key=*** Api_Key=*** secret=*** Api_Key=*** latency_ms=37 secret_ref=vault:7 trace=9f1c tokens=9 POST trace=9f1c secret_ref=vault:7 POST - status=200 trace=9f1c - status=200 Api_Key=*** PASSWORD=*** path=/v1/orders - secret=*** user=svc_ingest user=svc_ingest secret_ref=vault:7 passwd=x status=200 path=/v1/orders status=200 user=svc_ingest secret_ref=vault:7 secret=*** POST - retry=2 user=svc_ingest retry=2 - user=svc_ingest secret_ref=vault:7 POST Api_Key=*** latency_ms=37 status=200 PASSWORD=*** POST tokens=9 secret_ref=vault:7 tokens=9 - retry=2 trace=9f1c latency_ms=37 latency_ms=37 - - tokens=9 secret=*** retry=2 Token=*** -", description: "150 mixed words with near-miss names, empty values and multi-'=' values (stress)"}
+expected_concepts:
+  - "tokenising on single spaces so spacing can be reproduced exactly"
+  - "splitting a word on its first '=' only"
+  - "exact, case-insensitive membership test in a set of names"
+  - "building the output in linear time"
+optimal_complexity: {time: "O(n)", space: "O(n)"}
+rubric:
+  excellent: "Splits on each space so empty words preserve spacing, takes the name before the first '=', checks exact case-insensitive membership in a set, masks the whole value including empty ones and rebuilds the line in one pass."
+  good: "Correct masking with a small slip that is fixed with a nudge, such as collapsing repeated spaces or using a substring search for the name."
+  weak: "Masks names that only contain a keyword, keeps part of a value that contains '=', lower-cases the output name or loses the original spacing."
+  criteria:
+    correctness: "All tests pass, including near-miss names, values with '=', empty values and repeated spaces."
+    efficiency: "Linear in the length of the line."
+    code_quality: "Keywords live in one set; the per-word rule is a few readable lines."
+    edge_cases: "Empty line, keyword without '=', word starting with '=', leading or trailing spaces and repeated parameters."
+    communication: "Explains why exact name matching avoids over-masking and why spacing must round-trip."
+hints:
+  - "Look at the line one word at a time; only words that look like a name and a value joined by an equals sign can contain a credential."
+  - "For each word, the name is everything before the first equals sign; compare it, ignoring case, against the four keywords as whole names, not as substrings."
+  - "Split the line on every single space so that runs of spaces turn into empty words, replace each sensitive word with its original name, an equals sign and three asterisks, and join the words back with single spaces, which reproduces the original spacing."
+followups:
+  - "How would you also mask credentials inside URL query strings such as ?token=abc?"
+  - "Should the redaction run in the application or in the log shipper, and what are the trade-offs?"
+  - "How would you test that a new keyword list never leaks a secret in production logs?"
+common_errors:
+  - "Using a split that collapses repeated spaces, so the output spacing changes."
+  - "Matching names by substring, which masks my_token or tokens as well."
+  - "Splitting on every '=' and masking only the text up to the second '='."
+  - "Leaving an empty value unmasked or lower-casing the name in the output."

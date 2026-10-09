@@ -1,0 +1,162 @@
+version: 1
+slug: scroll_throttle_leading_trailing
+title: Scroll Handler Throttle (Leading and Trailing)
+difficulty: medium
+competency_keys: [algorithms, problem_solving]
+role_tags: [frontend, fullstack, mobile]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Scroll Handler Throttle (Leading and Trailing)
+
+  A product listing page lazily loads images while the user scrolls. Running the loader on every scroll
+  event makes the page stutter, so the handler is **throttled**: it runs at most once per
+  `interval_ms`, but it always runs right away when scrolling starts and once more after scrolling
+  stops, so the final position is never missed.
+
+  Given the scroll event times `timestamps` (milliseconds, non-decreasing) and `interval_ms`, simulate
+  the throttle and return every time at which the handler **fires**, in ascending order.
+
+  The throttle is either **idle** or inside a **window** `[f, f + interval_ms)` that was opened by a
+  call at time `f`:
+
+  - An event that arrives while the throttle is **idle** fires immediately at its own time (the
+    *leading* call) and opens the window `[t, t + interval_ms)`.
+  - An event that arrives **inside** a window is suppressed but marks a *trailing* call as pending.
+    Several suppressed events still produce only one pending call.
+  - When a window ends at time `e = f + interval_ms`: if a call is pending, it fires at `e`, the
+    pending mark is cleared and a new window `[e, e + interval_ms)` opens. If nothing is pending, the
+    throttle becomes idle.
+  - When a window ends at exactly the same time as an event arrives, the window end is processed
+    **first**, then the event.
+  - After the last event, windows keep ending as described until the throttle is idle.
+
+  ### Example 1
+  ```
+  Input:  timestamps = [0, 30, 60, 90, 120, 300], interval_ms = 100
+  Output: [0, 100, 200, 300]
+  Explanation: 0 fires (leading). 30-90 are suppressed, so a trailing call fires at 100 and
+  opens [100, 200). 120 is suppressed, so 200 fires and opens [200, 300). The window ending
+  at 300 is processed before the event at 300; nothing is pending, so the handler is idle
+  and 300 fires immediately.
+  ```
+
+  ### Example 2
+  ```
+  Input:  timestamps = [10, 10, 60, 260], interval_ms = 50
+  Output: [10, 60, 110, 260]
+  Explanation: 10 fires and the second 10 makes a call pending. At 60 the window end is
+  processed first: the pending call fires at 60 and opens [60, 110), so the event at 60 is
+  suppressed into that window and fires as a trailing call at 110. The window [110, 160)
+  ends quietly, and 260 fires as a new leading call.
+  ```
+
+  ### Constraints
+  - `0 <= timestamps.length <= 10^5`
+  - `0 <= timestamps[i] <= 10^9` and `timestamps` is non-decreasing
+  - `1 <= interval_ms <= 10^6`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: throttle_fire_times
+  params:
+    - {name: timestamps, type: "int[]"}
+    - {name: interval_ms, type: int}
+  return_type: "int[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def throttle_fire_times(timestamps: list[int], interval_ms: int) -> list[int]:
+        fires: list[int] = []
+        window_end = None  # None while idle
+        pending = False
+
+        def run_timers(until: int | None) -> None:
+            # Process window ends that are due at or before `until` (all of them when until is None).
+            nonlocal window_end, pending
+            while window_end is not None and (until is None or window_end <= until):
+                if pending:
+                    fires.append(window_end)  # trailing call opens a new window
+                    pending = False
+                    window_end += interval_ms
+                else:
+                    window_end = None  # quiet window: back to idle
+
+        for t in timestamps:
+            run_timers(t)
+            if window_end is None:
+                fires.append(t)  # leading call
+                window_end = t + interval_ms
+            else:
+                pending = True
+        run_timers(None)
+        return fires
+  javascript: |
+    function throttleFireTimes(timestamps, intervalMs) {
+      const fires = [];
+      let windowEnd = null; // null while idle
+      let pending = false;
+
+      // Process window ends due at or before `until` (all of them when until is null).
+      const runTimers = (until) => {
+        while (windowEnd !== null && (until === null || windowEnd <= until)) {
+          if (pending) {
+            fires.push(windowEnd); // trailing call opens a new window
+            pending = false;
+            windowEnd += intervalMs;
+          } else {
+            windowEnd = null; // quiet window: back to idle
+          }
+        }
+      };
+
+      for (const t of timestamps) {
+        runTimers(t);
+        if (windowEnd === null) {
+          fires.push(t); // leading call
+          windowEnd = t + intervalMs;
+        } else {
+          pending = true;
+        }
+      }
+      runTimers(null);
+      return fires;
+    }
+tests:
+  - {id: t1, args: [[0, 30, 60, 90, 120, 300], 100], expected: [0, 100, 200, 300], description: "Example 1"}
+  - {id: t2, args: [[10, 10, 60, 260], 50], expected: [10, 60, 110, 260], description: "Example 2 - duplicate timestamp and an event exactly at the window end"}
+  - {id: t3, hidden: true, args: [[], 100], expected: [], description: "No events"}
+  - {id: t4, hidden: true, args: [[42], 1000], expected: [42], description: "Single event - only the leading call"}
+  - {id: t5, hidden: true, args: [[0, 100, 200, 300], 100], expected: [0, 100, 200, 300], description: "Events exactly on window boundaries with nothing pending - every event is a leading call"}
+  - {id: t6, hidden: true, args: [[0, 50, 100, 150, 200, 250], 100], expected: [0, 100, 200, 300], description: "Pending call fires at the boundary before an event at the same time, which is then suppressed into the new window"}
+  - {id: t7, hidden: true, args: [[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640, 650, 660, 670, 680, 690, 700, 710, 720, 730, 740, 750, 760, 770, 780, 790, 800, 810, 820, 830, 840, 850, 860, 870, 880, 890, 900, 910, 920, 930, 940, 950, 960, 970, 980, 990], 250], expected: [0, 250, 500, 750, 1000], description: "Continuous scrolling every 10 ms - trailing calls chain one interval apart, plus the final trailing call"}
+  - {id: t8, hidden: true, args: [[5, 5, 5, 5], 1], expected: [5, 6], description: "Interval of 1 ms with all events at the same time"}
+  - {id: t9, hidden: true, args: [[0, 999999999, 1000000000], 1000000], expected: [0, 999999999, 1000999999], description: "Large timestamps and interval without overflow"}
+  - {id: t10, hidden: true, args: [[40, 48, 168, 168, 171, 174, 214, 214, 229, 229, 232, 352, 472, 475, 490, 493, 613, 613, 616, 631, 631, 751, 751, 766, 766, 774, 790, 910, 918, 921, 937, 945, 948, 963, 1003, 1006, 1009, 1009, 1024, 1274, 1394, 1434, 1684, 1934, 1974, 1990, 2005, 2013, 2028, 2031, 2047, 2297, 2337, 2587, 2603, 2606, 2609, 2729, 2737, 2777, 2785, 3035, 3155, 3155, 3158, 3198, 3238, 3278, 3528, 3778, 3781, 3784, 3800, 4050, 4053, 4053, 4069, 4319, 4335, 4455, 4495, 4495, 4745, 4785, 4793, 4796, 5046, 5046, 5061, 5077, 5085, 5100, 5220, 5340, 5590, 5593, 5601, 5851, 5971, 5987, 5995, 6115, 6131, 6251, 6291, 6411, 6426, 6434, 6437, 6445, 6453, 6468, 6483, 6483, 6733, 6741, 6757, 6773, 6773, 6781, 6901, 6941, 6981, 6989, 6989, 7239, 7359, 7479, 7599, 7719, 7722, 7972, 8092, 8092, 8107, 8110, 8125, 8375, 8383, 8386, 8426, 8426, 8429, 8429, 8437, 8440, 8480, 8480, 8483, 8498, 8618, 8626, 8642, 8682, 8722, 8972, 8975, 8978, 9228, 9478, 9728, 9978, 9994, 9997, 10005, 10008, 10048, 10064, 10314, 10322, 10322, 10337, 10377, 10385, 10385, 10401, 10404, 10420, 10460, 10468, 10508, 10523, 10563, 10578, 10593, 10608, 10728, 10743, 10758, 11008, 11048, 11048, 11048, 11064, 11314, 11330, 11345, 11385, 11635, 11675, 11715, 11718, 11733, 11736, 11751, 12001, 12016, 12056, 12071, 12321, 12321, 12571, 12611, 12614, 12617, 12737, 12752, 13002, 13010, 13130, 13170, 13173, 13293, 13543, 13663, 13666, 13674, 13682, 13690, 13690, 13698, 13948, 13956, 14206, 14246, 14254, 14262, 14262, 14262, 14265, 14273, 14393, 14408, 14423, 14423, 14439, 14454, 14470, 14485, 14525, 14541, 14661, 14669, 14669, 14709, 14959, 15079, 15087, 15095, 15095, 15345, 15353, 15353, 15361, 15369, 15377, 15627, 15630, 15630, 15670, 15920, 15923, 15923, 15938, 15953, 15969, 15969, 15972, 16222, 16222, 16225, 16475, 16515, 16530, 16546, 16796, 17046, 17061, 17077, 17092, 17342, 17350, 17470, 17473, 17593, 17843, 17883, 17886, 17901, 18021, 18024, 18039, 18055, 18058, 18066, 18106, 18114, 18130, 18138, 18388, 18403, 18406, 18526, 18776, 18784, 18799, 18807, 18927, 19047, 19087, 19207, 19222, 19262, 19302, 19305, 19345, 19345, 19385, 19635, 19885, 19885, 20005, 20045, 20061, 20064, 20067, 20082, 20085, 20088, 20104, 20120, 20120, 20128, 20144, 20152, 20272, 20288, 20408, 20416, 20666, 20706, 20709, 20725, 20725, 20733, 20853, 20856, 20872, 20872, 20875, 20891, 20894, 20909, 20912, 20928, 20931, 21181, 21181, 21221, 21341, 21357, 21365, 21365, 21380, 21383, 21391, 21407, 21407, 21415, 21430, 21446, 21462, 21477, 21493, 21743, 21751, 21767, 21807, 21807, 21823, 21823, 21823, 21823, 21838, 22088, 22103, 22353, 22356, 22476, 22726], 100], expected: [40, 140, 240, 352, 472, 572, 672, 772, 872, 972, 1072, 1274, 1394, 1494, 1684, 1934, 2034, 2134, 2297, 2397, 2587, 2687, 2787, 3035, 3155, 3255, 3355, 3528, 3778, 3878, 4050, 4150, 4319, 4419, 4519, 4745, 4845, 5046, 5146, 5246, 5346, 5590, 5690, 5851, 5971, 6071, 6171, 6271, 6371, 6471, 6571, 6733, 6833, 6933, 7033, 7239, 7359, 7479, 7599, 7719, 7819, 7972, 8092, 8192, 8375, 8475, 8575, 8675, 8775, 8972, 9072, 9228, 9478, 9728, 9978, 10078, 10314, 10414, 10514, 10614, 10728, 10828, 11008, 11108, 11314, 11414, 11635, 11735, 11835, 12001, 12101, 12321, 12421, 12571, 12671, 12771, 13002, 13102, 13202, 13302, 13543, 13663, 13763, 13948, 14048, 14206, 14306, 14406, 14506, 14606, 14706, 14806, 14959, 15079, 15179, 15345, 15445, 15627, 15727, 15920, 16020, 16222, 16322, 16475, 16575, 16796, 17046, 17146, 17342, 17442, 17542, 17642, 17843, 17943, 18043, 18143, 18388, 18488, 18588, 18776, 18876, 18976, 19076, 19176, 19276, 19376, 19476, 19635, 19885, 19985, 20085, 20185, 20285, 20385, 20485, 20666, 20766, 20866, 20966, 21181, 21281, 21381, 21481, 21581, 21743, 21843, 22088, 22188, 22353, 22453, 22553, 22726], description: "400 events with bursts, duplicates and quiet gaps"}
+expected_concepts:
+  - discrete-event simulation with a small state machine
+  - processing due timers before events at the same timestamp
+  - leading and trailing edge semantics of throttling
+  - draining remaining timers after the input ends
+optimal_complexity: {time: O(n), space: O(1) besides the output}
+rubric:
+  excellent: Models the throttle as idle or windowed with a pending flag, processes every window end due at or before each event (including chains of trailing calls), drains timers at the end, explains the tie rule and contrasts throttle with debounce.
+  good: Correct simulation after a hint about the same-time tie rule or about the final trailing call after the last event.
+  weak: Only fires leading calls, fires a trailing call for every suppressed event, measures windows from event times instead of fire times, or forgets the trailing call after the last event.
+  criteria:
+    correctness: All tests pass, including events exactly on window boundaries and continuous scrolling.
+    efficiency: Linear in the number of events; each window end is processed once.
+    code_quality: Clear state variables (window end, pending flag) and a single helper that advances timers.
+    edge_cases: No events, one event, duplicate timestamps, interval of 1, large timestamps.
+    communication: Walks through an example timeline and states the order of timer and event at the same instant.
+hints:
+  - Think of the throttle as a tiny state machine - it is either idle or inside a window that will end at a known time, possibly with a call pending.
+  - Before handling each event, first process every window end that is due at or before the event time; a pending call fires at the window end and immediately opens the next window from that time.
+  - Keep window_end (or none when idle) and a pending flag; for each event, loop while window_end <= t (fire and extend if pending, otherwise go idle), then either fire now and set window_end = t + interval or set pending; after the input, run the same loop without a time limit.
+followups:
+  - How would you implement this throttle in the browser with setTimeout and what clock would you use?
+  - How does a debounce differ, and when would you prefer it for a search box?
+  - How could requestAnimationFrame replace a fixed interval for scroll work?
+common_errors:
+  - Treating an event that lands exactly on the window end as suppressed in the old window.
+  - Opening the next window from the last event time instead of from the trailing fire time.
+  - Forgetting the trailing call that fires after the last event.
+  - Firing one trailing call per suppressed event instead of one per window.

@@ -1,0 +1,221 @@
+version: 1
+slug: overlapping_room_bookings
+title: "Overlapping Room Bookings"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [backend, dba, data_analyst]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Overlapping Room Bookings
+
+  A facilities team migrated meeting-room reservations from an old tool that never checked for
+  double-booking. Before switching the new system on, they need a list of every conflict.
+
+  Table `bookings`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | room_id | INTEGER | the reserved room |
+  | start_minute | INTEGER | start of the booking, minutes since the start of the week |
+  | end_minute | INTEGER | end of the booking; always greater than `start_minute` |
+
+  A booking occupies the room over the **half-open** range `[start_minute, end_minute)`: a booking that
+  ends at minute 600 and another that starts at minute 600 do **not** overlap. Two bookings conflict when
+  they are for the **same room** and their ranges share at least one minute.
+
+  Return one row per conflicting pair with columns `room_id`, `first_booking_id` and `second_booking_id`,
+  where `first_booking_id < second_booking_id`. Order the rows by `room_id`, then `first_booking_id`,
+  then `second_booking_id`, all ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  bookings
+  +----+---------+--------------+------------+
+  | id | room_id | start_minute | end_minute |
+  +----+---------+--------------+------------+
+  | 1  | 101     | 540          | 600        |
+  | 2  | 101     | 570          | 630        |
+  | 3  | 101     | 600          | 660        |
+  | 4  | 102     | 540          | 600        |
+  | 5  | 101     | 480          | 720        |
+  +----+---------+--------------+------------+
+
+  Output
+  +---------+------------------+-------------------+
+  | room_id | first_booking_id | second_booking_id |
+  +---------+------------------+-------------------+
+  | 101     | 1                | 2                 |
+  | 101     | 1                | 5                 |
+  | 101     | 2                | 3                 |
+  | 101     | 2                | 5                 |
+  | 101     | 3                | 5                 |
+  +---------+------------------+-------------------+
+  Bookings 1 and 3 only touch at minute 600, so they do not conflict. Booking 4 is in another room.
+  ```
+
+  ### Example 2
+  ```
+  bookings
+  +----+---------+--------------+------------+
+  | id | room_id | start_minute | end_minute |
+  +----+---------+--------------+------------+
+  | 1  | 7       | 60           | 120        |
+  | 2  | 7       | 120          | 180        |
+  | 3  | 8       | 60           | 180        |
+  +----+---------+--------------+------------+
+
+  Output
+  +---------+------------------+-------------------+
+  | room_id | first_booking_id | second_booking_id |
+  +---------+------------------+-------------------+
+  +---------+------------------+-------------------+
+  Room 7's bookings are back to back and room 8 has a single booking, so there is no conflict.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^4`
+  - `0 <= start_minute < end_minute <= 10080`
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return room_id, first_booking_id and second_booking_id for every pair of overlapping bookings.
+    SELECT room_id, id AS first_booking_id, id AS second_booking_id
+    FROM bookings;
+reference_solutions:
+  sql: |
+    SELECT a.room_id,
+           a.id AS first_booking_id,
+           b.id AS second_booking_id
+    FROM bookings a
+    JOIN bookings b
+      ON b.room_id = a.room_id
+     AND a.id < b.id
+     AND a.start_minute < b.end_minute
+     AND b.start_minute < a.end_minute
+    ORDER BY a.room_id, a.id, b.id;
+sql_setup: |
+  CREATE TABLE bookings (
+    id INTEGER PRIMARY KEY,
+    room_id INTEGER NOT NULL,
+    start_minute INTEGER NOT NULL,
+    end_minute INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1"
+    ordered: true
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_minute, end_minute) VALUES
+        (1, 101, 540, 600), (2, 101, 570, 630), (3, 101, 600, 660), (4, 102, 540, 600), (5, 101, 480, 720);
+    expected_rows:
+      - [101, 1, 2]
+      - [101, 1, 5]
+      - [101, 2, 3]
+      - [101, 2, 5]
+      - [101, 3, 5]
+  - id: t2
+    description: "Example 2 - back-to-back bookings and different rooms do not conflict"
+    ordered: true
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_minute, end_minute) VALUES
+        (1, 7, 60, 120), (2, 7, 120, 180), (3, 8, 60, 180);
+    expected_rows: []
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Identical bookings conflict and are reported once, not twice"
+    ordered: true
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_minute, end_minute) VALUES
+        (1, 5, 100, 200), (2, 5, 100, 200);
+    expected_rows:
+      - [5, 1, 2]
+  - id: t5
+    hidden: true
+    description: "Ids inserted out of order - smaller id must always be first_booking_id"
+    ordered: true
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_minute, end_minute) VALUES
+        (9, 3, 0, 50), (2, 3, 40, 60), (5, 3, 10, 20);
+    expected_rows:
+      - [3, 2, 9]
+      - [3, 5, 9]
+  - id: t6
+    hidden: true
+    description: "Several rooms ordered numerically (4, 20, 300), not by insertion or text"
+    ordered: true
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_minute, end_minute) VALUES
+        (1, 300, 0, 10), (2, 300, 5, 15), (3, 20, 0, 10), (4, 20, 9, 11), (5, 4, 0, 1), (6, 4, 0, 1);
+    expected_rows:
+      - [4, 5, 6]
+      - [20, 3, 4]
+      - [300, 1, 2]
+  - id: t7
+    hidden: true
+    description: "Nested bookings - every pair conflicts (6 pairs)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_minute, end_minute) VALUES
+        (1, 1, 0, 100), (2, 1, 10, 90), (3, 1, 20, 80), (4, 1, 30, 70);
+    expected_rows:
+      - [1, 1, 2]
+      - [1, 1, 3]
+      - [1, 1, 4]
+      - [1, 2, 3]
+      - [1, 2, 4]
+      - [1, 3, 4]
+  - id: t8
+    hidden: true
+    description: "Same times in different rooms, one-minute overlap at the end and touching at the end"
+    ordered: true
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_minute, end_minute) VALUES
+        (1, 1, 0, 60), (2, 2, 0, 60), (3, 3, 0, 60), (4, 1, 60, 61), (5, 2, 59, 60);
+    expected_rows:
+      - [2, 2, 5]
+  - id: t9
+    hidden: true
+    description: "Whole-week booking overlaps everything; the short bookings only touch each other"
+    ordered: true
+    setup_sql: |
+      INSERT INTO bookings (id, room_id, start_minute, end_minute) VALUES
+        (1, 2, 0, 10080), (2, 2, 10079, 10080), (3, 2, 0, 1), (4, 2, 1, 10079);
+    expected_rows:
+      - [2, 1, 2]
+      - [2, 1, 3]
+      - [2, 1, 4]
+expected_concepts:
+  - self join on the same table
+  - interval overlap predicate for half-open ranges
+  - avoiding mirrored and self pairs with a.id < b.id
+optimal_complexity: {time: "O(n^2) worst case per room; O(n log n + k) with an index on (room_id, start_minute)", space: "O(k) for k output pairs"}
+rubric:
+  excellent: "Self-joins bookings on room_id with a.id < b.id and the half-open overlap test a.start < b.end AND b.start < a.end, orders the output, and explains why touching bookings are excluded."
+  good: "Correct self join and ordering but first uses <= in the overlap test or forgets to remove mirrored pairs until a test shows it."
+  weak: "Only checks whether one start falls inside the other booking (missing containment), returns each pair twice or pairs a booking with itself."
+  criteria:
+    correctness: "All tests pass, including identical bookings, nested bookings and back-to-back bookings."
+    efficiency: "Joins only within a room; mentions an index on (room_id, start_minute) for large tables."
+    code_quality: "Clear aliases, named output columns and a single readable overlap predicate."
+    edge_cases: "Empty table, touching endpoints, identical ranges and ids inserted out of order."
+    communication: "Explains the two-comparison overlap test and why it covers partial overlap and containment."
+hints:
+  - "You need to compare bookings with other bookings of the same table - think about joining the table to itself."
+  - "Two half-open ranges overlap exactly when each one starts before the other one ends; and requiring the first id to be smaller removes both self-pairs and mirrored duplicates."
+  - "Join bookings a to bookings b on equal room_id with a.id < b.id, a.start_minute < b.end_minute and b.start_minute < a.end_minute, select a.room_id, a.id and b.id, and order by those three columns."
+followups:
+  - "How would you change the query if end_minute were inclusive instead of exclusive?"
+  - "How would you list, for each room, the total number of minutes that are double-booked?"
+  - "How could the new system prevent overlapping bookings at write time in PostgreSQL?"
+common_errors:
+  - "Using <= in the overlap test, which reports back-to-back bookings as conflicts."
+  - "Joining with a.id <> b.id, which returns every conflict twice."
+  - "Checking only whether one booking's start lies inside the other, which misses a booking that fully contains another."

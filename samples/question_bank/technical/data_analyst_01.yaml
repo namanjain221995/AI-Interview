@@ -1,0 +1,645 @@
+# Curated questions: data analyst — analytical SQL, data cleaning and data modelling for analysis.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [data_analyst]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: technical.data_analyst.join_fanout_inflated_revenue
+    competency_key: sql
+    topic: Join fan-out inflating totals
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You join the orders table to the payments table so you can show payment method next to each order, and
+      suddenly total revenue for the month is almost double what finance reported. What do you think happened,
+      and how would you fix the query?
+    expected_concepts:
+      - one-to-many join duplicating order rows (fan-out)
+      - checking the grain of each table before joining
+      - comparing row counts before and after the join
+      - aggregating the many side first or picking one row per order
+      - summing revenue at the correct grain
+    rubric:
+      excellent: Immediately identifies the one-to-many fan-out, explains how to prove it with row counts or a duplicate check on the order key, and fixes it by pre-aggregating or choosing one payment per order while keeping revenue at order grain.
+      good: Recognises that the join duplicated rows and proposes a reasonable fix such as aggregating payments first.
+      weak: Reaches for DISTINCT on the final sum or blames the source data without checking the join.
+    followups:
+      - Why is wrapping the sum in DISTINCT a dangerous fix here?
+      - How would you build a habit or check so this doesn't reach a dashboard again?
+    common_errors:
+      - Using SUM(DISTINCT amount), which silently drops genuinely equal amounts.
+      - Not checking whether an order can have several partial payments or refunds.
+
+  - external_key: technical.data_analyst.zero_rows_in_report
+    competency_key: sql
+    topic: Keeping zero rows in a report
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Say you need a report listing every sales rep with the number of deals they closed this quarter, and reps
+      with no closed deals must still appear with a zero. Talk me through how you'd write that query and where
+      people usually go wrong.
+    expected_concepts:
+      - starting from the reps table and left joining deals
+      - putting the quarter and status filters in the join condition rather than WHERE
+      - counting a deal column instead of counting all rows
+      - COALESCE to turn missing counts into zero
+      - checking the rep count matches the source table
+    rubric:
+      excellent: Starts from the full rep list, explains why filtering deals in WHERE turns the left join into an inner join, counts a non-null deal column, and verifies that every rep appears.
+      good: Uses a left join and gets the zeros, though may need prompting on the WHERE versus ON subtlety.
+      weak: Uses an inner join or counts all rows, so reps without deals disappear or show a count of one.
+    followups:
+      - What would COUNT of all rows return for a rep with no deals, and why?
+      - How would you also show reps who joined partway through the quarter?
+    common_errors:
+      - Filtering the right-hand table in the WHERE clause and losing the zero rows.
+
+  - external_key: technical.data_analyst.nulls_skewing_averages
+    competency_key: sql
+    topic: How NULLs skew aggregates
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      A colleague's average discount per order looks suspiciously high, and you suspect missing values are the
+      cause. How do NULLs behave in counts, sums, averages and comparisons, and how can that quietly distort a
+      report like this?
+    expected_concepts:
+      - aggregates other than COUNT of all rows ignore NULLs
+      - AVG divides by non-null rows only, so missing means are excluded
+      - whether NULL means zero, unknown or not applicable
+      - comparisons with NULL are unknown and drop rows from filters
+      - COALESCE used deliberately, not by reflex
+    rubric:
+      excellent: Explains that AVG skips NULLs so orders without a discount vanish from the denominator, asks what a NULL actually means in this field, and shows how NULL comparisons silently drop rows from filters.
+      good: Knows aggregates skip NULLs and suggests checking or replacing them.
+      weak: Thinks NULLs count as zero everywhere or replaces them with zero without asking what they mean.
+    followups:
+      - When would treating a missing discount as zero be wrong?
+      - What happens to rows where the discount is NULL in a filter like discount not equal to ten?
+    common_errors:
+      - Replacing every NULL with zero, which hides real data-capture problems.
+
+  - external_key: technical.data_analyst.current_plan_per_customer
+    competency_key: sql
+    topic: Latest record per entity
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      You have a subscription history table with one row every time a customer changes plan. How would you get
+      each customer's current plan, and what edge cases would you watch for?
+    expected_concepts:
+      - ROW_NUMBER partitioned by customer ordered by change time descending
+      - alternatively a max-timestamp subquery joined back
+      - ties when two changes share a timestamp
+      - a deterministic tie-breaker column
+      - cancelled customers and future-dated changes
+    rubric:
+      excellent: Uses a window function or equivalent, names the tie problem and a deterministic tie-breaker, and considers cancellations and changes scheduled for the future.
+      good: Produces a correct latest-row query with a window function or max join.
+      weak: Groups by customer and takes the max of the plan name, mixing columns from different rows.
+    followups:
+      - Your max-timestamp join returns two rows for some customers. Why, and what do you do?
+      - How would you get the plan a customer had on a specific past date?
+    common_errors:
+      - Taking MAX of several columns independently, which can combine values from different rows.
+
+  - external_key: technical.data_analyst.duplicate_events_found
+    competency_key: data_analysis
+    topic: Discovering duplicates in a source table
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Halfway through an analysis you notice that some rows in the events table you rely on look like exact
+      duplicates. What would you do next, both for your analysis and for the table itself?
+    expected_concepts:
+      - measuring how many duplicates and since when
+      - deciding whether they are true duplicates or legitimate repeats
+      - finding a natural key or event id to deduplicate on
+      - checking impact on numbers already shared
+      - reporting the issue to the data owner
+    rubric:
+      excellent: Quantifies the duplicates, checks whether they are real repeats, deduplicates on a sound key, works out which past numbers are affected, and raises it with the owning team rather than only patching locally.
+      good: Confirms the duplicates and deduplicates sensibly for the analysis.
+      weak: Drops duplicate rows silently and carries on without understanding the cause or telling anyone.
+    followups:
+      - How would you tell a genuine double click apart from a pipeline duplicate?
+      - Who would you tell, and what would you put in that message?
+    common_errors:
+      - Deduplicating on every column, which misses duplicates that differ only by load timestamp.
+
+  - external_key: technical.data_analyst.new_dataset_first_checks
+    competency_key: data_analysis
+    topic: First checks on an unfamiliar dataset
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      A partner sends you a data extract you've never worked with before, and you're asked to start analysing it
+      today. What checks do you run before you trust any number from it?
+    expected_concepts:
+      - row counts and date coverage against expectations
+      - uniqueness of the supposed key
+      - missing values and unexpected categories per column
+      - value ranges and distributions for numeric fields
+      - reconciling a known total with another source
+      - reading any documentation or asking the provider
+    rubric:
+      excellent: Describes a systematic profile (volume, coverage, keys, nulls, ranges, categories) and ties at least one total back to a trusted source before analysing, noting what they would ask the provider.
+      good: Covers several useful checks such as nulls, duplicates and ranges.
+      weak: Starts building charts straight away or only skims a few rows.
+    followups:
+      - Which single check has saved you the most trouble in the past?
+      - The totals are close to the trusted source but not exact. How close is close enough?
+    common_errors:
+      - Checking only the first few rows, which hides problems in later dates or rare categories.
+
+  - external_key: technical.data_analyst.defining_active_user
+    competency_key: data_analysis
+    topic: Defining an active user
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Think of a product you've analysed. How did you, or how would you, define an active user for it, and what
+      trade-offs come with that definition?
+    expected_concepts:
+      - tying activity to a meaningful action, not just a login or app open
+      - choosing the time window (daily, weekly, monthly)
+      - excluding internal, test and automated accounts
+      - how the definition reacts to product changes
+      - documenting the definition so everyone uses the same one
+    rubric:
+      excellent: Picks a meaningful action that reflects real value, justifies the window from the product's natural usage frequency, excludes non-human or internal accounts, and discusses how the choice could be gamed or drift.
+      good: Gives a reasonable definition with a time window and one trade-off.
+      weak: Defines active as anyone who logged in, with no reasoning about the product.
+    followups:
+      - How would a background sync or push notification inflate your number?
+      - Why might weekly be a better window than daily for this product?
+    common_errors:
+      - Counting passive events such as notification opens as activity.
+
+  - external_key: technical.data_analyst.two_conversion_rates
+    competency_key: data_analysis
+    topic: Same metric, different numbers
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Marketing says checkout conversion is twelve percent, and the product team says it's four percent, for the
+      same week. How could both be telling the truth, and how would you sort it out?
+    expected_concepts:
+      - different denominators (sessions, visitors, cart starts)
+      - different numerators (orders, paid orders, completed checkouts)
+      - different time windows or attribution of late conversions
+      - different filters such as platform or traffic source
+      - writing down one agreed definition
+    rubric:
+      excellent: Systematically compares numerator, denominator, unit of analysis, window and filters, reproduces both numbers, and proposes a documented shared definition with a named owner.
+      good: Points to different denominators or definitions and suggests aligning them.
+      weak: Assumes one team has a bug without checking how each number was defined.
+    followups:
+      - Which of the two numbers would you put on the executive dashboard, and why?
+      - How would you stop this happening with the next metric?
+    common_errors:
+      - Arguing about which number is right before reproducing both.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: technical.data_analyst.ytd_and_month_change_query
+    competency_key: sql
+    topic: Running totals and period-over-period change
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Walk me through how you'd build a monthly report that shows each product line's revenue, its
+      year-to-date running total, and the change against the previous month, ideally in a single query.
+    expected_concepts:
+      - aggregating to month and product line first
+      - SUM over a window partitioned by product line and year, ordered by month
+      - LAG for the previous month's value
+      - handling months with no sales so LAG compares the right months
+      - percentage change with a guard for zero or missing previous values
+    rubric:
+      excellent: Aggregates first, then uses partitioned window functions with the year reset, explains why missing months break LAG and fills them, and handles divide-by-zero in the percentage change.
+      good: Correct use of a running SUM and LAG with sensible partitions.
+      weak: Uses self-joins or spreadsheet steps without a clear approach, or forgets to reset the running total each year.
+    followups:
+      - What does the default window frame do when two rows share the same month?
+      - A product line had no sales in March. What does your April change show?
+    common_errors:
+      - Applying window functions to raw transactions instead of to the monthly aggregate.
+
+  - external_key: technical.data_analyst.date_spine_missing_days
+    competency_key: sql
+    topic: Filling gaps with a date spine
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your daily sign-ups chart draws a straight line between Friday and Monday on weekends when nobody signed
+      up, which hides the dips. How would you fix that in the query, and why does it matter for other
+      calculations too?
+    expected_concepts:
+      - generating a calendar or date spine table
+      - left joining daily counts onto the spine
+      - filling missing days with zero
+      - effect on moving averages and day-over-day comparisons
+      - distinguishing a true zero from missing data
+    rubric:
+      excellent: Builds a date spine, joins actual counts to it with zero fill, and explains how gaps distort moving averages and lag-based comparisons, while checking that a zero is not really a pipeline outage.
+      good: Proposes a calendar table and zero filling.
+      weak: Fixes it only in the chart tool or does not see why missing rows matter.
+    followups:
+      - How would you tell whether a day of zeros is real or a broken pipeline?
+      - How would this change for an hourly chart across several time zones?
+    common_errors:
+      - Assuming a missing day means zero activity when the load actually failed.
+
+  - external_key: technical.data_analyst.daily_sales_timezone_mismatch
+    competency_key: data_analysis
+    topic: Time zones and daily cut-offs
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your dashboard says yesterday's sales were noticeably lower than the figure finance shared for the same
+      day, but the totals for the full month match. What do you suspect, and how would you confirm it?
+    expected_concepts:
+      - UTC storage versus local business day boundaries
+      - finance using a different cut-off or posting date
+      - order date versus payment or settlement date
+      - shifting sales between adjacent days but not across the month
+      - agreeing and documenting the reporting day definition
+    rubric:
+      excellent: Recognises that matching monthly totals point to a day-boundary problem, names time zone and date-field differences, confirms by recomputing with finance's definition, and documents the agreed reporting day.
+      good: Suspects a time zone or date field difference and suggests checking it.
+      weak: Assumes missing data or a bug without using the clue that monthly totals match.
+    followups:
+      - Which date would you use for a daily trading report, and why?
+      - How would you handle stores in several time zones on one chart?
+    common_errors:
+      - Converting timestamps to local time after truncating to the date, which shifts the wrong rows.
+
+  - external_key: technical.data_analyst.usage_streaks_query
+    competency_key: sql
+    topic: Consecutive-day streaks
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      The product team wants to know each user's longest run of consecutive days using the app. How would you
+      approach that in SQL?
+    expected_concepts:
+      - reducing to one row per user per active day
+      - subtracting a row number from the date to form streak groups
+      - grouping by user and group key to get streak lengths
+      - taking the maximum per user
+      - time zone of the activity date
+    rubric:
+      excellent: Deduplicates to user-days, explains the date-minus-row-number grouping trick or an equivalent LAG-based reset, then aggregates streak lengths and takes the max, noting the time zone used to define a day.
+      good: Reaches a workable approach with LAG or row numbers, perhaps with some prompting.
+      weak: Proposes looping in application code or cannot describe how to identify a break in the streak.
+    followups:
+      - Why do you need to deduplicate to one row per day first?
+      - How would you allow a one-day grace gap in a streak?
+    common_errors:
+      - Forgetting duplicate activity on the same day, which breaks the row-number trick.
+
+  - external_key: technical.data_analyst.sessionizing_clickstream
+    competency_key: sql
+    topic: Building sessions from raw events
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You only have raw page-view events with a user id and timestamp, and you need to report average session
+      length. How would you define sessions and build them?
+    expected_concepts:
+      - inactivity timeout such as thirty minutes
+      - LAG to find the gap from the previous event per user
+      - flagging a new session when the gap exceeds the timeout
+      - cumulative sum of flags to assign session ids
+      - single-event sessions having zero measured length
+    rubric:
+      excellent: Defines a timeout and justifies it, builds sessions with LAG plus a running sum of new-session flags, and points out that single-event sessions and the unknown time on the last page bias the average length.
+      good: Describes the gap-based approach with window functions.
+      weak: Groups by user and day and calls that a session.
+    followups:
+      - How sensitive is average session length to the timeout you chose?
+      - Would you report the mean or the median here, and why?
+    common_errors:
+      - Ignoring that the time spent on the last page of a session is unknown.
+
+  - external_key: technical.data_analyst.large_orders_skew_average
+    competency_key: data_analysis
+    topic: Handling outliers in reporting
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Average order value jumped thirty percent last week, and you find it's driven by a handful of very large
+      bulk orders from business customers. How would you handle this in your reporting?
+    expected_concepts:
+      - confirming whether the orders are genuine or erroneous
+      - reporting a median or trimmed mean alongside the mean
+      - segmenting business and consumer customers
+      - not deleting real data to make the chart look normal
+      - explaining the driver in the commentary
+    rubric:
+      excellent: Verifies the orders are real, keeps them in revenue, separates the segments or adds a robust statistic, and explains the change in plain words so readers do not misread it.
+      good: Suggests the median or segmentation and checks the orders are valid.
+      weak: Removes the orders as outliers without investigating or explaining.
+    followups:
+      - How would you decide on a rule for what counts as an outlier going forward?
+      - Finance still wants the mean. How would you present it?
+    common_errors:
+      - Dropping legitimate high-value orders, which then makes revenue reconcile badly.
+
+  - external_key: technical.data_analyst.field_mostly_missing
+    competency_key: data_analysis
+    topic: Deciding how to treat missing data
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You want to break revenue down by customer industry, but the industry field is empty for about a third of
+      accounts. How do you decide what to do about that?
+    expected_concepts:
+      - checking whether missingness is random or tied to a segment or period
+      - showing an explicit unknown category
+      - enriching or backfilling from another source
+      - risks of imputation for categorical fields
+      - stating the coverage limitation in the result
+    rubric:
+      excellent: Investigates why the field is missing and whether it biases the breakdown, keeps an explicit unknown group, considers enrichment, and states clearly how much revenue the conclusions cover.
+      good: Keeps an unknown bucket and mentions checking whether missing values are concentrated somewhere.
+      weak: Drops the missing accounts and presents the remaining breakdown as the full picture.
+    followups:
+      - What would it tell you if missing industry was concentrated in self-serve sign-ups?
+      - When is imputing a value acceptable here, if ever?
+    common_errors:
+      - Excluding unknowns silently, which overstates the share of every known industry.
+
+  - external_key: technical.data_analyst.traffic_spike_bots
+    competency_key: data_analysis
+    topic: Filtering bots and test traffic
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Website visits went up forty percent overnight, but sign-ups didn't move at all. The marketing lead is
+      excited. How would you work out whether the traffic is real?
+    expected_concepts:
+      - breaking down by source, referrer, device and user agent
+      - looking for bot patterns such as identical session lengths or no interaction
+      - checking for internal testing or monitoring tools
+      - comparing engagement metrics for the new traffic
+      - agreeing an exclusion rule and applying it consistently
+    rubric:
+      excellent: Uses the mismatch with sign-ups as a clue, slices the traffic by source and behaviour to find the anomaly, checks for bots and internal tools, and proposes a documented filter applied to history as well.
+      good: Suspects bots and breaks the traffic down to look for an unusual source.
+      weak: Accepts the spike as real or removes it without evidence.
+    followups:
+      - How would you explain to the marketing lead that the gain probably isn't real?
+      - Should you restate past reports once you add the bot filter?
+    common_errors:
+      - Filtering only the current spike instead of applying the same rule to historical data.
+
+  - external_key: technical.data_analyst.customer_moves_region
+    competency_key: databases
+    topic: Slowly changing attributes in reports
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When an account moves from one sales region to another, last year's revenue-by-region report suddenly
+      changes. How would you explain why, and how would you model the data so people get the view they expect?
+    expected_concepts:
+      - joining to the current attribute rewrites history
+      - as-was versus as-is reporting
+      - keeping attribute history with valid-from and valid-to dates
+      - joining facts to the attribute version valid at transaction time
+      - agreeing with stakeholders which view each report needs
+    rubric:
+      excellent: Explains that the report joins to the current region, describes keeping a history of the attribute with validity dates, shows how to join by transaction date, and notes that some reports legitimately want the current view.
+      good: Identifies the cause and suggests storing the region history.
+      weak: Suggests freezing old reports manually or cannot explain why history changed.
+    followups:
+      - Which view would a sales compensation report need, and why?
+      - How would you handle a correction to a region that was wrong all along?
+    common_errors:
+      - Snapshotting whole reports instead of modelling the attribute history.
+
+  - external_key: technical.data_analyst.table_grain_before_joining
+    competency_key: databases
+    topic: Understanding table grain
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You're handed a table called customer metrics with no documentation, and you need to join it to orders.
+      How do you work out what one row actually represents before you use it?
+    expected_concepts:
+      - testing candidate keys for uniqueness
+      - checking for date or snapshot columns that repeat customers
+      - reading the code or job that builds the table
+      - asking the owner and checking lineage
+      - choosing the join keys and filters that match the grain
+    rubric:
+      excellent: Tests uniqueness of candidate keys with grouped counts, spots snapshot or date columns, reads the producing logic or asks the owner, and only then chooses join keys that cannot fan out.
+      good: Checks for duplicates on the customer id and asks the owner.
+      weak: Assumes one row per customer from the table name.
+    followups:
+      - The table has one row per customer per day. How does that change your join?
+      - How would you document what you learn for the next analyst?
+    common_errors:
+      - Trusting the table name to describe its grain.
+
+  - external_key: technical.data_analyst.sql_or_python_choice
+    competency_key: python
+    topic: When to move from SQL to Python
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you decide which parts of an analysis stay in SQL and which parts you move into Python or a
+      notebook? Give me an example from your own work.
+    expected_concepts:
+      - pushing heavy filtering and aggregation to the warehouse
+      - Python for statistics, modelling, complex reshaping or plotting
+      - data volume pulled into memory
+      - reproducibility, version control and parameterised notebooks
+      - handing off logic that needs to run regularly
+    rubric:
+      excellent: Gives a concrete example, keeps large aggregations in the warehouse, uses Python where it adds real capability, and describes how they keep the notebook reproducible and reviewable.
+      good: Sensible split with a real example.
+      weak: Pulls entire raw tables into a dataframe by default or uses only one tool regardless of the task.
+    followups:
+      - How do you make sure someone else can rerun your notebook in three months?
+      - When has pulling too much data into pandas caused you problems?
+    common_errors:
+      - Exporting to spreadsheets between steps, which breaks reproducibility.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: technical.data_analyst.expensive_dashboard_query
+    competency_key: sql
+    topic: Query cost on a columnar warehouse
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A dashboard query you inherited scans several terabytes every time someone opens the page, takes minutes,
+      and the warehouse bill is climbing. How would you go about making it faster and cheaper?
+    expected_concepts:
+      - reading the query plan and bytes scanned
+      - selecting only needed columns in a columnar store
+      - filtering on partition or clustering columns
+      - pre-aggregating into a summary table refreshed on a schedule
+      - caching or materialised views and their freshness trade-off
+      - checking how often the dashboard is actually used
+    rubric:
+      excellent: Starts from the plan and scan statistics, applies column pruning and partition filters, proposes a pre-aggregated model at the dashboard's grain, and weighs freshness and maintenance cost against savings.
+      good: Names partition filtering, selecting fewer columns and pre-aggregation.
+      weak: Only suggests a bigger warehouse or adding indexes without understanding how the engine scans data.
+    followups:
+      - How would you prove the summary table produces the same numbers as the original query?
+      - What would change if the dashboard needs near real-time data?
+    common_errors:
+      - Assuming LIMIT reduces the amount of data scanned.
+      - Wrapping the partition column in a function, which disables partition pruning.
+
+  - external_key: technical.data_analyst.revenue_off_from_ledger
+    competency_key: data_analysis
+    topic: Reconciling with finance
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your revenue figure for last quarter is three percent higher than the finance ledger, and the CFO wants to
+      know which number is right before the board meeting. How would you reconcile them?
+    expected_concepts:
+      - understanding finance's revenue recognition rules
+      - refunds, cancellations, discounts, taxes and currency conversion
+      - booking date versus recognition date
+      - bridging the gap in steps by category
+      - comparing at transaction level for a sample period
+      - documenting the reconciliation and agreeing which number is used where
+    rubric:
+      excellent: Builds a step-by-step bridge between the two figures (refunds, tax, currency, timing, test orders), drills to transaction level where the gap remains, and recommends which figure suits which purpose with a written explanation.
+      good: Lists the likely causes and proposes comparing totals by category to find the gap.
+      weak: Picks one number as correct without reconciling, or tries to force them to match.
+    followups:
+      - How do you explain to the CFO that both numbers are correct for different purposes?
+      - What would you put in place so the gap is tracked every month?
+    common_errors:
+      - Treating finance's figure as product revenue without understanding recognition timing.
+
+  - external_key: technical.data_analyst.average_of_ratios
+    competency_key: data_analysis
+    topic: Averaging ratios correctly
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      A weekly report computes conversion rate by averaging the seven daily conversion rates. Another report
+      divides the week's total orders by the week's total visits. Explain why they disagree and which one you'd
+      use in different situations.
+    expected_concepts:
+      - average of ratios weights each day equally
+      - ratio of sums weights by volume
+      - low-traffic days distorting the simple average
+      - when an unweighted average is intentionally wanted
+      - the same issue across stores, segments or users
+    rubric:
+      excellent: Explains the weighting difference precisely, shows how a small day with an extreme rate moves the unweighted average, recommends ratio of sums for overall performance, and names cases where equal weighting is deliberate.
+      good: Recognises weighting as the difference and prefers totals divided by totals.
+      weak: Thinks the two should be equal or cannot explain which to use.
+    followups:
+      - How does the same problem show up when averaging per-store conversion rates across the chain?
+      - When would you deliberately average per-user ratios?
+    common_errors:
+      - Rolling up pre-computed percentages from a summary table instead of recomputing from counts.
+
+  - external_key: technical.data_analyst.every_channel_up_total_down
+    competency_key: data_analysis
+    topic: Mix shift and Simpson's paradox
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      This quarter, conversion improved in every acquisition channel, yet overall conversion went down. An
+      executive thinks the numbers must be wrong. How would you explain what's going on and show it?
+    expected_concepts:
+      - shift in traffic mix toward low-converting channels
+      - Simpson's paradox
+      - decomposing the change into rate effect and mix effect
+      - a simple table or chart showing share and rate per channel
+      - implications for what the business should do
+    rubric:
+      excellent: Identifies mix shift, quantifies rate and mix effects with a decomposition, presents it simply to the executive, and draws a business implication about acquisition rather than stopping at the paradox.
+      good: Explains mix shift correctly and suggests showing per-channel shares and rates.
+      weak: Assumes a data error or cannot reconcile the per-channel and overall numbers.
+    followups:
+      - How would you present this on a single slide?
+      - Which number should the growth team be measured on?
+    common_errors:
+      - Reporting only the blended rate and drawing the opposite conclusion from the segments.
+
+  - external_key: technical.data_analyst.late_arriving_events
+    competency_key: data_analysis
+    topic: Reporting with late-arriving data
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Mobile events can arrive up to three days late because apps sync when they come back online. How would you
+      design daily reporting so that yesterday's numbers are useful but don't mislead anyone?
+    expected_concepts:
+      - event time versus ingestion time
+      - measuring the typical arrival delay distribution
+      - reprocessing a trailing window of days on each run
+      - marking recent days as provisional on dashboards
+      - avoiding false alarms from incomplete days
+    rubric:
+      excellent: Separates event time from load time, quantifies the lag, reprocesses a rolling window idempotently, and shows recent days as provisional or estimated so readers and alerts are not misled.
+      good: Recognises that recent days are incomplete and proposes reprocessing them.
+      weak: Reports by load date or ignores the issue, so numbers shift without explanation.
+    followups:
+      - How would you set an alert threshold on a metric whose latest days are always incomplete?
+      - Would you ever estimate the final value for yesterday? How?
+    common_errors:
+      - Comparing an incomplete yesterday with a complete day last week and raising a false drop.
+
+  - external_key: technical.data_analyst.incremental_orders_model
+    competency_key: sql
+    topic: Building an incremental, deduplicated table
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      You maintain an orders table for reporting that is rebuilt from scratch every night, and it now takes too
+      long. Orders can be updated days after they're created. How would you make it incremental without getting
+      the numbers wrong?
+    expected_concepts:
+      - using an updated-at column or change feed to select changed rows
+      - merge or upsert on the order key
+      - a lookback window for late updates
+      - idempotent runs that can be safely repeated
+      - handling deletes
+      - periodic full rebuild or reconciliation as a safety net
+    rubric:
+      excellent: Uses updated-at or change data with a lookback, merges on a unique key, makes the job idempotent, accounts for deletes, and keeps a reconciliation or periodic full refresh to catch drift.
+      good: Proposes a merge on changed rows with an updated-at filter.
+      weak: Appends only new orders by creation date, so later updates and cancellations are missed.
+    followups:
+      - How would you detect that the incremental table has drifted from the source?
+      - What happens if the job runs twice for the same day?
+    common_errors:
+      - Filtering on created date, which misses updates to older orders.

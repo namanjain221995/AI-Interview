@@ -1,0 +1,638 @@
+# Frontend core (4/4): browser security (XSS, CSRF, CSP and the origin model), networking and
+# cross-browser robustness.
+# Round types follow difficulty: easy -> screening/combined, medium -> all three,
+# hard -> deep technical/combined.
+version: 1
+defaults:
+  role_tags: [frontend]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: technical.frontend_core.xss_despite_framework
+    competency_key: security
+    topic: Where XSS slips past framework escaping
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Modern frameworks escape text you render by default. In a frontend codebase built on one of them, where
+      can cross-site scripting still sneak in?
+    expected_concepts:
+      - raw HTML APIs such as innerHTML or dangerouslySetInnerHTML
+      - user-controlled URLs in href or src, including javascript URLs
+      - serialising server data into inline scripts without escaping
+      - third-party libraries and markdown renderers that emit HTML
+      - direct DOM manipulation outside the framework
+    rubric:
+      excellent: Names several distinct escape hatches with concrete examples, explains why escaping text does not cover URLs or raw HTML, and describes how to spot them in review.
+      good: Names raw HTML insertion and at least one other path.
+      weak: Believes the framework makes XSS impossible.
+    followups:
+      - How would you safely render a link whose URL comes from a user?
+      - How would you find every raw HTML insertion in a large codebase?
+    common_errors:
+      - Trusting that any value rendered through the framework is safe, including attribute URLs.
+
+  - external_key: technical.frontend_core.same_origin_policy
+    competency_key: security
+    topic: The same-origin policy
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      In your own words, what does the browser's same-origin policy protect, and what can a page on another
+      origin still do to your site despite it?
+    expected_concepts:
+      - origin is scheme, host and port
+      - scripts cannot read responses or DOM from other origins
+      - other origins can still send requests, submit forms and embed resources
+      - that gap is why CSRF and clickjacking exist
+      - CORS relaxes reading, not sending
+    rubric:
+      excellent: Defines origin precisely, separates reading from sending and embedding, and links the remaining capabilities to CSRF, clickjacking and the role of CORS.
+      good: Knows the policy blocks cross-origin reads and that requests can still be sent.
+      weak: Thinks the policy stops other sites from sending any request to your server.
+    followups:
+      - Is a subdomain the same origin as the main domain?
+      - Why can an image tag load a cross-origin image while fetch cannot read it?
+    common_errors:
+      - Treating CORS as a server-side security barrier against requests.
+
+  - external_key: technical.frontend_core.secure_contexts
+    competency_key: security
+    topic: HTTPS, mixed content and secure contexts
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Why does it matter that every resource on a page is loaded over HTTPS, and what does a secure context
+      unlock for frontend code?
+    expected_concepts:
+      - mixed content lets a network attacker tamper with the page
+      - browsers block or upgrade mixed content
+      - HSTS prevents downgrade to HTTP
+      - many APIs such as service workers, geolocation and clipboard need a secure context
+      - Secure cookies are only sent over HTTPS
+    rubric:
+      excellent: Explains the tampering risk of a single script loaded over plain HTTP, how browsers handle mixed content, the role of HSTS, and which features require secure contexts.
+      good: Understands mixed content risk and that some APIs need HTTPS.
+      weak: Sees HTTPS only as a padlock for login pages.
+    followups:
+      - Why is an HTTP script on an HTTPS page worse than an HTTP image?
+      - How does local development count as a secure context?
+    common_errors:
+      - Hard-coding http URLs for assets or APIs.
+
+  - external_key: technical.frontend_core.fetch_wrapper
+    competency_key: javascript
+    topic: Building a robust request helper on fetch
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      If you were writing the shared helper your app uses to call its API with fetch, what would it need to
+      handle beyond just making the request?
+    expected_concepts:
+      - fetch resolves on HTTP error statuses, so check response.ok
+      - parsing errors and non-JSON responses
+      - timeouts and cancellation with AbortController
+      - consistent error objects for the UI
+      - credentials, headers and authentication refresh in one place
+    rubric:
+      excellent: Covers status handling, parsing failures, timeouts, cancellation and a consistent error shape, and explains how the UI uses it, with a view on retries.
+      good: Checks the status and handles network and parse errors.
+      weak: Assumes a failed response will throw automatically.
+    followups:
+      - Which requests would be safe to retry automatically?
+      - How should the UI distinguish being offline from a server error?
+    common_errors:
+      - Treating every resolved fetch as success.
+
+  - external_key: technical.frontend_core.api_key_in_bundle
+    competency_key: security
+    topic: Secrets in frontend code
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      During a review you notice a teammate has put a paid third-party API key into a frontend environment
+      variable so the browser can call that service directly. What would you say, and what would you suggest?
+    expected_concepts:
+      - everything in the bundle is public, including build-time variables
+      - the key can be extracted and abused at your cost
+      - proxying through a backend that holds the secret
+      - publishable keys restricted by origin or scope where the vendor supports it
+      - rotating a key that has already shipped
+    rubric:
+      excellent: Explains that build variables end up in public code, proposes a server-side proxy or restricted publishable key, and insists on rotating the exposed key.
+      good: Recognises the key is exposed and suggests moving the call to the backend.
+      weak: Suggests obfuscating or minifying the key.
+    followups:
+      - The key already shipped to production last week. What now?
+      - When is it fine for a key to be in frontend code?
+    common_errors:
+      - Believing environment variables stay secret after a frontend build.
+
+  - external_key: technical.frontend_core.user_supplied_links
+    competency_key: security
+    topic: Rendering user-supplied links safely
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Users can add a personal website link to their public profile, and other users can click it. What could
+      go wrong when you render that link, and how would you handle it?
+    expected_concepts:
+      - javascript and data URL schemes executing script
+      - allowing only http and https after parsing the URL
+      - opening in a new tab with noopener to prevent tab-nabbing
+      - rel attributes such as nofollow or ugc for user content
+      - showing the destination so users can judge it
+    rubric:
+      excellent: Validates the scheme with a URL parser on input and output, prevents opener access, marks the link as user content and considers phishing risk.
+      good: Blocks javascript URLs and uses noopener.
+      weak: Renders whatever the user typed into the href.
+    followups:
+      - Why is checking that the string starts with http not enough?
+      - What can a page opened in a new tab do to the original tab without noopener?
+    common_errors:
+      - Validating with a naive string prefix check instead of parsing the URL.
+
+  - external_key: technical.frontend_core.button_does_nothing
+    competency_key: debugging
+    topic: Debugging a silent failure with DevTools
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      On the staging site, clicking the Save button seems to do nothing at all. There's no error message and
+      no change. How would you use the browser's developer tools to work out what's happening?
+    expected_concepts:
+      - console errors and warnings
+      - network panel to see whether a request was sent and its response
+      - event listener inspection and breakpoints on the handler
+      - checking for an overlaying element or disabled state
+      - comparing with a working environment
+    rubric:
+      excellent: Works through console, network and the handler in a logical order, considers both front and back end causes such as a swallowed error or an invisible overlay, and narrows it down methodically.
+      good: Checks the console and network panel and sets a breakpoint.
+      weak: Adds alerts or logs at random without a plan.
+    followups:
+      - The request returns 200 but the UI doesn't update. Where do you look next?
+      - How would you check whether something invisible is intercepting the click?
+    common_errors:
+      - Ignoring a request that was never sent at all.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: technical.frontend_core.strict_csp_design
+    competency_key: security
+    topic: Designing a strict Content Security Policy
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      For a new single-page app, what Content Security Policy would you aim for, and why do people often say
+      a domain allowlist for scripts isn't enough?
+    expected_concepts:
+      - nonce- or hash-based script-src with strict-dynamic
+      - allowlisted domains often host scripts or JSONP that bypass the policy
+      - object-src none and base-uri restrictions
+      - frame-ancestors for embedding control
+      - avoiding unsafe-inline and unsafe-eval
+      - report-only mode and violation reporting
+    rubric:
+      excellent: Proposes a nonce or hash based strict policy with strict-dynamic, explains allowlist bypasses, covers object-src, base-uri and frame-ancestors, and plans reporting.
+      good: Knows CSP restricts script sources and that unsafe-inline weakens it.
+      weak: Proposes a long domain allowlist with unsafe-inline.
+    followups:
+      - How do nonces work with a statically hosted single-page app?
+      - What does strict-dynamic allow, and why?
+    common_errors:
+      - Adding unsafe-inline to make the policy pass.
+
+  - external_key: technical.frontend_core.clickjacking_defence
+    competency_key: security
+    topic: Clickjacking and framing controls
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Explain how a clickjacking attack works against a web app, and how you'd protect pages while still
+      letting a few trusted partners embed one specific widget.
+    expected_concepts:
+      - hidden or transparent iframe over a decoy page
+      - frame-ancestors in CSP and the legacy X-Frame-Options header
+      - per-route policies, allowing only the embeddable widget
+      - listing specific partner origins
+      - confirmation steps for sensitive actions
+    rubric:
+      excellent: Describes the attack clearly, uses frame-ancestors with per-route configuration and named partner origins, and adds defence in depth for sensitive actions.
+      good: Knows to prevent framing with headers.
+      weak: Relies on JavaScript frame-busting code.
+    followups:
+      - Why is JavaScript frame-busting unreliable?
+      - How would you serve different framing rules for different routes?
+    common_errors:
+      - Blocking framing for the whole site and breaking the legitimate widget.
+
+  - external_key: technical.frontend_core.browser_data_exposure
+    competency_key: security
+    topic: Sensitive data leaking from the browser
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Apart from the obvious API responses, how can sensitive user data leak out of a frontend application,
+      and what do you do to limit that?
+    expected_concepts:
+      - tokens or personal data in URLs leaking via history, logs and the Referer header
+      - Referrer-Policy settings
+      - analytics and session-replay tools capturing form fields
+      - authenticated pages stored in browser or shared caches
+      - data left in storage after logout
+    rubric:
+      excellent: Names several realistic leak paths with concrete mitigations such as referrer policy, masking in analytics, cache control on private pages and clearing storage on logout.
+      good: Identifies URLs and third-party analytics as leak paths.
+      weak: Cannot think of leaks beyond the network responses themselves.
+    followups:
+      - How would you configure a session-replay tool safely?
+      - Why are password reset tokens in URLs risky, and how do you reduce the risk?
+    common_errors:
+      - Putting identifiers or tokens in query strings that analytics then record.
+
+  - external_key: technical.frontend_core.embedding_partner_iframe
+    competency_key: security
+    topic: Sandboxing embedded third-party content
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your app needs to embed a partner's booking widget in an iframe. How would you limit what that embedded
+      content can do to your page and your users?
+    expected_concepts:
+      - the sandbox attribute and granting only needed permissions
+      - allow-scripts with allow-same-origin can undo the sandbox for same-origin content
+      - the allow attribute and Permissions-Policy for camera, payment and similar features
+      - referrerpolicy and loading attributes
+      - validating any messages the iframe sends
+    rubric:
+      excellent: Applies sandbox flags minimally with an understanding of dangerous combinations, restricts powerful features and referrer data, and validates communication with the frame.
+      good: Uses the sandbox attribute and restricts features.
+      weak: Embeds the iframe without restrictions, trusting the partner fully.
+    followups:
+      - Why is combining allow-scripts and allow-same-origin risky?
+      - What can the partner still do even inside a sandbox?
+    common_errors:
+      - Adding every sandbox permission until the widget works.
+
+  - external_key: technical.frontend_core.xss_bypasses_csrf_tokens
+    competency_key: security
+    topic: Why XSS defeats CSRF protection
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A colleague argues that because your app has solid CSRF tokens, an XSS bug is lower priority. How would
+      you explain the relationship between the two?
+    expected_concepts:
+      - CSRF is a cross-site request riding on ambient cookies
+      - XSS runs script inside your own origin
+      - same-origin script can read CSRF tokens and make authenticated requests
+      - HttpOnly stops token theft but not actions performed in the page
+      - XSS generally undermines every in-page defence
+    rubric:
+      excellent: Explains both attacks precisely, shows that script running in your origin can read tokens and act as the user, and concludes that XSS is usually the more severe class.
+      good: Knows XSS can read the CSRF token and bypass it.
+      weak: Treats the two defences as interchangeable.
+    followups:
+      - What does HttpOnly protect against in an XSS scenario, and what not?
+      - How does SameSite change the CSRF picture?
+    common_errors:
+      - Believing HttpOnly cookies make XSS harmless.
+
+  - external_key: technical.frontend_core.dom_xss_from_url
+    competency_key: security
+    topic: Tracing DOM-based XSS from URL to sink
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A penetration tester sends you a crafted link to your search page that runs their script, even though the
+      server never sees the payload because it's in the URL fragment. How would you find the bug and fix it?
+    expected_concepts:
+      - fragments are processed only in the browser, so server-side filtering never sees them
+      - tracing sources such as location.hash or search params to sinks
+      - sinks such as innerHTML, document.write, eval or dynamic selectors
+      - using textContent or framework rendering instead of HTML insertion
+      - looking for the same pattern elsewhere in the codebase
+    rubric:
+      excellent: Explains why the payload never reaches the server, traces source to sink with DevTools or code search, fixes it with a safe API and searches for variants of the same pattern.
+      good: Finds the unsafe HTML insertion of URL data and replaces it.
+      weak: Proposes a server-side input filter.
+    followups:
+      - Which DevTools features help trace where a value from the URL ends up?
+      - How would you search the codebase for other places with the same pattern?
+    common_errors:
+      - Assuming server-side input validation covers client-only data.
+
+  - external_key: technical.frontend_core.postmessage_validation
+    competency_key: security
+    topic: Securing postMessage communication
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your app and an embedded payments iframe talk to each other with postMessage, and a security review
+      flagged the integration. What would you expect them to have found, and how would you fix it?
+    expected_concepts:
+      - not checking event.origin on received messages
+      - sending with a wildcard target origin
+      - trusting message data without validating its shape
+      - acting on messages that trigger sensitive actions or navigation
+      - using MessageChannel for a dedicated connection
+    rubric:
+      excellent: Identifies missing origin checks, wildcard target origins and unvalidated payloads, fixes each concretely and limits what messages are allowed to trigger.
+      good: Checks event.origin and specifies the target origin when sending.
+      weak: Does not see any risk in postMessage.
+    followups:
+      - Why is a substring match on the origin dangerous?
+      - What should happen when an unexpected message arrives?
+    common_errors:
+      - Validating origins with includes or startsWith.
+
+  - external_key: technical.frontend_core.state_changing_get
+    competency_key: security
+    topic: State-changing GET requests and cross-site requests
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      In code review you spot that the archive link in your app's notification list works by navigating to a
+      URL with a GET request that archives the item. Why might that be a problem, and how would you change it?
+    expected_concepts:
+      - GET should be safe and free of side effects
+      - other sites can trigger GET requests with images, links or prefetching
+      - SameSite Lax cookies are still sent on top-level GET navigations
+      - prefetchers, crawlers and link previews may follow the link
+      - using POST or other non-GET methods with CSRF protection
+    rubric:
+      excellent: Explains HTTP method semantics, shows how cross-site pages and automated prefetchers could trigger the action, notes SameSite Lax does not cover it, and moves to a protected non-GET request.
+      good: Knows GET should not change state and suggests POST with a token.
+      weak: Sees no problem because users must be signed in.
+    followups:
+      - How could a browser or email client trigger that link without the user clicking?
+      - What does SameSite Lax protect and not protect here?
+    common_errors:
+      - Believing SameSite Lax blocks every cross-site request with cookies.
+
+  - external_key: technical.frontend_core.prototype_pollution
+    competency_key: security
+    topic: Prototype pollution in JavaScript
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A security report says a deep-merge helper in your frontend, which merges query string parameters into a
+      settings object, allows prototype pollution. What does that mean, and how would you fix it?
+    expected_concepts:
+      - keys such as __proto__ or constructor.prototype reaching Object.prototype
+      - every object then inherits attacker-controlled properties
+      - impact through gadgets such as options that reach innerHTML or URLs
+      - blocking dangerous keys or using objects without a prototype or Map
+      - avoiding merging untrusted input into config at all
+    rubric:
+      excellent: Explains how a crafted key modifies the shared prototype, gives a realistic exploitation path, and fixes it both in the merge helper and by not merging untrusted input wholesale.
+      good: Understands the mechanism and filters dangerous keys.
+      weak: Does not see how a merge could affect unrelated objects.
+    followups:
+      - How could polluting a prototype lead to XSS?
+      - Why does using Object.create with a null prototype help?
+    common_errors:
+      - Only blocking the literal key __proto__ and missing constructor.prototype.
+
+  - external_key: technical.frontend_core.safari_only_bug
+    competency_key: debugging
+    topic: Bugs in one browser only
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A feature works in Chrome and Firefox, but a portion of iPhone users report it's broken. How would you
+      investigate, and how do you decide which browsers to support and how?
+    expected_concepts:
+      - reproducing on the exact engine and version, including real devices or cloud devices
+      - checking compatibility data for the features used
+      - feature detection rather than user-agent sniffing
+      - polyfills or progressive enhancement
+      - a support policy based on analytics data
+    rubric:
+      excellent: Reproduces on matching engines, isolates the unsupported or divergent behaviour, fixes it with feature detection or a fallback, and grounds browser support decisions in real usage data.
+      good: Reproduces on the browser and uses compatibility data or polyfills.
+      weak: Asks users to switch browsers or sniffs the user agent.
+    followups:
+      - How would you know whether a browser API is safe to use for your audience?
+      - Why is user-agent sniffing fragile?
+    common_errors:
+      - Testing iPhone behaviour only by resizing a desktop browser.
+
+  - external_key: technical.frontend_core.timezone_dates
+    competency_key: javascript
+    topic: Dates, time zones and formatting
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Users in some countries see appointments shown on the wrong day in your app. How would you track that
+      down, and how should a frontend handle dates and time zones?
+    expected_concepts:
+      - date-only strings parsed as UTC versus date-time strings parsed as local time
+      - storing instants in UTC with an explicit time zone where it matters
+      - formatting with Intl.DateTimeFormat in the user's or event's time zone
+      - distinguishing calendar dates from instants
+      - testing under different time zones and daylight saving transitions
+    rubric:
+      excellent: Pinpoints parsing and time-zone conversion as the cause, separates calendar dates from instants, formats with Intl in the right zone and tests across zones and daylight saving changes.
+      good: Identifies a UTC versus local conversion problem and fixes the parsing.
+      weak: Adds or subtracts hours manually to compensate.
+    followups:
+      - Should a date-only value such as a contract start date ever be converted between time zones?
+      - How would you run your tests in a different time zone?
+    common_errors:
+      - Parsing a date-only string with new Date and displaying it in local time.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: technical.frontend_core.trusted_types_rollout
+    competency_key: security
+    topic: Eliminating DOM XSS with Trusted Types
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      In a large frontend codebase, how would you systematically eliminate DOM-based XSS rather than fixing
+      bugs one at a time? Talk me through tools like Trusted Types and how you'd roll them out.
+    expected_concepts:
+      - dangerous sinks such as innerHTML, script src and eval
+      - Trusted Types enforced through CSP
+      - a small number of reviewed policies that create trusted values
+      - report-only rollout to find violations first
+      - lint rules and safe wrapper APIs to prevent new sinks
+      - handling third-party libraries that write to sinks
+    rubric:
+      excellent: Explains sink-based thinking, rolls out Trusted Types in report-only mode, centralises a few audited policies, adds lint rules and handles third-party code and browser support.
+      good: Knows what Trusted Types do and that sinks should be centralised.
+      weak: Relies on code review to catch every unsafe sink.
+    followups:
+      - What would you do about a third-party library that assigns to innerHTML?
+      - How do you keep the number of policies small over time?
+    common_errors:
+      - Creating a default policy that passes everything through and defeats the purpose.
+
+  - external_key: technical.frontend_core.cross_origin_isolation
+    competency_key: security
+    topic: Cross-origin isolation, COOP and COEP
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your team wants to use SharedArrayBuffer for a performance-critical feature, which requires the page to
+      be cross-origin isolated. What does that involve, and what might it break?
+    expected_concepts:
+      - side-channel attacks such as Spectre motivated isolation
+      - Cross-Origin-Opener-Policy separating browsing context groups
+      - Cross-Origin-Embedder-Policy requiring subresources to opt in
+      - CORP or CORS on embedded resources, or the credentialless mode
+      - breaking popups for OAuth or payments and third-party embeds
+    rubric:
+      excellent: Explains why isolation is required, what each header does, how embedded resources must opt in and what commonly breaks, with a plan to test and roll it out route by route.
+      good: Knows the two headers are needed and that third-party resources may break.
+      weak: Does not know what cross-origin isolation is for.
+    followups:
+      - How would an OAuth popup flow be affected by a strict opener policy?
+      - How would you roll this out without breaking existing embeds?
+    common_errors:
+      - Enabling the headers site-wide without auditing embedded third-party resources.
+
+  - external_key: technical.frontend_core.realtime_transport_choice
+    competency_key: javascript
+    topic: Polling, server-sent events and WebSockets
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      For a live operations dashboard that shows updates within a second, how would you choose between polling,
+      server-sent events and WebSockets, and what client-side behaviour would you build around the connection?
+    expected_concepts:
+      - trade-offs of each transport including direction, proxies and infrastructure
+      - reconnection with backoff and jitter
+      - resuming from the last event id so updates are not missed
+      - pausing or slowing updates in hidden tabs
+      - sharing one connection across tabs and handling bursts of messages
+    rubric:
+      excellent: Chooses a transport with reasoned trade-offs, designs reconnection, resumption and backpressure handling, and accounts for background tabs and multiple open tabs.
+      good: Makes a defensible transport choice and handles reconnection.
+      weak: Picks WebSockets by default without considering reconnection or missed updates.
+    followups:
+      - How would the client catch up on events missed during a disconnect?
+      - What would you do if the server sends hundreds of updates per second?
+    common_errors:
+      - Reconnecting immediately in a tight loop when the server is down.
+
+  - external_key: technical.frontend_core.progressive_enhancement
+    competency_key: frontend_react
+    topic: Progressive enhancement for critical flows
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Some of your users are on flaky networks where JavaScript bundles sometimes fail to load or arrive late.
+      How would you design a critical flow such as sign-in or checkout so it still works?
+    expected_concepts:
+      - server-rendered HTML forms that submit without JavaScript
+      - enhancing the baseline with client-side behaviour when it loads
+      - avoiding interactions that silently do nothing before scripts arrive
+      - measuring script load failures in production
+      - trade-offs in complexity and testing both paths
+    rubric:
+      excellent: Builds a working HTML baseline enhanced by JavaScript, covers the gap before scripts load, measures script failures and is realistic about the testing and complexity cost.
+      good: Proposes server-handled forms as a fallback.
+      weak: Assumes JavaScript always loads.
+    followups:
+      - How would you know how often your bundles fail to load for real users?
+      - What happens if a user submits before the client-side validation script loads?
+    common_errors:
+      - Buttons that look ready but do nothing until JavaScript has loaded.
+
+  - external_key: technical.frontend_core.untrusted_html_rendering
+    competency_key: security
+    topic: Rendering untrusted full HTML documents
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your web app needs to show customers the HTML emails they've received, with their original layout and
+      styles. How would you render that content without putting your app or your users at risk?
+    expected_concepts:
+      - rendering in a sandboxed iframe on a separate origin
+      - sanitising scripts, forms and event handlers anyway
+      - CSS isolation so the email cannot restyle or overlay the app
+      - proxying remote images to block tracking and leaking the user's address
+      - a restrictive CSP on the rendering origin
+    rubric:
+      excellent: Combines origin isolation, sandboxing, sanitisation and CSP, handles CSS and overlay attacks, and proxies remote content for privacy, explaining why each layer is needed.
+      good: Uses a sandboxed iframe and sanitises the HTML.
+      weak: Inserts the sanitised HTML directly into the app's DOM.
+    followups:
+      - Why use a separate origin if the iframe is already sandboxed?
+      - How could an email's CSS mislead the user without any script?
+    common_errors:
+      - Injecting email HTML into the main document where its styles leak into the app.
+
+  - external_key: technical.frontend_core.embeddable_widget_design
+    competency_key: security
+    topic: Building a script other websites embed
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You're building a support chat widget that customers add to their own websites with a single script
+      tag. How would you design it so it's isolated from the host page in both directions?
+    expected_concepts:
+      - a small loader script that creates an iframe on your origin
+      - the host page can read or alter anything rendered in its DOM
+      - user session and tokens kept inside the iframe origin
+      - postMessage protocol with origin checks
+      - compatibility with host CSP and third-party cookie restrictions
+      - avoiding global variable and style collisions
+    rubric:
+      excellent: Uses a minimal loader plus an iframe on its own origin, keeps credentials out of the host page, defines a validated message protocol and addresses host CSP, cookie restrictions and collisions.
+      good: Isolates the UI in an iframe and validates messages.
+      weak: Injects the whole widget and its tokens directly into the host page's DOM.
+    followups:
+      - How would authentication work when third-party cookies are blocked?
+      - What should the widget do if the host page's CSP blocks it?
+    common_errors:
+      - Storing the widget's session token where the host page's scripts can read it.
+
+  - external_key: technical.frontend_core.keyboard_drag_and_drop
+    competency_key: accessibility
+    topic: Accessible alternatives to drag and drop
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your task board lets people reorder cards and move them between columns only by dragging with a mouse.
+      How would you make those interactions accessible to keyboard, screen-reader and touch users?
+    expected_concepts:
+      - keyboard pick-up, move and drop with clear key bindings
+      - announcing grab, position and drop with live regions
+      - alternative controls such as a move-to menu or buttons
+      - WCAG 2.2 dragging movements and target size criteria
+      - preserving focus on the moved card
+    rubric:
+      excellent: Provides keyboard operation and a non-dragging alternative, announces each step, keeps focus on the moved card, cites the relevant WCAG criteria and tests with assistive technology.
+      good: Adds keyboard support or a move menu with some announcements.
+      weak: Considers drag and drop inherently impossible to make accessible.
+    followups:
+      - What would a screen-reader user hear while moving a card between columns?
+      - Where should focus go after a card is moved?
+    common_errors:
+      - Losing focus when the moved card is re-rendered in its new position.

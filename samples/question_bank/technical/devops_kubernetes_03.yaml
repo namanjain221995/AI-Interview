@@ -1,0 +1,634 @@
+# Kubernetes in depth (3/4): RBAC, workload security, configuration, upgrades and the control plane.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [devops]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: technical.devops_kubernetes.rbac_namespace_readonly
+    competency_key: kubernetes
+    topic: RBAC roles and bindings
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      A support team needs to view pods and logs in two namespaces but must not change anything. How would
+      you set that up with RBAC, and why did you choose those particular objects?
+    expected_concepts:
+      - Role versus ClusterRole scope
+      - RoleBinding in each namespace, possibly to a shared ClusterRole
+      - verbs get, list and watch on pods and the pods/log subresource
+      - binding to a group from the identity provider rather than individuals
+      - verifying with kubectl auth can-i
+    rubric:
+      excellent: Builds a least-privilege role including the log subresource, binds it per namespace to a group, explains reusing a ClusterRole via RoleBindings, and verifies the result.
+      good: Creates a read-only role and binding in the right namespaces.
+      weak: Grants the built-in view or edit role cluster-wide, or binds users one by one with broad verbs.
+    followups:
+      - Why would a RoleBinding that references a ClusterRole still be namespace-scoped?
+      - How would you check what a specific user can do?
+    common_errors:
+      - Forgetting that logs are a separate subresource.
+
+  - external_key: technical.devops_kubernetes.service_account_hygiene
+    competency_key: security
+    topic: Service accounts for workloads
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Why is it a problem when every workload in a namespace runs as the default service account, and what
+      would you do about it?
+    expected_concepts:
+      - one identity per workload for least privilege
+      - permissions granted to default affect every pod using it
+      - disabling automatic token mounting when the API isn't needed
+      - short-lived projected tokens
+      - mapping service accounts to cloud identities
+    rubric:
+      excellent: Explains the blast radius of a shared identity, gives each workload its own account with minimal rights, disables token mounting where unneeded, and mentions projected tokens.
+      good: Recommends dedicated service accounts and turning off unneeded token mounts.
+      weak: Doesn't see why a shared default account matters.
+    followups:
+      - How would an attacker in a pod use a mounted token?
+      - Which workloads genuinely need to call the Kubernetes API?
+    common_errors:
+      - Granting extra rights to the default account to make one app work.
+
+  - external_key: technical.devops_kubernetes.protecting_secrets
+    competency_key: security
+    topic: Protecting Kubernetes Secrets
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Kubernetes Secrets are only base64 encoded by default. What would you do in a real cluster to keep the
+      values in them properly protected?
+    expected_concepts:
+      - encryption at rest in etcd with a KMS provider
+      - RBAC restricting get and list on Secrets
+      - syncing from an external secret manager
+      - avoiding secrets in environment variables when files will do
+      - audit logging of secret access
+    rubric:
+      excellent: Covers storage encryption, tight RBAC including list and watch, external secret managers, how secrets reach the pod, and auditing.
+      good: Mentions encryption at rest and restricting access with RBAC.
+      weak: Believes base64 is encryption or relies only on keeping manifests private.
+    followups:
+      - Why is list permission on Secrets as dangerous as get?
+      - How would you rotate a secret without restarting everything by hand?
+    common_errors:
+      - Overlooking that anyone who can create pods in a namespace can read its Secrets.
+
+  - external_key: technical.devops_kubernetes.forbidden_exec
+    competency_key: kubernetes
+    topic: Diagnosing a forbidden error
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      An engineer on call gets a forbidden error when trying to exec into a pod, although they can list pods
+      fine. How would you figure out what's missing, and would you simply grant it?
+    expected_concepts:
+      - exec is a separate subresource needing create on pods/exec
+      - kubectl auth can-i to test as the user
+      - check which roles and bindings apply to their group
+      - exec is powerful and should be granted deliberately
+      - break-glass access with auditing
+    rubric:
+      excellent: Pinpoints the exec subresource, verifies with can-i, and thinks about whether exec should be granted broadly or through an audited break-glass process.
+      good: Identifies the missing exec permission and how to add it.
+      weak: Gives the engineer cluster-admin to unblock them.
+    followups:
+      - Why might exec access be treated as sensitive?
+      - How would you give temporary elevated access during incidents?
+    common_errors:
+      - Assuming get on pods includes exec.
+
+  - external_key: technical.devops_kubernetes.configmap_not_reloaded
+    competency_key: kubernetes
+    topic: Config changes not picked up
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Someone updated a ConfigMap to change a feature setting, but the running pods are still using the old
+      value an hour later. Explain why, and how you'd make config changes roll out reliably.
+    expected_concepts:
+      - environment variables are read only at container start
+      - mounted files update eventually but subPath mounts never do
+      - the app may cache config and not reread files
+      - checksum annotation on the pod template to trigger a rollout
+      - immutable versioned ConfigMaps
+    rubric:
+      excellent: Distinguishes env vars, volume mounts and subPath, and proposes a rollout-triggering pattern so changes are versioned and reversible.
+      good: Knows env vars need a restart and suggests restarting the deployment.
+      weak: Cannot explain why the change didn't apply.
+    followups:
+      - Why is a controlled rollout better than updating config in place?
+      - How would you roll back a bad config change?
+    common_errors:
+      - Not knowing that subPath mounts never receive updates.
+
+  - external_key: technical.devops_kubernetes.security_context_defaults
+    competency_key: security
+    topic: Pod and container security context
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Which security context settings would you put on a typical web service container by default, and what
+      does each one protect against?
+    expected_concepts:
+      - runAsNonRoot and a specific user ID
+      - readOnlyRootFilesystem
+      - allowPrivilegeEscalation false
+      - dropping all capabilities and adding only what's needed
+      - seccomp RuntimeDefault profile
+    rubric:
+      excellent: Lists a sensible baseline, explains the attack each setting blocks, and mentions how to handle apps that need a writable path or a capability.
+      good: Names several correct settings with a brief reason for each.
+      weak: Only mentions not running privileged, or cannot explain the settings.
+    followups:
+      - The app needs to write temporary files. How do you keep the root filesystem read-only?
+      - When would you need to add a capability back?
+    common_errors:
+      - Assuming containers are isolated enough that running as root doesn't matter.
+
+  - external_key: technical.devops_kubernetes.cluster_upgrade_basics
+    competency_key: kubernetes
+    topic: Upgrading a cluster version
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Describe how you would take a cluster from one minor version to the next, from preparation through to
+      the last node.
+    expected_concepts:
+      - read release notes and check deprecated APIs
+      - upgrade the control plane before the nodes
+      - version skew rules between kubelet and API server
+      - cordon, drain and replace or upgrade nodes gradually
+      - upgrade add-ons and verify workloads, test in a lower environment first
+    rubric:
+      excellent: Gives an ordered, safe procedure covering preparation, control plane, add-ons and node rollout with skew rules and verification at each stage.
+      good: Upgrades control plane first then drains nodes one by one.
+      weak: Upgrades everything at once or skips checking for removed APIs.
+    followups:
+      - Why can't you skip a minor version?
+      - What would make you pause halfway through the node rollout?
+    common_errors:
+      - Forgetting cluster add-ons such as the CNI and DNS need compatible versions.
+
+  - external_key: technical.devops_kubernetes.drain_stuck
+    competency_key: kubernetes
+    topic: Node drain hangs
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      During planned maintenance, kubectl drain has been sitting there for twenty minutes on one node. What
+      could be blocking it, and how would you get it moving without causing an outage?
+    expected_concepts:
+      - a PodDisruptionBudget that allows no disruptions
+      - pods with emptyDir or not managed by a controller
+      - DaemonSet pods needing the ignore flag
+      - long termination grace periods or stuck finalizers
+      - fixing the cause rather than forcing the drain
+    rubric:
+      excellent: Identifies the blocking pod from drain output, explains each typical cause, and resolves it safely, for example by scaling up to satisfy the budget first.
+      good: Recognises a PDB or unmanaged pod as the blocker.
+      weak: Forces deletion of everything on the node immediately.
+    followups:
+      - The PDB is for a single-replica service. What would you do?
+      - What does disabling eviction in drain do, and why is it risky?
+    common_errors:
+      - Using force flags that bypass disruption budgets without telling the service owner.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: technical.devops_kubernetes.pod_security_admission
+    competency_key: security
+    topic: Pod Security Standards and admission
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you enforce the Pod Security Standards across a cluster that already has dozens of running
+      workloads, some of which need elevated privileges?
+    expected_concepts:
+      - privileged, baseline and restricted levels
+      - namespace labels for enforce, audit and warn modes
+      - start with audit and warn to find violations
+      - isolate genuinely privileged workloads in dedicated namespaces
+      - version pinning of the standard
+    rubric:
+      excellent: Explains the levels and modes, uses audit and warn to measure impact before enforcing, and handles privileged system workloads by isolation rather than weakening everything.
+      good: Knows the levels and namespace labels and plans a gradual rollout.
+      weak: Enforces restricted everywhere at once or has no plan for exceptions.
+    followups:
+      - When would you reach for a policy engine instead of built-in pod security?
+      - How do you stop a team from relabelling their namespace to privileged?
+    common_errors:
+      - Not realising enforcement applies to new pods, so existing violations hide until a restart.
+
+  - external_key: technical.devops_kubernetes.policy_engine
+    competency_key: kubernetes
+    topic: Policy as code with admission controllers
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      If you introduced a policy engine such as Kyverno or OPA Gatekeeper, which rules would you enforce first,
+      and how would you roll them out without blocking teams?
+    expected_concepts:
+      - validating versus mutating admission
+      - priority rules such as required resources, trusted registries, no latest tags, labels
+      - audit mode and background scans before enforcement
+      - clear error messages and exemptions process
+      - testing policies in CI against manifests
+    rubric:
+      excellent: Picks high-value rules tied to real risks, rolls out via audit then enforce with good messaging and exceptions, and shifts checks left into CI.
+      good: Names sensible rules and starts in audit mode.
+      weak: Lists rules without any rollout plan or turns everything on in enforce mode immediately.
+    followups:
+      - How would you handle a team that needs a temporary exception?
+      - What happens to deployments if the policy engine is unavailable?
+    common_errors:
+      - Ignoring the availability impact of a failing admission webhook.
+
+  - external_key: technical.devops_kubernetes.removed_api_versions
+    competency_key: kubernetes
+    topic: Deprecated APIs before an upgrade
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      The next Kubernetes version removes some API versions, and you have hundreds of manifests and Helm
+      releases spread across teams. How would you find everything affected before the upgrade?
+    expected_concepts:
+      - scan manifests and rendered charts with tools such as pluto or kubent
+      - API server metrics or audit logs for requests to deprecated versions
+      - stored Helm release manifests that reference old APIs
+      - working with owning teams and tracking progress
+      - CI checks to prevent regressions
+    rubric:
+      excellent: Combines static scanning of source and releases with runtime evidence from the API server, coordinates fixes with owners, and adds CI guards.
+      good: Uses a scanning tool and plans to update the manifests.
+      weak: Upgrades and fixes whatever breaks afterwards.
+    followups:
+      - Why could a Helm release break even after you fixed the chart?
+      - How do existing objects in etcd behave when an API version is removed?
+    common_errors:
+      - Scanning only Git and missing clients and controllers still calling old versions.
+
+  - external_key: technical.devops_kubernetes.node_upgrade_strategy
+    competency_key: kubernetes
+    topic: Node upgrade strategies
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Compare upgrading worker nodes in place with building a new node pool and migrating workloads across.
+      Which have you used, and when would you pick each?
+    expected_concepts:
+      - surge upgrades replacing nodes within a pool
+      - blue-green node pools with cordon and drain of the old pool
+      - fast rollback by uncordoning the old pool
+      - temporary extra capacity and cost
+      - respecting PDBs and monitoring between batches
+    rubric:
+      excellent: Contrasts both approaches on risk, rollback, speed and cost, and explains batch sizing and verification grounded in experience.
+      good: Describes both approaches and one advantage of each.
+      weak: Only knows clicking upgrade in a console with no view on risk.
+    followups:
+      - How would you choose the batch size for a surge upgrade?
+      - What would you check before deleting the old pool?
+    common_errors:
+      - Deleting the old pool before confirming workloads are healthy on the new one.
+
+  - external_key: technical.devops_kubernetes.rbac_cleanup
+    competency_key: security
+    topic: Reducing over-permissive RBAC
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      An audit finds more than forty bindings to cluster-admin, many for service accounts nobody remembers
+      creating. How would you clean this up without breaking the things that rely on them?
+    expected_concepts:
+      - inventory bindings and their subjects
+      - use audit logs to see which permissions are actually used
+      - craft least-privilege roles from observed usage
+      - staged removal with owners and a rollback plan
+      - guardrails preventing new cluster-admin bindings
+    rubric:
+      excellent: Uses audit data to learn real usage, replaces bindings with scoped roles in stages with owners, and adds controls so the problem doesn't return.
+      good: Inventories the bindings and replaces them with narrower roles gradually.
+      weak: Deletes them all at once or leaves them because changing them is risky.
+    followups:
+      - How long would you collect audit data before deciding a permission is unused?
+      - Which bindings would you leave alone, and why?
+    common_errors:
+      - Removing permissions from a controller and only finding out during the next reconcile failure.
+
+  - external_key: technical.devops_kubernetes.pod_cloud_credentials
+    competency_key: security
+    topic: Pods using the node's cloud role
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You discover that applications reach cloud storage using the permissions attached to the worker nodes,
+      so every pod on a node shares the same broad role. How would you move to per-workload credentials?
+    expected_concepts:
+      - pod-level identity such as IRSA, EKS Pod Identity, GKE or Azure workload identity
+      - mapping each service account to its own cloud role
+      - blocking pod access to the instance metadata endpoint
+      - migrating workload by workload then trimming the node role
+      - verifying with cloud access logs
+    rubric:
+      excellent: Explains the risk, moves each workload to its own federated identity, blocks metadata access, and shrinks the node role only after confirming nothing still depends on it.
+      good: Proposes a workload identity mechanism and narrower roles.
+      weak: Suggests putting long-lived access keys into Secrets instead.
+    followups:
+      - How would you prove no pod still uses the node role before you trim it?
+      - What does hop limit on the metadata service have to do with this?
+    common_errors:
+      - Forgetting the node itself still needs some permissions to function.
+
+  - external_key: technical.devops_kubernetes.etcd_operations
+    competency_key: kubernetes
+    topic: etcd health and operations
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What role does etcd play in a cluster, and if you were running the control plane yourself, how would you
+      keep it healthy?
+    expected_concepts:
+      - the source of truth for all cluster state
+      - odd-sized cluster and Raft quorum
+      - low-latency disks and fsync latency sensitivity
+      - regular snapshots stored off the cluster
+      - database size, compaction and defragmentation
+    rubric:
+      excellent: Explains etcd's role and quorum, the disk latency sensitivity, and an operational routine of monitoring, compaction, defragmentation and tested snapshots.
+      good: Knows etcd stores state, needs quorum and should be backed up.
+      weak: Thinks etcd is an optional cache or cannot say what happens if it fails.
+    followups:
+      - What happens to running pods if etcd loses quorum?
+      - Which etcd metrics would you alert on?
+    common_errors:
+      - Running an even number of members and believing it adds resilience.
+
+  - external_key: technical.devops_kubernetes.slow_api_server
+    competency_key: kubernetes
+    topic: Slow API server and kubectl timeouts
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      kubectl commands have become slow and occasionally time out, and deploy pipelines are failing as a
+      result. How would you find out what's loading the API server?
+    expected_concepts:
+      - API server request rate and latency metrics by verb and resource
+      - audit logs to find heavy clients
+      - controllers or tools doing expensive full lists
+      - large objects or huge numbers of objects such as events or secrets
+      - API priority and fairness to protect critical traffic
+    rubric:
+      excellent: Uses metrics and audit logs to identify the noisy client and request type, checks etcd latency, and uses priority and fairness or client fixes to resolve it.
+      good: Checks API server metrics and suspects a misbehaving controller.
+      weak: Only suggests adding more control plane nodes.
+    followups:
+      - Why are list calls without a resource version expensive?
+      - How would you protect the kubelet and controllers from a noisy CI tool?
+    common_errors:
+      - Overlooking etcd latency as the underlying cause.
+
+  - external_key: technical.devops_kubernetes.image_admission
+    competency_key: security
+    topic: Enforcing trusted images in the cluster
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you make sure the cluster only runs images that came from your own build pipeline, rather
+      than anything someone pulls from a public registry?
+    expected_concepts:
+      - allowlist of internal registries enforced at admission
+      - image signing in CI, for example with cosign
+      - signature verification in an admission policy
+      - referencing images by digest
+      - pull-through cache and mirrored base images
+    rubric:
+      excellent: Combines registry restrictions, signing in CI and verification at admission with digest pinning, and handles third-party images through a controlled mirror.
+      good: Restricts registries at admission and mentions signing.
+      weak: Relies on code review alone or only scans images after they run.
+    followups:
+      - How would you handle Helm charts that pull images from public registries?
+      - What's the weakness of checking tags rather than digests?
+    common_errors:
+      - Verifying a tag that can later point to a different image.
+
+  - external_key: technical.devops_kubernetes.audit_logging
+    competency_key: security
+    topic: Kubernetes audit logs
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What would you capture in the Kubernetes audit log, and how have you used, or would you use, those logs
+      during a security investigation?
+    expected_concepts:
+      - audit policy levels such as Metadata and RequestResponse
+      - logging secret access at metadata level only
+      - capturing exec, port-forward and RBAC changes
+      - shipping logs off the cluster with retention
+      - querying by user, service account and source IP
+    rubric:
+      excellent: Designs a policy that balances detail with volume and secrecy, ships logs securely, and shows how to reconstruct who did what during an investigation.
+      good: Knows audit logs exist, what levels mean, and how to search them.
+      weak: Confuses audit logs with application or container logs.
+    followups:
+      - Why should you avoid logging Secret request bodies?
+      - Which events would you alert on in real time?
+    common_errors:
+      - Logging everything at the most detailed level and overwhelming storage.
+
+  - external_key: technical.devops_kubernetes.expired_cluster_certs
+    competency_key: kubernetes
+    topic: Expired control plane certificates
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A self-managed cluster that's been running for a year suddenly stops accepting kubectl commands, and
+      nodes begin to go NotReady. Logs mention certificate validity errors. What would you do?
+    expected_concepts:
+      - control plane and kubelet certificates expiring after a year
+      - checking expiry with kubeadm certs check-expiration or openssl
+      - renewing certificates and restarting control plane components
+      - kubelet client certificate rotation
+      - monitoring certificate expiry going forward
+    rubric:
+      excellent: Diagnoses expiry quickly, renews certificates in the right order, restores kubelets, and puts rotation and expiry monitoring in place.
+      good: Identifies expired certificates and knows how to renew them.
+      weak: Rebuilds the cluster or cannot connect the symptoms to certificates.
+    followups:
+      - Why do regular cluster upgrades usually prevent this?
+      - How would you renew without an outage next time?
+    common_errors:
+      - Renewing certificates without updating the admin kubeconfig.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: technical.devops_kubernetes.access_model_at_scale
+    competency_key: kubernetes
+    topic: Access model for many teams
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Thirty teams will use a shared platform, each getting namespaces on demand. How would you design
+      authentication and authorisation so access stays least privilege without your team becoming a ticket
+      queue?
+    expected_concepts:
+      - single sign-on through OIDC with groups from the identity provider
+      - standard role templates bound to team groups
+      - namespace provisioning automated through GitOps or a controller
+      - short-lived credentials and break-glass procedures
+      - periodic access review and audit
+    rubric:
+      excellent: Designs identity federation, templated roles, automated self-service provisioning, and review processes, explaining how each keeps access tight as teams change.
+      good: Uses SSO groups and standard roles with some automation.
+      weak: Proposes static kubeconfigs or manual per-user bindings.
+    followups:
+      - How do you handle someone moving to another team?
+      - What would your break-glass access look like?
+    common_errors:
+      - Distributing long-lived client certificates that can't be revoked easily.
+
+  - external_key: technical.devops_kubernetes.leaked_sa_token
+    competency_key: security
+    topic: Leaked service account token
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A long-lived service account token for a deployment controller was found in a public repository. Walk
+      me through your response, from the first hour to the follow-up work.
+    expected_concepts:
+      - revoke immediately by deleting the token Secret or the service account
+      - assess what the account could do from its RBAC bindings
+      - search audit logs for use of the token from unknown sources
+      - check for persistence such as new bindings, workloads or webhooks
+      - move to short-lived bound tokens and secret scanning
+    rubric:
+      excellent: Revokes first, scopes the blast radius from RBAC, hunts for misuse and persistence in audit logs, and fixes the root causes with short-lived tokens and scanning.
+      good: Revokes the token and checks audit logs for misuse.
+      weak: Only deletes the commit from the repository.
+    followups:
+      - What would an attacker most likely create to keep access?
+      - Why are legacy long-lived tokens still a risk in newer clusters?
+    common_errors:
+      - Assuming removing the file from Git history ends the exposure.
+
+  - external_key: technical.devops_kubernetes.fleet_upgrades
+    competency_key: kubernetes
+    topic: Routine upgrades across a fleet
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      You're responsible for twenty clusters, and Kubernetes ships a new minor version roughly three times a
+      year. How would you turn upgrades into a routine, low-risk process instead of a dreaded project?
+    expected_concepts:
+      - fixed cadence and support window policy
+      - canary clusters and progressive waves by risk
+      - automated pre-flight checks for deprecated APIs and add-on compatibility
+      - conformance and smoke tests after each wave
+      - clear rollback or abort criteria and communication with teams
+    rubric:
+      excellent: Describes a repeatable cadence with automation, staged waves, objective go or no-go criteria and team communication, and explains how it keeps clusters within support.
+      good: Proposes testing on a non-production cluster first and upgrading in waves.
+      weak: Upgrades only when forced by end of support.
+    followups:
+      - What would you treat as a stop signal during a wave?
+      - How do you handle a team whose workload blocks the upgrade?
+    common_errors:
+      - Falling several versions behind and facing forced multi-step upgrades.
+
+  - external_key: technical.devops_kubernetes.etcd_disaster_recovery
+    competency_key: kubernetes
+    topic: Restoring a cluster after etcd loss
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Two of three etcd members in a self-managed cluster were lost when their disks failed, and the API
+      server is down. How would you get the cluster back, and what would you check afterwards?
+    expected_concepts:
+      - quorum loss makes the cluster read-only or unavailable
+      - restore from the latest snapshot into a new single-member cluster, then grow it
+      - running workloads keep serving while the control plane is down
+      - drift between snapshot state and reality after restore
+      - reconcile controllers, verify workloads, then improve backup and placement
+    rubric:
+      excellent: Explains the quorum situation, performs a careful snapshot restore and rebuild, anticipates state drift after restore, and validates workloads before declaring recovery.
+      good: Restores from snapshot and re-adds members.
+      weak: Has no backup plan or tries to restart members until it works.
+    followups:
+      - What happens to objects created after the snapshot was taken?
+      - Would you consider forcing a new cluster from the surviving member instead?
+    common_errors:
+      - Not realising running pods continue serving traffic while the control plane is down.
+
+  - external_key: technical.devops_kubernetes.rbac_escalation_paths
+    competency_key: security
+    topic: Hidden privilege escalation in RBAC
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Some RBAC permissions look harmless but effectively give someone cluster-admin. Which ones worry you,
+      and how would you detect them in an existing cluster?
+    expected_concepts:
+      - create pods lets a user mount any service account or host path in the namespace
+      - bind, escalate and impersonate verbs
+      - access to nodes/proxy, secrets list or webhook configurations
+      - updating workloads controlled by privileged service accounts
+      - tooling and reviews to find these combinations
+    rubric:
+      excellent: Names several realistic escalation paths and explains each mechanism, and describes automated analysis plus admission controls to contain them.
+      good: Identifies pod creation and secret access as escalation risks.
+      weak: Thinks only cluster-admin bindings are dangerous.
+    followups:
+      - Why does the ability to create pods imply access to every secret in the namespace?
+      - How would admission policy reduce the impact of these permissions?
+    common_errors:
+      - Granting wildcard verbs on a resource to save time.
+
+  - external_key: technical.devops_kubernetes.upgrade_halfway_failure
+    competency_key: kubernetes
+    topic: Upgrade goes wrong halfway
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Halfway through a node upgrade, workloads on the new nodes start failing while those on the old nodes
+      are fine. The control plane is already on the new version. How would you handle it?
+    expected_concepts:
+      - stop the rollout and shift workloads back to old nodes
+      - compare node-level differences such as runtime, kernel, cgroup version or OS image
+      - control plane rollback is usually not an option
+      - version skew limits on how long old nodes can stay
+      - fix forward with a corrected node image, then resume
+    rubric:
+      excellent: Halts and contains impact, systematically compares old and new nodes to find the cause, understands control plane rollback limits, and plans a safe fix forward.
+      good: Pauses the rollout and investigates differences between nodes.
+      weak: Tries to downgrade the control plane immediately or keeps pushing the upgrade.
+    followups:
+      - How would a change from cgroup v1 to v2 break a workload?
+      - What would you add to your pre-upgrade testing after this?
+    common_errors:
+      - Assuming the control plane can be rolled back like an application.

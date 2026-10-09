@@ -1,0 +1,182 @@
+version: 1
+slug: daily_build_count_change
+title: Day-over-Day Build Count
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [devops, data_analyst, platform]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Day-over-Day Build Count
+
+  A nightly job writes how many CI builds ran on each day into table `daily_builds`. When the CI
+  system was down for a whole day, the job wrote **no row** for that day.
+
+  Table `daily_builds`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | build_date | TEXT | primary key, formatted `'YYYY-MM-DD'` |
+  | build_count | INTEGER | builds that ran that day, `>= 0` |
+
+  The platform team's dashboard shows the trend. For every row return `build_date`, `build_count` and
+  `change_from_previous`: this row's `build_count` minus the `build_count` of the **previous recorded
+  day** (the closest earlier `build_date` present in the table, not necessarily the calendar day
+  before). The earliest row has no previous day, so its `change_from_previous` is `NULL`.
+
+  Order the result by `build_date` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  daily_builds
+  +------------+-------------+
+  | build_date | build_count |
+  +------------+-------------+
+  | 2026-04-01 | 120         |
+  | 2026-04-02 | 135         |
+  | 2026-04-03 | 98          |
+  +------------+-------------+
+
+  Output
+  +------------+-------------+----------------------+
+  | build_date | build_count | change_from_previous |
+  +------------+-------------+----------------------+
+  | 2026-04-01 | 120         | NULL                 |
+  | 2026-04-02 | 135         | 15                   |
+  | 2026-04-03 | 98          | -37                  |
+  +------------+-------------+----------------------+
+  ```
+
+  ### Example 2
+  ```
+  daily_builds
+  +------------+-------------+
+  | build_date | build_count |
+  +------------+-------------+
+  | 2026-04-28 | 40          |
+  | 2026-05-02 | 55          |
+  | 2026-05-03 | 55          |
+  +------------+-------------+
+
+  Output
+  +------------+-------------+----------------------+
+  | build_date | build_count | change_from_previous |
+  +------------+-------------+----------------------+
+  | 2026-04-28 | 40          | NULL                 |
+  | 2026-05-02 | 55          | 15                   |
+  | 2026-05-03 | 55          | 0                    |
+  +------------+-------------+----------------------+
+  No rows exist for 2026-04-29 to 2026-05-01, so 2026-05-02 is compared with 2026-04-28.
+  ```
+
+  ### Constraints
+  - `0 <= rows <= 10^4`
+  - `0 <= build_count <= 10^6`
+  - `build_date` is unique and always uses the exact format above (text order equals date order).
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return build_date, build_count and change_from_previous (NULL for the first row), ordered by build_date.
+    SELECT build_date, build_count, 0 AS change_from_previous
+    FROM daily_builds
+    ORDER BY build_date;
+reference_solutions:
+  sql: |
+    SELECT build_date,
+           build_count,
+           build_count - LAG(build_count) OVER (ORDER BY build_date) AS change_from_previous
+    FROM daily_builds
+    ORDER BY build_date;
+sql_setup: |
+  CREATE TABLE daily_builds (
+    build_date TEXT PRIMARY KEY,
+    build_count INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - consecutive days with an increase and a decrease"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_builds (build_date, build_count) VALUES
+        ('2026-04-01', 120), ('2026-04-02', 135), ('2026-04-03', 98);
+    expected_rows: [["2026-04-01", 120, null], ["2026-04-02", 135, 15], ["2026-04-03", 98, -37]]
+  - id: t2
+    description: "Example 2 - missing days compare with the previous recorded day; zero change"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_builds (build_date, build_count) VALUES
+        ('2026-04-28', 40), ('2026-05-02', 55), ('2026-05-03', 55);
+    expected_rows: [["2026-04-28", 40, null], ["2026-05-02", 55, 15], ["2026-05-03", 55, 0]]
+  - id: t3
+    hidden: true
+    description: "Empty table returns no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single row - change is NULL, not 0"
+    ordered: true
+    setup_sql: "INSERT INTO daily_builds (build_date, build_count) VALUES ('2026-01-01', 7);"
+    expected_rows: [["2026-01-01", 7, null]]
+  - id: t5
+    hidden: true
+    description: "Rows inserted out of date order - LAG must follow build_date, not insertion order"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_builds (build_date, build_count) VALUES
+        ('2026-03-05', 60), ('2026-03-02', 10), ('2026-03-04', 45), ('2026-03-03', 30), ('2026-03-01', 12);
+    expected_rows: [["2026-03-01", 12, null], ["2026-03-02", 10, -2], ["2026-03-03", 30, 20], ["2026-03-04", 45, 15], ["2026-03-05", 60, 15]]
+  - id: t6
+    hidden: true
+    description: "Zero-build days and large swings in both directions"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_builds (build_date, build_count) VALUES
+        ('2026-06-01', 0), ('2026-06-02', 1000000), ('2026-06-03', 0), ('2026-06-04', 0), ('2026-06-05', 999999);
+    expected_rows: [["2026-06-01", 0, null], ["2026-06-02", 1000000, 1000000], ["2026-06-03", 0, -1000000], ["2026-06-04", 0, 0], ["2026-06-05", 999999, 999999]]
+  - id: t7
+    hidden: true
+    description: "Month and year boundaries with long gaps between recorded days"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_builds (build_date, build_count) VALUES
+        ('2026-02-01', 90), ('2025-12-31', 50), ('2026-01-01', 20), ('2026-03-01', 90);
+    expected_rows: [["2025-12-31", 50, null], ["2026-01-01", 20, -30], ["2026-02-01", 90, 70], ["2026-03-01", 90, 0]]
+  - id: t8
+    hidden: true
+    description: "Two weeks of data with gaps (weekends missing) - previous recorded day each time"
+    ordered: true
+    setup_sql: |
+      INSERT INTO daily_builds (build_date, build_count) VALUES
+        ('2026-09-07', 210), ('2026-09-08', 224), ('2026-09-09', 198), ('2026-09-10', 240), ('2026-09-11', 175),
+        ('2026-09-14', 260), ('2026-09-15', 255), ('2026-09-16', 255), ('2026-09-17', 301), ('2026-09-18', 120);
+    expected_rows: [["2026-09-07", 210, null], ["2026-09-08", 224, 14], ["2026-09-09", 198, -26], ["2026-09-10", 240, 42], ["2026-09-11", 175, -65], ["2026-09-14", 260, 85], ["2026-09-15", 255, -5], ["2026-09-16", 255, 0], ["2026-09-17", 301, 46], ["2026-09-18", 120, -181]]
+expected_concepts:
+  - "LAG() window function"
+  - "window ORDER BY independent of insertion order"
+  - "NULL propagation in arithmetic"
+  - "previous row versus previous calendar day"
+optimal_complexity: {time: "O(n log n) for the ordered window (O(n) when scanning the primary key in order)", space: "O(n)"}
+rubric:
+  excellent: "Uses LAG(build_count) OVER (ORDER BY build_date), lets the first row become NULL naturally, explains that gaps compare with the previous recorded row and contrasts this with a self-join on date minus one day."
+  good: "Correct result after a hint about gaps or the first row's NULL."
+  weak: "Self-joins on the calendar day before (dropping rows after gaps), returns 0 instead of NULL for the first row, or relies on insertion order."
+  criteria:
+    correctness: "All tests pass, including gaps, out-of-order inserts and the first row's NULL."
+    efficiency: "A single window pass rather than a correlated subquery per row."
+    code_quality: "Clear alias for the computed column and an explicit ORDER BY."
+    edge_cases: "Empty table, single row, zero counts and month or year boundaries."
+    communication: "Explains why the previous recorded day differs from the previous calendar day."
+hints:
+  - "Each row needs a value from the row just before it when the rows are sorted by date."
+  - "A window function can read a column from the previous row in a chosen order; think about what it returns for the very first row."
+  - "Subtract LAG(build_count) OVER (ORDER BY build_date) from build_count; the first row's LAG is NULL, so the difference is NULL as required."
+followups:
+  - "How would you compare with the same weekday one week earlier instead?"
+  - "How would you fill missing days with a zero count before computing the change?"
+  - "How would you compute the change as a percentage without dividing by zero?"
+common_errors:
+  - "Self-joining on the calendar day before, which loses rows that follow a missing day."
+  - "Using COALESCE to turn the first row's NULL into 0, which the contract forbids."
+  - "Relying on insertion order instead of ORDER BY build_date inside the window."

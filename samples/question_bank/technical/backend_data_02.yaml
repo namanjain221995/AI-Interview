@@ -1,0 +1,633 @@
+# Technical bank: backend data layer, part 2 (transactions, isolation, locking and concurrency bugs).
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend]
+questions:
+  # ------------------------------------------------------- transactions
+  - external_key: technical.backend_data.transaction_boundaries
+    competency_key: databases
+    topic: Where a transaction should start and end
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      In a typical request handler that reads some data, updates a few rows and returns a response, how do you
+      decide where the transaction should begin and end?
+    expected_concepts:
+      - grouping the writes that must succeed or fail together
+      - keeping transactions short
+      - validation and slow work done outside the transaction
+      - one clear owner of commit and rollback, such as a unit of work
+      - committing before sending the response or triggering side effects
+    rubric:
+      excellent: Draws the boundary around the writes that form one business invariant, keeps slow or external work outside, gives a single layer ownership of commit and rollback, and commits before the response.
+      good: Wraps related writes in one transaction and keeps it reasonably short.
+      weak: Relies on autocommit per statement or opens a transaction for the whole request without thinking about it.
+    followups:
+      - What could go wrong if the response is sent before the commit succeeds?
+      - Where in your codebase does commit actually happen?
+    common_errors:
+      - Several independent commits inside one logical operation, leaving partial updates on failure.
+
+  - external_key: technical.backend_data.lost_update_edits
+    competency_key: databases
+    topic: Lost updates between concurrent editors
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Two support agents open the same customer record, both edit it, and the second save silently overwrites
+      the first agent's changes. How would you prevent that?
+    expected_concepts:
+      - the lost update problem
+      - optimistic concurrency with a version column or timestamp
+      - conditional update that checks the version
+      - telling the user about the conflict and letting them merge or retry
+      - ETags and If-Match at the API level
+    rubric:
+      excellent: Names the lost update, applies optimistic concurrency with a version checked in the update statement, surfaces conflicts to the user and extends it to the API with ETags or If-Match.
+      good: Uses a version column or row lock to detect or prevent the overwrite.
+      weak: Suggests that the last write winning is fine or that it happens too rarely to matter.
+    followups:
+      - Why is optimistic locking usually a better fit here than holding a row lock?
+      - How would the API tell the client that its copy is out of date?
+    common_errors:
+      - Reading the version and then updating without including it in the WHERE clause.
+
+  - external_key: technical.backend_data.external_calls_in_transaction
+    competency_key: databases
+    topic: Slow work inside an open transaction
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Why is it a problem to call a payment provider or another slow HTTP service while you have a database
+      transaction open, and how would you restructure that code?
+    expected_concepts:
+      - locks and connections held for the duration of the call
+      - pool exhaustion and blocked writers under load
+      - the external call cannot be rolled back with the database
+      - recording intent, calling out, then recording the result
+      - outbox or background job for the side effect
+    rubric:
+      excellent: Explains held locks, connection exhaustion and the mismatch between rollback and external side effects, then restructures into separate steps with recorded state or an outbox.
+      good: Knows long transactions hold resources and moves the call outside.
+      weak: Sees no issue as long as the code works in testing.
+    followups:
+      - The payment succeeds but your commit then fails. What state are you in?
+      - How would you notice long-running transactions in production?
+    common_errors:
+      - Assuming a rollback also undoes the external call.
+
+  - external_key: technical.backend_data.deadlock_investigation
+    competency_key: databases
+    topic: Investigating database deadlocks
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Your logs show occasional deadlock errors from the database during busy periods. What does that error
+      actually mean, and how would you track down the cause?
+    expected_concepts:
+      - two transactions waiting on each other's locks
+      - the database picks a victim and aborts it
+      - reading the deadlock report for the statements and locks involved
+      - inconsistent lock ordering across code paths
+      - retrying the aborted transaction safely
+    rubric:
+      excellent: Explains the circular wait and victim selection, uses the database's deadlock details to find the two code paths, fixes the lock ordering or narrows the transactions, and adds safe retries.
+      good: Understands what a deadlock is and would look for conflicting transactions.
+      weak: Treats it as random database flakiness or simply increases timeouts.
+    followups:
+      - How can two transactions deadlock when they update the same table in different orders?
+      - Is a retry enough on its own? Why or why not?
+    common_errors:
+      - Confusing a deadlock with an ordinary lock wait timeout.
+
+  - external_key: technical.backend_data.duplicate_signup_race
+    competency_key: databases
+    topic: Check-then-act races
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Your signup code checks whether a username is taken and then inserts the new user, yet you occasionally
+      find two accounts with the same username. Explain how that happens and how you'd fix it.
+    expected_concepts:
+      - check-then-act race between concurrent requests
+      - double submits and client retries
+      - a unique constraint as the real guarantee
+      - handling the violation as a normal conflict response
+      - cleaning up the duplicates that already exist
+    rubric:
+      excellent: Describes the interleaving step by step, enforces uniqueness with a constraint, maps the violation to a clean conflict response and plans how to clean up existing duplicates before adding the constraint.
+      good: Identifies the race and adds a unique constraint.
+      weak: Adds a sleep, a second check or an in-process lock that does not work across instances.
+    followups:
+      - The constraint fails to apply because duplicates already exist. What do you do?
+      - Would a mutex in your application code solve this? Why or why not?
+    common_errors:
+      - An in-memory lock that only protects one server process.
+
+  - external_key: technical.backend_data.orm_flush_and_commit
+    competency_key: databases
+    topic: ORM sessions, flushes and commits
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How does the ORM you use most decide when to send changes to the database and when to commit, and what
+      bugs have you seen from people misunderstanding that?
+    expected_concepts:
+      - unit of work tracking changed objects
+      - flush sends SQL while commit makes it durable
+      - autoflush before queries
+      - expired or stale objects after commit
+      - errors surfacing at flush time far from the line that caused them
+    rubric:
+      excellent: Explains unit of work, the difference between flush and commit, autoflush and object expiry, and gives a concrete bug such as an error raised far from its cause or data not visible to another connection.
+      good: Knows the difference between flush and commit in their ORM.
+      weak: Thinks every attribute assignment writes to the database immediately.
+    followups:
+      - Why might another service not see a row you just added and flushed?
+      - Where would you expect a constraint violation to be raised in your ORM?
+    common_errors:
+      - Assuming data written in an uncommitted transaction is visible to other connections.
+
+  - external_key: technical.backend_data.connection_pool_sizing
+    competency_key: databases
+    topic: Database connection pools
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Why do backend services use a database connection pool, and how would you decide how large that pool
+      should be?
+    expected_concepts:
+      - connection setup cost and server-side memory per connection
+      - total connections equals pool size times instances
+      - database max connections and a pooler such as PgBouncer
+      - wait timeout when the pool is exhausted
+      - sizing from concurrency and query time rather than guessing
+    rubric:
+      excellent: Explains the cost of connections, multiplies by the number of instances against the database limit, sizes from concurrency and query duration, and mentions an external pooler and pool wait timeouts.
+      good: Understands why pools exist and that bigger is not always better.
+      weak: Sets the pool as large as possible to avoid waiting.
+    followups:
+      - What happens when autoscaling doubles the number of service instances?
+      - What should a request do when no connection is free?
+    common_errors:
+      - Forgetting that every replica has its own pool.
+
+  # ---------------------------------------------------------- locking
+  - external_key: technical.backend_data.row_lock_variants
+    competency_key: databases
+    topic: SELECT FOR UPDATE, NOWAIT and SKIP LOCKED
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Tell me about situations where you've locked rows explicitly, and when you'd reach for plain FOR UPDATE,
+      NOWAIT or SKIP LOCKED.
+    expected_concepts:
+      - FOR UPDATE to serialize a read-modify-write on a row
+      - NOWAIT to fail fast instead of queueing
+      - SKIP LOCKED for work-queue style claiming
+      - lock ordering and holding locks briefly
+      - weaker lock modes for foreign key checks
+    rubric:
+      excellent: Gives concrete uses for each variant, such as balance updates, interactive fail-fast actions and job claiming, and discusses lock duration, ordering and lighter lock modes.
+      good: Uses FOR UPDATE correctly and knows SKIP LOCKED suits queues.
+      weak: Has never used explicit locks or locks entire tables to be safe.
+    followups:
+      - How would you build a simple job queue on a table with SKIP LOCKED?
+      - What happens to your lock if the transaction is left open by mistake?
+    common_errors:
+      - Taking FOR UPDATE outside a transaction, so the lock is released immediately.
+
+  - external_key: technical.backend_data.flash_sale_oversell
+    competency_key: databases
+    topic: Overselling stock under concurrency
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      During a flash sale you sold a hundred and twenty units of an item that only had a hundred in stock.
+      What probably went wrong in the code, and how would you redesign the stock decrement?
+    expected_concepts:
+      - read stock, check, then write races under load
+      - a conditional atomic update that checks remaining stock
+      - checking the affected row count
+      - row locking as an alternative
+      - reservations with expiry for checkout flows
+      - hot-row contention on very popular items
+    rubric:
+      excellent: Explains the race, replaces it with a single conditional update or proper locking, checks affected rows, considers reservations with expiry and recognises the hot-row contention this creates at peak.
+      good: Uses an atomic conditional update or a row lock to stop overselling.
+      weak: Adds a cache or retries without addressing the race.
+    followups:
+      - How would you hold stock for a user during a ten-minute checkout?
+      - What would you do if that single row becomes the bottleneck?
+    common_errors:
+      - Decrementing in application memory and saving the result.
+
+  - external_key: technical.backend_data.safe_transaction_retry
+    competency_key: databases
+    topic: Retrying failed transactions safely
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Some database errors, like serialization failures and deadlocks, are meant to be retried. How do you
+      structure code so that a retry is actually safe?
+    expected_concepts:
+      - retrying the whole transaction, not one statement
+      - recognising retryable error codes
+      - no external side effects inside the retried block
+      - bounded retries with backoff and jitter
+      - idempotency for client-level retries
+    rubric:
+      excellent: Wraps the full transaction in a retry helper keyed on specific error codes, keeps side effects out of it, bounds attempts with backoff and jitter, and distinguishes this from client-level idempotency.
+      good: Retries the whole transaction on the right errors with a limit.
+      weak: Retries any exception indefinitely or retries only the failed statement.
+    followups:
+      - What would go wrong if the retried block also sends an email?
+      - How would you notice that retries are hiding a real contention problem?
+    common_errors:
+      - Reusing in-memory state from the failed attempt.
+
+  - external_key: technical.backend_data.pool_exhaustion_spike
+    competency_key: databases
+    topic: Connection pool exhaustion during a spike
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      During a traffic spike, requests start timing out while waiting for a database connection, even though
+      the database's own CPU looks fine. How would you work out what's holding the connections?
+    expected_concepts:
+      - pool metrics for in use, waiting and wait time
+      - connections held during slow non-database work
+      - leaked connections not returned on error paths
+      - idle in transaction sessions on the database side
+      - lock waits holding connections open
+    rubric:
+      excellent: Uses pool and database-side session data to find who holds connections and why, covers slow work inside transactions, leaks and lock waits, and fixes the cause rather than only enlarging the pool.
+      good: Checks pool metrics and looks for slow queries or leaks.
+      weak: Raises the pool size and database connection limit without investigating.
+    followups:
+      - What does a session that is idle in transaction tell you?
+      - How would you find a code path that never returns its connection?
+    common_errors:
+      - Assuming the database is the bottleneck because the errors mention it.
+
+  - external_key: technical.backend_data.long_read_on_primary
+    competency_key: databases
+    topic: Long-running reads and MVCC side effects
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      An analyst runs a reporting query on the primary database that takes three hours. Apart from the CPU it
+      uses, what problems can that cause for your production workload?
+    expected_concepts:
+      - old snapshots stop cleanup of dead row versions
+      - table and index bloat on busy tables
+      - locks that block schema changes, which then block everyone else
+      - replication conflicts if run on a replica
+      - statement timeouts and a separate analytics replica or warehouse
+    rubric:
+      excellent: Explains how a long snapshot prevents vacuum and causes bloat, how it can block DDL and create a lock queue, and moves reporting to a replica or warehouse with timeouts as guardrails.
+      good: Knows long queries hold resources and suggests running them elsewhere.
+      weak: Thinks a read-only query cannot affect writers at all.
+    followups:
+      - Why could this query make a quick ALTER TABLE take the site down?
+      - What would you configure to stop this from happening by accident?
+    common_errors:
+      - Believing read-only means no impact under MVCC.
+
+  - external_key: technical.backend_data.single_runner_cron
+    competency_key: distributed_systems
+    topic: Running a scheduled task on only one replica
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your service runs on ten replicas, and a nightly billing task must run exactly once, not ten times. How
+      would you arrange that, and what failure cases worry you?
+    expected_concepts:
+      - a dedicated scheduler or job instead of every replica
+      - database advisory lock or lease row
+      - lease expiry if the holder dies mid-run
+      - idempotency so a second run does no harm
+      - recording completion per billing period
+    rubric:
+      excellent: Prefers a single scheduler or leased lock, handles the holder dying mid-run, and makes the job idempotent by recording completion per period so duplicates are harmless anyway.
+      good: Uses a lock or a single scheduled job and thinks about crashes.
+      weak: Picks the replica with a particular hostname or relies on timing.
+    followups:
+      - The replica holding the lock crashes halfway through. What happens next?
+      - How would you know the task did not run at all last night?
+    common_errors:
+      - Relying only on a lock without making the work idempotent.
+
+  - external_key: technical.backend_data.ddl_lock_queue
+    competency_key: databases
+    topic: A small schema change that caused an outage
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A migration that only added a nullable column caused several minutes of errors across the whole site.
+      How could such a small change do that, and how would you run it safely next time?
+    expected_concepts:
+      - DDL needs a strong lock even when the change itself is fast
+      - waiting behind a long transaction while new queries queue behind it
+      - lock timeout on the migration session
+      - retrying the migration in a quiet window
+      - checking for long transactions before migrating
+    rubric:
+      excellent: Explains how the waiting DDL lock blocks every later query on the table, sets a short lock timeout with retries, checks for long transactions first and builds this into the migration tooling.
+      good: Knows DDL takes locks and suggests running it carefully with timeouts.
+      weak: Blames the database or suggests migrations only at night without understanding the cause.
+    followups:
+      - What value would you use for the lock timeout, and why?
+      - How would your migration tool make this the default for everyone?
+    common_errors:
+      - Assuming that a metadata-only change needs no lock at all.
+
+  - external_key: technical.backend_data.read_your_writes_replica
+    competency_key: databases
+    topic: Read-your-writes with replicas
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      After moving reads to a replica, users sometimes update their profile, refresh, and see the old values.
+      How would you fix that without sending all reads back to the primary?
+    expected_concepts:
+      - asynchronous replication lag
+      - routing a user's reads to the primary for a short time after a write
+      - waiting for the replica to reach a log position
+      - returning the updated object in the write response
+      - monitoring and alerting on replication lag
+    rubric:
+      excellent: Explains replication lag and offers targeted read-your-writes strategies such as sticky primary reads after a write or waiting on a log position, and monitors lag with a fallback when it grows.
+      good: Routes reads after writes to the primary for the affected user.
+      weak: Adds a delay on the client or gives up on replicas entirely.
+    followups:
+      - How would you decide which reads are safe to send to a replica?
+      - What happens to your approach when lag spikes to a minute?
+    common_errors:
+      - Assuming replicas are always up to date within milliseconds.
+
+  - external_key: technical.backend_data.shared_state_in_services
+    competency_key: debugging
+    topic: Shared mutable state in a web service
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What kinds of shared state inside a backend service process have caused concurrency bugs for you, and
+      how did you make that code safe?
+    expected_concepts:
+      - module-level caches, singletons and class attributes
+      - request data leaking between threads or tasks
+      - non-thread-safe clients or collections
+      - locks, immutable data or per-request instances
+      - context-local storage used correctly
+    rubric:
+      excellent: Gives a real example of shared state corrupting or leaking data, explains the interleaving, and fixes it with per-request instances, immutability or proper synchronization, plus a test or tool that would catch it.
+      good: Names common sources of shared state and a reasonable fix.
+      weak: Assumes the web framework makes all code thread-safe.
+    followups:
+      - How would you detect a bug like that before production?
+      - When is a lock the wrong fix for shared state?
+    common_errors:
+      - Storing per-request data on a global or singleton object.
+
+  - external_key: technical.backend_data.nested_transaction_propagation
+    competency_key: databases
+    topic: Nested service calls and transactions
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      One service function opens a transaction and calls another function that also opens one. What actually
+      happens in your stack, and how do you design code so that transaction ownership is clear?
+    expected_concepts:
+      - joining the outer transaction versus starting a new one
+      - savepoints for partial rollback
+      - an inner commit or rollback affecting the outer work
+      - a single owner of the boundary at the edge of the use case
+      - passing the session or unit of work explicitly
+    rubric:
+      excellent: Explains propagation or savepoint behaviour in their stack, shows how an inner rollback can poison the outer transaction, and keeps one clear owner at the use-case boundary with explicit session passing.
+      good: Knows nested transactions are usually joined or use savepoints.
+      weak: Assumes each function's transaction is fully independent.
+    followups:
+      - When would you deliberately use a savepoint?
+      - An inner function catches a database error and carries on. What state is the transaction in?
+    common_errors:
+      - Swallowing a database error and continuing to use an aborted transaction.
+
+  - external_key: technical.backend_data.atomic_increments
+    competency_key: databases
+    topic: Atomic updates versus read-modify-write
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      In ORM code it's very common to load an object, change a field like a view count or a balance, and save
+      it. When is that safe, and how do you write it when it isn't?
+    expected_concepts:
+      - concurrent read-modify-write loses updates
+      - a single UPDATE with an expression evaluated in the database
+      - ORM expression helpers for in-place updates
+      - row locks or version checks when logic is complex
+      - invariants enforced with conditions or check constraints
+    rubric:
+      excellent: Explains the lost-update interleaving, uses database-side expressions for simple changes, falls back to locking or optimistic checks for complex logic, and protects invariants with conditions or constraints.
+      good: Knows to use an atomic update statement for counters.
+      weak: Believes the ORM handles concurrent saves automatically.
+    followups:
+      - How would you stop a balance from ever going negative?
+      - What is stale in your object after an in-database update?
+    common_errors:
+      - Saving the whole object and overwriting fields another request changed.
+
+  - external_key: technical.backend_data.hot_row_contention
+    competency_key: databases
+    topic: Hot rows under heavy write load
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Every like on a viral post updates a single counter row, and during a spike you see lock waits pile up
+      and request latency climb. How would you redesign this?
+    expected_concepts:
+      - row-level lock serialization on one hot row
+      - sharded or striped counters summed on read
+      - buffering increments in memory or a fast store and flushing periodically
+      - recording events and aggregating asynchronously
+      - accepting approximate or slightly delayed counts
+    rubric:
+      excellent: Identifies the single-row serialization, offers sharded counters, buffered or asynchronous aggregation, and discusses accuracy, durability on crash and how reads combine the parts.
+      good: Proposes one workable way to spread or batch the writes.
+      weak: Scales the database up or adds read replicas, which do nothing for write contention.
+    followups:
+      - How many counter shards would you start with, and how would you read the total?
+      - What do you lose if the buffering process crashes?
+    common_errors:
+      - Moving the counter to a cache with no plan for durability or reconciliation.
+
+  - external_key: technical.backend_data.ledger_transfers
+    competency_key: databases
+    topic: Correct money transfers under concurrency
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How would you design money transfers between user wallets so that balances stay correct with thousands
+      of concurrent transfers, retries and the occasional crash?
+    expected_concepts:
+      - double-entry ledger entries as the source of truth
+      - debits and credits written in one transaction
+      - consistent lock ordering to avoid deadlocks
+      - idempotency keys for client retries
+      - balance constraints and reconciliation against the ledger
+    rubric:
+      excellent: Uses an append-only double-entry ledger with atomic paired entries, prevents overdrafts with locking or constraints, orders locks consistently, makes requests idempotent and reconciles balances against the ledger.
+      good: Uses transactions and row locks with some idempotency.
+      weak: Updates two balance columns in separate operations or ignores retries and crashes.
+    followups:
+      - How do you avoid deadlocks when A pays B while B pays A at the same moment?
+      - How would you prove the balances are correct at the end of the day?
+    common_errors:
+      - Storing only the current balance with no ledger to audit or rebuild it.
+
+  - external_key: technical.backend_data.redis_lock_ran_twice
+    competency_key: distributed_systems
+    topic: Distributed lock that failed to protect a job
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A job protected by a Redis lock with a thirty-second expiry still ran twice at the same time and
+      corrupted some data. How could that happen, and how would you make the protected work safe?
+    expected_concepts:
+      - the lock expiring while the holder is paused or still working
+      - garbage collection pauses, slow I/O or clock issues
+      - fencing tokens checked by the resource being written
+      - lease renewal and its limits
+      - making the work idempotent or guarded by database constraints
+    rubric:
+      excellent: Explains how a pause outlives the lease, shows why the lock alone cannot be trusted for correctness, adds fencing tokens or conditional writes at the data store and makes the work idempotent.
+      good: Recognises lock expiry during long work and adds renewal or longer expiry.
+      weak: Simply increases the expiry and assumes the problem is solved.
+    followups:
+      - Where exactly would a fencing token be checked in your design?
+      - When is a lock only an efficiency measure rather than a correctness guarantee?
+    common_errors:
+      - Treating a lock with an expiry as a mutual exclusion guarantee.
+
+  - external_key: technical.backend_data.production_only_race
+    competency_key: debugging
+    topic: A race condition that only shows up under load
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Tell me about a concurrency bug you've dealt with that only appeared under production load. How did you
+      reproduce it, find the cause and convince yourself the fix was right?
+    expected_concepts:
+      - gathering evidence from logs, traces and data state
+      - forming a hypothesis about the interleaving
+      - reproducing with stress tests, injected delays or a race detector
+      - fixing the root cause rather than adding sleeps
+      - verifying under load and adding a regression test
+    rubric:
+      excellent: Describes a real bug with the specific interleaving, a deliberate reproduction strategy, a root-cause fix and verification under load with a lasting regression test.
+      good: Explains a real race and a sensible fix with some verification.
+      weak: Cannot give a concrete example or fixed it by adding delays or retries until it went away.
+    followups:
+      - What made it so hard to reproduce locally?
+      - What would you change in the codebase so that class of bug is less likely?
+    common_errors:
+      - Declaring victory because the bug stopped appearing for a week.
+
+  - external_key: technical.backend_data.testing_for_races
+    competency_key: testing
+    topic: Testing code for race conditions
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      How would you test a booking or checkout endpoint to gain real confidence that it has no race conditions,
+      rather than hoping the happy-path tests are enough?
+    expected_concepts:
+      - firing many concurrent requests against a real database
+      - asserting invariants afterwards rather than individual responses
+      - barriers or injected delays to force interleavings
+      - running against the same isolation level and engine as production
+      - race detectors and load tests in CI
+    rubric:
+      excellent: Designs concurrent tests against a production-like database that assert invariants, forces interleavings with barriers or delays, and explains why mocks or in-memory databases hide races.
+      good: Runs concurrent requests and checks the end state.
+      weak: Relies on unit tests with mocked repositories.
+    followups:
+      - Why might an in-memory test database never show the race?
+      - How would you keep such a test from being flaky?
+    common_errors:
+      - Testing concurrency with sequential requests in a loop.
+
+  - external_key: technical.backend_data.failover_lost_writes
+    competency_key: distributed_systems
+    topic: Writes lost in a database failover
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      With asynchronous replication, a failover can lose writes that the old primary had already acknowledged.
+      How do you think about that risk when designing a service, and what would you do about it?
+    expected_concepts:
+      - acknowledged commits not yet on the replica
+      - synchronous or semi-synchronous replication and its latency cost
+      - deciding which data cannot tolerate loss
+      - reconciling with downstream systems or event logs after failover
+      - preventing the old primary from accepting writes
+    rubric:
+      excellent: Explains the replication window, weighs synchronous replication against latency per data type, plans reconciliation after failover and covers fencing the old primary.
+      good: Understands asynchronous replication can lose recent writes and suggests synchronous replication for critical data.
+      weak: Assumes a managed database never loses committed data.
+    followups:
+      - How would you find out which writes were lost after the failover?
+      - Which data in a typical product would you accept losing for a few seconds?
+    common_errors:
+      - Equating high availability with zero data loss.
+
+  - external_key: technical.backend_data.locks_vs_single_writer
+    competency_key: distributed_systems
+    topic: Row locks versus a single writer per key
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      When many updates target the same entity, you can coordinate them with database locks or route all work
+      for that key through a single writer, such as a partitioned queue. How do you choose between those?
+    expected_concepts:
+      - lock contention and deadlock risk with many writers
+      - partitioning by key so one consumer owns each key
+      - ordering guarantees per key
+      - added latency and asynchronous responses with the queue approach
+      - rebalancing and failure of the owning consumer
+    rubric:
+      excellent: Compares contention, ordering, latency and operational complexity, explains how key partitioning removes contention but makes responses asynchronous, and covers ownership changes during rebalancing.
+      good: Knows both approaches and a reasonable case for each.
+      weak: Picks locks or queues by habit without discussing the trade-offs.
+    followups:
+      - How does the user get a result if the update is processed asynchronously?
+      - What happens to in-flight work when partitions are reassigned?
+    common_errors:
+      - Assuming the single-writer approach needs no idempotency during rebalances.

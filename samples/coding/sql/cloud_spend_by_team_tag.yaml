@@ -1,0 +1,210 @@
+version: 1
+slug: cloud_spend_by_team_tag
+title: "Cloud Spend by Team Tag"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [cloud, devops, platform, data_analyst]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Cloud Spend by Team Tag
+
+  The platform team charges cloud costs back to product teams using a `team` tag on every resource.
+  Tagging is not always done carefully: some resources have no tag at all, some have an empty tag, and
+  some tags were typed with stray spaces. The monthly FinOps report must still account for every cent.
+
+  Table `cost_line_items` (one row per resource per billing period):
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | resource_id | VARCHAR(60) | the billed resource |
+  | team_tag | VARCHAR(40) | team tag as entered; NULL when the resource has no tag |
+  | cost_cents | BIGINT | cost in cents; negative for credits and refunds |
+
+  The **team** of a line item is its `team_tag` with leading and trailing spaces removed. When the tag
+  is NULL, empty, or made only of spaces, the team is the literal string `'untagged'`.
+
+  Return one row per team with the columns `team` and `total_cost_cents` (the sum of `cost_cents` of
+  its line items). Order the result by `total_cost_cents` descending, then by `team` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  cost_line_items
+  +----+---------------+------------+------------+
+  | id | resource_id   | team_tag   | cost_cents |
+  +----+---------------+------------+------------+
+  | 1  | 'vm-web-01'   | 'search'   | 125000     |
+  | 2  | 'db-main'     | 'payments' | 98000      |
+  | 3  | 'bucket-logs' | NULL       | 4300       |
+  | 4  | 'vm-web-02'   | ' search ' | 25000      |
+  | 5  | 'lb-edge'     | ''         | 12000      |
+  | 6  | 'cache-01'    | 'payments' | 52000      |
+  | 7  | 'vm-tmp'      | '   '      | 700        |
+  +----+---------------+------------+------------+
+
+  Output
+  +------------+------------------+
+  | team       | total_cost_cents |
+  +------------+------------------+
+  | 'payments' | 150000           |
+  | 'search'   | 150000           |
+  | 'untagged' | 17000            |
+  +------------+------------------+
+  ' search ' is trimmed to 'search'. Rows 3, 5 and 7 have no usable tag, so they are
+  reported together as 'untagged'. payments and search tie on 150000 and are ordered by team.
+  ```
+
+  ### Example 2
+  ```
+  cost_line_items
+  +----+--------------+-----------+------------+
+  | id | resource_id  | team_tag  | cost_cents |
+  +----+--------------+-----------+------------+
+  | 1  | 'fn-resize'  | 'media'   | 3200       |
+  | 2  | 'queue-jobs' | 'media'   | 800        |
+  | 3  | 'vm-ci'      | 'tooling' | 5100       |
+  +----+--------------+-----------+------------+
+
+  Output
+  +-----------+------------------+
+  | team      | total_cost_cents |
+  +-----------+------------------+
+  | 'tooling' | 5100             |
+  | 'media'   | 4000             |
+  +-----------+------------------+
+  ```
+
+  ### Constraints
+  - At most `10^6` line items; the table may be empty.
+  - Tags contain lower-case letters only once trimmed, and no trimmed tag equals `'untagged'`.
+  - `-10^12 <= cost_cents <= 10^12`; totals can exceed the 32-bit integer range.
+  - In the examples, string values are shown in quotes so that empty and blank tags are visible.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return team ('untagged' for NULL, empty or blank tags) and total_cost_cents,
+    -- ordered by total_cost_cents descending, then team.
+    SELECT team_tag AS team, SUM(cost_cents) AS total_cost_cents
+    FROM cost_line_items
+    GROUP BY team_tag
+    ORDER BY total_cost_cents DESC, team;
+reference_solutions:
+  sql: |
+    WITH tagged AS (
+      SELECT COALESCE(NULLIF(TRIM(team_tag), ''), 'untagged') AS team,
+             cost_cents
+      FROM cost_line_items
+    )
+    SELECT team, SUM(cost_cents) AS total_cost_cents
+    FROM tagged
+    GROUP BY team
+    ORDER BY total_cost_cents DESC, team;
+sql_setup: |
+  CREATE TABLE cost_line_items (
+    id INTEGER PRIMARY KEY,
+    resource_id VARCHAR(60) NOT NULL,
+    team_tag VARCHAR(40),
+    cost_cents BIGINT NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - padded tag merged, NULL/empty/blank tags pooled as untagged, tie broken by team"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cost_line_items (id, resource_id, team_tag, cost_cents) VALUES
+        (1, 'vm-web-01', 'search', 125000), (2, 'db-main', 'payments', 98000), (3, 'bucket-logs', NULL, 4300),
+        (4, 'vm-web-02', ' search ', 25000), (5, 'lb-edge', '', 12000), (6, 'cache-01', 'payments', 52000),
+        (7, 'vm-tmp', '   ', 700);
+    expected_rows: [["payments", 150000], ["search", 150000], ["untagged", 17000]]
+  - id: t2
+    description: "Example 2 - everything tagged, no untagged row"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cost_line_items (id, resource_id, team_tag, cost_cents) VALUES
+        (1, 'fn-resize', 'media', 3200), (2, 'queue-jobs', 'media', 800), (3, 'vm-ci', 'tooling', 5100);
+    expected_rows: [["tooling", 5100], ["media", 4000]]
+  - id: t3
+    hidden: true
+    description: "Empty table - no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Only NULL, empty and blank tags - a single untagged row"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cost_line_items (id, resource_id, team_tag, cost_cents) VALUES
+        (1, 'vm-a', NULL, 100), (2, 'vm-b', '', 250), (3, 'vm-c', '  ', 50), (4, 'vm-d', NULL, 1);
+    expected_rows: [["untagged", 401]]
+  - id: t5
+    hidden: true
+    description: "Credits make one team net negative - it sorts last"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cost_line_items (id, resource_id, team_tag, cost_cents) VALUES
+        (1, 'vm-x', 'ads', 5000), (2, 'credit-ads', 'ads', -9000), (3, 'vm-y', 'ml', 4000), (4, 'vm-z', NULL, 0),
+        (5, 'refund', 'ml', -1000);
+    expected_rows: [["ml", 3000], ["untagged", 0], ["ads", -4000]]
+  - id: t6
+    hidden: true
+    description: "Totals above the 32-bit range (BIGINT sums)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cost_line_items (id, resource_id, team_tag, cost_cents) VALUES
+        (1, 'gpu-pool-1', 'ml', 3000000000), (2, 'gpu-pool-2', 'ml', 2500000000), (3, 'warehouse', 'analytics', 4294967296),
+        (4, 'orphan-disk', NULL, 2147483648);
+    expected_rows: [["ml", 5500000000], ["analytics", 4294967296], ["untagged", 2147483648]]
+  - id: t7
+    hidden: true
+    description: "Trailing-space and leading-space variants merge into one team"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cost_line_items (id, resource_id, team_tag, cost_cents) VALUES
+        (1, 'a', 'core', 10), (2, 'b', 'core ', 20), (3, 'c', '  core', 30), (4, 'd', 'edge', 60);
+    expected_rows: [["core", 60], ["edge", 60]]
+  - id: t8
+    hidden: true
+    description: "Ties at the same total including untagged - ordered by team name"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cost_line_items (id, resource_id, team_tag, cost_cents) VALUES
+        (1, 'r1', 'web', 700), (2, 'r2', NULL, 700), (3, 'r3', 'api', 700), (4, 'r4', 'data', 300), (5, 'r5', 'data', 400);
+    expected_rows: [["api", 700], ["data", 700], ["untagged", 700], ["web", 700]]
+  - id: t9
+    hidden: true
+    description: "Net zero team still appears with total 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cost_line_items (id, resource_id, team_tag, cost_cents) VALUES
+        (1, 'vm-1', 'qa', 1200), (2, 'credit-1', 'qa', -1200), (3, 'vm-2', 'sec', 15);
+    expected_rows: [["sec", 15], ["qa", 0]]
+expected_concepts:
+  - "TRIM and NULLIF to turn blank strings into NULL"
+  - "COALESCE to supply a default label"
+  - "grouping by a derived expression (CTE or subquery)"
+  - "SUM over BIGINT and ordering with a tie-breaker"
+optimal_complexity: {time: "O(n) aggregation pass plus O(t log t) to sort t teams", space: "O(t) for the grouped result"}
+rubric:
+  excellent: "Derives the team once with COALESCE(NULLIF(TRIM(...), ''), 'untagged'), groups by that derived value, orders by total descending with team as the tie-breaker and discusses enforcing tags at provisioning time."
+  good: "Correct query after a hint about empty or blank tags or about grouping by the cleaned value rather than the raw tag."
+  weak: "Handles NULL but not empty or blank tags, groups by the raw tag so padded and untagged rows split into several rows, or ignores the tie-breaker."
+  criteria:
+    correctness: "All tests pass, including blank tags, credits, ties and totals above 32 bits."
+    efficiency: "A single grouped pass; the cleaning expression is not repeated in correlated subqueries."
+    code_quality: "The team derivation is written once (CTE or subquery) and the output columns are named as required."
+    edge_cases: "Empty table, all-untagged data, negative and zero totals, padded tags and large sums."
+    communication: "Explains the difference between NULL and an empty string and why both need handling."
+hints:
+  - "Decide first what the team of a single line item is, and only then think about adding costs up per team."
+  - "A missing tag can arrive as NULL, as an empty string or as spaces only; trimming turns the blank cases into an empty string, which you can then turn into NULL and replace with a default label."
+  - "Derive the team with TRIM, then NULLIF against the empty string, then COALESCE with 'untagged', in a CTE or subquery; group by that derived column, sum the costs and order by the total descending and then by team."
+followups:
+  - "How would you show the untagged share as a percentage of the total bill?"
+  - "How would you stop untagged resources from being created in the first place?"
+  - "If tags could differ in letter case, how would you normalize them and which name would you display?"
+common_errors:
+  - "Using COALESCE alone, which leaves empty and blank tags as their own rows."
+  - "Grouping by the raw team_tag, so padded tags form separate teams."
+  - "Ordering only by total, which leaves tied teams in an unpredictable order."

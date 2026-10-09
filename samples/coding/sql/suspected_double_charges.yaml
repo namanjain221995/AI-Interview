@@ -1,0 +1,235 @@
+version: 1
+slug: suspected_double_charges
+title: Suspected Double Charges
+difficulty: medium
+competency_keys: [sql, databases]
+role_tags: [security, backend, data_analyst]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Suspected Double Charges
+
+  A payments team wants to catch accidental double charges, such as a checkout button pressed twice
+  or a client retrying a request that had already succeeded. Every captured charge is stored in table
+  `charges`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | card_token | VARCHAR(40) | tokenised card reference |
+  | merchant | VARCHAR(60) | merchant identifier |
+  | amount_cents | INTEGER | charged amount in cents |
+  | charged_ts | INTEGER | Unix time in seconds |
+
+  Ids are assigned in time order: a charge with a larger `id` never has an earlier `charged_ts`
+  (two charges may share the same second).
+
+  Two charges form a **suspected pair** when they have the **same `card_token`, the same `merchant`
+  and the same `amount_cents`**, and the later one happened **at most 120 seconds** after the earlier
+  one (exactly 120 seconds still counts). Report **every** such pair, not only neighbouring charges:
+  three identical charges within 120 seconds of each other form three pairs.
+
+  Return `first_id` (the smaller id of the pair), `second_id` (the larger id) and `seconds_apart`
+  (`charged_ts` of the second minus `charged_ts` of the first), ordered by `first_id` ascending and
+  then `second_id` ascending. Return no rows when nothing is suspicious.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  charges
+  +----+------------+------------+--------------+------------+
+  | id | card_token | merchant   | amount_cents | charged_ts |
+  +----+------------+------------+--------------+------------+
+  | 1  | tok_a      | coffee-hub | 450          | 1000       |
+  | 2  | tok_a      | coffee-hub | 450          | 1045       |
+  | 3  | tok_b      | coffee-hub | 450          | 1050       |
+  | 4  | tok_a      | coffee-hub | 500          | 1060       |
+  | 5  | tok_a      | book-nook  | 450          | 1070       |
+  | 6  | tok_a      | coffee-hub | 450          | 1165       |
+  +----+------------+------------+--------------+------------+
+
+  Output
+  +----------+-----------+---------------+
+  | first_id | second_id | seconds_apart |
+  +----------+-----------+---------------+
+  | 1        | 2         | 45            |
+  | 2        | 6         | 120           |
+  +----------+-----------+---------------+
+  Charges 1 and 6 are 165 seconds apart, so they are not a pair. Charges 3, 4 and 5 differ in card,
+  amount or merchant.
+  ```
+
+  ### Example 2
+  ```
+  charges
+  +----+------------+-------------+--------------+------------+
+  | id | card_token | merchant    | amount_cents | charged_ts |
+  +----+------------+-------------+--------------+------------+
+  | 10 | tok_z      | cloud-store | 999          | 5000       |
+  | 11 | tok_z      | cloud-store | 999          | 5000       |
+  | 12 | tok_z      | cloud-store | 999          | 5030       |
+  +----+------------+-------------+--------------+------------+
+
+  Output
+  +----------+-----------+---------------+
+  | first_id | second_id | seconds_apart |
+  +----------+-----------+---------------+
+  | 10       | 11        | 0             |
+  | 10       | 12        | 30            |
+  | 11       | 12        | 30            |
+  +----------+-----------+---------------+
+  ```
+
+  ### Constraints
+  - `0 <= rows in charges <= 10^6`
+  - `1 <= amount_cents <= 10^9`
+  - `0 <= charged_ts <= 4 * 10^9`, and `charged_ts` never decreases as `id` grows.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Pairs of charges with the same card, merchant and amount at most 120 seconds apart.
+    SELECT a.id AS first_id, b.id AS second_id, b.charged_ts - a.charged_ts AS seconds_apart
+    FROM charges a
+    JOIN charges b ON b.card_token = a.card_token AND b.id > a.id
+    ORDER BY first_id, second_id;
+reference_solutions:
+  sql: |
+    SELECT
+      a.id AS first_id,
+      b.id AS second_id,
+      b.charged_ts - a.charged_ts AS seconds_apart
+    FROM charges a
+    JOIN charges b
+      ON b.card_token = a.card_token
+     AND b.merchant = a.merchant
+     AND b.amount_cents = a.amount_cents
+     AND b.id > a.id
+     AND b.charged_ts - a.charged_ts <= 120
+    ORDER BY a.id, b.id;
+sql_setup: |
+  CREATE TABLE charges (
+    id INTEGER PRIMARY KEY,
+    card_token VARCHAR(40) NOT NULL,
+    merchant VARCHAR(60) NOT NULL,
+    amount_cents INTEGER NOT NULL,
+    charged_ts BIGINT NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - exactly 120 seconds counts, 165 does not, other fields must match"
+    ordered: true
+    setup_sql: |
+      INSERT INTO charges (id, card_token, merchant, amount_cents, charged_ts) VALUES
+        (1, 'tok_a', 'coffee-hub', 450, 1000), (2, 'tok_a', 'coffee-hub', 450, 1045), (3, 'tok_b', 'coffee-hub', 450, 1050),
+        (4, 'tok_a', 'coffee-hub', 500, 1060), (5, 'tok_a', 'book-nook', 450, 1070), (6, 'tok_a', 'coffee-hub', 450, 1165);
+    expected_rows: [[1, 2, 45], [2, 6, 120]]
+  - id: t2
+    description: "Example 2 - three identical charges form three pairs, same second gives 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO charges (id, card_token, merchant, amount_cents, charged_ts) VALUES
+        (10, 'tok_z', 'cloud-store', 999, 5000), (11, 'tok_z', 'cloud-store', 999, 5000), (12, 'tok_z', 'cloud-store', 999, 5030);
+    expected_rows: [[10, 11, 0], [10, 12, 30], [11, 12, 30]]
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single charge cannot pair with itself"
+    ordered: true
+    setup_sql: "INSERT INTO charges (id, card_token, merchant, amount_cents, charged_ts) VALUES (1, 'tok_a', 'shop', 100, 50);"
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Boundary - 120 seconds is a pair, 121 seconds is not"
+    ordered: true
+    setup_sql: |
+      INSERT INTO charges (id, card_token, merchant, amount_cents, charged_ts) VALUES
+        (1, 'tok_a', 'shop', 100, 0), (2, 'tok_a', 'shop', 100, 120),
+        (3, 'tok_b', 'shop', 100, 1000), (4, 'tok_b', 'shop', 100, 1121);
+    expected_rows: [[1, 2, 120]]
+  - id: t6
+    hidden: true
+    description: "Near misses only - each pair differs in exactly one of card, merchant or amount"
+    ordered: true
+    setup_sql: |
+      INSERT INTO charges (id, card_token, merchant, amount_cents, charged_ts) VALUES
+        (1, 'tok_a', 'shop', 100, 10), (2, 'tok_b', 'shop', 100, 11),
+        (3, 'tok_a', 'shop-2', 100, 12), (4, 'tok_a', 'shop', 101, 13);
+    expected_rows: []
+  - id: t7
+    hidden: true
+    description: "Chain every 100 seconds - only neighbours pair, the 200-second pairs are excluded"
+    ordered: true
+    setup_sql: |
+      INSERT INTO charges (id, card_token, merchant, amount_cents, charged_ts) VALUES
+        (1, 'tok_c', 'gym', 2500, 0), (2, 'tok_c', 'gym', 2500, 100), (3, 'tok_c', 'gym', 2500, 200), (4, 'tok_c', 'gym', 2500, 300);
+    expected_rows: [[1, 2, 100], [2, 3, 100], [3, 4, 100]]
+  - id: t8
+    hidden: true
+    description: "Burst of five identical charges in the same second - all ten pairs, no self or reversed pairs"
+    ordered: true
+    setup_sql: |
+      INSERT INTO charges (id, card_token, merchant, amount_cents, charged_ts) VALUES
+        (21, 'tok_r', 'ticketing', 7900, 3000), (22, 'tok_r', 'ticketing', 7900, 3000), (23, 'tok_r', 'ticketing', 7900, 3000),
+        (24, 'tok_r', 'ticketing', 7900, 3000), (25, 'tok_r', 'ticketing', 7900, 3000);
+    expected_rows:
+      - [21, 22, 0]
+      - [21, 23, 0]
+      - [21, 24, 0]
+      - [21, 25, 0]
+      - [22, 23, 0]
+      - [22, 24, 0]
+      - [22, 25, 0]
+      - [23, 24, 0]
+      - [23, 25, 0]
+      - [24, 25, 0]
+  - id: t9
+    hidden: true
+    description: "Realistic timestamps and large amounts with interleaved cards - pairs found within each card only"
+    ordered: true
+    setup_sql: |
+      INSERT INTO charges (id, card_token, merchant, amount_cents, charged_ts) VALUES
+        (101, 'tok_k1', 'airline', 999999999, 1767225600), (102, 'tok_k2', 'airline', 999999999, 1767225610),
+        (103, 'tok_k1', 'airline', 999999999, 1767225700), (104, 'tok_k2', 'airline', 999999999, 1767225731),
+        (105, 'tok_k1', 'grocer', 1250, 1767225750), (106, 'tok_k1', 'airline', 999999999, 1767225790),
+        (107, 'tok_k2', 'grocer', 1250, 1767225800), (108, 'tok_k1', 'grocer', 1250, 1767225870),
+        (109, 'tok_k1', 'grocer', 1250, 1767225871);
+    expected_rows:
+      - [101, 103, 100]
+      - [103, 106, 90]
+      - [105, 108, 120]
+      - [108, 109, 1]
+expected_concepts:
+  - self-join on equality columns plus a range condition
+  - avoiding self-pairs and reversed duplicates with a.id < b.id
+  - inclusive boundaries in time windows
+  - all pairs versus neighbouring pairs
+  - deterministic ORDER BY of the final result
+optimal_complexity: {time: "O(n log n + p) with an index on (card_token, merchant, amount_cents, charged_ts), where p is the number of pairs", space: O(p)}
+rubric:
+  excellent: Writes a self-join on card, merchant and amount with a.id < b.id and an inclusive 120-second range, orders the pairs, and discusses the composite index and why the time condition keeps the join small.
+  good: Correct query after a hint about duplicate or reversed pairs or about the inclusive boundary.
+  weak: Joins only on the card, compares only neighbouring rows with LAG, returns each pair twice or uses a strict < 120 boundary.
+  criteria:
+    correctness: All tests pass, including bursts in the same second, the exact 120-second boundary and chains of charges.
+    efficiency: A single self-join whose equality columns can use a composite index; no cross join filtered afterwards.
+    code_quality: Clear aliases, join conditions grouped logically and output aliases that match the contract.
+    edge_cases: Empty table, a single charge, near misses that differ in one field and identical timestamps.
+    communication: Explains how the pairing rule avoids self-pairs and duplicates and how it would scale.
+hints:
+  - A suspected pair involves two rows of the same table; which kind of join compares a table with itself?
+  - Join charges to itself on card, merchant and amount, and use the ids to keep each pair exactly once and never pair a charge with itself.
+  - Join a and b on equal card_token, merchant and amount_cents with b.id > a.id and b.charged_ts - a.charged_ts <= 120, select a.id, b.id and the time difference, and order by a.id then b.id.
+followups:
+  - How would you report each burst once (a group of charges) instead of every pair?
+  - Which index lets the database find candidate partners without scanning every charge of the card?
+  - How would the query change if ids were not guaranteed to follow time order?
+  - How would you run this continuously on a stream of new charges?
+common_errors:
+  - Joining only on card_token, which flags different merchants or amounts.
+  - Using a.id <> b.id, which returns every pair twice in both orders.
+  - Using < 120 instead of <= 120, which drops charges exactly two minutes apart.
+  - Comparing only neighbouring charges with LAG, which misses pairs that have another charge between them.

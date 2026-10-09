@@ -1,0 +1,234 @@
+version: 1
+slug: canonicalize_url_for_cache
+title: Normalise Percent-Encoded URLs for an Edge Cache
+difficulty: medium
+competency_keys: [algorithms, problem_solving, code_quality]
+role_tags: [frontend, backend, sre, security]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Normalise Percent-Encoded URLs for an Edge Cache
+
+  The edge cache in front of a documentation site stores pages by URL. Browsers, crawlers and old
+  links write the same address in different ways (`%7E` versus `~`, `%2f` versus `%2F`, a trailing dot
+  on the host, an explicit default port, blank form fields), and every spelling currently gets its own
+  cache entry. Write `normalize_url(url)` that rewrites a URL into one **normal form**.
+
+  The input has the shape `scheme://authority[path][?query][#fragment]`:
+
+  - `scheme` is `http` or `https` in any letter case.
+  - `authority` runs from after `://` up to the first `/`, `?` or `#` (or the end). It is `host` or
+    `host:port`.
+  - `path` starts with `/` and runs up to the first `?` or `#`; it may be missing.
+  - `query` is the text after a `?` up to the first `#`; it exists only if that `?` comes before
+    any `#`.
+  - `fragment` is everything from the first `#`.
+
+  Build the result as `scheme://host[:port]` + `path` + `?query` (when parameters remain):
+
+  1. **Scheme and host** are lowercased, and one trailing `.` on the host is removed.
+  2. **Port**: read it as a decimal number (leading zeros allowed). If it equals the default for the
+     scheme (`80` for `http`, `443` for `https`), drop it; otherwise write it without leading zeros.
+  3. **Escapes** in the path and the query: a `%` followed by two hex digits is an escape. If the
+     escaped character is **unreserved** (`A-Z`, `a-z`, `0-9`, `-`, `.`, `_`, `~`), replace the escape
+     with that character; otherwise keep the escape with **uppercase** hex digits. Scan left to right
+     and never re-examine produced text, so `%2541` becomes `%2541`. A `%` that does not start an
+     escape is kept as is.
+  4. **Path**: after step 3 it is kept exactly (letter case, `.` and `..` segments and `//` are not
+     touched). A missing path becomes `/`.
+  5. **Query**: after step 3 split it on `&`. Drop pieces that are empty and pieces with an `=` whose
+     value (the text after the first `=`) is empty. The **key** of a piece is the text before its first
+     `=`, or the whole piece if it has no `=`. Sort the remaining pieces by key in plain character-code
+     (ASCII) order, keeping the original order of pieces with equal keys, and join them with `&`. If no
+     pieces remain, the result has no `?`.
+  6. The **fragment** is dropped.
+
+  ### Example 1
+  ```
+  Input:  url = "HTTPS://Docs.Example.COM.:0443/API%2fv1/%7Euser/a%2Db?b=2&a=%41&c=&&a=1#top"
+  Output: "https://docs.example.com/API%2Fv1/~user/a-b?a=A&a=1&b=2"
+  Explanation: port 0443 is the https default; %2f is reserved and becomes %2F, %7E and %2D
+  are unreserved and are decoded; "c=" and the empty piece are dropped; the two "a" parameters
+  keep their original order.
+  ```
+
+  ### Example 2
+  ```
+  Input:  url = "http://shop.example.net:8080"
+  Output: "http://shop.example.net:8080/"
+  ```
+
+  ### Example 3
+  ```
+  Input:  url = "http://Cdn.Example.org:443/img/./logo.png?#frag"
+  Output: "http://cdn.example.org:443/img/./logo.png"
+  Explanation: 443 is only the default port for https, so it stays. "/./" is left as is.
+  ```
+
+  ### Constraints
+  - `10 <= url.length <= 2000`; the URL contains printable ASCII characters without spaces
+  - `host` has 1-253 characters from `a-z`, `A-Z`, `0-9`, `-` and `.`, and does not end with `..`
+  - a `port`, when present, is 1-5 digits with a value between 1 and 65535
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: normalize_url
+  params:
+    - {name: url, type: string}
+  return_type: string
+  comparison: exact
+reference_solutions:
+  python: |
+    HEX = "0123456789abcdefABCDEF"
+    DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+    def _is_unreserved(ch: str) -> bool:
+        return ch.isascii() and (ch.isalnum() or ch in "-._~")
+
+
+    def _normalize_escapes(text: str) -> str:
+        out: list[str] = []
+        i = 0
+        while i < len(text):
+            if text[i] == "%" and i + 2 < len(text) and text[i + 1] in HEX and text[i + 2] in HEX:
+                ch = chr(int(text[i + 1:i + 3], 16))
+                out.append(ch if _is_unreserved(ch) else "%" + text[i + 1:i + 3].upper())
+                i += 3
+            else:
+                out.append(text[i])
+                i += 1
+        return "".join(out)
+
+
+    def normalize_url(url: str) -> str:
+        scheme, rest = url.split("://", 1)
+        scheme = scheme.lower()
+        end = len(rest)
+        for sep in "/?#":
+            pos = rest.find(sep)
+            if pos != -1:
+                end = min(end, pos)
+        authority, rest = rest[:end], rest[end:]
+        rest = rest.split("#", 1)[0]  # drop the fragment
+        path, _, query = rest.partition("?")
+
+        host, _, port = authority.partition(":")
+        host = host.lower()
+        if host.endswith("."):
+            host = host[:-1]
+        result = scheme + "://" + host
+        if port and int(port) != DEFAULT_PORTS[scheme]:
+            result += ":" + str(int(port))
+
+        result += _normalize_escapes(path) or "/"
+
+        params = []
+        for piece in _normalize_escapes(query).split("&"):
+            key, has_eq, value = piece.partition("=")
+            if piece == "" or (has_eq and value == ""):
+                continue
+            params.append((key, piece))
+        params.sort(key=lambda kv: kv[0])  # stable: equal keys keep their order
+        if params:
+            result += "?" + "&".join(piece for _, piece in params)
+        return result
+  javascript: |
+    const HEX = '0123456789abcdefABCDEF';
+    const DEFAULT_PORTS = { http: 80, https: 443 };
+
+    const isUnreserved = (ch) => /^[A-Za-z0-9\-._~]$/.test(ch);
+
+    function normalizeEscapes(text) {
+      let out = '';
+      let i = 0;
+      while (i < text.length) {
+        if (text[i] === '%' && i + 2 < text.length && HEX.includes(text[i + 1]) && HEX.includes(text[i + 2])) {
+          const hex = text.slice(i + 1, i + 3);
+          const ch = String.fromCharCode(parseInt(hex, 16));
+          out += isUnreserved(ch) ? ch : '%' + hex.toUpperCase();
+          i += 3;
+        } else {
+          out += text[i];
+          i += 1;
+        }
+      }
+      return out;
+    }
+
+    function normalizeUrl(url) {
+      const sepAt = url.indexOf('://');
+      const scheme = url.slice(0, sepAt).toLowerCase();
+      let rest = url.slice(sepAt + 3);
+      let end = rest.length;
+      for (const sep of '/?#') {
+        const pos = rest.indexOf(sep);
+        if (pos !== -1) end = Math.min(end, pos);
+      }
+      const authority = rest.slice(0, end);
+      rest = rest.slice(end).split('#')[0]; // drop the fragment
+      const q = rest.indexOf('?');
+      const path = q === -1 ? rest : rest.slice(0, q);
+      const query = q === -1 ? '' : rest.slice(q + 1);
+
+      const colon = authority.indexOf(':');
+      let host = (colon === -1 ? authority : authority.slice(0, colon)).toLowerCase();
+      const port = colon === -1 ? '' : authority.slice(colon + 1);
+      if (host.endsWith('.')) host = host.slice(0, -1);
+      let result = scheme + '://' + host;
+      if (port !== '' && parseInt(port, 10) !== DEFAULT_PORTS[scheme]) result += ':' + parseInt(port, 10);
+
+      result += normalizeEscapes(path) || '/';
+
+      const params = [];
+      for (const piece of normalizeEscapes(query).split('&')) {
+        const eq = piece.indexOf('=');
+        const key = eq === -1 ? piece : piece.slice(0, eq);
+        if (piece === '' || (eq !== -1 && eq === piece.length - 1)) continue;
+        params.push([key, piece]);
+      }
+      params.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)); // stable sort by key
+      if (params.length > 0) result += '?' + params.map((p) => p[1]).join('&');
+      return result;
+    }
+tests:
+  - {id: t1, args: ["HTTPS://Docs.Example.COM.:0443/API%2fv1/%7Euser/a%2Db?b=2&a=%41&c=&&a=1#top"], expected: "https://docs.example.com/API%2Fv1/~user/a-b?a=A&a=1&b=2", description: "Example 1"}
+  - {id: t2, args: ["http://shop.example.net:8080"], expected: "http://shop.example.net:8080/", description: "Example 2 - missing path becomes /, non-default port kept"}
+  - {id: t3, args: ["http://Cdn.Example.org:443/img/./logo.png?#frag"], expected: "http://cdn.example.org:443/img/./logo.png", description: "Example 3 - 443 is not the default for http; dot segments untouched; empty query dropped"}
+  - {id: t4, hidden: true, args: ["https://example.com/a%25b%2541?x=%25"], expected: "https://example.com/a%25b%2541?x=%25", description: "Percent-encoded percent sign stays encoded and is not decoded twice"}
+  - {id: t5, hidden: true, args: ["https://example.com/100%/off%zz%4?%=1&q=50%"], expected: "https://example.com/100%/off%zz%4?%=1&q=50%", description: "Malformed escapes (no hex, one hex digit, at the end) are left unchanged"}
+  - {id: t6, hidden: true, args: ["http://api.example.com:00080/v2//Items/../X?z=1&Z=2&_=3&a=&a&=v#?frag=1"], expected: "http://api.example.com/v2//Items/../X?=v&Z=2&_=3&a&z=1", description: "Port with leading zeros equal to default dropped; double slash and .. kept; uppercase keys before underscore before lowercase; flag parameter without = kept, empty-key parameter sorted first"}
+  - {id: t7, hidden: true, args: ["https://EXAMPLE.com:65535?b=1&a=2"], expected: "https://example.com:65535/?a=2&b=1", description: "No path but a query - path becomes / before the query; maximum port kept"}
+  - {id: t8, hidden: true, args: ["http://example.com/%41%62%30%2d%2E%5f%7e%20%2F%3a%3F%23%26"], expected: "http://example.com/Ab0-._~%20%2F%3A%3F%23%26", description: "Every unreserved class decoded, reserved and space escapes uppercased"}
+  - {id: t9, hidden: true, args: ["https://example.com/search?q=a%26b%3Dc&q=a&lang=en&q=%7a&page=2&lang=&sort=price%2Basc"], expected: "https://example.com/search?lang=en&page=2&q=a%26b%3Dc&q=a&q=z&sort=price%2Basc", description: "Encoded & and = inside values do not split parameters; repeated keys keep input order; empty value dropped"}
+  - {id: t10, hidden: true, args: ["https://h.example/p?&&&#x"], expected: "https://h.example/p", description: "Query made only of separators collapses to no query"}
+  - {id: t11, hidden: true, args: ["http://example.com:080/#only-fragment?not=query"], expected: "http://example.com/", description: "Question mark inside the fragment is not a query; port 080 is the http default"}
+expected_concepts:
+  - splitting a URL into components by the first delimiter
+  - percent-encoding normalisation (unreserved decode, uppercase hex)
+  - single-pass scanning that avoids double decoding
+  - stable sort by key
+  - cache-key fragmentation and cache poisoning awareness
+optimal_complexity: {time: "O(n + p log p) for a URL of length n with p query parameters", space: O(n)}
+rubric:
+  excellent: Splits the URL with clear component boundaries, normalises escapes in a single left-to-right pass without double decoding, handles default ports with leading zeros per scheme, drops blank parameters, uses a stable sort by key only, and explains why over-normalising (for example decoding reserved characters) could change meaning or enable cache poisoning.
+  good: Correct output after a hint about the escape rules for reserved characters or about stable ordering of repeated keys.
+  weak: Uses a full URL-decoding library call that decodes reserved characters, sorts by the whole parameter, compares the port as a string, or keeps the fragment.
+  criteria:
+    correctness: All tests pass, including %25, malformed escapes, encoded & and =, and fragments containing ?.
+    efficiency: Linear scanning plus one sort of the parameters.
+    code_quality: Separate helpers for splitting, escape normalisation and query handling.
+    edge_cases: Missing path, empty query, query of only separators, ports with leading zeros, maximum port, trailing dot on the host.
+    communication: Explains which normalisations are safe for a cache key and which are not.
+hints:
+  - Split the URL into scheme, authority, path, query and fragment first, using the first occurrence of each delimiter, and treat each part with its own rules.
+  - For escapes, walk the text once and look at a percent sign plus the next two characters; decide between decoding and uppercasing, then jump past all three characters so nothing is decoded twice.
+  - Normalise the path and query text, split the query on ampersands, filter out empty pieces and pieces whose value after the first equals sign is empty, stable-sort by the text before the first equals sign, and only add the question mark when something remains; compare the port numerically with the scheme default.
+followups:
+  - Why must %2F not be decoded to / in the path, and what could go wrong for the origin server if it were?
+  - Which query parameters (for example tracking tags) would you also strip for caching, and how would you make that configurable?
+  - How can a mismatch between the cache's normalisation and the origin's URL parsing lead to cache poisoning?
+common_errors:
+  - Decoding every escape, including reserved characters such as %2F, %26 or %3D, which changes the meaning of the URL.
+  - Decoding %25 and then decoding the result again.
+  - Comparing the port as text so 0443 or 00080 is not recognised as the default.
+  - Sorting parameters by full text or with an unstable sort, reordering repeated keys.
+  - Treating a ? inside the fragment as the start of the query.

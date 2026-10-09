@@ -1,0 +1,637 @@
+# Curated questions: full-stack engineering (part 1 of 4) — auth flows, sessions and API/UI contracts.
+# `defaults` are merged into every question (question keys win). Round types follow difficulty:
+# easy -> technical_screening + combined, medium -> + deep_technical, hard -> deep_technical + combined.
+version: 1
+defaults:
+  role_tags: [fullstack]
+  round_types: [technical_screening, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------- sessions and login
+  - external_key: technical.fullstack.session_cookie_vs_token
+    competency_key: security
+    topic: Server sessions versus browser-held tokens
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you've built login for a web app, how did you decide between a server-side session behind a cookie
+      and a token that the browser holds itself? And where did that token actually end up living?
+    expected_concepts:
+      - server-side session id in an HttpOnly cookie versus self-contained tokens
+      - localStorage is readable by any injected script (XSS exposure)
+      - revocation is easy with server sessions and hard with long-lived tokens
+      - cookies bring CSRF considerations that bearer headers do not
+      - scaling concerns such as shared session stores
+    rubric:
+      excellent: Compares both models on XSS exposure, CSRF, revocation and scaling, ties the choice to a real app they built, and explains where the credential was stored and why.
+      good: Explains the basic difference and names at least one security trade-off of storing tokens in the browser.
+      weak: Treats JWTs as automatically more secure or modern, or cannot say where the credential was kept.
+    followups:
+      - If you kept the token in memory only, what happens when the user refreshes the page?
+      - How would you revoke access for one user right now under each model?
+    common_errors:
+      - Storing long-lived tokens in localStorage without considering script injection.
+      - Assuming a signed token cannot be stolen and replayed.
+
+  - external_key: technical.fullstack.auth_cookie_attributes
+    competency_key: security
+    topic: Hardening the auth cookie
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Say your app keeps its session in a cookie. Which attributes would you set on that cookie, and what
+      specific attack or mistake does each one protect you from?
+    expected_concepts:
+      - HttpOnly to keep scripts from reading it
+      - Secure so it is only sent over HTTPS
+      - SameSite Lax or Strict as a CSRF mitigation
+      - narrow Path and Domain scoping
+      - sensible expiry or Max-Age and the __Host- prefix
+    rubric:
+      excellent: Names HttpOnly, Secure and SameSite with the attack each addresses, discusses domain scoping or the __Host- prefix, and explains when SameSite None is needed and what that costs.
+      good: Covers HttpOnly, Secure and SameSite with mostly correct reasons.
+      weak: Lists attributes without knowing what they protect against, or thinks HttpOnly encrypts the cookie.
+    followups:
+      - Your frontend and API live on different subdomains. How does that change your cookie settings?
+      - When would SameSite Strict hurt the user experience?
+    common_errors:
+      - Believing SameSite alone fully removes the need for any CSRF defence.
+
+  - external_key: technical.fullstack.login_flow_walkthrough
+    competency_key: api_design
+    topic: Login flow end to end
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Take an app you've worked on and walk me through everything that happens from the moment a user clicks
+      Sign in to the moment they see their dashboard, across the browser, the API and the database.
+    expected_concepts:
+      - form submission over HTTPS and server-side credential check
+      - password hashing with a slow algorithm such as bcrypt or argon2
+      - issuing a session or token and how the browser stores it
+      - redirect and loading the user's profile or permissions
+      - generic error messages that do not reveal which field was wrong
+    rubric:
+      excellent: Gives a concrete, ordered walkthrough across all three layers, mentions hashing, credential issuance, how subsequent requests are authenticated and how failures are reported to the UI.
+      good: Covers the main steps with a couple of security details but skips how later requests carry the credential.
+      weak: Describes only the UI or only the database lookup, or mentions storing or comparing plain-text passwords.
+    followups:
+      - Where in that flow would you add rate limiting, and keyed on what?
+      - How does the dashboard know which menu items this user may see?
+    common_errors:
+      - Returning different errors for unknown email and wrong password, which leaks account existence.
+
+  - external_key: technical.fullstack.password_reset_design
+    competency_key: security
+    topic: Password reset flow
+    difficulty: medium
+    kind: technical
+    text: >-
+      How would you build a forgot-password flow from scratch, covering the email, the link, the reset page and
+      what happens to the user's existing sessions afterwards?
+    expected_concepts:
+      - random, single-use token stored hashed with a short expiry
+      - same response whether or not the email exists
+      - token invalidated after use and when a newer one is issued
+      - existing sessions and refresh tokens revoked after the change
+      - rate limiting reset requests and notifying the user of the change
+      - avoiding token leakage through referrer headers or analytics
+    rubric:
+      excellent: Designs a single-use, hashed, expiring token, avoids account enumeration, revokes other sessions after the reset and covers abuse limits and referrer or log leakage.
+      good: Has a sensible expiring token and email flow but misses session revocation or enumeration.
+      weak: Emails the password itself, uses guessable tokens, or never expires the link.
+    followups:
+      - Why store a hash of the reset token instead of the token itself?
+      - A user clicks two different reset emails. What should happen?
+    common_errors:
+      - Leaving the user's other devices logged in after a password reset.
+
+  - external_key: technical.fullstack.refresh_token_rotation
+    competency_key: security
+    topic: Access and refresh tokens with rotation
+    difficulty: medium
+    kind: technical
+    text: >-
+      Many apps pair a short-lived access token with a longer-lived refresh token. How have you implemented that
+      split, and how does rotating the refresh token help you detect when one has been stolen?
+    expected_concepts:
+      - short access token lifetime limits the damage of a leak
+      - refresh token stored server-side or hashed, sent only to the refresh endpoint
+      - rotation issues a new refresh token on every use
+      - reuse of an already-rotated token revokes the whole token family
+      - refresh token kept in an HttpOnly cookie scoped to the refresh path
+    rubric:
+      excellent: Explains rotation with token families and reuse detection, scopes and stores refresh tokens safely, and discusses the grace window needed for legitimate concurrent refreshes.
+      good: Describes the access and refresh split and rotation but is vague on what reuse detection actually does.
+      weak: Uses a refresh token that never changes or never expires, or sends it with every API call.
+    followups:
+      - What would you do when two legitimate requests try to refresh at the same moment?
+      - Where should the refresh endpoint's cookie path point, and why?
+    common_errors:
+      - Treating any reuse as theft without allowing for network retries, which logs real users out.
+
+  - external_key: technical.fullstack.parallel_refresh_logouts
+    competency_key: debugging
+    topic: Random logouts from parallel token refresh
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Users complain they get logged out at random, usually when they come back to a tab after a while. Your app
+      rotates refresh tokens and the dashboard fires several API calls on load. How would you track this down,
+      and how would you fix it?
+    expected_concepts:
+      - several requests receive 401 at once and each tries to refresh
+      - the second refresh presents an already-rotated token and triggers reuse revocation
+      - single-flight refresh in the client so concurrent callers wait on one refresh
+      - coordination across browser tabs such as BroadcastChannel or a lock
+      - a short server-side grace window for the previous token
+      - reproducing with throttled network and logging refresh token family ids
+    rubric:
+      excellent: Identifies the concurrent-refresh race with rotation as the likely cause, proposes reproducing it deliberately, and fixes both client side (single-flight, cross-tab coordination) and server side (grace window) while keeping reuse detection meaningful.
+      good: Spots that parallel refreshes collide and proposes a client-side queue or lock.
+      weak: Suggests making tokens last longer or disabling rotation without understanding the race.
+    followups:
+      - How would you prove the race is the cause before shipping a fix?
+      - Two tabs both wake up at once. How does your fix behave there?
+    common_errors:
+      - Fixing it only within one tab and forgetting that tabs share the same cookie.
+
+  - external_key: technical.fullstack.social_login_spa
+    competency_key: security
+    topic: Adding social sign-in to a SPA and API
+    difficulty: medium
+    kind: technical
+    text: >-
+      Suppose you're adding Sign in with Google to a single-page app that talks to your own API. Which OAuth
+      or OpenID Connect flow would you use, where does each step run, and how does your API end up trusting the
+      user?
+    expected_concepts:
+      - authorization code flow with PKCE rather than the implicit flow
+      - state and nonce parameters against CSRF and replay
+      - validating the ID token signature, issuer, audience and expiry
+      - backend exchanges the code and creates its own session
+      - linking the external identity to an existing account safely
+    rubric:
+      excellent: Chooses code flow with PKCE, explains state and nonce, validates the ID token correctly, and has the backend issue its own session while handling account linking by verified email or explicit linking.
+      good: Picks a reasonable flow and validates tokens but is fuzzy on state, nonce or account linking.
+      weak: Uses the implicit flow, trusts whatever email the frontend sends, or passes the provider's token around as the app's own session.
+    followups:
+      - Someone already has a password account with the same email. What do you do?
+      - Why is the implicit flow discouraged today?
+    common_errors:
+      - Accepting an ID token without checking its audience.
+
+  - external_key: technical.fullstack.csrf_defence
+    competency_key: security
+    topic: CSRF protection with cookie auth
+    difficulty: medium
+    kind: technical
+    text: >-
+      Your API authenticates the browser with a session cookie. Explain how a cross-site request forgery attack
+      would work against it, and what you'd put in place on both the frontend and the backend to stop it.
+    expected_concepts:
+      - browser attaches cookies to cross-site requests automatically
+      - SameSite cookies as a first layer
+      - synchronizer token or double-submit token sent in a header
+      - requiring a custom header or JSON content type on state-changing requests
+      - safe methods never change state
+      - checking Origin or Referer headers
+    rubric:
+      excellent: Explains the attack precisely, layers SameSite with a token or custom-header check, notes GET must be side-effect free, and describes how the frontend obtains and sends the token.
+      good: Explains the attack and one solid defence such as a CSRF token.
+      weak: Confuses CSRF with XSS or CORS, or believes CORS settings alone prevent it.
+    followups:
+      - Why does a JSON-only API with a custom header resist simple CSRF?
+      - Does CSRF matter if you use bearer tokens in an Authorization header?
+    common_errors:
+      - Thinking CORS blocks the forged request from being sent at all.
+
+  - external_key: technical.fullstack.cors_error_staging
+    competency_key: debugging
+    topic: CORS failure in staging
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A teammate says the frontend works locally, but in staging every API call fails with a CORS error in the
+      browser console. How would you work out what's wrong?
+    expected_concepts:
+      - CORS is enforced by the browser based on response headers
+      - check the preflight OPTIONS request and its response in the network tab
+      - allowed origin must match the staging frontend origin exactly
+      - credentials require a specific origin, not a wildcard
+      - proxies or gateways stripping headers or failing the preflight
+      - a server error can surface as a CORS error when error responses lack the headers
+    rubric:
+      excellent: Inspects the preflight and actual responses, checks the exact origin, credentials and allowed headers, and recognises that a 500 or a proxy can masquerade as a CORS problem.
+      good: Knows CORS is about response headers and checks the allowed origin for staging.
+      weak: Proposes disabling CORS in the browser or setting a wildcard with credentials.
+    followups:
+      - Why does it work locally? What is different about your dev setup?
+      - How would you avoid CORS entirely for this app?
+    common_errors:
+      - Setting Access-Control-Allow-Origin to * while also sending cookies.
+
+  - external_key: technical.fullstack.sign_out_all_devices
+    competency_key: security
+    topic: Sign out of all devices
+    difficulty: medium
+    kind: scenario
+    text: >-
+      A customer tells support their laptop was stolen and asks you to sign them out everywhere. Your app uses
+      JWT access tokens. What would that feature look like, and how fast can you actually cut off access?
+    expected_concepts:
+      - revoke all refresh tokens or sessions for the user server-side
+      - outstanding access tokens stay valid until they expire
+      - short access token lifetime or a per-user token version checked on requests
+      - denylist of token ids as a trade-off against statelessness
+      - forcing re-authentication and optionally a password change
+    rubric:
+      excellent: Revokes refresh tokens immediately, is clear that existing access tokens live until expiry, and offers a token-version or denylist check with its cost, giving a realistic time-to-cutoff.
+      good: Revokes refresh tokens and acknowledges the access-token window.
+      weak: Claims deleting the token from the database instantly invalidates a stateless JWT.
+    followups:
+      - How would you show users a list of their active sessions?
+      - What would you change if the cutoff had to be immediate?
+    common_errors:
+      - Forgetting that stateless tokens cannot be recalled without extra server state.
+
+  - external_key: technical.fullstack.hidden_button_authorization
+    competency_key: security
+    topic: UI permissions versus server enforcement
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      In an app with admins and regular users, how do you handle permissions in the UI compared with the API?
+      Tell me how you've split that responsibility in a real project.
+    expected_concepts:
+      - the server enforces every permission on every request
+      - the UI hides or disables actions only for usability
+      - a single source of permission data sent to the client
+      - checking ownership of the specific resource, not just the role
+      - tests that call the API directly as a lower-privileged user
+    rubric:
+      excellent: States that the API is the only real enforcement point, shows how the UI gets permission data to shape the interface, and mentions resource-level checks and tests that bypass the UI.
+      good: Knows hiding a button is not security and enforces roles in the API.
+      weak: Relies on hiding UI elements or on client-side route guards for protection.
+    followups:
+      - Permissions change while the user is logged in. How does the UI catch up?
+      - How would you test that a regular user cannot call admin endpoints?
+    common_errors:
+      - Checking the role but not whether the record belongs to the caller.
+
+  - external_key: technical.fullstack.invoice_id_exposure
+    competency_key: security
+    topic: Object-level authorization bug
+    difficulty: medium
+    kind: scenario
+    text: >-
+      A customer reports that by changing the number in a URL like slash invoices slash one-two-three-four, they
+      can see another company's invoice. How would you handle this, both right now and in the longer term?
+    expected_concepts:
+      - immediate fix scoping the query by the caller's account or tenant
+      - checking access logs for whether it was exploited
+      - auditing other endpoints for the same pattern
+      - ownership checks enforced centrally rather than per handler
+      - automated tests for cross-account access
+      - opaque ids reduce guessing but are not a fix on their own
+    rubric:
+      excellent: Ships a scoped-query fix quickly, investigates exposure in logs, audits sibling endpoints, and proposes a structural fix such as tenant-scoped data access plus regression tests, noting that random ids are defence in depth only.
+      good: Fixes the endpoint with an ownership check and looks for similar endpoints.
+      weak: Proposes only switching to UUIDs or obfuscating ids.
+    followups:
+      - How would you find every other endpoint with the same flaw?
+      - Who needs to be told, and what would you tell them?
+    common_errors:
+      - Treating unguessable ids as the authorization control.
+
+  - external_key: technical.fullstack.session_expiry_long_form
+    competency_key: frontend_react
+    topic: Session expiry during long forms
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Users fill in a long application form, step away, then hit Submit and lose everything because their
+      session expired. How would you fix that experience?
+    expected_concepts:
+      - silent token refresh before or on a 401
+      - retrying the original request after re-authentication
+      - saving drafts locally or to the server as the user types
+      - warning before expiry or re-login in a modal without leaving the page
+      - preserving form state across a redirect to login
+    rubric:
+      excellent: Combines silent refresh with retry, draft persistence and an in-place re-login path, and considers what should happen if re-auth fails.
+      good: Proposes autosaving drafts or refreshing the session before submit.
+      weak: Suggests just making sessions last much longer.
+    followups:
+      - Where would you store the draft, and what about sensitive fields?
+      - The user logs back in as a different account. What happens to the draft?
+    common_errors:
+      - Persisting sensitive form data in localStorage without thought.
+
+  # ------------------------------------------------------------- API and UI contracts
+  - external_key: technical.fullstack.shared_api_types
+    competency_key: typescript
+    topic: Keeping frontend and backend types in sync
+    difficulty: medium
+    kind: technical
+    text: >-
+      How do you keep the frontend's idea of an API response in sync with what the backend actually returns?
+      Tell me what you've used and where it broke down.
+    expected_concepts:
+      - generating clients or types from an OpenAPI or GraphQL schema
+      - shared type packages in a monorepo
+      - runtime validation at the boundary such as zod
+      - CI check that fails when the schema and generated code drift
+      - types alone do not protect against old deployed clients
+    rubric:
+      excellent: Describes a concrete source of truth with code generation or a shared package, adds runtime validation where data is untrusted, enforces drift checks in CI, and reflects on a real failure.
+      good: Uses generated or shared types and explains the benefit.
+      weak: Hand-writes types on both sides and relies on manual testing to catch mismatches.
+    followups:
+      - Why might you still validate responses at runtime when you have generated types?
+      - How do you handle fields that are nullable in the database but required in the UI?
+    common_errors:
+      - Assuming compile-time types guarantee what arrives over the network.
+
+  - external_key: technical.fullstack.validation_error_shape
+    competency_key: api_design
+    topic: Error responses the UI can use
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How would you design the API's error responses so the frontend can show the right message next to the
+      right form field? Describe the shape you'd use and why.
+    expected_concepts:
+      - consistent error envelope across endpoints
+      - machine-readable codes separate from human messages
+      - field paths for validation errors including nested fields
+      - appropriate status codes such as 400 or 422 versus 409
+      - a request id for support and debugging
+    rubric:
+      excellent: Proposes a consistent envelope with codes, field paths and messages, distinguishes validation from conflict and server errors, and explains how the UI maps errors to fields and handles unknown codes.
+      good: Returns field-level errors in a consistent format with sensible status codes.
+      weak: Returns a single free-text string or a 200 with an error flag.
+    followups:
+      - How would you localise these messages?
+      - What does the UI show for an error code it does not recognise?
+    common_errors:
+      - Leaking stack traces or SQL errors in the response body.
+
+  - external_key: technical.fullstack.validation_placement
+    competency_key: code_quality
+    topic: Where validation rules live
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When a form has rules like required fields, formats and limits, where do you put the validation, and how
+      do you avoid the frontend and backend rules drifting apart?
+    expected_concepts:
+      - client validation for fast feedback, server validation for correctness
+      - server is the authority because clients can be bypassed
+      - sharing schemas or generating them from one definition
+      - rules that need data, such as uniqueness, only on the server
+      - surfacing server validation errors in the same UI
+    rubric:
+      excellent: Explains why both layers exist, keeps the server authoritative, shares or generates rules from one source, and handles server-only rules gracefully in the form.
+      good: Validates on both sides with the server as the authority.
+      weak: Validates only in the browser, or duplicates rules by hand with no plan for drift.
+    followups:
+      - How would you show an email is already taken before the user submits?
+      - A rule changes. How many places do you have to update?
+    common_errors:
+      - Trusting client-side validation for business rules.
+
+  - external_key: technical.fullstack.renamed_field_rollout
+    competency_key: api_design
+    topic: Rolling out a breaking contract change
+    difficulty: medium
+    kind: scenario
+    text: >-
+      A backend developer renamed a field in an API response, the web app was updated in the same release, but
+      users with the app already open and an older mobile build started seeing errors. How would you roll out a
+      change like that safely next time?
+    expected_concepts:
+      - expand and contract, adding the new field before removing the old one
+      - support old and new clients during a transition window
+      - deprecation tracking with usage metrics or logs
+      - versioning only when a change is truly incompatible
+      - contract tests against the clients still in use
+    rubric:
+      excellent: Proposes an expand-and-contract sequence with both fields served, measures remaining usage before removal, and accounts for open tabs and slow-updating mobile clients.
+      good: Suggests keeping the old field for a while or versioning the endpoint.
+      weak: Proposes forcing everyone to upgrade, or coordinating deploys perfectly so the gap never exists.
+    followups:
+      - How do you know when it is safe to remove the old field?
+      - What about requests the old clients send, not just responses?
+    common_errors:
+      - Assuming web clients update instantly on deploy.
+
+  - external_key: technical.fullstack.dashboard_aggregation_layer
+    competency_key: system_design
+    topic: Backend-for-frontend and request fan-out
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      A dashboard page makes fourteen separate API calls to render and feels slow, especially on mobile
+      networks. Would you introduce a backend-for-frontend, a GraphQL layer, or something else? Walk me through
+      how you'd decide.
+    expected_concepts:
+      - measure where time goes (round trips, waterfalls, slow endpoints)
+      - aggregating on the server close to the services
+      - backend-for-frontend owned by the UI team versus a general GraphQL gateway
+      - caching, partial failure handling and timeouts in the aggregator
+      - cost of another layer to operate, secure and version
+      - cheaper alternatives such as parallelising requests or a purpose-built endpoint
+    rubric:
+      excellent: Starts from measurement, compares BFF, GraphQL and a purpose-built endpoint on latency, ownership, caching and operational cost, and designs for partial failure so one slow widget does not block the page.
+      good: Picks a reasonable aggregation approach and explains why it reduces round trips.
+      weak: Adopts GraphQL by default without considering the cost or the real bottleneck.
+    followups:
+      - One of the underlying services is slow. How does the page behave?
+      - Who owns the BFF and how is it deployed?
+    common_errors:
+      - Moving the waterfall to the server without parallelising it.
+
+  - external_key: technical.fullstack.list_vs_detail_payloads
+    competency_key: api_design
+    topic: Shaping payloads for list and detail views
+    difficulty: medium
+    kind: technical
+    text: >-
+      How do you decide what an endpoint returns when the same data shows up in a compact list view and in a
+      full detail page? Tell me about a time you got that wrong.
+    expected_concepts:
+      - separate summary and detail representations
+      - avoiding over-fetching large nested data in lists
+      - avoiding under-fetching that forces a request per row
+      - sparse fieldsets or include parameters
+      - payload size and caching implications
+    rubric:
+      excellent: Designs distinct summary and detail shapes from UI needs, discusses over- and under-fetching with a concrete example, and weighs flexible field selection against complexity and caching.
+      good: Returns lighter list payloads and fuller detail payloads with a sensible reason.
+      weak: Returns the whole database row everywhere, or one request per list item.
+    followups:
+      - How do you stop list payloads growing as people add fields over time?
+      - What does a field-selection parameter cost you?
+    common_errors:
+      - Exposing internal or sensitive columns by serialising entire models.
+
+  - external_key: technical.fullstack.tenant_isolation_enforcement
+    competency_key: security
+    topic: Tenant isolation across the stack
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      In a multi-tenant business app, how would you make sure one customer can never see another customer's
+      data, even when a developer forgets a filter in a new query?
+    expected_concepts:
+      - tenant id derived from the authenticated session, never from the request body
+      - scoped data access layer or repository that always applies the tenant filter
+      - database row-level security as a backstop
+      - tenant-aware caches, search indexes, file paths and background jobs
+      - automated cross-tenant tests and logging of tenant context
+    rubric:
+      excellent: Layers a scoped data access pattern with database-level enforcement such as row-level security, extends isolation to caches, files, search and jobs, and backs it with cross-tenant tests.
+      good: Centralises tenant filtering and derives the tenant from the session.
+      weak: Relies on developers remembering to add a where clause.
+    followups:
+      - How does a background job know which tenant it is working for?
+      - Where could data leak even with perfect database queries?
+    common_errors:
+      - Forgetting cache keys and file storage paths when isolating tenants.
+
+  - external_key: technical.fullstack.support_impersonation
+    competency_key: security
+    topic: Support staff impersonation feature
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      The support team wants a way to see the app exactly as a specific customer sees it so they can debug
+      problems. How would you design that feature so it's useful but doesn't become a security hole?
+    expected_concepts:
+      - impersonation session separate from the customer's own session
+      - real actor recorded alongside the impersonated user in audit logs
+      - restricted permissions such as read-only or blocked sensitive actions
+      - time limits, visible banner and an explicit end action
+      - access limited to specific staff roles, possibly with approval or customer consent
+    rubric:
+      excellent: Designs a distinct, time-bound, audited impersonation session that records both identities, restricts dangerous actions, makes it obvious in the UI, and limits who can use it.
+      good: Includes audit logging and role restrictions.
+      weak: Shares the customer's password or issues a normal session for the customer with no trail.
+    followups:
+      - Which actions would you block while impersonating?
+      - How would the customer find out it happened?
+    common_errors:
+      - Logging actions as the customer, losing who actually performed them.
+
+  - external_key: technical.fullstack.mfa_rollout
+    competency_key: security
+    topic: Rolling out multi-factor authentication
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You're asked to add authenticator-app multi-factor login to an existing product with a large user base.
+      How would you build and roll it out, including what happens when people lose their phone?
+    expected_concepts:
+      - TOTP enrolment with QR code and confirmation of a first code
+      - secrets encrypted at rest and codes with replay protection
+      - partially authenticated state between password and second factor
+      - recovery codes stored hashed and single use
+      - gradual rollout, opt-in first, enforced for admins later
+      - step-up authentication for sensitive actions
+    rubric:
+      excellent: Covers enrolment, an intermediate login state that cannot reach the API, secure secret storage, recovery codes and support recovery, plus a phased rollout and step-up for sensitive actions.
+      good: Describes enrolment and verification with recovery codes.
+      weak: Issues a full session before the second factor is checked, or has no recovery story.
+    followups:
+      - How would you stop brute forcing of six-digit codes?
+      - What does support need to verify before resetting someone's second factor?
+    common_errors:
+      - Granting a full session after the password step and checking the code only in the UI.
+
+  - external_key: technical.fullstack.magic_link_login
+    competency_key: security
+    topic: Passwordless email login
+    difficulty: medium
+    kind: scenario
+    text: >-
+      Product wants passwordless login where users get a sign-in link by email. How would you build it, and what
+      problems would you expect once it's in production?
+    expected_concepts:
+      - single-use, short-lived, hashed tokens
+      - email security scanners prefetching links and consuming them
+      - confirmation step or POST on landing instead of logging in on GET
+      - binding the link to the requesting browser or showing a code
+      - rate limiting and no account enumeration
+    rubric:
+      excellent: Builds a secure single-use token flow and anticipates link prefetching by scanners, cross-device clicks and email delays, with a concrete mitigation for each.
+      good: Builds a sound token flow with expiry and single use.
+      weak: Uses long-lived or reusable links, or logs the user in from any GET request.
+    followups:
+      - The user requests the link on a laptop and opens it on a phone. What happens?
+      - How do you handle the email arriving after the link expires?
+    common_errors:
+      - Consuming the token on GET, so link-scanning software logs in or burns the link.
+
+  - external_key: technical.fullstack.credential_stuffing_response
+    competency_key: security
+    topic: Defending the login endpoint
+    difficulty: medium
+    kind: scenario
+    text: >-
+      Your monitoring shows thousands of failed logins per minute spread across many IP addresses and many
+      different accounts. What's probably happening, and what would you do on the backend and in the UI?
+    expected_concepts:
+      - credential stuffing using leaked password lists
+      - rate limiting per account and per IP or network with backoff
+      - challenge such as CAPTCHA after suspicious patterns
+      - breached-password checks and encouraging MFA
+      - alerting on success rate and notifying affected users
+      - avoiding lockouts that let attackers deny service to real users
+    rubric:
+      excellent: Identifies credential stuffing, layers rate limits keyed on several dimensions with progressive challenges, protects successful-login accounts, and weighs lockout-based denial of service.
+      good: Proposes rate limiting and CAPTCHA with a sensible reason.
+      weak: Suggests only blocking the IPs that appear in the logs.
+    followups:
+      - Some attempts succeed. How do you find and protect those accounts?
+      - How do you avoid locking out a real user?
+    common_errors:
+      - Hard account lockouts that attackers can trigger at will.
+
+  - external_key: technical.fullstack.sso_redirect_loop
+    competency_key: debugging
+    topic: SSO redirect loop
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      After enabling single sign-on for an enterprise customer, some of their users get stuck bouncing between
+      your app and their identity provider forever. How would you debug that?
+    expected_concepts:
+      - capture the redirect chain with browser tools or a HAR file
+      - session cookie not being set or not sent back, for example SameSite on a cross-site POST
+      - state or nonce cookie lost between redirects
+      - mismatched callback URL, domain or protocol behind a proxy
+      - clock skew causing assertions or tokens to look expired
+      - comparing affected and unaffected users and browsers
+    rubric:
+      excellent: Captures the redirect chain, reasons about cookies on cross-site returns, proxy-forwarded scheme or host, state handling and clock skew, and narrows it down by comparing affected and unaffected users.
+      good: Suspects cookie or callback misconfiguration and inspects the redirects.
+      weak: Guesses at configuration changes without collecting evidence.
+    followups:
+      - Why would only some users be affected?
+      - How does running behind a TLS-terminating proxy cause this?
+    common_errors:
+      - Overlooking that the IdP returns via a cross-site POST, which SameSite Lax cookies do not accompany.

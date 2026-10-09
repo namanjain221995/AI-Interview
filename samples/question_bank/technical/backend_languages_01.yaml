@@ -1,0 +1,653 @@
+# Curated questions: backend language depth, part 1 (Python runtime, async, packaging, typing, testing).
+# `defaults` are merged into every question (question keys win).
+# Round types follow difficulty: easy -> technical_screening + combined; medium -> + deep_technical;
+# hard -> deep_technical + combined.
+version: 1
+defaults:
+  role_tags: [backend]
+questions:
+  # ------------------------------------------------------------- memory and runtime
+  - external_key: technical.backend_languages.py_refcount_and_cycle_gc
+    competency_key: python
+    topic: Python reference counting and the cycle collector
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How does CPython actually free memory? I'm interested in how reference counting and the cyclic garbage
+      collector divide the work, and whether that distinction has ever mattered in code you've written.
+    expected_concepts:
+      - objects freed immediately when their reference count reaches zero
+      - reference cycles need the generational cycle collector
+      - generations and collection thresholds
+      - weak references to break cycles in caches or observer patterns
+      - finalizers and objects holding external resources
+    rubric:
+      excellent: Explains that most objects are freed deterministically by reference counting, that cycles are found later by the generational collector, and gives a concrete case such as a cache or parent-child graph fixed with weak references or explicit cleanup.
+      good: Correctly describes reference counting and knows cycles need a separate collector, with a partial example.
+      weak: Describes Python memory as a generic tracing garbage collector or cannot say when objects are freed.
+    followups:
+      - When would you ever call gc.collect or tune the thresholds yourself?
+      - How would you notice in production that cycles are piling up?
+    common_errors:
+      - Assuming del frees an object even while other references still exist.
+      - Believing the cycle collector is the main way Python reclaims memory.
+
+  - external_key: technical.backend_languages.py_native_memory_growth
+    competency_key: python
+    topic: Native memory growth outside the Python heap
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A Python worker's resident memory climbs by a few hundred megabytes a day, but tracemalloc snapshots show
+      the Python-level allocations staying flat. What could explain the gap, and how would you investigate it?
+    expected_concepts:
+      - allocations inside C extensions are invisible to tracemalloc
+      - allocator fragmentation and glibc malloc arenas
+      - trying MALLOC_ARENA_MAX or jemalloc to test the fragmentation theory
+      - native profiling tools such as memray with native traces, heaptrack or valgrind
+      - bisecting by library version or isolating the suspect workload
+      - worker recycling as a mitigation while the cause is found
+    rubric:
+      excellent: Separates Python-heap growth from native growth, names both extension leaks and allocator fragmentation as hypotheses, describes how to test each with native-aware tools or allocator changes, and proposes a safe mitigation meanwhile.
+      good: Recognises that the memory is outside what tracemalloc sees and suggests at least one native-aware tool or C extension as the suspect.
+      weak: Keeps looking for Python object leaks or simply suggests adding more memory.
+    followups:
+      - How would you confirm the issue is fragmentation rather than a true leak?
+      - What would you put in place so this is caught before production next time?
+    common_errors:
+      - Treating RSS and the Python heap size as the same number.
+
+  # ------------------------------------------------------------- dependencies and packaging
+  - external_key: technical.backend_languages.py_reproducible_dependencies
+    competency_key: python
+    topic: Reproducible Python dependencies
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Walk me through how you manage dependencies for a Python service, from declaring them in the project to
+      making sure production installs exactly the versions you tested.
+    expected_concepts:
+      - declaring direct dependencies in pyproject.toml
+      - a lockfile with pinned transitive versions and hashes
+      - isolated virtual environments per project
+      - tools such as uv, Poetry or pip-tools
+      - installing from the lockfile in CI and container builds
+    rubric:
+      excellent: Distinguishes loose direct requirements from a fully pinned lockfile, explains how CI and the container image install from the lock, and mentions hashes or a private index for supply-chain safety.
+      good: Uses a virtual environment and some form of pinning, and installs the same way in CI and production.
+      weak: Relies on unpinned requirements or a global interpreter and cannot explain why builds might differ.
+    followups:
+      - How do you update a single transitive dependency without upgrading everything?
+      - Where should a library's dependency ranges differ from an application's?
+    common_errors:
+      - Pinning exact versions in a reusable library, which causes conflicts for its consumers.
+
+  - external_key: technical.backend_languages.py_resolver_conflict
+    competency_key: python
+    topic: Resolving incompatible transitive requirements
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Two libraries your service needs pin incompatible ranges of the same transitive package, and the
+      resolver simply gives up. How would you work your way out of that?
+    expected_concepts:
+      - reading the resolver output to find the exact conflicting constraints
+      - checking whether newer releases of either library relax the range
+      - testing whether the constraint is real or overly strict
+      - overrides or constraints files as a deliberate, documented exception
+      - contributing upstream or replacing one of the libraries
+      - isolating the conflicting functionality into a separate service as a last resort
+    rubric:
+      excellent: Works methodically from the resolver message, tries upgrades and checks whether the pin is genuine, uses an override only with tests and a written note, and considers upstream fixes or isolation for the long term.
+      good: Finds the conflicting packages and proposes upgrading or overriding one of them with some testing.
+      weak: Suggests installing with dependency checks disabled or vendoring copies without understanding the risk.
+    followups:
+      - How would you prove the overridden version actually works for the library that pinned it?
+      - Who would you tell about the override, and how would you make sure it gets removed later?
+    common_errors:
+      - Forcing an install that ignores constraints and shipping it without tests.
+
+  - external_key: technical.backend_languages.py_internal_library_releases
+    competency_key: python
+    topic: Versioning a shared internal Python library
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your team owns an internal Python library that about twenty services depend on. How would you version,
+      publish and evolve it so those services can upgrade without things breaking under them?
+    expected_concepts:
+      - semantic versioning with a clear definition of the public API
+      - publishing built wheels to a private package index
+      - deprecation warnings and a deprecation window before removal
+      - loose dependency ranges in the library itself
+      - testing against consumers or a compatibility matrix in CI
+      - changelogs and automated upgrade pull requests
+    rubric:
+      excellent: Defines the public surface, uses semantic versioning with deprecation periods, publishes to a private index, keeps the library's own dependency ranges loose, and verifies changes against real consumers before release.
+      good: Uses versioned releases with a changelog and avoids breaking changes in minor versions.
+      weak: Shares the code by copying it or via a git branch with no versioning, or makes breaking changes without notice.
+    followups:
+      - How would you handle a breaking change that half the services cannot adopt for months?
+      - What tells you a symbol is part of the public API?
+    common_errors:
+      - Treating everything importable as public, so any refactor becomes a breaking change.
+
+  # ------------------------------------------------------------- error handling
+  - external_key: technical.backend_languages.py_exception_hierarchy
+    competency_key: python
+    topic: Designing exceptions in a Python service
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you design exceptions in a Python codebase? Tell me when you create your own exception classes,
+      and how you decide which layer should catch them.
+    expected_concepts:
+      - a small domain exception hierarchy with a common base
+      - catching specific exceptions rather than bare except
+      - translating low-level errors at layer boundaries
+      - exception chaining with raise from
+      - one place that turns unhandled errors into responses and logs
+    rubric:
+      excellent: Describes a deliberate hierarchy, catches narrowly, translates errors at boundaries while preserving the cause with raise from, and centralises how errors become responses and logs.
+      good: Creates custom exceptions for domain cases and avoids bare except, with a sensible idea of where to handle them.
+      weak: Catches Exception everywhere and logs or ignores it, or returns error codes instead of raising.
+    followups:
+      - What does raise from add when you translate an exception?
+      - When is it acceptable to catch a broad Exception?
+    common_errors:
+      - Swallowing exceptions with a log line and carrying on in an inconsistent state.
+
+  - external_key: technical.backend_languages.py_custom_context_manager
+    competency_key: python
+    topic: Writing context managers
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Tell me about a context manager you've written yourself in Python. What problem did it solve, and why
+      was it better than repeating try and finally blocks around the code?
+    expected_concepts:
+      - guaranteed cleanup of resources such as connections, locks or temp files
+      - enter and exit methods or contextlib.contextmanager
+      - how exceptions inside the block reach the exit logic
+      - async context managers for async resources
+      - ExitStack for a variable number of resources
+    rubric:
+      excellent: Gives a concrete example, explains both implementation styles, describes how exceptions are passed to the exit logic and whether they are suppressed, and mentions async or ExitStack variants.
+      good: Gives a working example with contextlib or the dunder methods and explains the cleanup guarantee.
+      weak: Has only used built-in context managers like open and cannot explain how one is built.
+    followups:
+      - What happens if your exit logic itself raises?
+      - When would you reach for ExitStack?
+    common_errors:
+      - Returning True from the exit method by accident and silently suppressing exceptions.
+
+  - external_key: technical.backend_languages.py_flaky_dependency_errors
+    competency_key: python
+    topic: Timeouts and retries around external calls
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your Python service calls a third-party API that times out or returns errors a few times an hour. Talk me
+      through how you'd structure timeouts, retries and error propagation around that call.
+    expected_concepts:
+      - explicit connect and read timeouts on every call
+      - retrying only idempotent operations and transient errors
+      - exponential backoff with jitter and a retry budget
+      - a circuit breaker or fallback when the dependency is down
+      - mapping failures to clear domain errors for callers
+      - metrics and logs for retries and final failures
+    rubric:
+      excellent: Sets explicit timeouts, retries only safe transient failures with backoff and jitter inside an overall deadline, adds a breaker or fallback, and makes failures visible to callers and in metrics.
+      good: Adds timeouts and retries with backoff and handles the final failure explicitly.
+      weak: Retries everything immediately in a loop, or relies on the client's default timeouts without knowing what they are.
+    followups:
+      - How do you stop retries at several layers from multiplying the load?
+      - Which HTTP status codes would you never retry, and why?
+    common_errors:
+      - Retrying non-idempotent requests and creating duplicates.
+
+  # ------------------------------------------------------------- typing
+  - external_key: technical.backend_languages.py_dataclass_or_pydantic
+    competency_key: python
+    topic: Dataclasses versus validation models
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      In a Python backend, when do you model data with plain dataclasses, and when do you reach for a
+      validation library such as Pydantic? Talk me through how you decide.
+    expected_concepts:
+      - validation and parsing at trust boundaries such as requests and config
+      - plain dataclasses for internal domain objects
+      - runtime cost of validation on hot paths
+      - frozen or immutable models
+      - serialization needs and schema generation
+    rubric:
+      excellent: Draws the line at trust boundaries, keeps internal objects lightweight, weighs validation cost and immutability, and gives an example from a real service.
+      good: Knows Pydantic validates at runtime and dataclasses do not, and applies that sensibly.
+      weak: Uses one of them everywhere without a reason, or thinks type hints alone validate data at runtime.
+    followups:
+      - Where in a request's life would you convert from the validated model to a domain object?
+      - How would you handle a field that is optional in the API but required internally?
+    common_errors:
+      - Believing dataclass type annotations are enforced at runtime.
+
+  - external_key: technical.backend_languages.py_gradual_typing_rollout
+    competency_key: python
+    topic: Introducing type checking to a legacy codebase
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You've joined a team with a fifty-thousand-line Python service that has no type hints at all. How would
+      you introduce static type checking without bringing feature work to a halt?
+    expected_concepts:
+      - choosing mypy or pyright and running it in CI from day one
+      - per-module strictness so new and touched code is checked first
+      - starting with boundaries and widely shared modules
+      - stub packages or ignores for untyped third-party libraries
+      - tracking a baseline so the error count only goes down
+      - agreeing conventions with the team
+    rubric:
+      excellent: Proposes an incremental plan with CI enforcement on new code, a baseline that only improves, priority on shared and boundary modules, a strategy for third-party gaps, and team buy-in.
+      good: Suggests adding a checker gradually, starting with new code, and running it in CI.
+      weak: Proposes annotating everything in one big effort, or adding hints without ever running a checker.
+    followups:
+      - How would you handle a module that's full of dynamic attribute access?
+      - How do you measure whether the effort is paying off?
+    common_errors:
+      - Sprinkling Any and ignore comments until the checker passes, which hides real errors.
+
+  - external_key: technical.backend_languages.py_protocol_vs_abc
+    competency_key: python
+    topic: Protocols and abstract base classes
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      In typed Python, when would you define a Protocol rather than an abstract base class? Give me an example
+      from a codebase you've worked on.
+    expected_concepts:
+      - structural typing with Protocol versus nominal inheritance with ABC
+      - decoupling callers from concrete implementations or third-party classes
+      - runtime enforcement of abstract methods by ABCs
+      - runtime_checkable and its limits
+      - sharing implementation through a base class
+    rubric:
+      excellent: Contrasts structural and nominal typing clearly, gives a real example such as a storage or notifier interface satisfied by classes it does not own, and explains what each option enforces at runtime versus only at check time.
+      good: Knows Protocols match by shape and ABCs require inheritance, with a reasonable example.
+      weak: Cannot distinguish them or believes Protocols are checked at runtime by default.
+    followups:
+      - What does runtime_checkable actually verify?
+      - When would you still want shared code in a base class?
+    common_errors:
+      - Expecting isinstance checks against a Protocol to validate method signatures.
+
+  - external_key: technical.backend_languages.py_generic_repository_typing
+    competency_key: python
+    topic: Typing generic data-access layers
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Suppose you're building a generic repository or cache layer in Python and want callers to get precise
+      types back. How would you type it, and where have you run into the limits of Python's type system?
+    expected_concepts:
+      - TypeVar and Generic classes or the newer type parameter syntax
+      - bounded type variables and Protocol constraints
+      - overloads for return types that depend on arguments
+      - ParamSpec for decorators that preserve signatures
+      - limits such as dynamic attributes, variadic shapes or ORM metaclasses
+      - pragmatic use of cast with a comment rather than spreading Any
+    rubric:
+      excellent: Designs a generic class with bounded type variables, uses overloads or ParamSpec where needed, names concrete limitations they hit, and describes contained, documented workarounds.
+      good: Uses TypeVar and Generic correctly for the basic case and mentions at least one limitation.
+      weak: Returns Any or object and relies on callers to cast, or does not know how generics are declared.
+    followups:
+      - How would you type a decorator that adds caching without losing the wrapped function's signature?
+      - What do you do when an ORM's types are wrong?
+    common_errors:
+      - Using unbounded TypeVars so the checker cannot verify method calls on them.
+
+  # ------------------------------------------------------------- async
+  - external_key: technical.backend_languages.py_asyncio_cancellation
+    competency_key: python
+    topic: Cancellation in asyncio
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How does cancellation work in asyncio, and what goes wrong when code swallows the cancellation or doesn't
+      clean up after it?
+    expected_concepts:
+      - task.cancel raises CancelledError at the next await
+      - CancelledError should be re-raised after cleanup
+      - try and finally or async context managers for cleanup
+      - timeouts implemented as cancellation
+      - asyncio.shield for work that must not be interrupted
+      - leaked connections or locks when cleanup is skipped
+    rubric:
+      excellent: Explains where cancellation is delivered, why catching it without re-raising breaks timeouts and shutdown, how to clean up correctly, and when shielding is appropriate.
+      good: Knows cancellation raises CancelledError and that cleanup belongs in finally blocks.
+      weak: Thinks cancelling a task stops it instantly or catches all exceptions including cancellation.
+    followups:
+      - How does a timeout around a task interact with code that catches every exception?
+      - What happens to a shielded operation when its caller is cancelled?
+    common_errors:
+      - Using a broad except that catches cancellation and keeps running.
+
+  - external_key: technical.backend_languages.py_structured_fanout
+    competency_key: python
+    topic: Failure handling in concurrent async fan-out
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      An async endpoint fans out to five downstream services with asyncio.gather. When one call fails, the other
+      calls keep running in the background and sometimes leak connections. How would you restructure it?
+    expected_concepts:
+      - gather does not cancel siblings on failure by default
+      - TaskGroup for structured concurrency and sibling cancellation
+      - an overall timeout for the whole fan-out
+      - deciding which calls are required and which may degrade
+      - limiting concurrency with a semaphore
+      - closing clients and connections reliably
+    rubric:
+      excellent: Explains why gather leaves tasks running, moves to a TaskGroup or explicit cancellation, adds an overall deadline, separates required from optional results, and ensures resources are released.
+      good: Proposes cancelling remaining tasks on failure and adding timeouts.
+      weak: Wraps each call in try and except to hide errors without addressing the orphaned tasks.
+    followups:
+      - How would you return partial results when an optional service fails?
+      - What does return_exceptions change, and when is it the right choice?
+    common_errors:
+      - Assuming an exception from gather means the other tasks were stopped.
+
+  - external_key: technical.backend_languages.py_async_consumer_backpressure
+    competency_key: python
+    topic: Bounding concurrency in an async consumer
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your asyncio consumer reads messages from a queue and spawns a task for every message. During a traffic
+      spike memory balloons and the database gets overwhelmed. How would you change the design?
+    expected_concepts:
+      - unbounded task creation removes backpressure
+      - a fixed pool of worker tasks or a semaphore
+      - bounded in-memory queues
+      - prefetch limits on the broker
+      - matching concurrency to database pool size
+      - acknowledging messages only after processing
+    rubric:
+      excellent: Identifies missing backpressure, bounds concurrency with workers or a semaphore sized to the downstream capacity, limits broker prefetch, and keeps acknowledgement semantics correct.
+      good: Adds a semaphore or worker pool to limit in-flight work.
+      weak: Suggests a bigger machine or more database connections without bounding the work.
+    followups:
+      - How would you choose the concurrency limit?
+      - What happens to unacknowledged messages if the consumer crashes mid-batch?
+    common_errors:
+      - Raising the database pool size, which moves the overload onto the database.
+
+  - external_key: technical.backend_languages.py_event_loop_stalls
+    competency_key: debugging
+    topic: Diagnosing event-loop stalls
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      An asyncio service has occasional stalls where every request pauses for a second or two at the same moment.
+      Average CPU is low and you can't find any obvious synchronous I/O. How would you find the cause?
+    expected_concepts:
+      - asyncio debug mode and slow callback warnings
+      - sampling profilers such as py-spy during a stall
+      - hidden blocking work such as large JSON parsing, DNS lookups or logging handlers
+      - garbage collection pauses on large heaps
+      - measuring event-loop lag as a metric
+      - moving CPU-bound work to executors
+    rubric:
+      excellent: Measures loop lag to confirm the symptom, captures stacks during stalls with a sampling profiler or debug mode, considers hidden blocking sources including GC pauses and DNS, and fixes the specific cause.
+      good: Suspects something blocking the loop and suggests profiling or debug mode to find it.
+      weak: Assumes the network or the database without evidence, or proposes adding more replicas.
+    followups:
+      - How would you capture evidence if the stalls only happen in production?
+      - If the cause turns out to be garbage collection, what would you change?
+    common_errors:
+      - Only checking for obvious requests or file calls and missing CPU-heavy work hidden in libraries.
+
+  - external_key: technical.backend_languages.py_sync_to_async_migration
+    competency_key: python
+    topic: Migrating a synchronous codebase toward async
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You're moving a large synchronous Django or Flask codebase toward async, but you can't rewrite it all at
+      once. How would you mix sync and async code safely during the transition?
+    expected_concepts:
+      - deciding whether async is worth it for the actual workload
+      - running sync code in thread executors from async code
+      - avoiding new event loops inside request handlers
+      - async-compatible drivers and clients versus sync ones
+      - thread-safety of shared state and connection pools
+      - migrating hot I/O-bound paths first with measurements
+    rubric:
+      excellent: Starts by questioning the benefit, uses well-defined bridges in both directions, avoids nested event loops, handles connection pools and thread safety, and migrates by measured priority.
+      good: Knows how to call sync code from async through executors and plans an incremental migration.
+      weak: Calls blocking libraries directly from async code or creates a new event loop per call.
+    followups:
+      - What breaks when sync code calls asyncio.run inside a running loop?
+      - How would you know the migration actually improved anything?
+    common_errors:
+      - Assuming async makes code faster even for CPU-bound or low-concurrency workloads.
+
+  # ------------------------------------------------------------- performance
+  - external_key: technical.backend_languages.py_endpoint_profiling
+    competency_key: debugging
+    topic: Finding where a slow Python endpoint spends time
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A Python API endpoint takes about eight hundred milliseconds. The team blames the database, but the
+      individual query timings look fine. How would you find out where the time actually goes?
+    expected_concepts:
+      - tracing spans or timing around each phase of the request
+      - profilers such as cProfile, pyinstrument or py-spy
+      - counting queries to find N plus one patterns from ORM lazy loading
+      - serialization and validation overhead on large responses
+      - reproducing with production-like data volumes
+    rubric:
+      excellent: Measures before guessing, uses tracing and a profiler, checks query count as well as query time, considers serialization costs, and verifies the fix with the same measurement.
+      good: Suggests a profiler or timing instrumentation and names one or two likely culprits.
+      weak: Starts optimising or caching without measuring, or keeps blaming the database.
+    followups:
+      - How would you profile this safely in production?
+      - What would you change if the profile showed most time in serialization?
+    common_errors:
+      - Looking only at the slowest single query and missing hundreds of fast ones.
+
+  - external_key: technical.backend_languages.py_process_pool_costs
+    competency_key: python
+    topic: Costs of process pools for CPU-bound work
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When you move CPU-heavy work in a Python service onto a process pool, what costs and pitfalls come along
+      with it, and how do you keep them under control?
+    expected_concepts:
+      - pickling arguments and results between processes
+      - fork versus spawn start methods and their side effects
+      - memory duplication across workers
+      - sending small references instead of large payloads
+      - batching tasks to amortise overhead
+      - handling worker crashes and timeouts
+    rubric:
+      excellent: Names serialization and start-method costs, explains fork safety issues with threads or open connections, reduces data transfer, batches work, and handles worker failures.
+      good: Knows data is pickled between processes and that very small tasks may not benefit.
+      weak: Thinks a process pool is free parallelism or confuses it with a thread pool.
+    followups:
+      - Why can forking a process that already has threads or open sockets cause trouble?
+      - When would you move this work to a separate job queue instead?
+    common_errors:
+      - Passing huge objects to every task so serialization dominates the runtime.
+
+  - external_key: technical.backend_languages.py_free_threaded_build
+    competency_key: python
+    topic: Evaluating free-threaded Python
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Recent CPython releases offer a free-threaded build without the global interpreter lock. What would you
+      need to check before running a production service on it, and where would you expect it to help or hurt?
+    expected_concepts:
+      - C extensions must declare support or the GIL is re-enabled
+      - single-threaded performance overhead
+      - races in code that implicitly relied on the GIL
+      - benefits for CPU-bound multithreaded workloads
+      - benchmarking the real workload before switching
+      - dependency readiness across the stack
+    rubric:
+      excellent: Explains extension compatibility, the single-thread overhead, latent races previously masked by the GIL, which workloads benefit, and proposes a measured, reversible trial.
+      good: Knows it allows real parallel threads and that libraries and thread safety need checking.
+      weak: Assumes it makes all Python code faster with no trade-offs, or does not know what the GIL protected.
+    followups:
+      - Which kinds of existing code would you expect to break first?
+      - How would you design the benchmark?
+    common_errors:
+      - Assuming code that was thread-safe under the GIL stays thread-safe without it.
+
+  # ------------------------------------------------------------- testing and code review
+  - external_key: technical.backend_languages.py_pytest_fixture_design
+    competency_key: testing
+    topic: Structuring pytest fixtures
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you organise pytest fixtures in a larger project so the tests stay fast and readable, instead of
+      turning into a tangle of hidden setup?
+    expected_concepts:
+      - fixture scopes and their trade-offs
+      - conftest placement close to the tests that use them
+      - factory fixtures instead of many near-identical fixtures
+      - transaction rollback or fresh state per test
+      - avoiding autouse except for genuine cross-cutting setup
+    rubric:
+      excellent: Uses scopes deliberately, keeps fixtures local and explicit, prefers factories, isolates state per test, and explains how they keep setup discoverable.
+      good: Uses fixtures and conftest sensibly and knows about scopes.
+      weak: Puts everything in one global conftest with autouse fixtures, or does setup inside each test by copy and paste.
+    followups:
+      - When does a session-scoped fixture cause flaky tests?
+      - How would you find out which fixtures make the suite slow?
+    common_errors:
+      - Sharing mutable state through broad-scoped fixtures so tests depend on their order.
+
+  - external_key: technical.backend_languages.py_patch_wrong_target
+    competency_key: testing
+    topic: Mocking the right import path
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A colleague's test patches a function with mock.patch, but the real function still runs during the test.
+      What's the most likely reason, and how would you explain the fix to them?
+    expected_concepts:
+      - patching where the name is looked up, not where it is defined
+      - from-imports bind a separate name in the importing module
+      - patching too late after the object was captured
+      - autospec so mocks match the real signature
+      - preferring injected dependencies over patching
+    rubric:
+      excellent: Explains name lookup and from-imports clearly, shows the correct target path, and suggests autospec or dependency injection to make the test sturdier.
+      good: Identifies patching the wrong module path and gives the fix.
+      weak: Suggests the mock library is broken or rewrites the test without understanding the cause.
+    followups:
+      - Why might autospec catch bugs that a plain mock would hide?
+      - How could the code be structured so it doesn't need patching at all?
+    common_errors:
+      - Patching the defining module after the code under test has already imported the name directly.
+
+  - external_key: technical.backend_languages.py_property_based_tests
+    competency_key: testing
+    topic: Property-based testing
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Where does property-based testing, with a tool like Hypothesis, fit in how you test backend code? Tell me
+      what kinds of bugs it finds that example-based tests miss, and how you choose the properties.
+    expected_concepts:
+      - generated inputs and automatic shrinking to minimal failing cases
+      - properties such as round trips, invariants and comparison with a simple reference
+      - edge cases like empty input, unicode and boundary numbers
+      - good fits such as parsers, serializers and pricing rules
+      - keeping runs deterministic and fast in CI
+    rubric:
+      excellent: Explains generation and shrinking, gives concrete property patterns, names suitable targets from real work, and addresses CI determinism and runtime.
+      good: Understands random input generation and gives at least one useful property.
+      weak: Confuses it with fuzzing in production or cannot name a property beyond restating the implementation.
+    followups:
+      - How would you write a property for a function that applies discounts to an order?
+      - What do you do when a property test fails once in CI and you can't reproduce it?
+    common_errors:
+      - Writing properties that reimplement the code under test, so both share the same bug.
+
+  - external_key: technical.backend_languages.py_mutable_state_leak
+    competency_key: debugging
+    topic: State leaking between calls
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A teammate reports that a Python helper seems to remember values between calls: a list it returns keeps
+      growing every time the endpoint is hit. How would you track down what's going on?
+    expected_concepts:
+      - mutable default arguments evaluated once at definition time
+      - module-level or class-level mutable state
+      - caches shared across requests
+      - reproducing with a minimal test calling the function twice
+      - using None as a default and creating the object inside
+    rubric:
+      excellent: Reproduces it with a small test, names mutable defaults and shared module or class state as suspects, explains why defaults are evaluated once, and fixes it with a test that guards against regression.
+      good: Recognises the mutable default argument problem and the fix.
+      weak: Restarts the service or clears the list manually without finding the cause.
+    followups:
+      - How would a linter or code review have caught this earlier?
+      - Where else in a web service does shared mutable state cause similar bugs?
+    common_errors:
+      - Fixing the symptom by copying the list at the call site while the shared state remains.
+
+  - external_key: technical.backend_languages.py_import_time_side_effects
+    competency_key: code_quality
+    topic: Side effects at import time
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      In a code review you notice a Python module that opens a database connection and reads environment
+      variables as soon as it's imported. What concerns would you raise, and what would you suggest instead?
+    expected_concepts:
+      - imports should be cheap and free of I/O
+      - tests and tooling fail or connect to real systems on import
+      - forked workers inheriting connections created before the fork
+      - explicit initialisation in an application factory or startup hook
+      - typed settings objects passed through dependency injection
+    rubric:
+      excellent: Explains the testing, tooling and fork-safety problems concretely, proposes explicit startup initialisation with injected settings and clients, and frames the feedback constructively with a migration path.
+      good: Points out testability problems and suggests lazy or explicit initialisation.
+      weak: Approves it as normal, or only comments on style.
+    followups:
+      - How would you phrase this comment so the author takes it on board?
+      - How would you change it without touching every module that imports the connection?
+    common_errors:
+      - Replacing it with a global lazily created singleton that keeps the same hidden coupling.

@@ -1,0 +1,131 @@
+version: 1
+slug: fixed_window_rate_limiter
+title: Per-Client Fixed-Window Limiter
+difficulty: easy
+competency_keys: [data_structures, problem_solving]
+role_tags: [backend, platform, sre, devops]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Per-Client Fixed-Window Limiter
+
+  A public API gateway gives every client its own quota. Time is cut into fixed, back-to-back windows of
+  `window_seconds` seconds: a request at time `t` belongs to window number `floor(t / window_seconds)`,
+  so with 60-second windows the times 0..59 form window 0, 60..119 window 1, and so on.
+
+  Request `i` comes from client `client_ids[i]` at second `timestamps[i]`. Requests are processed in the
+  given order, and timestamps never decrease. A request is **admitted** if its client has had fewer than
+  `limit` admitted requests in the request's window so far; otherwise it is **rejected**. Rejected
+  requests do not use up quota, and each client's quota is independent of every other client's.
+
+  Return a list of booleans, one per request in input order: `true` if admitted, `false` if rejected.
+
+  ### Example 1
+  ```
+  Input:  client_ids = ["ci-bot", "ci-bot", "web", "ci-bot", "ci-bot"]
+          timestamps = [0, 10, 20, 59, 60], limit = 2, window_seconds = 60
+  Output: [true, true, true, false, true]
+  Explanation: ci-bot's third request at 59 is still in window 0, where it already has 2 admitted.
+  At 60 a new window starts. The web client has its own quota.
+  ```
+
+  ### Example 2
+  ```
+  Input:  client_ids = ["a", "a", "a", "a"], timestamps = [5, 5, 9, 10], limit = 1, window_seconds = 10
+  Output: [true, false, false, true]
+  ```
+
+  ### Constraints
+  - `0 <= client_ids.length == timestamps.length <= 10^5`
+  - `0 <= timestamps[i] <= 2^31 - 1`, non-decreasing
+  - `0 <= limit <= 10^5`
+  - `1 <= window_seconds <= 10^6`
+  - client ids are non-empty strings of letters, digits, `-` and `_`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: fixed_window_rate_limiter
+  params:
+    - {name: client_ids, type: "string[]"}
+    - {name: timestamps, type: "int[]"}
+    - {name: limit, type: int}
+    - {name: window_seconds, type: int}
+  return_type: "bool[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def fixed_window_rate_limiter(
+        client_ids: list[str], timestamps: list[int], limit: int, window_seconds: int
+    ) -> list[bool]:
+        # client -> (window index, admitted count in that window)
+        state: dict[str, tuple[int, int]] = {}
+        decisions: list[bool] = []
+        for client, ts in zip(client_ids, timestamps):
+            window = ts // window_seconds
+            current_window, count = state.get(client, (window, 0))
+            if current_window != window:
+                count = 0
+            if count < limit:
+                decisions.append(True)
+                count += 1
+            else:
+                decisions.append(False)
+            state[client] = (window, count)
+        return decisions
+  javascript: |
+    function fixedWindowRateLimiter(clientIds, timestamps, limit, windowSeconds) {
+      const state = new Map(); // client -> [window index, admitted count]
+      const decisions = [];
+      for (let i = 0; i < clientIds.length; i++) {
+        const window = Math.floor(timestamps[i] / windowSeconds);
+        let [currentWindow, count] = state.get(clientIds[i]) || [window, 0];
+        if (currentWindow !== window) count = 0;
+        if (count < limit) {
+          decisions.push(true);
+          count += 1;
+        } else {
+          decisions.push(false);
+        }
+        state.set(clientIds[i], [window, count]);
+      }
+      return decisions;
+    }
+tests:
+  - {id: t1, args: [["ci-bot", "ci-bot", "web", "ci-bot", "ci-bot"], [0, 10, 20, 59, 60], 2, 60], expected: [true, true, true, false, true], description: "Example 1 - per-client quota and window boundary"}
+  - {id: t2, args: [["a", "a", "a", "a"], [5, 5, 9, 10], 1, 10], expected: [true, false, false, true], description: "Example 2 - same-second requests and a new window at 10"}
+  - {id: t3, hidden: true, args: [[], [], 3, 60], expected: [], description: "No requests"}
+  - {id: t4, hidden: true, args: [["x", "y", "x"], [1, 2, 3], 0, 60], expected: [false, false, false], description: "Limit 0 rejects every request"}
+  - {id: t5, hidden: true, args: [["a", "a", "a", "a", "a"], [0, 1, 2, 3, 4], 1, 1], expected: [true, true, true, true, true], description: "Window of one second: every request is in its own window"}
+  - {id: t6, hidden: true, args: [["a", "b", "a", "b", "a", "b", "a"], [0, 0, 1, 1, 2, 2, 3], 2, 100], expected: [true, true, true, true, false, false, false], description: "Interleaved clients have independent quotas"}
+  - {id: t7, hidden: true, args: [["svc", "svc", "svc", "svc", "svc"], [0, 30, 30, 500, 520], 2, 60], expected: [true, true, false, true, true], description: "Client skips several windows; count resets"}
+  - {id: t8, hidden: true, args: [["k", "k", "k", "k"], [2147483640, 2147483645, 2147483646, 2147483647], 3, 1000000], expected: [true, true, true, false], description: "Largest timestamps in one window"}
+  - {id: t9, hidden: true, args: [["p", "p", "p", "q", "p", "p", "p", "q"], [117, 118, 119, 119, 120, 121, 122, 179], 2, 60], expected: [true, true, false, true, true, true, false, true], description: "Rejection just before a boundary; quota restarts at 120 and the other client is unaffected"}
+expected_concepts:
+  - hash map keyed by client id
+  - window index from integer division
+  - resetting a counter when the window changes
+  - rejected requests do not consume quota
+  - memory bounded by the number of distinct clients
+optimal_complexity: {time: "O(n) for n requests", space: "O(c) for c distinct clients"}
+rubric:
+  excellent: "Keeps one window index and admitted count per client in a hash map, resets the count lazily when the window changes, never counts rejections, and discusses the burst at window boundaries and how to evict idle clients."
+  good: "Correct per-client counting; one slip such as counting rejected requests or a window off-by-one is fixed after testing."
+  weak: "Uses one global counter, never resets counts, or rescans all earlier requests for each new one."
+  criteria:
+    correctness: "All tests pass, including window boundaries, limit 0 and interleaved clients."
+    efficiency: "Constant expected work per request; no rescanning of earlier requests."
+    code_quality: "State per client is a small, clearly named pair; the admit decision is a single comparison."
+    edge_cases: "Empty input, limit 0, window size 1, timestamps exactly on a boundary, a client returning after skipping windows and very large timestamps."
+    communication: "Explains the boundary burst of fixed windows (up to twice the limit across two adjacent windows) compared with sliding windows."
+hints:
+  - "Each client only needs to know how many requests it has had admitted in its current window."
+  - "Store, for every client, the index of the window it last used and an admitted count; when a request falls into a different window, that count starts again from zero."
+  - "Walk the requests in order with a hash map from client id to a pair of window index and admitted count. Compute the window as the timestamp integer-divided by the window length, reset the count if the stored window differs, admit and increment when the count is below the limit, and otherwise reject without changing the count."
+followups:
+  - "Why can a client get up to twice the limit within a short span around a window boundary, and how would you prevent that?"
+  - "How would you run this limiter across several gateway instances that share a Redis cluster?"
+  - "How would you evict state for clients that have gone idle so memory stays bounded?"
+common_errors:
+  - "Counting rejected requests against the quota."
+  - "Never resetting the count when a new window starts."
+  - "Sharing one counter across all clients."
+  - "Computing the window with floating-point division and getting boundaries wrong."
+  - "Resetting the count only when the window index increases by exactly one, which fails when a client skips windows."

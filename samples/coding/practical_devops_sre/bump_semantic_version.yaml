@@ -1,0 +1,146 @@
+version: 1
+slug: bump_semantic_version
+title: Release Tool Version Bump
+difficulty: easy
+competency_keys: [problem_solving, code_quality]
+role_tags: [devops, platform, backend, general]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Release Tool Version Bump
+
+  Your team's release script stamps every build with a version of the form `MAJOR.MINOR.PATCH`,
+  optionally followed by a hyphen and a **pre-release label**, for example `2.4.0-rc.1`. When an
+  engineer runs `release --bump <part>`, the script must compute the next version.
+
+  Given the current `version` and the `part` to bump (`"major"`, `"minor"` or `"patch"`), return the new
+  version string using these rules:
+
+  1. **Normal bump.** Increment the chosen component and reset every component to its right to `0`. The
+     result never carries a pre-release label.
+  2. **Finishing a pre-release.** A pre-release such as `1.3.0-beta` comes *before* the release
+     `1.3.0`. If the current version is a pre-release and that release `MAJOR.MINOR.PATCH` is already a
+     valid target for the requested bump, return it as is (just drop the label) instead of incrementing:
+     - `patch`: always finishes the pre-release (`1.2.3-rc.1` becomes `1.2.3`).
+     - `minor`: finishes it when `PATCH` is `0` (`1.3.0-beta` becomes `1.3.0`); otherwise it is a normal
+       minor bump (`1.2.3-rc.1` becomes `1.3.0`).
+     - `major`: finishes it when both `MINOR` and `PATCH` are `0` (`2.0.0-alpha` becomes `2.0.0`);
+       otherwise it is a normal major bump.
+
+  The pre-release label starts after the **first** hyphen and may itself contain hyphens and dots.
+  Components are compared and incremented as numbers, not as text.
+
+  ### Example 1
+  ```
+  Input:  version = "1.4.2", part = "minor"
+  Output: "1.5.0"
+  Explanation: MINOR goes from 4 to 5 and PATCH resets to 0.
+  ```
+
+  ### Example 2
+  ```
+  Input:  version = "1.2.3-rc.1", part = "patch"
+  Output: "1.2.3"
+  Explanation: 1.2.3 is the release this candidate precedes, so the label is dropped without incrementing.
+  ```
+
+  ### Example 3
+  ```
+  Input:  version = "2.0.0-alpha", part = "minor"
+  Output: "2.0.0"
+  Explanation: PATCH is 0, so finishing the pre-release as 2.0.0 already satisfies a minor bump.
+  ```
+
+  ### Constraints
+  - `version` matches `MAJOR.MINOR.PATCH` or `MAJOR.MINOR.PATCH-LABEL`.
+  - Each component is a decimal integer from `0` to `10^9` without leading zeros (except `0` itself).
+  - `LABEL` is non-empty and contains only letters, digits, dots and hyphens.
+  - `part` is exactly one of `"major"`, `"minor"`, `"patch"`.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: bump_semantic_version
+  params:
+    - {name: version, type: string}
+    - {name: part, type: string}
+  return_type: string
+  comparison: exact
+reference_solutions:
+  python: |
+    def bump_semantic_version(version: str, part: str) -> str:
+        core, sep, _label = version.partition("-")
+        is_pre = sep == "-"
+        major, minor, patch = (int(x) for x in core.split("."))
+        if part == "patch":
+            if not is_pre:
+                patch += 1
+        elif part == "minor":
+            if not (is_pre and patch == 0):
+                minor += 1
+            patch = 0
+        else:
+            if not (is_pre and minor == 0 and patch == 0):
+                major += 1
+            minor = 0
+            patch = 0
+        return f"{major}.{minor}.{patch}"
+  javascript: |
+    function bumpSemanticVersion(version, part) {
+      const dash = version.indexOf("-");
+      const isPre = dash !== -1;
+      const core = isPre ? version.slice(0, dash) : version;
+      let [major, minor, patch] = core.split(".").map(Number);
+      if (part === "patch") {
+        if (!isPre) patch += 1;
+      } else if (part === "minor") {
+        if (!(isPre && patch === 0)) minor += 1;
+        patch = 0;
+      } else {
+        if (!(isPre && minor === 0 && patch === 0)) major += 1;
+        minor = 0;
+        patch = 0;
+      }
+      return `${major}.${minor}.${patch}`;
+    }
+tests:
+  - {id: t1, args: ["1.4.2", "minor"], expected: "1.5.0", description: "Example 1 - normal minor bump resets PATCH"}
+  - {id: t2, args: ["1.2.3-rc.1", "patch"], expected: "1.2.3", description: "Example 2 - patch finishes the pre-release"}
+  - {id: t3, args: ["2.0.0-alpha", "minor"], expected: "2.0.0", description: "Example 3 - minor finishes a pre-release of an x.y.0 release"}
+  - {id: t4, hidden: true, args: ["1.2.3-rc.1", "minor"], expected: "1.3.0", description: "Minor on a pre-release whose PATCH is not 0 is a normal minor bump"}
+  - {id: t5, hidden: true, args: ["1.2.0-rc", "major"], expected: "2.0.0", description: "Major on a pre-release whose MINOR is not 0 is a normal major bump"}
+  - {id: t6, hidden: true, args: ["3.0.0-rc-2.build-x", "major"], expected: "3.0.0", description: "Major finishes a pre-release; the label itself contains hyphens"}
+  - {id: t7, hidden: true, args: ["0.0.0", "patch"], expected: "0.0.1", description: "Smallest version, patch bump"}
+  - {id: t8, hidden: true, args: ["0.0.0-dev", "major"], expected: "0.0.0", description: "Pre-release of 0.0.0 finished by a major bump"}
+  - {id: t9, hidden: true, args: ["9.99.999", "minor"], expected: "9.100.0", description: "No decimal carry: 99 becomes 100, PATCH resets"}
+  - {id: t10, hidden: true, args: ["999999999.1000000000.7", "major"], expected: "1000000000.0.0", description: "Nine and ten digit components; major resets both lower parts"}
+  - {id: t11, hidden: true, args: ["4.7.1", "patch"], expected: "4.7.2", description: "Plain patch bump without a label"}
+expected_concepts:
+  - splitting the core version from the pre-release label at the first hyphen
+  - numeric parsing of components rather than string arithmetic
+  - resetting lower components after a bump
+  - pre-release precedence (a pre-release comes before its release)
+  - clear branching per bump part
+optimal_complexity: {time: "O(L) for a version string of length L", space: "O(L)"}
+rubric:
+  excellent: "Separates the label at the first hyphen, parses components as numbers, states the three finish-the-pre-release conditions precisely and covers labels with hyphens, 0.x versions and nine-digit components without being prompted."
+  good: "Handles normal bumps and the patch pre-release case correctly, and fixes the minor or major pre-release condition after one failing example."
+  weak: "Increments digits as text, keeps the pre-release label in the output, or always increments even when the version is a pre-release of the target release."
+  criteria:
+    correctness: "All tests pass, including labels that contain hyphens and pre-releases of x.y.0 and x.0.0 releases."
+    efficiency: "Single pass over the string; no regex backtracking or repeated splitting is needed."
+    code_quality: "Parsing is separated from the bump decision; the finish condition per part reads as one clear rule."
+    edge_cases: "0.0.0, pre-release of 0.0.0, carries such as 9.99.999, nine-digit components and multi-hyphen labels."
+    communication: "Explains why a minor bump on x.y.0-beta returns x.y.0 but a minor bump on x.y.3-beta returns x.(y+1).0."
+hints:
+  - "Start by separating the numeric part from the optional label; think about which hyphen marks the start of the label."
+  - "For a plain release the answer is a normal increment with lower parts reset. For a pre-release, ask whether the release it leads up to is already big enough for the requested bump."
+  - "Parse the three numbers from the text before the first hyphen. Patch on a pre-release keeps the numbers; minor on a pre-release keeps them only when PATCH is zero; major only when both MINOR and PATCH are zero; in every other case increment the chosen part, zero the parts to its right, and never output the label."
+followups:
+  - "How would you extend this to support a prerelease bump that turns 1.2.3-rc.1 into 1.2.3-rc.2?"
+  - "How would you compare two versions that both carry pre-release labels?"
+  - "How would you validate untrusted input and report a helpful error for malformed versions?"
+  - "What should the release tool do with build metadata such as 1.2.3+build.7?"
+common_errors:
+  - "Splitting on every hyphen and losing part of a label such as rc-1."
+  - "Incrementing PATCH on a pre-release, turning 1.2.3-rc.1 into 1.2.4."
+  - "Forgetting to reset PATCH when bumping MINOR, or MINOR when bumping MAJOR."
+  - "Treating a minor bump of 1.2.3-rc.1 as finishing the pre-release and returning 1.2.3."
+  - "Copying the pre-release label into the result."

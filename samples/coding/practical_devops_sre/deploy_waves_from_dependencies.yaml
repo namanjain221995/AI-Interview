@@ -1,0 +1,157 @@
+version: 1
+slug: deploy_waves_from_dependencies
+title: "Deployment Wave Planner"
+difficulty: medium
+competency_keys: [algorithms, data_structures]
+role_tags: [devops, platform, sre, backend]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Deployment Wave Planner
+
+  A release train rolls out a set of services in **waves**: every service in a wave is deployed in
+  parallel, and a wave starts only after the previous wave has finished.
+
+  `services` lists every service in the release (names are distinct). Each pair `[a, b]` in
+  `dependencies` means **`a` must be deployed after `b`** (so `b` has to be in an earlier wave than
+  `a`). Both names of every pair appear in `services`; the same pair may be listed more than once.
+
+  Put every service in the **earliest wave possible**:
+
+  - a service with no dependencies goes in wave 1;
+  - otherwise its wave is one more than the **latest** wave among the services it depends on.
+
+  Return the waves in order (wave 1 first). Inside each wave, sort the names in ascending
+  lexicographic (ASCII) order. If the dependencies contain a **cycle** (including a service that depends
+  on itself), no valid plan exists: return an empty list. An empty `services` list also gives an empty
+  list.
+
+  ### Example 1
+  ```
+  Input:  services = ["api", "db", "cache", "web", "worker"]
+          dependencies = [["api", "db"], ["api", "cache"], ["web", "api"], ["worker", "db"]]
+  Output: [["cache", "db"], ["api", "worker"], ["web"]]
+  ```
+
+  ### Example 2
+  ```
+  Input:  services = ["auth", "billing", "ledger", "docs"]
+          dependencies = [["auth", "billing"], ["billing", "ledger"], ["ledger", "auth"]]
+  Output: []
+  Explanation: auth -> billing -> ledger -> auth is a cycle, so no plan exists even for docs.
+  ```
+
+  ### Example 3
+  ```
+  Input:  services = ["edge", "metrics", "gateway"]
+          dependencies = [["edge", "gateway"], ["edge", "gateway"], ["edge", "metrics"], ["gateway", "metrics"]]
+  Output: [["metrics"], ["gateway"], ["edge"]]
+  Explanation: edge waits for gateway (wave 2), so it lands in wave 3 even though it also depends on metrics.
+  ```
+
+  ### Constraints
+  - `0 <= services.length <= 10^4`
+  - `0 <= dependencies.length <= 5 * 10^4`
+  - Service names are 1 to 30 characters from `[A-Za-z0-9_-]` and are distinct.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: deploy_waves_from_dependencies
+  params:
+    - {name: services, type: "string[]"}
+    - {name: dependencies, type: "string[][]"}
+  return_type: "string[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def deploy_waves_from_dependencies(services: list[str], dependencies: list[list[str]]) -> list[list[str]]:
+        dependents: dict[str, list[str]] = {name: [] for name in services}
+        pending: dict[str, int] = {name: 0 for name in services}
+        for later, earlier in {(pair[0], pair[1]) for pair in dependencies}:
+            dependents[earlier].append(later)
+            pending[later] += 1
+
+        waves: list[list[str]] = []
+        current = sorted(name for name in services if pending[name] == 0)
+        placed = 0
+        while current:
+            waves.append(current)
+            placed += len(current)
+            upcoming = []
+            for name in current:
+                for later in dependents[name]:
+                    pending[later] -= 1
+                    if pending[later] == 0:
+                        upcoming.append(later)
+            current = sorted(upcoming)
+        return waves if placed == len(services) else []
+  javascript: |
+    function deployWavesFromDependencies(services, dependencies) {
+      const dependents = new Map(services.map((name) => [name, []]));
+      const pending = new Map(services.map((name) => [name, 0]));
+      const seen = new Set();
+      for (const [later, earlier] of dependencies) {
+        const key = later + "\u0000" + earlier;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        dependents.get(earlier).push(later);
+        pending.set(later, pending.get(later) + 1);
+      }
+      const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+      const waves = [];
+      let current = services.filter((name) => pending.get(name) === 0).sort(byCodeUnit);
+      let placed = 0;
+      while (current.length > 0) {
+        waves.push(current);
+        placed += current.length;
+        const upcoming = [];
+        for (const name of current) {
+          for (const later of dependents.get(name)) {
+            pending.set(later, pending.get(later) - 1);
+            if (pending.get(later) === 0) upcoming.push(later);
+          }
+        }
+        current = upcoming.sort(byCodeUnit);
+      }
+      return placed === services.length ? waves : [];
+    }
+tests:
+  - {id: t1, args: [["api", "db", "cache", "web", "worker"], [["api", "db"], ["api", "cache"], ["web", "api"], ["worker", "db"]]], expected: [["cache", "db"], ["api", "worker"], ["web"]], description: "Example 1 - three waves with sorted names"}
+  - {id: t2, args: [["auth", "billing", "ledger", "docs"], [["auth", "billing"], ["billing", "ledger"], ["ledger", "auth"]]], expected: [], description: "Example 2 - a cycle means no plan even for unrelated services"}
+  - {id: t3, args: [["edge", "metrics", "gateway"], [["edge", "gateway"], ["edge", "gateway"], ["edge", "metrics"], ["gateway", "metrics"]]], expected: [["metrics"], ["gateway"], ["edge"]], description: "Example 3 - duplicate pair and wave from the latest dependency"}
+  - {id: t4, hidden: true, args: [[], []], expected: [], description: "No services at all"}
+  - {id: t5, hidden: true, args: [["zeta", "Alpha", "beta", "alpha", "_ops", "9-lives"], []], expected: [["9-lives", "Alpha", "_ops", "alpha", "beta", "zeta"]], description: "No dependencies - one wave in ASCII order (digits, uppercase, underscore, lowercase)"}
+  - {id: t6, hidden: true, args: [["solo", "loop"], [["loop", "loop"]]], expected: [], description: "Self-dependency is a cycle"}
+  - {id: t7, hidden: true, args: [["s5", "s4", "s3", "s2", "s1"], [["s5", "s4"], ["s4", "s3"], ["s3", "s2"], ["s2", "s1"], ["s5", "s1"], ["s5", "s4"]]], expected: [["s1"], ["s2"], ["s3"], ["s4"], ["s5"]], description: "Linear chain - one service per wave; shortcut edge must not pull s5 earlier"}
+  - {id: t8, hidden: true, args: [["app", "queue", "store", "cdn", "dns", "lb"], [["app", "store"], ["app", "queue"], ["queue", "store"], ["lb", "dns"], ["cdn", "dns"], ["app", "lb"]]], expected: [["dns", "store"], ["cdn", "lb", "queue"], ["app"]], description: "Two independent subgraphs merging into one service - longest path decides the wave"}
+  - {id: t9, hidden: true, args: [["a", "b", "c", "d", "e"], [["b", "a"], ["c", "b"], ["d", "c"], ["c", "d"], ["e", "a"]]], expected: [], description: "Cycle deep in the graph after valid early waves - must still return empty"}
+  - {id: t10, hidden: true, args: [["hub", "x1", "x2", "x3", "x4", "x5", "x6"], [["x1", "hub"], ["x2", "hub"], ["x3", "hub"], ["x4", "hub"], ["x5", "hub"], ["x6", "x5"], ["x6", "hub"], ["x6", "x5"]]], expected: [["hub"], ["x1", "x2", "x3", "x4", "x5"], ["x6"]], description: "Fan-out from a hub with duplicate edges into the last service"}
+  - {id: t11, hidden: true, args: [["svc-108", "svc-084", "svc-275", "svc-261", "svc-252", "svc-194", "svc-047", "svc-107", "svc-067", "svc-124", "svc-142", "svc-076", "svc-256", "svc-167", "svc-104", "svc-260", "svc-060", "svc-195", "svc-094", "svc-172", "svc-165", "svc-221", "svc-185", "svc-139", "svc-006", "svc-288", "svc-100", "svc-271", "svc-251", "svc-122", "svc-126", "svc-029", "svc-152", "svc-276", "svc-093", "svc-272", "svc-159", "svc-074", "svc-133", "svc-140", "svc-155", "svc-105", "svc-265", "svc-160", "svc-099", "svc-051", "svc-011", "svc-024", "svc-136", "svc-239", "svc-184", "svc-242", "svc-235", "svc-088", "svc-249", "svc-258", "svc-198", "svc-091", "svc-170", "svc-186", "svc-243", "svc-038", "svc-269", "svc-201", "svc-162", "svc-149", "svc-254", "svc-121", "svc-192", "svc-259", "svc-180", "svc-086", "svc-278", "svc-178", "svc-097", "svc-117", "svc-282", "svc-032", "svc-211", "svc-112", "svc-129", "svc-295", "svc-077", "svc-289", "svc-115", "svc-002", "svc-146", "svc-207", "svc-026", "svc-179", "svc-232", "svc-248", "svc-075", "svc-255", "svc-182", "svc-290", "svc-197", "svc-016", "svc-123", "svc-023", "svc-234", "svc-177", "svc-102", "svc-298", "svc-208", "svc-147", "svc-230", "svc-231", "svc-134", "svc-053", "svc-137", "svc-227", "svc-034", "svc-280", "svc-284", "svc-128", "svc-030", "svc-083", "svc-297", "svc-264", "svc-070", "svc-065", "svc-238", "svc-210", "svc-267", "svc-027", "svc-189", "svc-010", "svc-279", "svc-079", "svc-196", "svc-209", "svc-150", "svc-082", "svc-266", "svc-131", "svc-161", "svc-293", "svc-283", "svc-226", "svc-012", "svc-273", "svc-113", "svc-193", "svc-145", "svc-294", "svc-233", "svc-291", "svc-020", "svc-017", "svc-019", "svc-031", "svc-156", "svc-202", "svc-004", "svc-228", "svc-022", "svc-018", "svc-003", "svc-111", "svc-069", "svc-257", "svc-218", "svc-263", "svc-223", "svc-247", "svc-025", "svc-052", "svc-119", "svc-237", "svc-281", "svc-009", "svc-132", "svc-072", "svc-058", "svc-114", "svc-050", "svc-106", "svc-071", "svc-116", "svc-285", "svc-299", "svc-054", "svc-059", "svc-157", "svc-212", "svc-092", "svc-098", "svc-125", "svc-081", "svc-049", "svc-175", "svc-151", "svc-270", "svc-000", "svc-229", "svc-244", "svc-021", "svc-153", "svc-028", "svc-110", "svc-262", "svc-206", "svc-213", "svc-061", "svc-236", "svc-063", "svc-066", "svc-225", "svc-216", "svc-287", "svc-073", "svc-035", "svc-220", "svc-037", "svc-120", "svc-090", "svc-078", "svc-008", "svc-039", "svc-015", "svc-168", "svc-005", "svc-292", "svc-200", "svc-148", "svc-181", "svc-224", "svc-043", "svc-045", "svc-203", "svc-296", "svc-127", "svc-068", "svc-096", "svc-048", "svc-080", "svc-087", "svc-222", "svc-277", "svc-166", "svc-215", "svc-042", "svc-101", "svc-143", "svc-205", "svc-064", "svc-141", "svc-033", "svc-214", "svc-013", "svc-062", "svc-219", "svc-056", "svc-250", "svc-164", "svc-268", "svc-176", "svc-057", "svc-103", "svc-041", "svc-036", "svc-246", "svc-044", "svc-040", "svc-158", "svc-118", "svc-085", "svc-199", "svc-135", "svc-163", "svc-138", "svc-173", "svc-187", "svc-183", "svc-190", "svc-089", "svc-001", "svc-191", "svc-217", "svc-286", "svc-055", "svc-169", "svc-046", "svc-274", "svc-130", "svc-014", "svc-240", "svc-007", "svc-253", "svc-245", "svc-154", "svc-171", "svc-241", "svc-095", "svc-174", "svc-188", "svc-144", "svc-204", "svc-109"], [["svc-276", "svc-002"], ["svc-279", "svc-118"], ["svc-130", "svc-204"], ["svc-101", "svc-020"], ["svc-041", "svc-283"], ["svc-284", "svc-174"], ["svc-116", "svc-013"], ["svc-180", "svc-231"], ["svc-210", "svc-105"], ["svc-075", "svc-012"], ["svc-089", "svc-142"], ["svc-122", "svc-120"], ["svc-103", "svc-038"], ["svc-098", "svc-168"], ["svc-154", "svc-284"], ["svc-292", "svc-066"], ["svc-080", "svc-164"], ["svc-023", "svc-046"], ["svc-018", "svc-095"], ["svc-284", "svc-035"], ["svc-270", "svc-278"], ["svc-184", "svc-017"], ["svc-146", "svc-125"], ["svc-268", "svc-162"], ["svc-016", "svc-010"], ["svc-046", "svc-286"], ["svc-052", "svc-056"], ["svc-021", "svc-082"], ["svc-073", "svc-156"], ["svc-144", "svc-257"], ["svc-165", "svc-200"], ["svc-183", "svc-260"], ["svc-240", "svc-299"], ["svc-073", "svc-055"], ["svc-223", "svc-259"], ["svc-108", "svc-240"], ["svc-009", "svc-280"], ["svc-187", "svc-123"], ["svc-123", "svc-116"], ["svc-035", "svc-268"], ["svc-056", "svc-174"], ["svc-232", "svc-092"], ["svc-088", "svc-187"], ["svc-178", "svc-049"], ["svc-202", "svc-280"], ["svc-047", "svc-012"], ["svc-192", "svc-138"], ["svc-162", "svc-131"], ["svc-129", "svc-234"], ["svc-187", "svc-246"], ["svc-281", "svc-229"], ["svc-217", "svc-005"], ["svc-184", "svc-072"], ["svc-153", "svc-075"], ["svc-123", "svc-246"], ["svc-229", "svc-070"], ["svc-267", "svc-062"], ["svc-105", "svc-126"], ["svc-082", "svc-169"], ["svc-124", "svc-214"], ["svc-178", "svc-255"], ["svc-235", "svc-214"], ["svc-189", "svc-155"], ["svc-155", "svc-031"], ["svc-115", "svc-239"], ["svc-076", "svc-216"], ["svc-163", "svc-221"], ["svc-055", "svc-057"], ["svc-030", "svc-012"], ["svc-201", "svc-163"], ["svc-240", "svc-260"], ["svc-133", "svc-211"], ["svc-258", "svc-266"], ["svc-050", "svc-087"], ["svc-219", "svc-242"], ["svc-125", "svc-132"], ["svc-010", "svc-200"], ["svc-127", "svc-236"], ["svc-045", "svc-110"], ["svc-136", "svc-027"], ["svc-053", "svc-086"], ["svc-147", "svc-017"], ["svc-112", "svc-122"], ["svc-260", "svc-001"], ["svc-049", "svc-187"], ["svc-113", "svc-107"], ["svc-127", "svc-296"], ["svc-046", "svc-164"], ["svc-173", "svc-113"], ["svc-137", "svc-185"], ["svc-194", "svc-127"], ["svc-087", "svc-015"], ["svc-050", "svc-078"], ["svc-036", "svc-195"], ["svc-088", "svc-029"], ["svc-114", "svc-138"], ["svc-223", "svc-056"], ["svc-086", "svc-023"], ["svc-162", "svc-126"], ["svc-262", "svc-152"], ["svc-060", "svc-142"], ["svc-267", "svc-151"], ["svc-243", "svc-069"], ["svc-244", "svc-255"], ["svc-124", "svc-208"], ["svc-059", "svc-106"], ["svc-087", "svc-142"], ["svc-212", "svc-188"], ["svc-182", "svc-105"], ["svc-029", "svc-135"], ["svc-056", "svc-013"], ["svc-099", "svc-162"], ["svc-107", "svc-036"], ["svc-082", "svc-287"], ["svc-021", "svc-202"], ["svc-268", "svc-277"], ["svc-145", "svc-227"], ["svc-098", "svc-136"], ["svc-007", "svc-159"], ["svc-033", "svc-143"], ["svc-029", "svc-129"], ["svc-057", "svc-212"], ["svc-100", "svc-035"], ["svc-293", "svc-056"], ["svc-274", "svc-264"], ["svc-198", "svc-270"], ["svc-065", "svc-090"], ["svc-008", "svc-100"], ["svc-048", "svc-269"], ["svc-280", "svc-252"], ["svc-168", "svc-017"], ["svc-148", "svc-190"], ["svc-130", "svc-204"], ["svc-010", "svc-062"], ["svc-246", "svc-135"], ["svc-224", "svc-189"], ["svc-135", "svc-222"], ["svc-173", "svc-283"], ["svc-013", "svc-050"], ["svc-027", "svc-212"], ["svc-230", "svc-269"], ["svc-051", "svc-155"], ["svc-280", "svc-036"], ["svc-204", "svc-277"], ["svc-220", "svc-140"], ["svc-030", "svc-086"], ["svc-121", "svc-252"], ["svc-142", "svc-182"], ["svc-227", "svc-111"], ["svc-238", "svc-123"], ["svc-102", "svc-198"], ["svc-135", "svc-181"], ["svc-273", "svc-047"], ["svc-071", "svc-234"], ["svc-020", "svc-139"], ["svc-128", "svc-215"], ["svc-078", "svc-268"], ["svc-242", "svc-204"], ["svc-169", "svc-043"], ["svc-076", "svc-157"], ["svc-270", "svc-026"], ["svc-105", "svc-204"], ["svc-060", "svc-288"], ["svc-156", "svc-298"], ["svc-028", "svc-158"], ["svc-081", "svc-092"], ["svc-054", "svc-030"], ["svc-014", "svc-189"], ["svc-083", "svc-035"], ["svc-261", "svc-274"], ["svc-160", "svc-067"], ["svc-233", "svc-006"], ["svc-145", "svc-049"], ["svc-068", "svc-161"], ["svc-017", "svc-072"], ["svc-119", "svc-225"], ["svc-007", "svc-083"], ["svc-081", "svc-094"], ["svc-269", "svc-056"], ["svc-047", "svc-012"], ["svc-113", "svc-287"], ["svc-262", "svc-113"], ["svc-241", "svc-289"], ["svc-168", "svc-058"], ["svc-129", "svc-176"], ["svc-065", "svc-265"], ["svc-191", "svc-021"], ["svc-263", "svc-219"], ["svc-273", "svc-096"], ["svc-293", "svc-004"], ["svc-058", "svc-298"], ["svc-117", "svc-270"], ["svc-109", "svc-151"], ["svc-291", "svc-107"], ["svc-221", "svc-245"], ["svc-144", "svc-093"], ["svc-160", "svc-071"], ["svc-231", "svc-080"], ["svc-115", "svc-220"], ["svc-245", "svc-002"], ["svc-054", "svc-038"], ["svc-055", "svc-244"], ["svc-061", "svc-070"], ["svc-116", "svc-213"], ["svc-210", "svc-229"], ["svc-031", "svc-047"], ["svc-177", "svc-258"], ["svc-242", "svc-277"], ["svc-107", "svc-022"], ["svc-213", "svc-076"], ["svc-241", "svc-005"], ["svc-027", "svc-040"], ["svc-163", "svc-265"], ["svc-182", "svc-200"], ["svc-191", "svc-104"], ["svc-114", "svc-129"], ["svc-012", "svc-172"], ["svc-239", "svc-288"], ["svc-016", "svc-060"], ["svc-196", "svc-296"], ["svc-200", "svc-070"], ["svc-265", "svc-031"], ["svc-108", "svc-003"], ["svc-204", "svc-070"], ["svc-024", "svc-143"], ["svc-086", "svc-218"], ["svc-148", "svc-145"], ["svc-230", "svc-052"], ["svc-221", "svc-024"], ["svc-102", "svc-173"], ["svc-137", "svc-202"], ["svc-100", "svc-062"], ["svc-085", "svc-208"], ["svc-183", "svc-009"], ["svc-199", "svc-024"], ["svc-265", "svc-018"], ["svc-008", "svc-089"], ["svc-051", "svc-031"], ["svc-226", "svc-204"], ["svc-019", "svc-006"], ["svc-200", "svc-006"], ["svc-286", "svc-230"], ["svc-199", "svc-276"], ["svc-032", "svc-030"], ["svc-161", "svc-283"], ["svc-066", "svc-107"], ["svc-012", "svc-096"], ["svc-236", "svc-137"], ["svc-077", "svc-003"], ["svc-057", "svc-164"], ["svc-238", "svc-154"], ["svc-283", "svc-202"], ["svc-019", "svc-226"], ["svc-252", "svc-032"], ["svc-014", "svc-030"], ["svc-202", "svc-287"], ["svc-222", "svc-069"], ["svc-233", "svc-229"], ["svc-188", "svc-228"], ["svc-136", "svc-080"], ["svc-292", "svc-287"], ["svc-015", "svc-151"], ["svc-041", "svc-287"], ["svc-193", "svc-171"], ["svc-161", "svc-137"], ["svc-061", "svc-277"], ["svc-245", "svc-055"], ["svc-141", "svc-015"], ["svc-272", "svc-155"], ["svc-121", "svc-133"], ["svc-094", "svc-231"], ["svc-237", "svc-049"], ["svc-222", "svc-225"], ["svc-297", "svc-185"], ["svc-201", "svc-272"], ["svc-122", "svc-048"], ["svc-213", "svc-016"], ["svc-237", "svc-255"], ["svc-068", "svc-045"], ["svc-236", "svc-082"], ["svc-194", "svc-102"]]], expected: [["svc-000", "svc-001", "svc-002", "svc-003", "svc-004", "svc-005", "svc-006", "svc-011", "svc-022", "svc-025", "svc-026", "svc-034", "svc-037", "svc-038", "svc-039", "svc-040", "svc-042", "svc-043", "svc-044", "svc-062", "svc-063", "svc-064", "svc-067", "svc-069", "svc-070", "svc-072", "svc-074", "svc-079", "svc-084", "svc-090", "svc-091", "svc-092", "svc-093", "svc-095", "svc-096", "svc-097", "svc-104", "svc-106", "svc-110", "svc-111", "svc-118", "svc-120", "svc-126", "svc-131", "svc-132", "svc-134", "svc-138", "svc-139", "svc-140", "svc-143", "svc-149", "svc-150", "svc-151", "svc-152", "svc-157", "svc-158", "svc-159", "svc-164", "svc-166", "svc-167", "svc-170", "svc-171", "svc-172", "svc-174", "svc-175", "svc-176", "svc-179", "svc-181", "svc-185", "svc-186", "svc-190", "svc-195", "svc-197", "svc-203", "svc-205", "svc-206", "svc-207", "svc-208", "svc-209", "svc-211", "svc-214", "svc-215", "svc-216", "svc-218", "svc-225", "svc-228", "svc-234", "svc-247", "svc-248", "svc-249", "svc-250", "svc-251", "svc-253", "svc-254", "svc-255", "svc-256", "svc-257", "svc-259", "svc-264", "svc-266", "svc-271", "svc-275", "svc-277", "svc-278", "svc-282", "svc-285", "svc-287", "svc-288", "svc-289", "svc-290", "svc-294", "svc-295", "svc-296", "svc-298", "svc-299"], ["svc-012", "svc-015", "svc-017", "svc-018", "svc-020", "svc-024", "svc-028", "svc-033", "svc-036", "svc-045", "svc-058", "svc-059", "svc-061", "svc-071", "svc-076", "svc-077", "svc-080", "svc-085", "svc-103", "svc-109", "svc-119", "svc-124", "svc-125", "svc-128", "svc-129", "svc-133", "svc-144", "svc-156", "svc-162", "svc-169", "svc-188", "svc-192", "svc-193", "svc-196", "svc-200", "svc-204", "svc-217", "svc-220", "svc-222", "svc-227", "svc-229", "svc-232", "svc-235", "svc-239", "svc-241", "svc-243", "svc-244", "svc-258", "svc-260", "svc-267", "svc-270", "svc-274", "svc-276", "svc-279", "svc-297"], ["svc-010", "svc-047", "svc-075", "svc-082", "svc-099", "svc-101", "svc-105", "svc-107", "svc-114", "svc-115", "svc-117", "svc-130", "svc-135", "svc-141", "svc-146", "svc-147", "svc-160", "svc-165", "svc-168", "svc-177", "svc-184", "svc-198", "svc-199", "svc-212", "svc-226", "svc-231", "svc-233", "svc-240", "svc-242", "svc-261", "svc-268", "svc-281"], ["svc-019", "svc-027", "svc-029", "svc-031", "svc-035", "svc-057", "svc-066", "svc-078", "svc-094", "svc-108", "svc-113", "svc-153", "svc-180", "svc-182", "svc-210", "svc-219", "svc-246", "svc-273", "svc-291"], ["svc-055", "svc-081", "svc-083", "svc-100", "svc-136", "svc-142", "svc-155", "svc-262", "svc-263", "svc-265", "svc-284", "svc-292"], ["svc-007", "svc-051", "svc-060", "svc-065", "svc-073", "svc-087", "svc-089", "svc-098", "svc-154", "svc-189", "svc-245", "svc-272"], ["svc-008", "svc-016", "svc-050", "svc-221", "svc-224"], ["svc-013", "svc-163", "svc-213"], ["svc-056", "svc-116", "svc-201"], ["svc-052", "svc-123", "svc-223", "svc-269", "svc-293"], ["svc-048", "svc-187", "svc-230", "svc-238"], ["svc-049", "svc-088", "svc-122", "svc-286"], ["svc-046", "svc-112", "svc-145", "svc-178", "svc-237"], ["svc-023", "svc-148"], ["svc-086"], ["svc-030", "svc-053"], ["svc-014", "svc-032", "svc-054"], ["svc-252"], ["svc-121", "svc-280"], ["svc-009", "svc-202"], ["svc-021", "svc-137", "svc-183", "svc-283"], ["svc-041", "svc-161", "svc-173", "svc-191", "svc-236"], ["svc-068", "svc-102", "svc-127"], ["svc-194"]], description: "Stress - 300 services with a random acyclic dependency graph in shuffled order"}
+expected_concepts:
+  - "topological sort (Kahn's algorithm) processed level by level"
+  - "in-degree counting and adjacency lists"
+  - "cycle detection by counting placed nodes"
+  - "longest-path layering in a DAG"
+  - "de-duplicating edges or counting them consistently"
+optimal_complexity: {time: "O(V + E + V log V) including sorting each wave", space: "O(V + E)"}
+rubric:
+  excellent: "Builds adjacency lists and in-degrees, runs Kahn's algorithm one level at a time so each level is a wave, sorts each wave, detects a cycle by comparing placed services with the total, and explains why a level-by-level traversal yields the latest-dependency wave rule."
+  good: "Correct waves via Kahn's algorithm or memoised longest-path DFS, with a small issue around duplicates, self-loops or sorting fixed after a hint."
+  weak: "Assigns waves by BFS distance from roots (shortest path), misses cycles, or returns a flat order instead of waves."
+  criteria:
+    correctness: "All tests pass, including cycles, self-dependencies, duplicate pairs and shortcut edges."
+    efficiency: "Linear in services plus dependencies, apart from sorting the names in each wave."
+    code_quality: "Graph building, layering and cycle detection are clearly separated with meaningful names."
+    edge_cases: "Empty input, isolated services, duplicate pairs, self-loops and a cycle after valid waves."
+    communication: "Explains the direction of each edge and why the earliest wave equals the longest dependency chain."
+hints:
+  - "Model the release as a directed graph between services. Which services can go out first, and what changes once they are deployed?"
+  - "Count for each service how many distinct dependencies are still not deployed. All services whose count is zero form the next wave; deploying them lowers the counts of the services that wait on them."
+  - "Run Kahn's algorithm level by level: start with the services that have no dependencies, then repeatedly collect every service whose remaining count drops to zero while processing the current wave, sort each wave by name, and if fewer services were placed than exist, the graph has a cycle and the answer is empty. Remove duplicate pairs first, or count them consistently."
+followups:
+  - "How would you limit each wave to at most k services while keeping the plan as short as possible?"
+  - "How would you report one cycle to the user instead of just returning an empty plan?"
+  - "If one service fails in wave 2, which services in later waves must be held back?"
+common_errors:
+  - "Reversing the edge direction, which deploys services before their dependencies."
+  - "Using shortest distance from a root, which puts a service too early when it also has a longer dependency chain."
+  - "Forgetting cycle detection, returning a partial plan when some services can never be placed."
+  - "Counting a duplicate pair twice in the in-degree but decrementing it once, leaving a service stuck."

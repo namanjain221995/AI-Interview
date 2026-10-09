@@ -1,0 +1,590 @@
+# Curated questions: problem solving / production troubleshooting (part 2 of 4).
+# Reasoning through production incidents step by step: symptoms, hypotheses, evidence, mitigation.
+version: 1
+defaults:
+  role_tags: [devops, sre, backend, support_engineer]
+  round_types: [problem_solving, combined]
+  kind: scenario
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: problem_solving.production_troubleshooting.large_uploads_rejected
+    competency_key: networking
+    topic: Large uploads rejected after an infrastructure change
+    difficulty: easy
+    text: >-
+      After you moved your API behind a new ingress layer, users can still upload small files, but anything
+      over about ten megabytes fails immediately with a 413 error. How would you find and fix the cause?
+    expected_concepts:
+      - 413 means a request body size limit was hit
+      - identify which hop returned the error (ingress, proxy, application)
+      - compare body size limits between old and new setup
+      - align limits across every layer in the path
+      - test with a range of file sizes after the fix
+    rubric:
+      excellent: Reads the 413 as a body size limit, identifies which layer generated it from response headers or logs, aligns limits on every hop and verifies with real uploads.
+      good: Recognises a size limit on the new ingress and raises it.
+      weak: Investigates storage or application code without using the status code clue.
+    followups:
+      - How can you tell whether the proxy or the application returned the 413?
+      - What risks come with raising the limit a lot?
+    common_errors:
+      - Raising the limit in the application while the proxy in front still rejects the request.
+
+  - external_key: problem_solving.production_troubleshooting.dashboard_traffic_drop_to_zero
+    competency_key: observability
+    topic: Real outage or broken telemetry
+    difficulty: easy
+    text: >-
+      Your main dashboard suddenly shows request traffic dropping to zero, but nobody is complaining and the
+      support queue is quiet. How would you decide whether this is a real outage or a monitoring problem?
+    expected_concepts:
+      - check the service directly (synthetic request, real user flow)
+      - compare independent signals (load balancer metrics, business metrics, logs)
+      - check the telemetry pipeline (agents, collectors, scrape targets)
+      - look for recent changes to monitoring config or metric names
+      - fix the gap and alert on missing data
+    rubric:
+      excellent: Verifies user impact through an independent path first, cross-checks other signals, then traces the telemetry pipeline to find where data stopped, and adds alerting on absent metrics.
+      good: Tests the service directly and checks whether metrics collection broke.
+      weak: Declares an outage and starts restarting services, or ignores the dashboard entirely.
+    followups:
+      - What independent signals would you trust most here?
+      - How would you be alerted next time telemetry silently stops?
+    common_errors:
+      - Trusting a single dashboard as the source of truth.
+
+  - external_key: problem_solving.production_troubleshooting.marketing_traffic_surge
+    competency_key: incident_response
+    topic: Unplanned traffic surge
+    difficulty: easy
+    text: >-
+      Marketing sent a promotional email to two million customers without warning anyone, traffic jumped to
+      five times normal, and the site is slowing down. What do you do in the next thirty minutes?
+    expected_concepts:
+      - identify the bottleneck (app capacity, database, external dependency)
+      - scale what can scale quickly
+      - protect the critical path (shed or degrade non-essential features)
+      - caching or static fallbacks for the landing pages being hit
+      - communicate with marketing and stakeholders, follow up on launch coordination
+    rubric:
+      excellent: Finds the actual bottleneck before scaling, protects checkout or other critical flows by degrading less important features, uses caching for the promoted pages, and coordinates with marketing both now and for future launches.
+      good: Scales up and adds caching, with some prioritisation.
+      weak: Scales everything blindly or only complains about the lack of notice.
+    followups:
+      - The database is the bottleneck and can't scale quickly. What now?
+      - What process would you set up with marketing afterwards?
+    common_errors:
+      - Scaling the web tier while the database is the real constraint.
+
+  - external_key: problem_solving.production_troubleshooting.waf_blocking_one_customer
+    competency_key: technical_support
+    topic: One customer suddenly blocked
+    difficulty: easy
+    text: >-
+      One enterprise customer says every request from their offices has been rejected since this morning, while
+      all your other customers are fine. How would you work out what is blocking them?
+    expected_concepts:
+      - get specifics (source IPs, timestamps, exact error and response body)
+      - search edge, firewall or WAF logs for their requests
+      - check recent rule, rate limit or allowlist changes
+      - consider changes on their side (new egress IPs, proxy)
+      - unblock safely and tune the rule rather than disabling protection
+    rubric:
+      excellent: Collects precise request details, finds their traffic in edge or WAF logs to see which rule acted, checks changes on both sides, and fixes it with a targeted exception or rule fix while keeping protection in place.
+      good: Checks firewall and rate limit logs and finds a likely block.
+      weak: Asks the customer to retry or disables security rules wholesale.
+    followups:
+      - Their requests don't appear in any of your logs. What does that suggest?
+      - How would you keep the customer informed while you investigate?
+    common_errors:
+      - Turning off the WAF globally to fix one customer.
+
+  - external_key: problem_solving.production_troubleshooting.upstream_429s
+    competency_key: debugging
+    topic: Rate limited by an internal dependency
+    difficulty: easy
+    text: >-
+      Your service started receiving lots of 429 responses from an internal API owned by another team. Your own
+      traffic hasn't changed. How would you find out why and get things working again?
+    expected_concepts:
+      - confirm your request rate to that API is truly unchanged
+      - check for changes in the other team's limits or quota allocation
+      - check whether retries are inflating your call volume
+      - respect Retry-After and back off
+      - work with the owning team on limits and caching
+    rubric:
+      excellent: Verifies actual call volume including retries, checks for limit or quota changes on the other side, backs off properly, and works with the owning team on a fix such as a raised limit, caching or batching.
+      good: Checks with the other team and adds backoff.
+      weak: Adds more retries or spreads calls across keys to dodge the limit.
+    followups:
+      - Your retries are doubling the call volume. What should change?
+      - How would you reduce your dependency on this API?
+    common_errors:
+      - Retrying immediately on 429, which deepens the problem.
+
+  - external_key: problem_solving.production_troubleshooting.month_end_job_failure
+    competency_key: debugging
+    topic: Failures on a particular calendar date
+    difficulty: easy
+    text: >-
+      A billing job has run fine every day for a year, but it failed on the thirty-first of this month. How
+      would you investigate a failure that seems tied to the date?
+    expected_concepts:
+      - read the actual error and stack trace from the failed run
+      - date arithmetic edge cases (month lengths, adding a month, leap years)
+      - data volume spikes at month end
+      - reproduce with the same date in a test environment
+      - fix, backfill and add tests for calendar edge cases
+    rubric:
+      excellent: Starts from the error, forms date-specific hypotheses such as month-length arithmetic or month-end volume, reproduces with a fixed clock, fixes and reprocesses safely, and adds edge-case tests.
+      good: Suspects a date bug and reproduces it.
+      weak: Reruns the job and moves on without understanding the date link.
+    followups:
+      - How would you test code that depends on the current date?
+      - Other jobs share the same date library. What would you check?
+    common_errors:
+      - Assuming it was a one-off infrastructure blip because it happened only once.
+
+  - external_key: problem_solving.production_troubleshooting.feature_flag_cohort_errors
+    competency_key: debugging
+    topic: Errors inside a feature flag cohort
+    difficulty: easy
+    text: >-
+      You turned on a new feature for ten percent of users this morning. Error rates overall rose only a little,
+      but support tickets are coming in about broken account pages. How would you connect these and respond?
+    expected_concepts:
+      - segment error metrics by flag cohort
+      - confirm affected users are in the enabled cohort
+      - turn the flag off as an immediate mitigation
+      - find the failing code path from logs or traces for flagged users
+      - judge rollouts by cohort metrics rather than global averages
+    rubric:
+      excellent: Segments errors by cohort to show the impact is concentrated, disables the flag quickly, finds the failure in the flagged path, and explains why global averages hid it.
+      good: Checks whether affected users have the flag on and turns it off.
+      weak: Investigates the account pages without considering the new feature.
+    followups:
+      - Why did the overall error rate barely move?
+      - What metrics would you watch during the next rollout step?
+    common_errors:
+      - Judging a partial rollout by global error rates.
+
+  - external_key: problem_solving.production_troubleshooting.periodic_daily_latency_spike
+    competency_key: databases
+    topic: Latency spike at the same time every day
+    difficulty: easy
+    text: >-
+      Every day at around two in the morning, database latency jumps for about twenty minutes and some API
+      requests time out. What would you look at to explain the pattern?
+    expected_concepts:
+      - list everything scheduled around that time (backups, maintenance, batch jobs)
+      - disk I/O and lock metrics during the window
+      - slow query logs during the spike
+      - provider maintenance windows
+      - reschedule, throttle or move heavy work to a replica
+    rubric:
+      excellent: Uses the regular timing to look for scheduled work, confirms with I/O, lock and query evidence during the window, and moves or throttles the offending job.
+      good: Suspects a backup or batch job and checks the schedule.
+      weak: Scales the database without identifying what runs at two in the morning.
+    followups:
+      - The backup runs on a replica, yet the primary still slows down. Why might that be?
+      - How would you reduce the impact if the job has to run then?
+    common_errors:
+      - Ignoring the regular timing clue.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: problem_solving.production_troubleshooting.threads_blocked_on_slow_dependency
+    competency_key: distributed_systems
+    topic: Service unresponsive behind a slow dependency
+    difficulty: medium
+    text: >-
+      Your API has stopped responding to almost every request, yet its CPU is low and there are few errors in
+      the logs. A dependency it calls got slower about the same time. How would you confirm the link and get
+      the API back?
+    expected_concepts:
+      - worker threads or connections all waiting on the slow dependency
+      - thread dumps or pool metrics showing saturation
+      - missing or overly long timeouts
+      - mitigate with shorter timeouts, circuit breaking or disabling the feature
+      - bulkheads so one dependency can't consume all capacity
+    rubric:
+      excellent: Explains how a slow dependency exhausts thread or connection pools, proves it with thread dumps or pool metrics, restores service through timeouts or feature disabling, and proposes bulkheads and sensible timeouts.
+      good: Suspects pool exhaustion from the slow dependency and suggests timeouts.
+      weak: Restarts the API repeatedly or scales it out without addressing the dependency.
+    followups:
+      - How would you choose the new timeout value?
+      - Why does scaling the API out often not help here?
+    common_errors:
+      - Equating low CPU with a healthy service.
+
+  - external_key: problem_solving.production_troubleshooting.poison_message_consumer
+    competency_key: distributed_systems
+    topic: One message blocking a consumer
+    difficulty: medium
+    text: >-
+      One of your queue consumers keeps crashing and restarting, and lag on its partition keeps growing while
+      other partitions are fine. The logs show the same stack trace every time. What's going on, and how do you
+      get things moving?
+    expected_concepts:
+      - a malformed or unexpected message crashing the consumer every attempt
+      - identify the offending message and its offset or ID
+      - skip or move it to a dead-letter queue to unblock processing
+      - fix the handler to validate input and fail gracefully
+      - alert on repeated failures and dead-letter growth
+    rubric:
+      excellent: Recognises a poison message, locates it from the stack trace and offset, unblocks the partition by dead-lettering it without losing it, fixes the handler and adds monitoring.
+      good: Identifies a bad message and skips it.
+      weak: Keeps restarting the consumer or deletes the message without keeping a copy.
+    followups:
+      - The message is valid but triggers a bug. How do you reprocess it later?
+      - How would you prevent one bad message from blocking a whole partition again?
+    common_errors:
+      - Dropping the message permanently without understanding what it contained.
+
+  - external_key: problem_solving.production_troubleshooting.duplicate_push_notifications
+    competency_key: distributed_systems
+    topic: Notifications delivered several times
+    difficulty: medium
+    text: >-
+      Since yesterday's deploy, users are receiving the same push notification two or three times. How would you
+      work out where the duplicates come from?
+    expected_concepts:
+      - trace a single notification through producer, queue and sender
+      - check for redeliveries (acknowledgement after a slow send, timeouts)
+      - check for duplicate producers or consumers after the deploy
+      - compare message IDs to tell duplicate events from duplicate sends
+      - idempotency keys or deduplication at the sender
+    rubric:
+      excellent: Traces one notification end to end with IDs to tell whether duplicates arise at production, delivery or sending, links it to what changed in the deploy, and adds idempotent sending.
+      good: Suspects redelivery or duplicate consumers and checks logs.
+      weak: Adds a time-based dedup hack without finding where duplicates start.
+    followups:
+      - The duplicates have identical message IDs. What does that narrow it down to?
+      - How long should a deduplication window be?
+    common_errors:
+      - Assuming the queue guarantees exactly-once delivery.
+
+  - external_key: problem_solving.production_troubleshooting.steal_time_noisy_neighbor
+    competency_key: linux
+    topic: Slowdown on a virtual machine with no changes
+    difficulty: medium
+    text: >-
+      A service running on cloud virtual machines got slower over the past day. There were no deploys, traffic
+      is normal, and the application's own metrics show nothing unusual except slower processing. Where would
+      you look?
+    expected_concepts:
+      - host-level metrics such as CPU steal time
+      - noisy neighbours or degraded underlying hardware
+      - burstable instance CPU credits running out
+      - compare affected instances with others of the same type
+      - replace or move instances and raise it with the provider
+    rubric:
+      excellent: Looks below the application at steal time, credits and disk or network throttling, compares instances to isolate host-level effects, and mitigates by replacing instances while gathering evidence for the provider.
+      good: Checks steal time or credits and suggests moving the instance.
+      weak: Profiles the application code repeatedly despite nothing having changed.
+    followups:
+      - Only instances on one type are affected. What does that suggest?
+      - What would you tell the cloud provider?
+    common_errors:
+      - Not knowing that a virtual machine can lose CPU to other tenants.
+
+  - external_key: problem_solving.production_troubleshooting.tls_hardening_breaks_clients
+    competency_key: networking
+    topic: TLS hardening breaking some clients
+    difficulty: medium
+    text: >-
+      Security asked you to disable outdated TLS versions and weak ciphers on your public API. Right after the
+      change, a handful of integration partners started failing to connect. How would you handle this?
+    expected_concepts:
+      - handshake failure logs and which protocol or cipher clients offered
+      - identify the affected partners and their client stacks
+      - decide between a temporary rollback, a separate endpoint or a short exception window
+      - communicate a deadline for partners to upgrade
+      - roll out such changes with advance measurement of client capabilities
+    rubric:
+      excellent: Uses handshake data to identify affected clients and why they fail, balances security against partner impact with a time-boxed option, communicates clearly, and recommends measuring client TLS usage before future changes.
+      good: Identifies outdated clients and works with partners on upgrades.
+      weak: Reverts the security change permanently or ignores the partners.
+    followups:
+      - How could you have measured who would break before making the change?
+      - What would you say to the security team about a temporary exception?
+    common_errors:
+      - Treating it as either all security or all compatibility, with no middle option.
+
+  - external_key: problem_solving.production_troubleshooting.uneven_load_long_lived_connections
+    competency_key: networking
+    topic: Load concentrating on a few backends
+    difficulty: medium
+    text: >-
+      After you scaled a gRPC service from four to twelve instances, the four original instances are still
+      running hot and the eight new ones get almost no traffic. Why might that be, and how would you fix it?
+    expected_concepts:
+      - long-lived HTTP/2 connections are balanced at connect time, not per request
+      - clients keep existing connections to the original backends
+      - check balancing layer (L4 versus L7) and client-side balancing
+      - connection max age or periodic reconnects to rebalance
+      - per-request load balancing via a proxy or client library
+    rubric:
+      excellent: Explains that connection-level balancing with long-lived HTTP/2 connections leaves new instances idle, verifies it with connection counts per backend, and fixes it with request-level balancing or connection lifetimes.
+      good: Identifies sticky long-lived connections as the cause.
+      weak: Adds even more instances or blames the new instances' health.
+    followups:
+      - What trade-offs come with forcing clients to reconnect periodically?
+      - How does an L7 proxy change the picture?
+    common_errors:
+      - Assuming a load balancer distributes every request when it only distributes connections.
+
+  - external_key: problem_solving.production_troubleshooting.deadline_exceeded_new_hop
+    competency_key: distributed_systems
+    topic: Deadlines exceeded after adding a service hop
+    difficulty: medium
+    text: >-
+      Your team added a new internal service in the middle of an existing request path. Since then, about two
+      percent of requests fail with deadline exceeded errors, even though each service's own latency looks fine.
+      How would you investigate?
+    expected_concepts:
+      - end-to-end deadline or timeout budget versus the sum of hops
+      - deadline propagation and each hop's own timeout
+      - tail latency adding up across hops even when medians are fine
+      - distributed traces of failing requests
+      - rebalance timeout budgets, cut a hop or parallelise calls
+    rubric:
+      excellent: Reasons about the end-to-end budget and how tail latencies compound across hops, uses traces of failed requests to see where time went, and adjusts budgets or the call structure.
+      good: Suspects the extra hop's latency pushes requests over the deadline and checks traces.
+      weak: Just raises every timeout without understanding the budget.
+    followups:
+      - Why can every service look healthy while end-to-end requests fail?
+      - Should retries happen at each hop?
+    common_errors:
+      - Judging each service by its median latency in isolation.
+
+  - external_key: problem_solving.production_troubleshooting.circuit_breaker_stuck_open
+    competency_key: distributed_systems
+    topic: Circuit breaker refusing a recovered dependency
+    difficulty: medium
+    text: >-
+      A downstream service had a brief blip twenty minutes ago and has fully recovered, but your service is
+      still refusing to call it and returning fallback responses. How would you investigate?
+    expected_concepts:
+      - circuit breaker state and its half-open probing behaviour
+      - probe requests failing for a different reason (wrong endpoint, auth, timeout)
+      - breaker configuration (thresholds, reset timeout)
+      - per-instance breakers in different states
+      - manually resetting while fixing the configuration
+    rubric:
+      excellent: Checks breaker state and probe results, finds why half-open probes keep failing or the reset never triggers, restores traffic safely and tunes the breaker configuration.
+      good: Identifies a stuck breaker and resets it.
+      weak: Restarts everything without understanding why the breaker stayed open.
+    followups:
+      - Some instances recovered and others did not. Why?
+      - How would you make breaker state visible to on-call engineers?
+    common_errors:
+      - Forgetting that half-open probes can fail for reasons unrelated to the dependency's health.
+
+  - external_key: problem_solving.production_troubleshooting.gc_pause_latency_spikes
+    competency_key: debugging
+    topic: Periodic latency spikes from runtime pauses
+    difficulty: medium
+    text: >-
+      A Java service's p99 latency spikes every few minutes, while the median stays flat and there are no errors.
+      How would you check whether garbage collection is the cause, and what would you do about it?
+    expected_concepts:
+      - correlate GC logs or pause metrics with the spikes
+      - heap size, allocation rate and old generation growth
+      - collector choice and its pause behaviour
+      - reduce allocation in hot paths
+      - rule out other causes such as safepoints or host contention
+    rubric:
+      excellent: Correlates pause metrics with the latency spikes, explains what drives the pauses (allocation rate, heap sizing, collector), considers alternative explanations, and proposes measured tuning or code changes.
+      good: Checks GC logs and suggests tuning the heap or collector.
+      weak: Increases heap size without measuring, or doesn't know how to confirm GC involvement.
+    followups:
+      - The pauses got worse after you increased the heap. Why might that happen?
+      - How would you find what's allocating so much?
+    common_errors:
+      - Tuning collector flags without first measuring pause times.
+
+  - external_key: problem_solving.production_troubleshooting.autoscaler_not_scaling
+    competency_key: incident_response
+    topic: Autoscaler not responding to load
+    difficulty: medium
+    text: >-
+      Traffic has been rising for an hour, latency is climbing, and your autoscaler hasn't added a single
+      instance. What would you check, and how would you keep users served in the meantime?
+    expected_concepts:
+      - scale manually first to protect users
+      - check the scaling metric (is it actually rising, is it being collected)
+      - maximum instance limits, quotas or capacity in the region
+      - autoscaler errors, cooldowns or permissions
+      - the scaling signal not reflecting the real bottleneck
+    rubric:
+      excellent: Scales manually to relieve users, then checks the metric pipeline, limits, quotas, cooldowns and autoscaler events, and questions whether the chosen metric tracks the real bottleneck.
+      good: Scales manually and checks autoscaler configuration and limits.
+      weak: Waits for the autoscaler or only checks its configuration while users suffer.
+    followups:
+      - CPU is low but latency is high. Why might the autoscaler never trigger?
+      - How would you test autoscaling before you need it?
+    common_errors:
+      - Scaling on CPU when the service is limited by something else.
+
+  - external_key: problem_solving.production_troubleshooting.autoscaler_flapping
+    competency_key: kubernetes
+    topic: Autoscaler flapping up and down
+    difficulty: medium
+    text: >-
+      Your service keeps scaling up and down every few minutes, and each scale-down produces a small burst of
+      errors. How would you stabilise it?
+    expected_concepts:
+      - metric oscillation from too-sensitive thresholds or short windows
+      - stabilization windows, cooldowns and hysteresis
+      - startup time and readiness making new instances skew the metric
+      - graceful shutdown and connection draining on scale-down
+      - choose a smoother or more meaningful scaling metric
+    rubric:
+      excellent: Explains the feedback loop causing oscillation, adds stabilization and hysteresis, and separately fixes the errors on scale-down with proper draining and graceful shutdown.
+      good: Suggests longer cooldowns and checks the thresholds.
+      weak: Disables autoscaling or pins a high instance count without addressing either problem.
+    followups:
+      - Why does each scale-down cause errors in the first place?
+      - How would you choose the stabilization window?
+    common_errors:
+      - Fixing the flapping while leaving the shutdown errors unexplained.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: problem_solving.production_troubleshooting.internal_mtls_expiry
+    competency_key: security
+    topic: Internal certificate expiry across a service mesh
+    difficulty: hard
+    text: >-
+      Service-to-service calls across your platform suddenly start failing with handshake errors, affecting
+      dozens of services at once. Public traffic reaches the edge fine. How would you diagnose and recover?
+    expected_concepts:
+      - simultaneous failures across services point to shared infrastructure
+      - internal certificates, intermediate or root CA expiry, or a rotation failure
+      - inspect certificates presented between services
+      - restore by reissuing or extending the trust chain, prioritising critical paths
+      - expiry monitoring and rotation testing for internal PKI
+    rubric:
+      excellent: Uses the breadth of failure to suspect shared trust infrastructure, confirms by inspecting presented certificates and the CA chain, plans a staged recovery that prioritises critical paths and avoids weakening security, and proposes PKI monitoring.
+      good: Suspects certificate expiry and reissues certificates.
+      weak: Disables mTLS everywhere to restore traffic without considering the security impact.
+    followups:
+      - Is temporarily disabling mutual TLS ever acceptable here, and under what conditions?
+      - How would you rotate an internal root CA without an outage?
+    common_errors:
+      - Debugging each service separately instead of looking at the shared component.
+
+  - external_key: problem_solving.production_troubleshooting.telemetry_vendor_down_during_incident
+    competency_key: observability
+    topic: Troubleshooting without your usual telemetry
+    difficulty: hard
+    text: >-
+      Users are reporting checkout failures, and at the same moment your hosted metrics and logging provider is
+      having its own outage, so your dashboards are empty. How would you investigate?
+    expected_concepts:
+      - fall back to local sources (host logs, load balancer logs, database stats)
+      - direct probing with real requests to reproduce the failure
+      - business signals (orders table, payment provider dashboard)
+      - consider whether the two outages share a cause
+      - afterwards, minimal independent observability for critical paths
+    rubric:
+      excellent: Switches to local and alternative evidence sources, reproduces the failure directly, considers whether both outages share a root cause, and proposes independent fallback observability for critical flows.
+      good: Uses host and load balancer logs and direct testing to investigate.
+      weak: Waits for the vendor to recover before doing anything.
+    followups:
+      - Could your telemetry agents themselves be causing the checkout failures?
+      - What minimum observability would you keep independent of any vendor?
+    common_errors:
+      - Assuming the two outages are unrelated without checking.
+
+  - external_key: problem_solving.production_troubleshooting.migration_lock_blocking_writes
+    competency_key: databases
+    topic: Schema migration blocking production writes
+    difficulty: hard
+    text: >-
+      A schema migration started during a deploy ten minutes ago. Since then, writes to the orders table are
+      hanging, and the application's connection pools are filling up. What do you do, and how do you decide
+      whether to cancel the migration?
+    expected_concepts:
+      - inspect lock waits and identify the blocking session
+      - DDL waiting on a long transaction and queueing everything behind it
+      - estimate what cancelling costs (rollback time, partial state)
+      - cancel or kill the blocker to restore writes when safe
+      - lock timeouts, online migration tools and testing on realistic data
+    rubric:
+      excellent: Uses lock views to identify blockers and waiters, explains the lock queue effect, weighs cancelling against waiting using rollback cost and business impact, restores writes, and proposes lock timeouts and online migration techniques.
+      good: Finds the migration holding locks and cancels it.
+      weak: Restarts the database or the application without understanding the lock chain.
+    followups:
+      - The migration itself is waiting on a two-hour analytics query. What then?
+      - How would you run this migration safely next time?
+    common_errors:
+      - Not realising a DDL waiting for a lock also blocks every query queued behind it.
+
+  - external_key: problem_solving.production_troubleshooting.hot_cache_shard
+    competency_key: distributed_systems
+    topic: One cache shard overloaded
+    difficulty: hard
+    text: >-
+      One node in your distributed cache cluster is at full CPU and timing out, while the other nodes are nearly
+      idle. Requests touching that node are slow. How would you diagnose and relieve it?
+    expected_concepts:
+      - a hot key or small set of keys mapping to one shard
+      - identify hot keys (key sampling, client-side metrics, monitoring commands)
+      - large values or expensive commands on that node
+      - local in-process caching or key replication for hot keys
+      - longer-term key design to spread load
+    rubric:
+      excellent: Suspects key skew rather than a bad node, identifies the hot keys or expensive operations with evidence, relieves load through local caching or replicating hot keys, and fixes the key design.
+      good: Identifies a hot key and suggests caching it closer to the clients.
+      weak: Replaces the node or adds nodes, which doesn't move a single hot key.
+    followups:
+      - The hot key belongs to a celebrity account that went viral. How do you handle that class of problem?
+      - Why doesn't adding nodes help?
+    common_errors:
+      - Assuming consistent hashing alone prevents hotspots.
+
+  - external_key: problem_solving.production_troubleshooting.out_of_order_events_wrong_state
+    competency_key: distributed_systems
+    topic: Out-of-order events corrupting state
+    difficulty: hard
+    text: >-
+      Some orders are showing as cancelled even though they were shipped. Your order state is updated by
+      consuming events from several services. How would you work out what's happening and repair it?
+    expected_concepts:
+      - events arriving or being processed out of order
+      - partitioning keys, parallel consumers and retries reordering events
+      - event timestamps and versions versus processing order
+      - versioned updates or state machines that reject invalid transitions
+      - identify and repair affected orders from the event history
+    rubric:
+      excellent: Reconstructs the event history for affected orders to prove reordering, explains which part of the pipeline reorders, introduces versioning or state transition guards, and repairs data from the event log.
+      good: Identifies ordering as the issue and suggests sequence numbers.
+      weak: Patches individual orders by hand without finding the systemic cause.
+    followups:
+      - The events come from different services with different clocks. Can you trust their timestamps?
+      - How would you find every affected order?
+    common_errors:
+      - Relying on wall-clock timestamps from different producers to order events.
+
+  - external_key: problem_solving.production_troubleshooting.primary_key_exhaustion
+    competency_key: databases
+    topic: Inserts failing after years of normal operation
+    difficulty: hard
+    text: >-
+      Inserts into one of your busiest tables suddenly start failing with an out-of-range error on the id
+      column, after years of running without problems. How would you restore service, and what are your options?
+    expected_concepts:
+      - the integer primary key sequence has reached the column's maximum
+      - immediate options (negative range, alternative id source) with risks
+      - migrating the column to a bigger type on a large table
+      - downstream systems and clients that assume the integer size
+      - capacity monitoring of sequences and similar limits
+    rubric:
+      excellent: Identifies sequence exhaustion, compares short-term workarounds with their risks, plans a safe type migration on a large table, checks downstream consumers of the id, and adds monitoring for similar limits.
+      good: Recognises key exhaustion and proposes changing the column to a bigger integer.
+      weak: Resets the sequence or deletes data, risking collisions or loss.
+    followups:
+      - The table has three billion rows. How do you change the column type without a long outage?
+      - What other limits like this would you audit?
+    common_errors:
+      - Resetting the sequence to reuse values that may still be referenced.

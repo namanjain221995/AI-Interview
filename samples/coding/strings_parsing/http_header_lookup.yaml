@@ -1,0 +1,158 @@
+version: 1
+slug: http_header_lookup
+title: "HTTP Header Lookup"
+difficulty: medium
+competency_keys: [problem_solving, code_quality]
+role_tags: [backend, network, security]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## HTTP Header Lookup
+
+  A debugging proxy captures raw HTTP messages, and support engineers often need one header from them.
+  You are given the header section of a message as a list of text lines (the request or status line has
+  already been removed) and must return the value of the header called `name`.
+
+  Process the lines in order using these rules:
+
+  1. **End of headers.** Stop at the first line that is completely empty (`""`); later lines belong to
+     the body and are ignored. A line containing only spaces or tabs is **not** empty (see rule 3).
+  2. **Header line.** Any other line that does not start with a space or a tab has the form
+     `Field-Name:value`. The name is everything before the **first** colon; the value is everything
+     after it, with leading and trailing spaces and tabs removed. Names compare
+     **case-insensitively** (`content-type` equals `Content-Type`).
+  3. **Continuation line.** A line that starts with a space or a tab continues the value of the most
+     recent header line. Remove its leading and trailing spaces and tabs; if anything remains, append it
+     to that header's value, separated by one space (no separator is needed when the value so far is
+     empty).
+  4. **Repeated headers.** If the header appears several times, join the values of its occurrences with
+     `", "` in the order they appear, skipping occurrences whose value is empty.
+
+  Return the resulting value, or `""` if the header does not appear (or all its values are empty).
+
+  ### Example 1
+  ```
+  Input:  lines = ["Host: api.example.com", "Content-Type: application/json", "Accept: */*"], name = "content-type"
+  Output: "application/json"
+  ```
+
+  ### Example 2
+  ```
+  Input:  lines = ["Cache-Control: no-cache", "X-Trace: a1", "cache-control: max-age=0,", "  must-revalidate", "", "Cache-Control: private"], name = "Cache-Control"
+  Output: "no-cache, max-age=0, must-revalidate"
+  Explanation: The third line repeats the header with different letter case, the fourth line continues
+  it, and the header after the empty line is part of the body.
+  ```
+
+  ### Example 3
+  ```
+  Input:  lines = ["Server: edge-7"], name = "Authorization"
+  Output: ""
+  ```
+
+  ### Constraints
+  - `0 <= lines.length <= 1000` and every line has at most 1000 printable ASCII characters, spaces or tabs.
+  - The first line is never a continuation line.
+  - Every header line contains a colon, and its field name is non-empty with no spaces, tabs or colons.
+  - `name` is non-empty and contains no spaces, tabs or colons.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: http_header_value
+  params:
+    - {name: lines, type: "string[]"}
+    - {name: name, type: "string"}
+  return_type: "string"
+  comparison: exact
+reference_solutions:
+  python: |
+    def http_header_value(lines: list[str], name: str) -> str:
+        target = name.lower()
+        matches: list[list[str]] = []   # value pieces of each matching occurrence
+        current: list[str] = []         # value pieces of the most recent header
+        for line in lines:
+            if line == "":
+                break  # end of the header section
+            if line[0] in " \t":
+                piece = line.strip(" \t")
+                if piece:
+                    current.append(piece)  # continuation of the previous header
+                continue
+            header, _, rest = line.partition(":")
+            current = []
+            piece = rest.strip(" \t")
+            if piece:
+                current.append(piece)
+            if header.lower() == target:
+                matches.append(current)
+        values = [" ".join(pieces) for pieces in matches]
+        return ", ".join(value for value in values if value)
+  javascript: |
+    function httpHeaderValue(lines, name) {
+      const trim = (s) => s.replace(/^[ \t]+|[ \t]+$/g, "");
+      const target = name.toLowerCase();
+      const matches = [];
+      let current = [];
+      for (const line of lines) {
+        if (line === "") break;
+        if (line[0] === " " || line[0] === "\t") {
+          const piece = trim(line);
+          if (piece) current.push(piece);
+          continue;
+        }
+        const colon = line.indexOf(":");
+        const header = line.slice(0, colon);
+        current = [];
+        const piece = trim(line.slice(colon + 1));
+        if (piece) current.push(piece);
+        if (header.toLowerCase() === target) matches.push(current);
+      }
+      return matches
+        .map((pieces) => pieces.join(" "))
+        .filter((value) => value !== "")
+        .join(", ");
+    }
+tests:
+  - {id: t1, args: [["Host: api.example.com", "Content-Type: application/json", "Accept: */*"], "content-type"], expected: "application/json", description: "Example 1 - case-insensitive lookup"}
+  - {id: t2, args: [["Cache-Control: no-cache", "X-Trace: a1", "cache-control: max-age=0,", "  must-revalidate", "", "Cache-Control: private"], "Cache-Control"], expected: "no-cache, max-age=0, must-revalidate", description: "Example 2 - repeated header, continuation and stop at the empty line"}
+  - {id: t3, args: [["Server: edge-7"], "Authorization"], expected: "", description: "Example 3 - header absent"}
+  - {id: t4, hidden: true, args: [[], "Host"], expected: "", description: "No lines at all"}
+  - {id: t5, hidden: true, args: [["X-A: 1", "", "X-B: 2"], "X-B"], expected: "", description: "Header only appears after the empty line (body)"}
+  - {id: t6, hidden: true, args: [["Location:   https://example.com:8443/path  "], "LOCATION"], expected: "https://example.com:8443/path", description: "Value contains colons - split at the first colon only; value trimmed"}
+  - {id: t7, hidden: true, args: [["X-Tag:", "X-Tag: blue", "X-Tag:   ", "x-tag: green"], "x-tag"], expected: "blue, green", description: "Empty occurrences are skipped when joining"}
+  - {id: t8, hidden: true, args: [["Subject:", "\t first part", " \t ", "   second part  "], "subject"], expected: "first part second part", description: "Continuations after an empty value, with tabs and a whitespace-only continuation"}
+  - {id: t9, hidden: true, args: [["Accept: text/html", "Warning: 199 cache", "  stale", "Accept: application/json"], "accept"], expected: "text/html, application/json", description: "Continuation belongs to a different header and must not leak in"}
+  - {id: t10, hidden: true, args: [["X-A: 1", "   ", "X-A: 2"], "x-a"], expected: "1, 2", description: "Whitespace-only line is a continuation, not the end of headers"}
+  - {id: t11, hidden: true, args: [["Content-Length: 10", "Content: x", "Content-Length-Extra: 5"], "Content"], expected: "x", description: "Names sharing a prefix must match exactly, not by prefix"}
+  - {id: t12, hidden: true, args: [["SET-COOKIE: a=1", "Set-Cookie: b=2", "set-cookie: c=3"], "Set-Cookie"], expected: "a=1, b=2, c=3", description: "Three occurrences in different letter cases joined in order"}
+  - {id: t13, hidden: true, args: [["X-Empty:", "  ", "X-Other: y"], "x-empty"], expected: "", description: "Header present but every value is empty"}
+expected_concepts:
+  - "line-oriented state machine (current header)"
+  - "splitting at the first delimiter only"
+  - "case-insensitive comparison of field names"
+  - "folded (continuation) lines"
+  - "joining repeated fields in order"
+optimal_complexity: {time: "O(total characters)", space: "O(length of the result)"}
+rubric:
+  excellent: "Reads the rules carefully, structures the code as a single pass that tracks the most recent header, splits only at the first colon, compares names case-insensitively and exactly, appends continuations to the right header, stops at the first empty line, and skips empty occurrences when joining."
+  good: "Correct for typical messages but needs a nudge on one rule such as continuations of non-matching headers or whitespace-only lines."
+  weak: "Splits on every colon, compares names case-sensitively or by prefix, keeps reading the body, or attaches continuations to the wrong header."
+  criteria:
+    correctness: "All tests pass, including colons in values, continuations, empty values and the end-of-headers rule."
+    efficiency: "One pass over the lines with linear work in their total length."
+    code_quality: "Each rule maps to a clear branch; trimming and joining are not duplicated."
+    edge_cases: "No lines, header only in the body, whitespace-only lines, all-empty values, names that share a prefix."
+    communication: "Asks or states how ambiguous inputs are handled before coding and explains each branch."
+hints:
+  - "Go through the lines one at a time. For each line, which of three kinds is it, and what do you need to remember from earlier lines to handle it?"
+  - "Remember the most recent header and the pieces of its value. A continuation line adds to that header, while a new header line starts a fresh value. Split header lines only at the first colon and compare names after converting both to the same letter case."
+  - "Walk the lines, stopping at the first empty one. For a line starting with a space or tab, trim it and add it to the current header's pieces if it is non-empty. Otherwise split at the first colon, start a new list of pieces with the trimmed value, and if the lowered name equals the lowered target, keep a reference to that list. At the end, join each kept list with single spaces, drop empty results and join the rest with a comma and a space."
+followups:
+  - "Why do real HTTP implementations reject folded continuation lines today, and what risks do they create?"
+  - "Set-Cookie values may contain commas; why is joining them with commas dangerous, and how would you return them instead?"
+  - "How would you parse the headers once and answer many lookups quickly?"
+  - "How should a proxy handle a header name with a space before the colon?"
+common_errors:
+  - "Splitting the line at every colon, which truncates values such as URLs with ports."
+  - "Comparing names case-sensitively or with a prefix check."
+  - "Appending a continuation line to the target header even when it belongs to another header."
+  - "Treating a whitespace-only line as the end of the headers."
+  - "Producing extra separators for empty occurrences or empty continuation lines."

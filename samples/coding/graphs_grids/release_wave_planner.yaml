@@ -1,0 +1,195 @@
+version: 1
+slug: release_wave_planner
+title: "Capacity-Limited Release Waves"
+difficulty: medium
+competency_keys: [algorithms, problem_solving]
+role_tags: [devops, platform, sre, backend]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Capacity-Limited Release Waves
+
+  A release manager ships `n` services, numbered `0` to `n - 1`, in numbered waves. Each pair
+  `[a, b]` in `deps` means service `b` must ship in an **earlier wave** than service `a`. The change
+  board limits every wave to at most `capacity` services.
+
+  Waves are built one after another with this rule:
+
+  - when building wave `k`, a service is **eligible** if it has not shipped yet and every service it
+    depends on shipped in waves `1` to `k - 1`;
+  - wave `k` takes the `capacity` eligible services with the **smallest numbers** (all of them if there
+    are fewer); eligible services that do not fit wait for a later wave.
+
+  Return the waves in order, each sorted in ascending order. If the dependencies contain a cycle
+  (including a service that depends on itself), not every service can ever ship: return an empty list.
+  The same pair may appear more than once.
+
+  ### Example 1
+  ```
+  Input:  n = 5, deps = [[2, 0], [3, 1], [4, 2], [4, 3]], capacity = 2
+  Output: [[0, 1], [2, 3], [4]]
+  Explanation: Services 0 and 1 have no dependencies. 2 and 3 become eligible after wave 1, and 4 needs both of them.
+  ```
+
+  ### Example 2
+  ```
+  Input:  n = 4, deps = [[1, 0], [2, 0], [3, 0]], capacity = 2
+  Output: [[0], [1, 2], [3]]
+  Explanation: Services 1, 2 and 3 all become eligible after wave 1, but only two fit in wave 2, so the smallest two go first.
+  ```
+
+  ### Example 3
+  ```
+  Input:  n = 3, deps = [[0, 1], [1, 2], [2, 0]], capacity = 3
+  Output: []
+  Explanation: 0 waits for 1, 1 waits for 2 and 2 waits for 0, so no service can ever ship.
+  ```
+
+  ### Constraints
+  - `1 <= n <= 10^4`
+  - `0 <= deps.length <= 5 * 10^4`
+  - `deps[i].length == 2` and `0 <= a, b < n`
+  - `1 <= capacity <= n`
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: release_waves
+  params:
+    - {name: n, type: "int"}
+    - {name: deps, type: "int[][]"}
+    - {name: capacity, type: "int"}
+  return_type: "int[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import heapq
+
+
+    def release_waves(n: int, deps: list[list[int]], capacity: int) -> list[list[int]]:
+        waiting = [0] * n
+        dependents = [[] for _ in range(n)]
+        for a, b in deps:
+            waiting[a] += 1
+            dependents[b].append(a)
+        ready = [s for s in range(n) if waiting[s] == 0]
+        heapq.heapify(ready)
+        waves = []
+        shipped = 0
+        while ready:
+            wave = [heapq.heappop(ready) for _ in range(min(capacity, len(ready)))]
+            waves.append(wave)
+            shipped += len(wave)
+            for s in wave:
+                for a in dependents[s]:
+                    waiting[a] -= 1
+                    if waiting[a] == 0:
+                        heapq.heappush(ready, a)
+        return waves if shipped == n else []
+  javascript: |
+    class MinHeap {
+      constructor(less) {
+        this.items = [];
+        this.less = less;
+      }
+      get size() {
+        return this.items.length;
+      }
+      push(value) {
+        const items = this.items;
+        items.push(value);
+        let i = items.length - 1;
+        while (i > 0) {
+          const parent = (i - 1) >> 1;
+          if (!this.less(items[i], items[parent])) break;
+          [items[i], items[parent]] = [items[parent], items[i]];
+          i = parent;
+        }
+      }
+      pop() {
+        const items = this.items;
+        const top = items[0];
+        const last = items.pop();
+        if (items.length > 0) {
+          items[0] = last;
+          let i = 0;
+          for (;;) {
+            const left = 2 * i + 1;
+            const right = left + 1;
+            let smallest = i;
+            if (left < items.length && this.less(items[left], items[smallest])) smallest = left;
+            if (right < items.length && this.less(items[right], items[smallest])) smallest = right;
+            if (smallest === i) break;
+            [items[i], items[smallest]] = [items[smallest], items[i]];
+            i = smallest;
+          }
+        }
+        return top;
+      }
+    }
+
+    function releaseWaves(n, deps, capacity) {
+      const waiting = new Array(n).fill(0);
+      const dependents = Array.from({ length: n }, () => []);
+      for (const [a, b] of deps) {
+        waiting[a]++;
+        dependents[b].push(a);
+      }
+      const ready = new MinHeap((a, b) => a < b);
+      for (let s = 0; s < n; s++) if (waiting[s] === 0) ready.push(s);
+      const waves = [];
+      let shipped = 0;
+      while (ready.size > 0) {
+        const wave = [];
+        while (wave.length < capacity && ready.size > 0) wave.push(ready.pop());
+        waves.push(wave);
+        shipped += wave.length;
+        for (const s of wave) {
+          for (const a of dependents[s]) {
+            waiting[a]--;
+            if (waiting[a] === 0) ready.push(a);
+          }
+        }
+      }
+      return shipped === n ? waves : [];
+    }
+tests:
+  - {id: t1, args: [5, [[2, 0], [3, 1], [4, 2], [4, 3]], 2], expected: [[0, 1], [2, 3], [4]], description: "Example 1 - capacity 2 with a chain"}
+  - {id: t2, args: [4, [[1, 0], [2, 0], [3, 0]], 2], expected: [[0], [1, 2], [3]], description: "Example 2 - capacity forces a ready service into a later wave"}
+  - {id: t3, args: [3, [[0, 1], [1, 2], [2, 0]], 3], expected: [], description: "Example 3 - cycle, no plan"}
+  - {id: t4, hidden: true, args: [1, [], 1], expected: [[0]], description: "Single service"}
+  - {id: t5, hidden: true, args: [4, [], 10], expected: [[0, 1, 2, 3]], description: "No dependencies, capacity larger than n - one wave"}
+  - {id: t6, hidden: true, args: [4, [], 1], expected: [[0], [1], [2], [3]], description: "No dependencies, capacity 1 - one service per wave in id order"}
+  - {id: t7, hidden: true, args: [3, [[1, 1]], 2], expected: [], description: "Self-dependency is a cycle"}
+  - {id: t8, hidden: true, args: [6, [[5, 0], [5, 0], [4, 5], [1, 4]], 3], expected: [[0, 2, 3], [5], [4], [1]], description: "Duplicate pairs and a late-unlocking low id"}
+  - {id: t9, hidden: true, args: [6, [[0, 5], [1, 5], [2, 5], [3, 5], [4, 5]], 2], expected: [[5], [0, 1], [2, 3], [4]], description: "Hub with five dependents released in capacity-limited batches"}
+  - {id: t10, hidden: true, args: [5, [[1, 0], [2, 1], [3, 2], [2, 3], [4, 0]], 5], expected: [], description: "Cycle among later services blocks the whole plan"}
+  - {id: t11, hidden: true, args: [50, [[33, 23], [27, 22], [49, 47], [48, 8], [20, 11], [34, 17], [49, 20], [27, 4], [33, 26], [45, 13], [16, 1], [41, 22], [25, 5], [23, 13], [31, 23], [26, 1], [44, 37], [18, 10], [41, 26], [41, 24], [39, 34], [42, 7], [41, 19], [42, 13], [15, 4], [39, 29], [17, 5], [44, 14], [31, 1], [29, 17], [28, 24], [43, 12], [35, 33], [41, 25], [41, 36], [34, 4], [19, 0], [47, 44], [17, 4], [33, 27], [14, 4], [41, 16], [27, 2], [40, 39], [27, 20], [14, 6], [17, 12], [43, 37], [23, 17], [46, 25], [48, 7], [32, 3], [46, 28], [48, 22], [28, 24], [34, 7], [31, 9], [44, 17], [44, 24], [25, 18], [10, 4], [9, 0], [32, 11], [35, 17], [21, 8], [42, 21], [35, 1], [43, 10], [40, 23], [48, 29], [43, 39], [34, 28], [31, 4], [33, 24], [32, 31], [32, 16], [37, 36], [49, 25], [42, 7], [38, 31]], 4], expected: [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15], [16, 17, 18, 19], [20, 21, 22, 23], [24, 25, 26, 27], [28, 29, 30, 31], [32, 33, 34, 36], [35, 37, 38, 39], [40, 41, 42, 43], [44, 45, 46, 48], [47], [49]], description: "50 services, 80 random acyclic dependencies, capacity 4 (stress)"}
+expected_concepts:
+  - "topological sorting with remaining-dependency counts"
+  - "min-heap of eligible services to pick the smallest numbers"
+  - "deferring services unlocked during a wave until the next wave"
+  - "cycle detection by counting shipped services"
+  - "O((n + E) log n) time"
+optimal_complexity: {time: "O((n + E) log n) for E dependency pairs", space: "O(n + E)"}
+rubric:
+  excellent: "Runs Kahn's algorithm wave by wave: pops up to capacity smallest services from a min-heap, only then releases their dependents into the heap so they wait for the next wave, detects cycles by the shipped count and explains O((n + E) log n)."
+  good: "Correct waves using a sorted list of eligible services or a rescan per wave, with minor prompting about when newly unlocked services become eligible."
+  weak: "Places newly unlocked services in the same wave, ignores the capacity, computes depth levels without the capacity rule, or loops forever on a cycle."
+  criteria:
+    correctness: "All tests pass, including capacity 1, capacity larger than any level, duplicates and cycles."
+    efficiency: "Each service is pushed and popped once from a heap."
+    code_quality: "The wave loop clearly separates choosing a wave from releasing dependents."
+    edge_cases: "A single service, no dependencies, self-dependency, cycles that leave other services shippable."
+    communication: "Explains why dependents of a wave must not join that same wave and how the capacity interacts with waiting services."
+hints:
+  - "Track which services are eligible right now, and think about what happens to that set after one wave ships."
+  - "Keep the eligible services in a structure that always hands back the smallest number, and keep a count of unshipped dependencies per service. Be careful about when a service unlocked by the current wave becomes eligible."
+  - "Count the dependencies of each service (repeated pairs counted each time) and record its dependents. Push every service with a count of zero into a min-heap. For each wave, pop up to capacity services from the heap and record them as the wave; only after the wave is chosen, decrement the counts of their dependents and push any that reach zero. Stop when the heap is empty and return an empty list if fewer than n services shipped."
+followups:
+  - "What is the minimum number of waves if you could choose freely instead of always taking the smallest numbers?"
+  - "How would you give each service a weight and limit the total weight per wave?"
+  - "How would you report which services are blocked by a cycle?"
+  - "How would you re-plan if one service in the middle of the rollout fails?"
+common_errors:
+  - "Pushing unlocked services into the heap before the current wave is complete, so they ship together with their dependency."
+  - "Ignoring capacity, which collapses the problem into plain depth levels."
+  - "Leaving waiting services behind instead of letting them compete with newly eligible ones."
+  - "Returning partial waves instead of an empty list when a cycle exists."

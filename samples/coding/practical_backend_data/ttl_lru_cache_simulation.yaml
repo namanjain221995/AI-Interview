@@ -1,0 +1,176 @@
+version: 1
+slug: ttl_lru_cache_simulation
+title: Session Cache with TTL and LRU Eviction
+difficulty: medium
+competency_keys: [data_structures, algorithms, problem_solving]
+role_tags: [backend, platform, sre, fullstack]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Session Cache with TTL and LRU Eviction
+
+  A login service keeps session tokens in an in-memory cache with room for `capacity` **live** entries.
+  Every entry has a time-to-live, and when the cache is full the least recently used entry makes room.
+  Replay a log of cache operations and return what every read would have returned.
+
+  Operation `i` happens at time `times[i]` (times never decrease) and is one of:
+
+  - `"SET key value ttl"` - store `value` under `key`; the entry **expires** at `times[i] + ttl`.
+  - `"GET key"` - read `key`.
+
+  Rules:
+
+  - An entry is **expired** at every time `now >= expires_at`. Expired entries can never be read and
+    do **not** count toward `capacity`.
+  - **GET** of a live key returns its value and makes it the **most recently used** entry. Its expiry
+    time does not change. A GET of a missing or expired key returns `"MISS"`.
+  - **SET** of a key that is live replaces its value and its expiry time and makes it the most recently
+    used entry; nothing is evicted.
+  - **SET** of any other key (new, or present but expired) first checks the number of live entries. If
+    it equals `capacity`, the **least recently used live** entry is evicted. Then the new entry is stored
+    as the most recently used.
+  - "Recently used" is updated only by a GET hit or a SET.
+
+  Return the results of all GET operations in order.
+
+  ### Example 1
+  ```
+  Input:  capacity = 2, times = [0, 1, 2, 3, 4, 10, 11],
+          ops = ["SET a 1 10", "SET b 2 5", "GET a", "SET c 3 100", "GET b", "GET a", "GET c"]
+  Output: ["1", "MISS", "MISS", "3"]
+  Explanation: at time 3 the cache is full (a and b are live); the GET at time 2 made a more recent,
+  so b is evicted. a expires at 0 + 10 = 10, so the GET at time 10 misses.
+  ```
+
+  ### Example 2
+  ```
+  Input:  capacity = 2, times = [0, 0, 5, 5, 5, 6, 6],
+          ops = ["SET s1 x 5", "SET s2 y 100", "GET s1", "SET s3 z 10", "GET s2", "SET s2 w 1", "GET s2"]
+  Output: ["MISS", "y", "w"]
+  Explanation: s1 expired at time 5, so only s2 is live and s3 fits without an eviction. The second
+  SET of s2 replaces its value and expiry time.
+  ```
+
+  ### Constraints
+  - `1 <= capacity <= 10^5`
+  - `0 <= ops.length == times.length <= 10^5`
+  - `0 <= times[i] <= 10^15`, and `times` is non-decreasing
+  - `1 <= ttl <= 10^15`, so expiry times need 64-bit integers.
+  - Keys and values are non-empty and contain only letters, digits, `_`, `-`, `.` and `:`; no value is
+    the text `MISS`. Tokens in an operation are separated by single spaces.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: run_ttl_cache
+  params:
+    - {name: capacity, type: int}
+    - {name: times, type: "long[]"}
+    - {name: ops, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import heapq
+    from collections import OrderedDict
+
+
+    def run_ttl_cache(capacity: int, times: list[int], ops: list[str]) -> list[str]:
+        entries: OrderedDict[str, tuple[str, int]] = OrderedDict()  # LRU first, MRU last
+        expiries: list[tuple[int, str]] = []  # min-heap of (expires_at, key); may hold stale items
+        results: list[str] = []
+        for now, op in zip(times, ops):
+            # Drop every entry that has expired by now so len(entries) counts live entries only.
+            while expiries and expiries[0][0] <= now:
+                _, key = heapq.heappop(expiries)
+                entry = entries.get(key)
+                if entry is not None and entry[1] <= now:
+                    del entries[key]
+            parts = op.split(" ")
+            if parts[0] == "GET":
+                entry = entries.get(parts[1])
+                if entry is None:
+                    results.append("MISS")
+                else:
+                    entries.move_to_end(parts[1])
+                    results.append(entry[0])
+            else:
+                key, value, ttl = parts[1], parts[2], int(parts[3])
+                if key not in entries and len(entries) >= capacity:
+                    entries.popitem(last=False)
+                expires_at = now + ttl
+                entries[key] = (value, expires_at)
+                entries.move_to_end(key)
+                heapq.heappush(expiries, (expires_at, key))
+        return results
+  javascript: |
+    function runTtlCache(capacity, times, ops) {
+      // A Map iterates in insertion order: re-inserting a key makes it the most recently used.
+      const entries = new Map();
+      const results = [];
+      for (let i = 0; i < ops.length; i++) {
+        const now = times[i];
+        for (const [key, entry] of entries) {
+          if (entry.expiresAt <= now) entries.delete(key);
+        }
+        const parts = ops[i].split(" ");
+        if (parts[0] === "GET") {
+          const entry = entries.get(parts[1]);
+          if (entry === undefined) {
+            results.push("MISS");
+          } else {
+            entries.delete(parts[1]);
+            entries.set(parts[1], entry);
+            results.push(entry.value);
+          }
+        } else {
+          const key = parts[1];
+          if (!entries.has(key) && entries.size >= capacity) {
+            entries.delete(entries.keys().next().value);
+          }
+          entries.delete(key);
+          entries.set(key, { value: parts[2], expiresAt: now + Number(parts[3]) });
+        }
+      }
+      return results;
+    }
+tests:
+  - {"id": "t1", "args": [2, [0, 1, 2, 3, 4, 10, 11], ["SET a 1 10", "SET b 2 5", "GET a", "SET c 3 100", "GET b", "GET a", "GET c"]], "expected": ["1", "MISS", "MISS", "3"], "description": "Example 1"}
+  - {"id": "t2", "args": [2, [0, 0, 5, 5, 5, 6, 6], ["SET s1 x 5", "SET s2 y 100", "GET s1", "SET s3 z 10", "GET s2", "SET s2 w 1", "GET s2"]], "expected": ["MISS", "y", "w"], "description": "Example 2 - expired entries free capacity; re-SET replaces value and expiry"}
+  - {"id": "t3", "hidden": true, "args": [3, [], []], "expected": [], "description": "No operations - empty result"}
+  - {"id": "t4", "hidden": true, "args": [1, [0, 1, 2, 3, 4], ["GET nope", "SET a 1 100", "SET b 2 100", "GET a", "GET b"]], "expected": ["MISS", "MISS", "2"], "description": "Capacity 1 - each new key evicts the previous one; GET on an unknown key"}
+  - {"id": "t5", "hidden": true, "args": [2, [0, 4, 5, 9, 10], ["SET t v 10", "GET t", "GET t", "GET t", "GET t"]], "expected": ["v", "v", "v", "MISS"], "description": "GET hits do not extend the TTL; entry is expired exactly at set time plus ttl"}
+  - {"id": "t6", "hidden": true, "args": [2, [0, 1, 2, 3, 4, 5], ["SET a 1 100", "SET b 2 100", "SET a 9 100", "SET c 3 100", "GET a", "GET b"]], "expected": ["9", "MISS"], "description": "SET of an existing live key updates recency and evicts nothing; the next new key evicts b"}
+  - {"id": "t7", "hidden": true, "args": [2, [0, 1, 5, 6, 7, 8], ["SET a 1 5", "SET b 2 100", "SET a 3 100", "SET c 4 100", "GET b", "GET a"]], "expected": ["MISS", "3"], "description": "SET of an expired key is stored as new without an eviction (only b is live); the next new key evicts b as least recently used"}
+  - {"id": "t8", "hidden": true, "args": [3, [7, 7, 7, 7, 7, 7, 7], ["SET a 1 1", "SET b 2 1", "SET c 3 1", "GET a", "SET d 4 1", "GET b", "GET a"]], "expected": ["1", "MISS", "1"], "description": "Many operations at one timestamp - recency from GET decides eviction"}
+  - {"id": "t9", "hidden": true, "args": [2, [999999999999995, 999999999999996, 1000000000000000, 1000000000000003, 1999999999999994, 1999999999999995], ["SET big x 1000000000000000", "SET small y 4", "GET small", "GET big", "GET big", "GET big"]], "expected": ["MISS", "x", "x", "MISS"], "description": "Times and TTLs near 10^15 - 64-bit expiry arithmetic; live one unit before expiry, expired exactly at it"}
+  - {"id": "t10", "hidden": true, "args": [4, [2, 4, 7, 9, 9, 9, 16, 18, 25, 28, 28, 31, 33, 36, 36, 43, 43, 43, 43, 45, 45, 52, 52, 54, 54, 55, 57, 57, 57, 57, 59, 59, 61, 62, 65, 65, 72, 72, 75, 75, 82, 83, 86, 86, 93, 96, 103, 103, 105, 105, 106, 107, 109, 116, 116, 119, 119, 126, 128, 129, 129, 130, 133, 136, 137, 137, 139, 139, 141, 141, 148, 149, 149, 149, 149, 151, 151, 152, 153, 156, 159, 159, 159, 161, 163, 164, 167, 174, 174, 174, 174, 174, 174, 174, 174, 174, 181, 182, 185, 185, 192, 193, 193, 195, 196, 196, 198, 205, 212, 213, 215, 215, 218, 221, 221, 221, 228, 228, 228, 231, 233, 240, 247, 247, 248, 249, 249, 251, 252, 252, 254, 257, 257, 264, 271, 274, 274, 281, 284, 287, 290, 293, 295, 298, 301, 303, 303, 303, 305, 307, 307, 309, 309, 310, 310, 317, 317, 319, 322, 322, 324, 327, 327, 334, 337, 337, 338, 341, 341, 341, 348, 350, 353, 353, 353, 354, 354, 355, 355, 355, 358, 360, 360, 367, 374, 374, 377, 378, 378, 385, 388, 388, 395, 402, 405, 406, 413, 415, 418, 420, 420, 421, 422, 425, 426, 429, 432, 432, 434, 434, 434, 434, 436, 437, 440, 443, 450, 453, 453, 455, 457, 457, 458, 459, 466, 473, 473, 473, 480, 487, 488, 490, 490, 497, 497, 497, 497, 500, 500, 503, 505, 505, 505, 506, 507, 514, 514, 514, 521, 528, 529, 529, 529, 536, 537, 537, 537, 537, 537, 539, 539, 540, 540, 540, 540, 543, 550, 550, 557, 558, 565, 565, 566, 573, 580, 583, 585, 592, 592, 593, 595, 598, 598, 598, 599, 602, 603, 605, 608, 615, 615, 615, 617, 620, 621, 621, 628, 628, 629, 631], ["GET k13", "GET k13", "SET k12 v2 17", "GET k12", "SET k4 v4 5", "GET k14", "GET k9", "GET k10", "GET k2", "SET k8 v9 3", "SET k14 v10 8", "SET k7 v11 11", "GET k3", "SET k4 v13 16", "GET k7", "SET k8 v15 30", "GET k5", "GET k0", "GET k1", "SET k4 v19 13", "GET k13", "SET k3 v21 30", "GET k11", "SET k9 v23 21", "GET k4", "SET k5 v25 1", "GET k1", "SET k1 v27 1", "GET k7", "GET k3", "GET k11", "SET k6 v31 4", "SET k3 v32 1", "GET k12", "SET k14 v34 1", "SET k13 v35 20", "GET k0", "SET k4 v37 1", "SET k4 v38 13", "SET k3 v39 19", "SET k9 v40 12", "GET k2", "GET k9", "GET k2", "SET k14 v44 8", "SET k3 v45 6", "GET k8", "GET k6", "GET k6", "SET k0 v49 17", "SET k11 v50 13", "SET k14 v51 20", "SET k2 v52 30", "GET k2", "GET k10", "GET k4", "GET k3", "SET k4 v57 14", "SET k0 v58 6", "SET k9 v59 5", "SET k14 v60 15", "GET k11", "GET k2", "SET k0 v63 16", "GET k0", "GET k1", "SET k4 v66 11", "GET k1", "GET k11", "GET k11", "GET k12", "SET k10 v71 16", "GET k6", "GET k9", "GET k6", "GET k9", "SET k10 v76 4", "GET k11", "SET k11 v78 23", "GET k7", "SET k12 v80 17", "SET k1 v81 16", "SET k11 v82 4", "GET k10", "SET k0 v84 12", "SET k9 v85 7", "SET k14 v86 11", "GET k7", "SET k10 v88 9", "GET k12", "GET k6", "GET k5", "SET k7 v92 12", "GET k4", "SET k7 v94 9", "GET k6", "GET k10", "GET k13", "GET k1", "SET k9 v99 2", "GET k9", "SET k12 v101 19", "GET k6", "SET k12 v103 27", "SET k2 v104 26", "GET k1", "SET k8 v106 21", "GET k1", "SET k13 v108 16", "SET k0 v109 25", "GET k0", "SET k12 v111 12", "GET k8", "GET k12", "SET k12 v114 23", "SET k14 v115 29", "SET k7 v116 15", "GET k14", "SET k9 v118 21", "GET k5", "SET k3 v120 4", "GET k12", "GET k1", "SET k6 v123 3", "GET k12", "SET k11 v125 28", "SET k1 v126 2", "SET k6 v127 25", "GET k0", "GET k1", "GET k2", "SET k12 v131 30", "GET k8", "GET k10", "SET k14 v134 16", "GET k1", "SET k8 v136 10", "GET k2", "GET k14", "SET k10 v139 13", "SET k13 v140 5", "GET k9", "SET k8 v142 4", "SET k6 v143 1", "GET k8", "GET k9", "GET k11", "SET k8 v147 15", "GET k12", "SET k7 v149 16", "SET k14 v150 27", "GET k1", "SET k0 v152 30", "SET k12 v153 1", "SET k3 v154 1", "SET k11 v155 12", "GET k1", "GET k1", "GET k11", "GET k14", "SET k10 v160 14", "GET k8", "GET k8", "SET k3 v163 28", "GET k13", "SET k11 v165 21", "GET k5", "SET k14 v167 7", "GET k3", "SET k3 v169 5", "SET k6 v170 4", "GET k6", "GET k2", "SET k10 v173 26", "SET k9 v174 22", "GET k5", "GET k10", "GET k10", "GET k7", "SET k12 v179 18", "GET k9", "SET k2 v181 4", "SET k2 v182 10", "SET k0 v183 5", "GET k12", "SET k7 v185 14", "SET k3 v186 20", "SET k11 v187 2", "SET k7 v188 12", "SET k14 v189 7", "SET k8 v190 26", "SET k1 v191 26", "GET k14", "GET k9", "SET k9 v194 11", "SET k1 v195 24", "GET k13", "SET k5 v197 29", "GET k12", "GET k6", "GET k1", "SET k1 v201 1", "GET k14", "SET k4 v203 22", "SET k10 v204 13", "SET k1 v205 13", "GET k10", "GET k12", "GET k0", "GET k11", "SET k6 v210 17", "GET k10", "SET k4 v212 9", "GET k8", "GET k8", "GET k1", "SET k10 v216 3", "GET k12", "SET k2 v218 13", "GET k13", "GET k9", "SET k7 v221 14", "GET k9", "SET k4 v223 16", "SET k14 v224 10", "GET k4", "SET k3 v226 19", "GET k6", "SET k14 v228 11", "SET k9 v229 24", "SET k14 v230 8", "GET k4", "SET k1 v232 30", "GET k2", "GET k1", "GET k7", "SET k0 v236 12", "SET k5 v237 15", "GET k7", "SET k9 v239 22", "SET k11 v240 17", "GET k11", "SET k1 v242 17", "GET k9", "SET k9 v244 22", "GET k9", "GET k12", "SET k3 v247 17", "GET k14", "SET k0 v249 1", "SET k0 v250 20", "SET k8 v251 9", "GET k14", "SET k3 v253 21", "GET k5", "SET k7 v255 24", "GET k1", "SET k13 v257 20", "SET k11 v258 9", "GET k5", "GET k9", "SET k12 v261 24", "SET k5 v262 19", "GET k5", "GET k6", "GET k13", "GET k13", "SET k3 v267 30", "GET k11", "GET k12", "SET k14 v270 5", "SET k11 v271 11", "GET k5", "SET k9 v273 30", "GET k7", "GET k4", "SET k6 v276 30", "GET k3", "SET k5 v278 1", "GET k9", "GET k11", "SET k6 v281 18", "GET k9", "SET k12 v283 15", "GET k3", "SET k2 v285 19", "GET k10", "SET k8 v287 10", "SET k1 v288 9", "SET k5 v289 3", "GET k2", "GET k10", "SET k3 v292 16", "SET k7 v293 13", "SET k5 v294 22", "GET k8", "SET k9 v296 30", "SET k13 v297 22", "GET k12", "GET k14"]], "expected": ["MISS", "MISS", "v2", "MISS", "MISS", "MISS", "MISS", "MISS", "v11", "MISS", "MISS", "MISS", "MISS", "MISS", "v19", "MISS", "MISS", "v21", "MISS", "MISS", "MISS", "MISS", "v40", "MISS", "MISS", "MISS", "MISS", "v52", "MISS", "MISS", "MISS", "MISS", "MISS", "v63", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "v88", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "v109", "v106", "v111", "v115", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "v134", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "v155", "v150", "MISS", "MISS", "MISS", "MISS", "v163", "v170", "MISS", "MISS", "v173", "v173", "MISS", "v174", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "v195", "MISS", "v204", "MISS", "MISS", "MISS", "v204", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "v223", "MISS", "MISS", "MISS", "v232", "MISS", "MISS", "v240", "v239", "v244", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "MISS", "v262", "MISS", "v257", "v257", "MISS", "v261", "MISS", "MISS", "MISS", "MISS", "v273", "MISS", "v273", "MISS", "MISS", "v285", "MISS", "MISS", "MISS", "MISS"], "description": "Stress - 300 random SET and GET operations over 15 keys with short TTLs and capacity 4"}
+expected_concepts:
+  - hash map plus recency order (linked list or ordered map) for O(1) LRU operations
+  - lazy expiry with a min-heap of expiry times
+  - only live entries count toward capacity
+  - a read refreshes recency but not the time-to-live
+  - 64-bit time arithmetic
+optimal_complexity: {time: O(n log n) with a heap for expiries, space: O(n)}
+rubric:
+  excellent: Combines a hash map with a recency list for O(1) LRU updates and a min-heap (or sorted structure) to drop expired entries lazily, applies the live-only capacity rule, keeps TTL unchanged on reads and uses 64-bit times.
+  good: Correct simulation with an O(capacity) scan for expired entries or eviction candidates, or a nudge on one rule such as the expiry boundary or re-setting an expired key.
+  weak: Counts expired entries toward capacity, refreshes the TTL on reads, evicts by insertion order instead of recency, or returns stale values after expiry.
+  criteria:
+    correctness: All tests pass, including expiry boundaries, re-set keys and evictions after reads.
+    efficiency: Amortised O(log n) or better per operation instead of scanning the whole cache.
+    code_quality: Small helpers for purge, touch and evict; the order structure and the map never disagree.
+    edge_cases: Capacity 1, GET on an unknown key, SET of an existing live key, SET of an expired key when full, expiry exactly at the current time, very large times.
+    communication: Explains how expiry and recency interact and why a lazy purge is correct.
+hints:
+  - Two separate questions decide every operation - is this entry still alive at the current time, and which live entry was used least recently?
+  - An ordered map (or a hash map plus a doubly linked list) gives you the least recently used key in O(1). Expired entries can be removed lazily before each operation, since nobody can observe them anyway.
+  - Before each operation, pop every entry whose expiry time is at or before now from a min-heap of (expires_at, key), skipping heap items that are stale because the key was set again. Then a GET hit moves the key to the most-recent end; a SET of a key that is not live evicts the oldest entry when the live count equals capacity, and stores the new entry at the most-recent end.
+followups:
+  - How would you make this cache safe for concurrent requests from many threads?
+  - How would you add a sliding expiration where every read extends the TTL?
+  - How does a cache like Redis expire keys without scanning all of them, and what trade-off does it accept?
+  - How would you report the hit ratio per minute from this simulation?
+common_errors:
+  - Counting expired entries toward capacity, which evicts a live entry unnecessarily.
+  - Treating an entry as live at exactly its expiry time.
+  - Extending the TTL on a GET hit.
+  - Evicting the oldest inserted key instead of the least recently used one.
+  - Computing expiry times in 32-bit integers.

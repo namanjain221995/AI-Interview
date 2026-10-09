@@ -1,0 +1,637 @@
+# Technical: ML engineering (1/4) - training pipelines, distributed training, feature stores.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [ml]
+questions:
+  # ------------------------------------------------------------- training pipelines
+  - external_key: technical.ml_engineering.training_pipeline_stages
+    competency_key: mlops
+    topic: End-to-end training pipeline stages
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Walk me through the stages of a training pipeline you've built or worked on, from raw data all the way
+      to a registered model. Where did it break most often?
+    expected_concepts:
+      - data extraction and validation
+      - feature transformation shared with serving
+      - training with tracked configuration
+      - evaluation against a baseline before registration
+      - registering the model with metadata and lineage
+      - orchestration with retries and alerts
+    rubric:
+      excellent: Describes each stage of a real pipeline with the tools used, explains how stages hand off artifacts, and gives concrete failure points with what was done to fix them.
+      good: Covers data, training, evaluation and registration in order with at least one real failure example.
+      weak: Describes only the model training step or stays generic with no sense of how the pipeline actually ran.
+    followups:
+      - How did you know a stage had failed silently rather than loudly?
+      - Which stage would you automate next if you had another month?
+    common_errors:
+      - Treating the pipeline as a single script with no separable, rerunnable steps.
+
+  - external_key: technical.ml_engineering.pre_training_data_checks
+    competency_key: mlops
+    topic: Data validation before training
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What checks do you run on training data before a training job starts, and what happens in your
+      pipeline when one of those checks fails?
+    expected_concepts:
+      - schema and type checks
+      - row counts and volume compared with previous runs
+      - null rates and value ranges per feature
+      - label distribution checks
+      - duplicate and leakage checks
+      - failing fast versus warning thresholds
+    rubric:
+      excellent: Lists concrete schema, volume, distribution and label checks with thresholds, and explains which failures block training versus only warn, plus who gets notified.
+      good: Names several sensible checks and says the run stops on failure.
+      weak: Relies on the training job crashing or on eyeballing data in a notebook.
+    followups:
+      - How do you set thresholds that don't fire on every small change?
+      - Which tool or library have you used for these checks?
+    common_errors:
+      - Checking only the schema and missing distribution changes that keep the schema valid.
+
+  - external_key: technical.ml_engineering.suspicious_offline_gain
+    competency_key: machine_learning
+    topic: Investigating a suspiciously large offline gain
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A retrained model scores much better offline than the current production version, and instead of
+      celebrating you're suspicious. How would you check whether that improvement is real?
+    expected_concepts:
+      - target or temporal leakage in new features
+      - changes in the evaluation set or split
+      - duplicates between train and test data
+      - comparing both models on the identical evaluation set
+      - slice-level comparison of the gain
+      - confirming with a shadow or online test
+    rubric:
+      excellent: Systematically rules out leakage, split changes and duplicate rows, re-evaluates both models on the same frozen set, looks at where the gain comes from by slice, and plans an online confirmation.
+      good: Suspects leakage and an evaluation-set change and knows to compare on the same data.
+      weak: Ships the model because the number went up, or cannot name how an offline gain could be fake.
+    followups:
+      - Give me an example of a feature that leaks the label without looking like it does.
+      - The gain is concentrated in one small segment. What does that suggest?
+    common_errors:
+      - Comparing the new model on a new test set with the old model's historical score.
+
+  - external_key: technical.ml_engineering.time_aware_splits
+    competency_key: machine_learning
+    topic: Time-aware train and test splits
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How do you design training, validation and test splits for a model that predicts something in the
+      future, like churn or demand, so that you don't leak information from the future into training?
+    expected_concepts:
+      - splitting by time rather than randomly
+      - a gap between training cutoff and evaluation window
+      - features computed only from data before the prediction time
+      - grouping by entity to avoid the same customer on both sides
+      - rolling or backtest evaluation over several windows
+    rubric:
+      excellent: Uses time-based splits with a gap, enforces point-in-time feature computation, handles entity overlap, and validates with several rolling windows to check stability.
+      good: Splits by time and explains why random splits leak.
+      weak: Uses a random split and does not see the leakage risk.
+    followups:
+      - How would you choose the size of the gap between training and test?
+      - What changes if the same customer appears many times in the data?
+    common_errors:
+      - Computing aggregate features over the full dataset before splitting.
+
+  - external_key: technical.ml_engineering.idempotent_pipeline_steps
+    competency_key: mlops
+    topic: Rerunnable and cached pipeline steps
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When you orchestrate training pipelines, how do you make each step safe to rerun after a failure, and
+      how do you avoid recomputing expensive steps whose inputs haven't changed?
+    expected_concepts:
+      - idempotent steps writing to versioned output locations
+      - content hashing of inputs and code for caching
+      - atomic writes or commit markers
+      - orchestrator retries with backoff
+      - explicit artifact passing between steps
+    rubric:
+      excellent: Explains idempotency through deterministic, versioned outputs and atomic commits, describes cache keys built from input data, code and config, and knows when to invalidate the cache.
+      good: Makes steps idempotent and uses the orchestrator's caching or skips based on existing outputs.
+      weak: Reruns the whole pipeline from scratch every time or overwrites outputs in place.
+    followups:
+      - How would a partial write from a crashed step be detected?
+      - What would you include in a cache key so it doesn't give stale results?
+    common_errors:
+      - Cache keys that ignore code or configuration changes, so stale artifacts are reused.
+
+  - external_key: technical.ml_engineering.parallelism_strategy
+    competency_key: distributed_systems
+    topic: Choosing a distributed training strategy
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your model no longer trains in a reasonable time on one GPU, or doesn't fit at all. How do you choose
+      between plain data parallelism, sharded approaches like FSDP or ZeRO, and tensor or pipeline
+      parallelism?
+    expected_concepts:
+      - data parallel when the model fits on one device
+      - sharding parameters, gradients and optimizer state when memory is the limit
+      - tensor parallelism within a node with fast interconnect
+      - pipeline parallelism and bubble overhead
+      - communication cost and interconnect bandwidth
+      - effect of global batch size on convergence
+    rubric:
+      excellent: Picks the strategy from memory and throughput constraints, explains what each approach shards and communicates, ties choices to interconnect topology, and mentions batch size and learning rate effects.
+      good: Correctly separates data parallel from model sharding and knows when memory forces sharding.
+      weak: Only knows to add more GPUs with data parallelism, or confuses the approaches.
+    followups:
+      - What happens to your learning rate when the global batch size grows eightfold?
+      - Why does tensor parallelism usually stay inside one node?
+    common_errors:
+      - Assuming data parallelism reduces per-GPU memory use.
+
+  - external_key: technical.ml_engineering.preemptible_training
+    competency_key: distributed_systems
+    topic: Training on preemptible instances
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You're training on spot or preemptible GPUs to save money, and jobs keep getting killed a few hours in.
+      How would you make training resilient to that?
+    expected_concepts:
+      - periodic checkpoints of model, optimizer and scheduler state
+      - saving data loader position and random state
+      - handling the preemption notice for a final checkpoint
+      - automatic resubmission and resume
+      - checkpoint frequency versus overhead trade-off
+      - writing checkpoints to durable storage
+    rubric:
+      excellent: Checkpoints full training state including optimizer, scheduler, data position and random state to durable storage, reacts to the preemption signal, and automates resume with a reasoned checkpoint interval.
+      good: Checkpoints model and optimizer regularly and restarts from the last checkpoint.
+      weak: Saves only final weights or suggests switching to on-demand instances without other ideas.
+    followups:
+      - How would you pick the checkpoint interval?
+      - After resuming, how do you know the run is equivalent to an uninterrupted one?
+    common_errors:
+      - Restoring weights but not optimizer state, so training effectively restarts the schedule.
+
+  - external_key: technical.ml_engineering.nan_loss_debugging
+    competency_key: machine_learning
+    topic: Debugging a loss that turns into NaN
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Partway through a training run, the loss suddenly becomes NaN. How would you track down the cause?
+    expected_concepts:
+      - reproducing from the last good checkpoint
+      - inspecting the batch that triggered it for bad values
+      - learning rate too high or warmup missing
+      - numerical issues such as log of zero or division by zero
+      - mixed precision overflow and loss scaling
+      - gradient norm logging and clipping
+    rubric:
+      excellent: Reproduces deterministically from a checkpoint, isolates whether data or numerics are at fault, checks learning rate, precision and unsafe operations, and adds gradient monitoring and anomaly detection.
+      good: Names learning rate, bad inputs and gradient explosion and suggests gradient clipping.
+      weak: Restarts the run and hopes, or only lowers the learning rate without investigating.
+    followups:
+      - How would you find the exact batch that caused it?
+      - What would you log going forward so you catch it earlier?
+    common_errors:
+      - Adding gradient clipping to hide the symptom without finding the bad data or operation.
+
+  - external_key: technical.ml_engineering.tuning_on_budget
+    competency_key: machine_learning
+    topic: Hyperparameter tuning on a budget
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Tell me how you've run hyperparameter tuning on a real project. What search strategy did you use, and how
+      did you decide when to stop searching?
+    expected_concepts:
+      - random search over grid search
+      - Bayesian optimization or similar adaptive search
+      - early stopping of poor trials such as successive halving
+      - choosing the most sensitive hyperparameters first
+      - a fixed validation set and budget
+    rubric:
+      excellent: Describes a concrete tuning effort with the search method, search space and budget, uses early stopping of bad trials, and explains a stopping rule based on diminishing returns.
+      good: Uses random or Bayesian search with a sensible search space on a real project.
+      weak: Tweaked values by hand without a method, or cannot explain why the chosen values worked.
+    followups:
+      - Which hyperparameters mattered most for that model?
+      - How did you avoid overfitting to the validation set while tuning?
+    common_errors:
+      - Tuning against the test set and then reporting it as unbiased performance.
+
+  - external_key: technical.ml_engineering.run_tracking
+    competency_key: mlops
+    topic: Experiment tracking in practice
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What do you record for every training run, and can you tell me about a time that record actually saved
+      you or your team later on?
+    expected_concepts:
+      - code commit and configuration
+      - dataset version or snapshot identifier
+      - hyperparameters and random seeds
+      - metrics over time and final evaluation
+      - environment and hardware details
+      - links to produced artifacts
+    rubric:
+      excellent: Lists a complete set of tracked items with the tool used, and gives a specific story where the record helped explain a regression or reproduce a result.
+      good: Tracks parameters, metrics and code version with a reasonable example of using them.
+      weak: Tracks only final metrics, or keeps results in spreadsheets and notebooks with no link to code or data.
+    followups:
+      - How do you stop the tracking server from filling with thousands of useless runs?
+    common_errors:
+      - Logging metrics without the data version, so runs cannot be compared fairly.
+
+  # ------------------------------------------------------------- feature stores
+  - external_key: technical.ml_engineering.point_in_time_training_sets
+    competency_key: data_engineering
+    topic: Point-in-time correct training sets
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Explain how you would build a training set from historical feature values so that each example only
+      sees what was actually known at the moment the prediction would have been made.
+    expected_concepts:
+      - event timestamps on labels and features
+      - as-of joins picking the latest value before the event time
+      - feature availability delay versus event time
+      - avoiding overwritten current-state tables
+      - storing feature history rather than only the latest value
+    rubric:
+      excellent: Describes as-of joins on event time, accounts for the delay before a feature value actually becomes available, and explains why current-state tables cause leakage.
+      good: Explains joining on timestamps so only earlier feature values are used.
+      weak: Joins today's feature values onto historical labels without seeing the problem.
+    followups:
+      - How do you handle a feature that is computed daily but becomes available at 6 a.m. the next day?
+      - How expensive is an as-of join at scale, and how have you made it faster?
+    common_errors:
+      - Ignoring the computation delay, so the training data uses values that were not yet available.
+
+  - external_key: technical.ml_engineering.replay_mismatch_features
+    competency_key: mlops
+    topic: Production predictions differ from offline replay
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Predictions in production look different from what you get when you replay the same requests offline
+      through the same model. How would you check whether feature computation is the culprit?
+    expected_concepts:
+      - logging the exact features used at serving time
+      - comparing logged features with offline-computed features per request
+      - separate code paths for training and serving transformations
+      - timing and freshness differences in the online store
+      - default values and missing-value handling differences
+    rubric:
+      excellent: Logs served features and diffs them against offline features request by request, quantifies which features disagree, and traces each mismatch to code path, freshness or default handling.
+      good: Suggests logging served features and comparing them with offline values.
+      weak: Retrains the model or blames the model version without checking the inputs.
+    followups:
+      - Once you find a mismatched feature, how do you prevent the same class of bug in future?
+    common_errors:
+      - Comparing distributions in aggregate and missing per-request mismatches that cancel out.
+
+  - external_key: technical.ml_engineering.realtime_window_features
+    competency_key: data_engineering
+    topic: Real-time windowed features
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      A fraud model needs features like the number of transactions on a card in the last five minutes. How
+      would you compute and serve that kind of feature with low latency, and still use exactly the same
+      definition when you build training data?
+    expected_concepts:
+      - stream processing with sliding or hopping windows
+      - event time, watermarks and late events
+      - low-latency online store keyed by entity
+      - one feature definition used for streaming and backfill
+      - logging served values for training
+      - handling hot keys and state size
+    rubric:
+      excellent: Designs a streaming aggregation with event-time windows and late-data handling, serves from an online store, guarantees training parity by shared definitions or logged features, and discusses hot keys and state size.
+      good: Uses a stream processor with windows and an online store and recognises the training parity problem.
+      weak: Queries the transactional database on each request or ignores how training data would be produced.
+    followups:
+      - What happens to the feature when events arrive late or out of order?
+      - Would you log and wait or backfill from history to train, and why?
+    common_errors:
+      - Using processing time instead of event time, so replays produce different values.
+
+  - external_key: technical.ml_engineering.feature_freshness_needs
+    competency_key: data_engineering
+    topic: Deciding how fresh a feature must be
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you decide how fresh a feature needs to be, and how does that decision change the way you
+      compute and store it?
+    expected_concepts:
+      - measuring model sensitivity to staleness
+      - batch versus streaming computation cost
+      - online store versus precomputed tables
+      - business tolerance for delayed reactions
+      - monitoring freshness in production
+    rubric:
+      excellent: Ties freshness to measured model impact and business needs, compares batch and streaming cost, and monitors freshness once deployed.
+      good: Gives a sensible example of a feature that needs to be fresh and one that does not, with matching compute choices.
+      weak: Assumes every feature should be real time, or cannot connect freshness to cost.
+    followups:
+      - How would you measure what staleness costs the model?
+    common_errors:
+      - Building streaming pipelines for features where a daily batch would perform the same.
+
+  - external_key: technical.ml_engineering.feature_history_backfill
+    competency_key: data_engineering
+    topic: Backfilling a new feature's history
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You've defined a new feature and want to train on two years of history, but it has only been computed
+      going forward from today. How would you approach backfilling it?
+    expected_concepts:
+      - recomputing from raw historical events with the same logic
+      - reconstructing state as of each historical date
+      - source data retention and schema changes over time
+      - partitioned, parallel backfill jobs
+      - validating backfilled values against recent live values
+    rubric:
+      excellent: Recomputes from historical raw data with the same definition, handles schema changes and missing sources, runs the backfill in parallel partitions, and validates overlap with live values.
+      good: Recomputes from raw history and checks the result against current values.
+      weak: Fills history with today's value or a constant without seeing the bias that introduces.
+    followups:
+      - The raw source was only kept for six months. What now?
+    common_errors:
+      - Backfilling with a different implementation than the live pipeline, creating training-serving skew.
+
+  - external_key: technical.ml_engineering.shared_feature_breakage
+    competency_key: mlops
+    topic: Ownership and versioning in a shared feature store
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A team changed how a shared feature in the feature store is computed, and two other teams' models
+      degraded the next day. How would you set up ownership and versioning so that can't happen quietly again?
+    expected_concepts:
+      - immutable versioned feature definitions
+      - explicit ownership and consumer registry
+      - lineage from features to models
+      - compatibility checks and review for definition changes
+      - deprecation with migration windows
+      - distribution monitoring per feature version
+    rubric:
+      excellent: Makes feature definitions immutable and versioned, tracks which models consume each version, adds review and automated compatibility checks, and runs deprecation with notice and migration paths.
+      good: Proposes versioning features and notifying consumers before changes.
+      weak: Asks teams to communicate better without any technical safeguard.
+    followups:
+      - How would you find every model that consumes a given feature?
+      - Who should be allowed to retire an old feature version?
+    common_errors:
+      - Versioning the feature name but letting the underlying computation change in place.
+
+  - external_key: technical.ml_engineering.feature_platform_scope
+    competency_key: system_design
+    topic: Scoping a first feature platform
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Five ML teams each compute features in their own ad hoc pipelines, and you're asked to propose a shared
+      feature platform. How would you scope the first version and decide what to build versus adopt?
+    expected_concepts:
+      - interviewing teams for the most painful shared problems
+      - starting with offline store and point-in-time retrieval or online serving based on need
+      - evaluating open-source and managed options against requirements
+      - a pilot with one or two teams and measurable success criteria
+      - migration and operating cost
+    rubric:
+      excellent: Grounds the scope in the teams' actual pain points, defines a narrow first version with a pilot and success metrics, compares adopt versus build on requirements and operating cost, and plans migration.
+      good: Proposes a reasonable first version and considers existing tools.
+      weak: Designs a complete platform up front with no pilot or prioritisation.
+    followups:
+      - What would make you stop the project after the pilot?
+      - How would you convince a team that is happy with its own pipeline to migrate?
+    common_errors:
+      - Building a large platform before any team has committed to use it.
+
+  # ------------------------------------------------------------- compute efficiency in training
+  - external_key: technical.ml_engineering.low_gpu_util_training
+    competency_key: mlops
+    topic: Low GPU utilisation during training
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      GPU utilisation during your training job sits around thirty percent. How would you find out whether the
+      bottleneck is data loading, the model itself or something else, and what would you change?
+    expected_concepts:
+      - profiling step time with a framework profiler
+      - data loader workers, prefetching and pinned memory
+      - decoding and augmentation cost on the CPU
+      - storage throughput from remote object storage
+      - small batch sizes or host to device synchronisation
+      - mixed precision and kernel fusion
+    rubric:
+      excellent: Profiles to separate input pipeline time from compute, fixes data loading with workers, prefetching and caching, removes synchronisation points, and verifies the gain with throughput numbers.
+      good: Suspects the data loader and suggests more workers and prefetching.
+      weak: Increases batch size or buys faster GPUs without measuring.
+    followups:
+      - How can you test quickly whether data loading is the bottleneck?
+      - Which operations accidentally force the GPU to wait for the CPU?
+    common_errors:
+      - Calling item or printing tensor values every step, forcing synchronisation.
+
+  - external_key: technical.ml_engineering.mixed_precision_practice
+    competency_key: machine_learning
+    topic: Mixed precision training
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How have you used mixed precision training, and what problems did you have to watch out for when you
+      turned it on?
+    expected_concepts:
+      - FP16 versus BF16 range and precision
+      - dynamic loss scaling for FP16
+      - keeping master weights or sensitive ops in FP32
+      - speedups depend on tensor cores and shapes
+      - validating that final quality matches full precision
+    rubric:
+      excellent: Explains BF16 versus FP16 trade-offs, loss scaling and which operations stay in full precision, and checks that accuracy and stability match a full-precision baseline.
+      good: Has used automatic mixed precision and knows about overflow and loss scaling.
+      weak: Knows only that it is faster, with no awareness of numerical risks.
+    followups:
+      - Why does BF16 usually not need loss scaling?
+    common_errors:
+      - Assuming any GPU gets a large speedup from mixed precision regardless of hardware.
+
+  - external_key: technical.ml_engineering.gpu_memory_limits
+    competency_key: mlops
+    topic: Working within GPU memory limits
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Your training job runs out of GPU memory as soon as you increase the batch size. What options do you
+      have besides moving to a bigger GPU?
+    expected_concepts:
+      - gradient accumulation
+      - activation checkpointing
+      - mixed precision
+      - sharding optimizer state or parameters
+      - shorter sequences or smaller inputs
+    rubric:
+      excellent: Offers several techniques with their trade-offs in speed and convergence, and explains how gradient accumulation keeps the effective batch size.
+      good: Names gradient accumulation and mixed precision correctly.
+      weak: Only suggests reducing batch size without considering the effect on training.
+    followups:
+      - What does activation checkpointing cost you?
+    common_errors:
+      - Forgetting that batch norm statistics still see only the small micro-batch under gradient accumulation.
+
+  - external_key: technical.ml_engineering.annotator_label_quality
+    competency_key: machine_learning
+    topic: Measuring and improving label quality
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your training labels come from a team of human annotators, and you suspect quality varies a lot between
+      them. How would you measure and improve the labels feeding into training?
+    expected_concepts:
+      - inter-annotator agreement on overlapping items
+      - gold-standard items with known answers
+      - clearer guidelines and adjudication of disagreements
+      - model-assisted detection of likely mislabels
+      - measuring the effect of label noise on the model
+    rubric:
+      excellent: Measures agreement and accuracy on gold items per annotator, improves guidelines and adjudication, uses model disagreement to find suspect labels, and checks the model impact of cleaning.
+      good: Uses overlapping labels or gold items to measure quality and gives feedback to annotators.
+      weak: Drops annotators based on impressions or ignores label quality entirely.
+    followups:
+      - How would you decide whether cleaning labels is worth more than collecting new ones?
+    common_errors:
+      - Assuming disagreement always means annotator error when the guidelines are ambiguous.
+
+  - external_key: technical.ml_engineering.large_dataset_versioning
+    competency_key: mlops
+    topic: Versioning large training datasets
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      How do you version the datasets you train on, especially when they're far too large to copy every
+      time something changes?
+    expected_concepts:
+      - immutable snapshots or table formats with time travel
+      - manifests listing files with content hashes
+      - partitioned append-only storage
+      - recording the dataset version with each run
+      - retention policy for old versions
+    rubric:
+      excellent: Uses snapshots, manifests or a table format with time travel instead of copies, records the version in every run, and plans retention and cost.
+      good: Uses a data versioning tool or dated snapshots and links them to runs.
+      weak: Keeps a single mutable dataset with no way to recover what a model was trained on.
+    followups:
+      - How long would you keep old dataset versions, and why?
+    common_errors:
+      - Versioning the query that built the dataset while the underlying tables keep changing.
+
+  - external_key: technical.ml_engineering.pipeline_code_tests
+    competency_key: testing
+    topic: Testing training pipeline code
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What kinds of automated tests do you write for the code in a training pipeline, as opposed to
+      evaluating the model itself?
+    expected_concepts:
+      - unit tests for feature transformations with known inputs and outputs
+      - schema and shape assertions
+      - a tiny end-to-end run on sample data
+      - checks that the model can overfit a small batch
+      - tests that training and serving transformations agree
+    rubric:
+      excellent: Distinguishes code tests from model evaluation, gives concrete examples such as transform unit tests, a small end-to-end smoke run and parity tests between training and serving code.
+      good: Writes unit tests for data transformations and some form of smoke test.
+      weak: Says ML code cannot really be tested or relies only on final metrics.
+    followups:
+      - How do you keep the smoke run fast enough to run on every pull request?
+    common_errors:
+      - Treating a good validation score as proof that the pipeline code is correct.
+
+  - external_key: technical.ml_engineering.streaming_input_pipeline
+    competency_key: data_engineering
+    topic: Input pipelines for very large datasets
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      When you train on billions of examples stored as files in object storage, how do you design the input
+      pipeline so that it streams efficiently, shuffles well enough and can resume exactly where it left off
+      after a failure?
+    expected_concepts:
+      - sharded record formats sized for throughput
+      - shard-level and buffer-level shuffling
+      - assigning shards across workers and ranks without overlap
+      - checkpointing shard and offset positions
+      - parallel reads and prefetching from object storage
+    rubric:
+      excellent: Designs sharded storage with two-level shuffling, deterministic shard assignment per rank, resumable iterator state and prefetching, and explains the trade-off between shuffle quality and memory.
+      good: Uses sharded files, buffered shuffling and parallel reads with some notion of resuming.
+      weak: Loads the whole dataset into memory or lists millions of small files per epoch.
+    followups:
+      - What goes wrong if two ranks read the same shard?
+      - How would you tell whether shuffle quality is hurting convergence?
+    common_errors:
+      - Storing millions of tiny files so listing and opening them dominates training time.
+
+  - external_key: technical.ml_engineering.poor_scaling_efficiency
+    competency_key: distributed_systems
+    topic: Diagnosing poor multi-GPU scaling
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You moved a training job from eight GPUs to sixty-four and it only got about twice as fast. How would you
+      work out where the scaling is being lost?
+    expected_concepts:
+      - measuring per-step compute versus communication time
+      - gradient all-reduce cost and interconnect bandwidth across nodes
+      - overlapping communication with backward computation
+      - per-rank input pipeline bottlenecks
+      - stragglers and uneven work
+      - smaller per-GPU batch reducing efficiency
+    rubric:
+      excellent: Profiles compute, communication and data time per rank, identifies cross-node bandwidth, stragglers or small per-device batches as causes, and proposes fixes such as overlap, gradient bucketing or topology-aware placement.
+      good: Suspects communication overhead and data loading and suggests profiling.
+      weak: Accepts the result as normal or only suggests adding more GPUs.
+    followups:
+      - How would you spot a single slow node among eight?
+      - When would you change the parallelism strategy instead of tuning?
+    common_errors:
+      - Keeping the global batch fixed so each GPU's share becomes too small to keep it busy.

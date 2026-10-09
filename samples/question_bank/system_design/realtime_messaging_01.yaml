@@ -1,0 +1,616 @@
+# Curated questions: system design for real-time and messaging systems (part 1 of 4).
+# Connection layer (long-lived connections, gateways, reconnects) and the chat messaging core.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [backend, platform]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------------------ chat basics
+  - external_key: system_design.realtime_messaging.small_team_chat_mvp
+    competency_key: system_design
+    topic: First version of an internal team chat
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A company of about five hundred people wants a simple internal chat tool with channels and direct messages,
+      and they want a first version in a couple of months. Walk me through the pieces you'd build and how a message
+      gets from one person's screen to everyone else's.
+    expected_concepts:
+      - persistent client connection such as a WebSocket for delivery
+      - API or socket endpoint that validates and stores the message first
+      - relational schema for users, channels, memberships and messages
+      - broadcast to connected members, history load for everyone else
+      - keeping the first version on one or two servers and saying what changes later
+    rubric:
+      excellent: Describes a coherent end-to-end flow (send, persist, acknowledge, broadcast, load history), a sensible data model, and deliberately keeps it small while naming what would break first as usage grows.
+      good: Covers connections, storage and broadcast correctly but is vague about the data model or what to defer.
+      weak: Jumps to a large distributed design with no clear message flow, or never stores messages durably.
+    followups:
+      - What would you deliberately leave out of the first version, and why?
+      - A user opens the app after a week away. How do they get the messages they missed?
+    common_errors:
+      - Broadcasting before the message is stored, so a crash loses messages that people already saw.
+
+  - external_key: system_design.realtime_messaging.dead_connection_detection
+    competency_key: networking
+    topic: Detecting silently dead client connections
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      A user's phone walks into a lift and loses signal, but the server never receives a close for their WebSocket.
+      How would you detect connections like that, and what should the server do once it decides the client is gone?
+    expected_concepts:
+      - application-level heartbeats or ping and pong frames on an interval
+      - timeout after a few missed heartbeats
+      - TCP keepalive alone being too slow or blocked by middleboxes
+      - cleaning up subscriptions, presence and connection registry entries
+      - falling back to push notifications or stored delivery for that user
+    rubric:
+      excellent: Explains why half-open connections happen, proposes heartbeats with a missed-beat threshold tuned against mobile battery and load, and lists the cleanup and fallback the server performs.
+      good: Proposes heartbeats with a timeout and cleans up the connection.
+      weak: Assumes the operating system or load balancer will always tell the server the client left.
+    followups:
+      - How would you choose the heartbeat interval for mobile clients?
+      - Should the client also detect a dead server, and how?
+    common_errors:
+      - Relying only on default TCP keepalive, which can take hours to notice a dead peer.
+
+  - external_key: system_design.realtime_messaging.message_status_ticks
+    competency_key: system_design
+    topic: Sent, delivered and read indicators
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      In a one-to-one messaging app, users see a message move from sent, to delivered, to read. How would you design
+      the flow of acknowledgements and the storage behind those states?
+    expected_concepts:
+      - server acknowledgement after the message is persisted (sent)
+      - recipient device acknowledgement when it receives the message (delivered)
+      - read event when the message is displayed, sent back to the sender
+      - storing a per-conversation high-water mark instead of a row per message
+      - delivering status updates to a sender who is offline later
+    rubric:
+      excellent: Defines exactly which event triggers each state, stores read and delivered positions compactly as per-user markers, and handles the sender or recipient being offline when the update happens.
+      good: Describes the three acknowledgements correctly but stores a status per message without considering volume.
+      weak: Treats delivered and read as the same thing or has no clear trigger for each state.
+    followups:
+      - The recipient has three devices. When is the message delivered?
+      - Some users turn off read receipts. How does that change the flow?
+    common_errors:
+      - Marking a message delivered when the server sends it rather than when a device confirms it.
+
+  - external_key: system_design.realtime_messaging.typing_indicator
+    competency_key: system_design
+    topic: Typing indicators
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Product wants a "someone is typing" indicator in conversations. How would you design it so it feels live but
+      doesn't put load on your storage or flood the network?
+    expected_concepts:
+      - ephemeral events that are never persisted
+      - client throttling such as one event every few seconds while typing
+      - expiry on the receiving side if no refresh arrives
+      - sending only to members currently connected to that conversation
+      - dropping the feature or summarising it in very large groups
+    rubric:
+      excellent: Treats typing as ephemeral, throttles on the client, expires on the receiver, routes only to active viewers and explains what happens in large channels.
+      good: Keeps it out of the database and adds some throttling or timeout.
+      weak: Stores every keystroke event or sends an event per keystroke to everyone in the channel.
+    followups:
+      - What happens if the "stopped typing" event is lost?
+      - How would you handle typing indicators in a channel with ten thousand members?
+    common_errors:
+      - Relying on an explicit stop event instead of a timeout on the receiver.
+
+  # ------------------------------------------------------------------------ connection layer
+  - external_key: system_design.realtime_messaging.connection_rebalancing
+    competency_key: networking
+    topic: Rebalancing long-lived connections after scale-out
+    difficulty: medium
+    text: >-
+      You doubled the number of WebSocket gateway servers before a big launch, but hours later the new servers are
+      almost idle while the old ones still hold nearly all the connections. Why does that happen, and how would you
+      design the gateway tier so load evens out?
+    expected_concepts:
+      - load balancers only balance new connections, existing ones stay put
+      - least-connections balancing rather than round robin for new connections
+      - gradual, controlled disconnects from overloaded nodes with client reconnect
+      - jittered reconnect on the client so moved users don't stampede
+      - per-node connection caps and admission control
+    rubric:
+      excellent: Explains that long-lived connections pin load to the nodes that existed when clients connected, and proposes least-connections routing plus a gentle, rate-limited shedding of connections from hot nodes with jittered client reconnects.
+      good: Identifies the cause and suggests forcing some reconnects, but without controlling the rate.
+      weak: Suggests adding more servers again or doesn't recognise that existing connections never move.
+    followups:
+      - How would you decide how many connections to shed per minute?
+      - What does the client need to do so a forced reconnect is invisible to the user?
+    common_errors:
+      - Disconnecting everyone on a hot node at once and creating a reconnect spike.
+
+  - external_key: system_design.realtime_messaging.gateway_deploy_draining
+    competency_key: system_design
+    topic: Deploying a WebSocket gateway without disruption
+    difficulty: medium
+    text: >-
+      Every time you deploy the WebSocket gateway, all of its users get disconnected at the same moment and the app
+      shows a reconnecting banner. How would you redesign deployments of a stateful connection tier like this?
+    expected_concepts:
+      - rolling deploys of a small slice of nodes at a time
+      - draining a node by stopping new connections and closing existing ones gradually
+      - server-initiated reconnect message so clients move cleanly
+      - client resuming from its last received sequence so nothing is lost or duplicated
+      - keeping the gateway thin so it rarely needs deploying
+    rubric:
+      excellent: Combines rolling, rate-limited draining with a clean reconnect-and-resume protocol, and argues for keeping business logic out of the gateway so it changes rarely.
+      good: Proposes rolling deploys with connection draining but doesn't cover how clients resume without gaps.
+      weak: Accepts the mass disconnect as unavoidable or only suggests deploying at night.
+    followups:
+      - How long should a drain take, and what bounds it?
+      - What state must survive the reconnect for the user not to notice?
+    common_errors:
+      - Draining by waiting for clients to leave on their own, which may never happen.
+
+  - external_key: system_design.realtime_messaging.long_lived_connection_auth
+    competency_key: security
+    topic: Authentication on long-lived connections
+    difficulty: medium
+    text: >-
+      Your clients authenticate with a short-lived access token when they open a WebSocket, but the connection then
+      stays open for hours. How would you handle token expiry, and how would you cut off a user immediately when an
+      admin removes them from the workspace?
+    expected_concepts:
+      - authenticate at connect time and record the token expiry on the connection
+      - in-band token refresh over the socket or forced reconnect when it expires
+      - revocation events pushed to gateways to close affected connections
+      - re-checking authorisation when subscribing to channels, not only at connect
+      - avoiding tokens in URLs that end up in logs
+    rubric:
+      excellent: Tracks expiry per connection, supports refresh without dropping the connection, and pushes revocation and permission changes to the gateways so sessions and subscriptions are cut within seconds.
+      good: Handles expiry with periodic re-validation but revocation is slow or only applies on reconnect.
+      weak: Validates once at connect and never again, so removed users keep receiving messages.
+    followups:
+      - Where would you put the token in a browser WebSocket handshake, and what are the risks of each choice?
+      - How do the gateways learn about a revocation quickly?
+    common_errors:
+      - Checking permissions only at connect, not when a user subscribes to a new channel.
+
+  - external_key: system_design.realtime_messaging.websocket_proxy_fallback
+    competency_key: networking
+    topic: Transport fallback through restrictive networks
+    difficulty: medium
+    text: >-
+      Several enterprise customers report that your real-time features never work in their offices, because their
+      proxies and firewalls interfere with WebSockets. How would you design the client and server transport so
+      those users still get live updates?
+    expected_concepts:
+      - always using TLS on port 443 so proxies can't inspect the upgrade
+      - fallback to server-sent events or HTTP long polling
+      - transport negotiation and automatic downgrade after failed attempts
+      - one logical session and message protocol shared across transports
+      - measuring which transport each client ends up on
+    rubric:
+      excellent: Explains why proxies break upgrades, uses TLS first, then designs a negotiated fallback that keeps the same session and delivery semantics across transports and is monitored.
+      good: Proposes long polling or server-sent events as a fallback with reasonable detection.
+      weak: Tells customers to change their firewall rules or does not know any alternative transport.
+    followups:
+      - How do you make sure ordering and acknowledgements behave the same on long polling?
+      - What does long polling cost you on the server side compared with WebSockets?
+    common_errors:
+      - Building a separate code path for the fallback that drifts from the WebSocket behaviour.
+
+  # ------------------------------------------------------------------------ chat messaging core
+  - external_key: system_design.realtime_messaging.conversation_ordering
+    competency_key: distributed_systems
+    topic: Message ordering within a conversation
+    difficulty: medium
+    text: >-
+      In a group chat, two people send messages at almost the same moment, and different members see them in a
+      different order, which makes replies confusing. How would you design ordering so every member sees the same
+      sequence?
+    expected_concepts:
+      - a single authority per conversation that assigns sequence numbers
+      - server-assigned order rather than client clocks
+      - routing all writes for a conversation to the same partition or owner
+      - clients sorting and gap-detecting by sequence number
+      - handling the owner failing over without reusing numbers
+    rubric:
+      excellent: Assigns a monotonic per-conversation sequence at one authority, explains why client and server wall clocks can't be trusted, and covers gap detection and failover of the sequencer.
+      good: Uses server-side sequence numbers per conversation but glosses over failover or gaps.
+      weak: Orders by client timestamps or by arrival time at whichever server received the message.
+    followups:
+      - Does ordering need to be global across conversations? Why or why not?
+      - How does a client notice that it missed message number forty-two?
+    common_errors:
+      - Assuming synchronised server clocks give a reliable total order.
+
+  - external_key: system_design.realtime_messaging.optimistic_send_dedup
+    competency_key: system_design
+    topic: Optimistic sending and duplicate suppression
+    difficulty: medium
+    text: >-
+      On a flaky mobile network, users tap send, see a spinner, and the app retries. Sometimes the message appears
+      twice for everyone. How would you design the send path, from the bubble appearing on the sender's screen to
+      the server acknowledgement, so retries never create duplicates?
+    expected_concepts:
+      - client-generated message id created before the first attempt
+      - server de-duplicating on that id within the conversation
+      - pending, sent and failed states shown in the UI
+      - local outbox on the client that survives app restarts
+      - reconciling the local pending message with the server copy
+    rubric:
+      excellent: Gives each message a client-generated id, stores a local outbox, de-duplicates on the server with a uniqueness constraint, and replaces the pending bubble with the acknowledged message without flicker or duplicates.
+      good: Uses a client id for de-duplication but doesn't address restarts or UI reconciliation.
+      weak: De-duplicates by comparing message text and time, or disables retries.
+    followups:
+      - What should the user see if the message still hasn't been acknowledged after a minute?
+      - How long does the server need to remember message ids?
+    common_errors:
+      - Generating the id on the server, which makes retries indistinguishable from new messages.
+
+  - external_key: system_design.realtime_messaging.multi_device_catch_up
+    competency_key: system_design
+    topic: Catching up across several devices
+    difficulty: medium
+    text: >-
+      A user has the app on a phone, a laptop and a tablet, and the tablet has been switched off for two weeks. How
+      would you design synchronisation so each device catches up quickly and correctly when it comes back?
+    expected_concepts:
+      - per-device sync cursor or last-seen sequence
+      - a per-user change log or inbox to replay since the cursor
+      - paging the catch-up and prioritising recent conversations
+      - full resync fallback when the cursor is too old or the log has been trimmed
+      - including edits, deletes and read state in the sync stream
+    rubric:
+      excellent: Designs a cursor-based sync against a per-user change stream, pages and prioritises the catch-up, includes non-message changes, and has an explicit fallback when the device is too far behind.
+      good: Uses a last-sync timestamp or cursor to fetch missed messages but ignores edits, read state or trimmed logs.
+      weak: Re-downloads everything on every reconnect or relies only on push notifications.
+    followups:
+      - Why might a timestamp cursor miss messages where a sequence cursor would not?
+      - How do you decide how long to keep the per-user change log?
+    common_errors:
+      - Syncing only new messages, so deletions and edits never reach the returning device.
+
+  - external_key: system_design.realtime_messaging.edit_delete_propagation
+    competency_key: system_design
+    topic: Editing and deleting messages
+    difficulty: medium
+    text: >-
+      You're adding message editing and "delete for everyone" to an existing chat product. How would you make those
+      changes reach every member's devices, including ones that are offline, along with search results and push
+      notifications that were already sent?
+    expected_concepts:
+      - edits and deletes as new events in the conversation stream with their own sequence
+      - tombstones instead of hard removal so offline devices learn about deletes
+      - updating or removing the message in the search index
+      - replacing or withdrawing notifications where the platform allows it
+      - edit history and permission checks for who may edit
+    rubric:
+      excellent: Models edits and deletes as ordered events with tombstones, follows them through sync, search and notifications, and is clear about what can't be recalled once delivered.
+      good: Propagates edits and deletes to online clients and storage but misses offline devices or derived copies.
+      weak: Updates the database row in place and assumes clients will notice.
+    followups:
+      - What can you realistically promise a user about deleting a message the other person already saw?
+      - How long do you keep tombstones?
+    common_errors:
+      - Forgetting derived copies such as the search index and cached previews.
+
+  - external_key: system_design.realtime_messaging.threaded_replies
+    competency_key: system_design
+    topic: Adding threaded replies to a chat product
+    difficulty: medium
+    text: >-
+      Your chat product currently has flat channels, and you need to add threaded replies, with reply counts on the
+      parent message and notifications for people following a thread. How would you change the data model and the
+      real-time updates?
+    expected_concepts:
+      - replies linked to a parent message id, ordered within the thread
+      - denormalised reply count and last-reply data on the parent
+      - per-user thread subscriptions or followers
+      - updating channel viewers with a summary rather than every reply
+      - unread state for threads separate from the channel
+    rubric:
+      excellent: Proposes a clean thread model, denormalises parent summaries with safe concurrent updates, tracks followers per thread and limits real-time traffic to people viewing or following the thread.
+      good: Has a reasonable parent-child model and reply counts but treats every reply like a channel message for delivery.
+      weak: Stores threads as nested JSON on the parent row or sends every reply to the whole channel.
+    followups:
+      - How do you keep the reply count correct when many people reply at once?
+      - Who should get notified about a new reply, and how is that decided?
+    common_errors:
+      - Updating the parent's reply count with read-then-write logic that loses increments.
+
+  - external_key: system_design.realtime_messaging.hot_message_reactions
+    competency_key: distributed_systems
+    topic: Reactions on a very popular message
+    difficulty: medium
+    text: >-
+      An all-company announcement in a channel with eighty thousand members gets tens of thousands of emoji
+      reactions in a few minutes, and the database row for that message becomes a hotspot. How would you design
+      reactions so this works smoothly?
+    expected_concepts:
+      - storing individual reactions separately from aggregated counts
+      - sharded or buffered counters merged periodically
+      - idempotent add and remove keyed on user, message and emoji
+      - batching real-time count updates to viewers every second or so
+      - accepting approximate live counts with exact counts on demand
+    rubric:
+      excellent: Separates per-user reactions from counts, removes the single-row hotspot with sharded or batched counters, keeps toggles idempotent and throttles the update stream to viewers.
+      good: Recognises the hotspot and suggests batching or caching counts, but leaves correctness of toggles vague.
+      weak: Increments a counter on the message row for every reaction and broadcasts each change.
+    followups:
+      - How do you show a user that they reacted, even while counts are approximate?
+      - What happens if someone adds and removes the same reaction quickly?
+    common_errors:
+      - Broadcasting every single reaction change to eighty thousand members.
+
+  - external_key: system_design.realtime_messaging.chat_attachments
+    competency_key: system_design
+    topic: File and image attachments in chat
+    difficulty: medium
+    text: >-
+      Users want to share photos, videos and documents in chat. How would you design the upload, processing and
+      viewing of attachments so messages stay fast and only conversation members can open the files?
+    expected_concepts:
+      - direct upload to object storage with a pre-signed URL
+      - message referencing the attachment id, sent once the upload completes
+      - asynchronous thumbnails, previews and malware scanning
+      - short-lived signed download URLs checked against membership
+      - size limits, resumable uploads and quotas
+    rubric:
+      excellent: Keeps large bytes off the messaging path with direct uploads, processes previews and scanning asynchronously, and enforces access with short-lived signed links tied to membership.
+      good: Uses object storage and some form of access control but routes uploads through the chat servers or skips processing.
+      weak: Stores files in the database or makes attachment links permanently public.
+    followups:
+      - A member is removed from the conversation. Can they still open old attachments?
+      - What does the recipient see while the thumbnail is still being generated?
+    common_errors:
+      - Using long-lived public URLs that anyone with the link can open forever.
+
+  - external_key: system_design.realtime_messaging.inbox_storage_model
+    competency_key: system_design
+    topic: Per-user inboxes versus per-conversation storage
+    difficulty: medium
+    text: >-
+      One way to store chat is a copy of every message in each recipient's inbox, and another is a single copy per
+      conversation that each member reads from. How would you choose between those models for direct messages,
+      small groups and channels with tens of thousands of members?
+    expected_concepts:
+      - write amplification of per-recipient copies versus read cost of shared timelines
+      - per-user inbox making "what's new for me" cheap to compute
+      - single shared copy for large channels with per-user read markers
+      - hybrid models chosen by conversation size
+      - effect on edits, deletes and per-user state such as hidden messages
+    rubric:
+      excellent: Compares write and read amplification concretely for each conversation size, proposes a hybrid with a clear threshold, and explains how edits, deletes and per-user state behave under each model.
+      good: Explains the basic trade-off and picks a sensible model for large channels.
+      weak: Picks one model for everything without discussing its cost at the other end of the size range.
+    followups:
+      - How would an edit work if every recipient has their own copy?
+      - Where would you set the threshold, and how would you move a conversation across it?
+    common_errors:
+      - Copying every channel message into every member's inbox regardless of channel size.
+
+  # ------------------------------------------------------------------------ hard: connection layer
+  - external_key: system_design.realtime_messaging.reconnect_storm
+    competency_key: distributed_systems
+    topic: Reconnect storms after an outage
+    difficulty: hard
+    text: >-
+      A network blip drops three million WebSocket connections at once. When they all reconnect and resync in the
+      same few seconds, the gateways and the message store fall over again, and the outage repeats for an hour.
+      How would you design the system to recover gracefully from this?
+    expected_concepts:
+      - exponential backoff with full jitter on the client
+      - server-side admission control and connection rate limits per node
+      - cheap reconnect path with resumable sessions rather than full resync
+      - prioritising recent conversations and deferring bulk history
+      - load shedding with retry-after hints and protecting the store with caches
+      - testing recovery with simulated mass disconnects
+    rubric:
+      excellent: Explains the thundering-herd feedback loop, attacks it on both client (jittered backoff) and server (admission control, cheap resume, deferred resync, shedding with hints) and proposes rehearsing it.
+      good: Proposes jittered backoff and some rate limiting but doesn't reduce the cost of each reconnect.
+      weak: Suggests adding servers or fixed-interval retries, which keeps the stampede synchronised.
+    followups:
+      - Old app versions don't have jitter. What can you still do on the server?
+      - How would you test that this works before the next real outage?
+    common_errors:
+      - Exponential backoff without jitter, so clients keep retrying in lockstep.
+
+  - external_key: system_design.realtime_messaging.gateway_connection_capacity
+    competency_key: networking
+    topic: Raising connections per gateway node
+    difficulty: hard
+    text: >-
+      Each of your gateway servers stops accepting new WebSocket connections at around fifty thousand, even though
+      CPU is mostly idle. The goal is half a million per node. How would you investigate where the limit is, and
+      what would you change in the design and the configuration?
+    expected_concepts:
+      - file descriptor and ephemeral port limits, including proxy-to-backend ports
+      - kernel settings such as socket buffers and connection tracking tables
+      - per-connection memory from buffers, TLS state and language runtime
+      - event-driven I/O rather than a thread per connection
+      - load testing with realistic idle and active connection mixes
+      - the blast radius of very large nodes during failure
+    rubric:
+      excellent: Investigates methodically across OS limits, load-balancer ports, memory per connection and the I/O model, proposes concrete fixes, and weighs the failure cost of packing so many users onto one node.
+      good: Names several plausible limits such as file descriptors and memory and suggests an event-driven server.
+      weak: Only proposes buying bigger machines or adding nodes without finding the bottleneck.
+    followups:
+      - If one of these half-million-connection nodes dies, what happens next?
+      - How would you estimate memory per idle connection?
+    common_errors:
+      - Ignoring ephemeral port exhaustion between the load balancer and the gateways.
+
+  - external_key: system_design.realtime_messaging.slow_client_backpressure
+    competency_key: distributed_systems
+    topic: Slow clients and per-connection backpressure
+    difficulty: hard
+    text: >-
+      Some clients on poor networks can't read messages as fast as your server sends them, and their outbound buffers
+      on the gateway grow until the process runs out of memory. How would you design per-connection backpressure so
+      a few slow clients can't hurt everyone else?
+    expected_concepts:
+      - bounded outbound queue per connection
+      - policies when the queue is full such as dropping, conflating or disconnecting
+      - distinguishing must-deliver messages from ephemeral updates
+      - telling the client to resync from its cursor after being cut off
+      - monitoring buffer sizes and slow-client disconnects
+    rubric:
+      excellent: Bounds each connection's buffer, applies different policies to ephemeral and durable messages, relies on cursor-based resync after a disconnect, and monitors it.
+      good: Bounds the buffer and disconnects slow clients but treats all messages the same.
+      weak: Increases memory or buffer sizes, or blocks the sender for everyone while a slow client catches up.
+    followups:
+      - Why is it safe to drop messages for a disconnected slow client in a chat app?
+      - How would you pick the buffer limit?
+    common_errors:
+      - Letting a slow socket block a shared broadcast loop so every other client waits too.
+
+  # ------------------------------------------------------------------------ hard: chat core
+  - external_key: system_design.realtime_messaging.e2ee_multi_device
+    competency_key: security
+    topic: End-to-end encrypted chat across devices
+    difficulty: hard
+    text: >-
+      You're asked to make a messaging app end-to-end encrypted, where each user can have several devices and can add
+      a new device at any time. How would you design key management and message delivery so the server never sees
+      message content?
+    expected_concepts:
+      - per-device identity keys and published prekeys
+      - encrypting each message for every recipient device, or sender keys for groups
+      - forward secrecy through ratcheting session keys
+      - verifying new devices and alerting contacts when keys change
+      - history on a new device as a deliberate trade-off such as device-to-device transfer
+      - what the server can still see, such as metadata
+    rubric:
+      excellent: Designs per-device keys with prekeys and ratcheting, explains group fan-out options, handles device addition and key-change verification, and is explicit about metadata and history trade-offs.
+      good: Understands public-key encryption per device and the server as a blind relay, but is thin on group messaging or new devices.
+      weak: Encrypts with a key the server stores or holds in escrow, or describes only TLS in transit.
+    followups:
+      - How would server-side features like search and spam detection change?
+      - What happens to messages sent while a recipient's new device was being added?
+    common_errors:
+      - Calling TLS between client and server end-to-end encryption.
+
+  - external_key: system_design.realtime_messaging.membership_change_races
+    competency_key: distributed_systems
+    topic: Group membership changes and in-flight messages
+    difficulty: hard
+    text: >-
+      When someone is removed from a private group, the business requirement is that they must not receive any
+      message sent after the removal, even ones already in flight through your fan-out pipeline. How would you design
+      membership and delivery to guarantee that?
+    expected_concepts:
+      - membership changes as ordered events in the same conversation sequence
+      - fan-out checks membership at the message's sequence position, not current cache state
+      - versioned membership or epochs carried with each message
+      - gateways dropping deliveries to unsubscribed connections immediately
+      - history access limited to the member's join and leave window
+    rubric:
+      excellent: Orders membership changes with messages in one per-conversation sequence, makes fan-out decide using the membership version at that position, and closes the delivery path at the gateway as well.
+      good: Removes the member from caches and subscriptions quickly but can't guarantee in-flight messages are excluded.
+      weak: Updates the membership table and assumes delivery will stop.
+    followups:
+      - What about a member who is added? Should they see recent history?
+      - How do you handle the case where the fan-out worker has a stale membership cache?
+    common_errors:
+      - Checking a membership cache that can lag behind the removal by seconds.
+
+  - external_key: system_design.realtime_messaging.chat_history_search
+    competency_key: system_design
+    topic: Searching chat history with permissions
+    difficulty: hard
+    text: >-
+      Design search over chat history for a workplace messaging product with tens of billions of messages, where
+      every user may only see results from conversations they belong to now, and new messages should be searchable
+      within a few seconds.
+    expected_concepts:
+      - near-real-time indexing from the message stream
+      - partitioning the index by workspace or tenant
+      - permission filtering at query time from the user's conversation list
+      - handling users in many conversations and membership changes
+      - edits, deletes and retention flowing into the index
+      - ranking by recency and relevance
+    rubric:
+      excellent: Builds a streaming indexing pipeline, partitions by tenant, filters on current membership efficiently even for heavy users, and keeps the index in step with edits, deletes and retention.
+      good: Uses a search engine fed from the message stream with some permission filtering, but misses scale or deletion details.
+      weak: Proposes SQL LIKE queries or filters permissions after fetching unrestricted results.
+    followups:
+      - A user belongs to forty thousand channels. How does the permission filter still work?
+      - How would you rebuild the index without downtime?
+    common_errors:
+      - Filtering permissions after retrieving the top results, which leaks counts and returns empty pages.
+
+  - external_key: system_design.realtime_messaging.multi_region_conversations
+    competency_key: distributed_systems
+    topic: Conversations spanning regions
+    difficulty: hard
+    text: >-
+      Your chat service runs in three regions, and a single conversation can include people connected in all three.
+      How would you decide where each conversation's messages are ordered and stored, and what happens to that
+      conversation when its home region goes down?
+    expected_concepts:
+      - a home region per conversation that owns ordering
+      - cross-region forwarding of sends and replication of messages
+      - placing the home near most members and moving it when membership shifts
+      - latency trade-off for members far from the home region
+      - failover to a replica region with fencing so two regions don't both assign sequences
+    rubric:
+      excellent: Picks a single owner region per conversation for ordering, explains cross-region forwarding and replication latency, and designs a fenced failover with a clear position on messages lost or delayed during it.
+      good: Proposes a home region and replication but leaves failover or split-brain vague.
+      weak: Lets every region accept and order writes independently without saying how conflicts resolve.
+    followups:
+      - How would you measure whether a conversation's home region is badly placed?
+      - What do members see during the failover window?
+    common_errors:
+      - Ignoring the risk of two regions issuing the same sequence numbers after a partition.
+
+  - external_key: system_design.realtime_messaging.retention_legal_hold
+    competency_key: system_design
+    topic: Message retention policies and legal hold
+    difficulty: hard
+    text: >-
+      Enterprise customers want to configure message retention, such as deleting everything after ninety days,
+      while their legal teams can place specific users or channels on hold so nothing is deleted. How would you
+      design retention and holds across storage, search, attachments and backups?
+    expected_concepts:
+      - policies at workspace, channel and user level with clear precedence
+      - holds overriding deletion, evaluated before any purge
+      - background deletion jobs that also clean indexes, caches and attachments
+      - backups that expire within the retention promise or crypto-shredding
+      - audit trail of policy changes and deletions
+    rubric:
+      excellent: Defines policy precedence with holds always winning, runs verifiable purge jobs across every copy including derived data, states plainly what happens to backups, and keeps an audit trail.
+      good: Implements scheduled deletion with a hold check but misses derived copies or backups.
+      weak: Deletes rows from the main table only, or ignores holds.
+    followups:
+      - How do you prove to a customer that data really was deleted?
+      - A hold is lifted. What happens to data that was past its retention date?
+    common_errors:
+      - Forgetting that search indexes and backups keep messages long after the primary copy is deleted.
+
+  - external_key: system_design.realtime_messaging.message_store_migration
+    competency_key: databases
+    topic: Migrating the message store without downtime
+    difficulty: hard
+    text: >-
+      Your chat product keeps all messages in a single PostgreSQL database that's nearly out of headroom, and you
+      want to move to a horizontally partitioned store. How would you plan the migration so users never lose
+      messages or see downtime?
+    expected_concepts:
+      - choosing a partition key such as conversation id
+      - dual writes or change data capture into the new store
+      - backfilling history in batches with verification
+      - shadow reads comparing old and new results
+      - gradual read cutover per conversation or tenant with rollback
+      - retiring the old path only after a stable period
+    rubric:
+      excellent: Lays out a phased plan (key choice, CDC or dual write, backfill, verification, shadow reads, staged cutover with rollback), and addresses ordering and consistency during the overlap.
+      good: Has backfill and cutover steps but is thin on verification or rollback.
+      weak: Proposes a maintenance window export and import, or a big-bang switch.
+    followups:
+      - How do you handle messages written during the backfill?
+      - What metrics would tell you it's safe to move the next batch of conversations?
+    common_errors:
+      - Dual writing without a way to detect and repair writes that succeeded in only one store.

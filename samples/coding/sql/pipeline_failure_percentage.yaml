@@ -1,0 +1,265 @@
+version: 1
+slug: pipeline_failure_percentage
+title: Pipeline Failure Percentage
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [devops, platform, qa, sre]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Pipeline Failure Percentage
+
+  The CI system stores one row per pipeline run. The platform team wants a quick table of how flaky each
+  pipeline is, **ignoring runs that someone cancelled** (a cancelled run says nothing about the code).
+
+  Table `pipeline_runs`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | pipeline | VARCHAR(60) | pipeline name, lower-case letters, digits and `-` |
+  | status | VARCHAR(20) | exactly one of `success`, `failed`, `cancelled` |
+
+  For every pipeline that appears in the table, return:
+
+  - `pipeline`;
+  - `finished_runs`: the number of its runs with status `success` or `failed` (cancelled runs are not
+    counted);
+  - `failure_pct`: `100 * failed_runs / finished_runs` as an **integer, rounded down** (so 2 failures out
+    of 3 finished runs is `66`, not `67` and not `66.67`). If the pipeline has **no finished runs** (only
+    cancelled ones), `finished_runs` is `0` and `failure_pct` is **NULL**.
+
+  Order the rows by `pipeline` ascending. An empty table returns no rows.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  pipeline_runs
+  +----+------------+-----------+
+  | id | pipeline   | status    |
+  +----+------------+-----------+
+  | 1  | web-build  | success   |
+  | 2  | web-build  | failed    |
+  | 3  | api-deploy | success   |
+  | 4  | web-build  | cancelled |
+  | 5  | web-build  | failed    |
+  | 6  | api-deploy | success   |
+  | 7  | api-deploy | cancelled |
+  | 8  | api-deploy | failed    |
+  | 9  | api-deploy | success   |
+  +----+------------+-----------+
+
+  Output
+  +------------+---------------+-------------+
+  | pipeline   | finished_runs | failure_pct |
+  +------------+---------------+-------------+
+  | api-deploy | 4             | 25          |
+  | web-build  | 3             | 66          |
+  +------------+---------------+-------------+
+  web-build: 3 finished runs (the cancelled one is ignored), 2 failed, 100 * 2 / 3 = 66.67 rounded down to 66.
+  api-deploy: 4 finished runs, 1 failed, 25.
+  ```
+
+  ### Example 2
+  ```
+  pipeline_runs
+  +----+--------------+-----------+
+  | id | pipeline     | status    |
+  +----+--------------+-----------+
+  | 1  | nightly-fuzz | cancelled |
+  | 2  | docs-publish | success   |
+  | 3  | nightly-fuzz | cancelled |
+  | 4  | docs-publish | success   |
+  +----+--------------+-----------+
+
+  Output
+  +--------------+---------------+-------------+
+  | pipeline     | finished_runs | failure_pct |
+  +--------------+---------------+-------------+
+  | docs-publish | 2             | 0           |
+  | nightly-fuzz | 0             | NULL        |
+  +--------------+---------------+-------------+
+  nightly-fuzz never finished a run, so failure_pct is NULL. docs-publish never failed, so it is 0.
+  ```
+
+  ### Constraints
+  - `0 <= rows in pipeline_runs <= 10^6`
+  - `status` is never NULL and always one of the three values above, in lower case.
+  - Pipeline names use only lower-case letters, digits and `-`.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return pipeline, finished_runs (success + failed) and failure_pct (integer, rounded down; NULL when
+    -- there are no finished runs), ordered by pipeline.
+    SELECT pipeline, COUNT(*) AS finished_runs, 0 AS failure_pct
+    FROM pipeline_runs
+    GROUP BY pipeline;
+reference_solutions:
+  sql: |
+    SELECT pipeline,
+           COUNT(CASE WHEN status IN ('success', 'failed') THEN 1 END) AS finished_runs,
+           100 * COUNT(CASE WHEN status = 'failed' THEN 1 END)
+             / NULLIF(COUNT(CASE WHEN status IN ('success', 'failed') THEN 1 END), 0) AS failure_pct
+    FROM pipeline_runs
+    GROUP BY pipeline
+    ORDER BY pipeline;
+sql_setup: |
+  CREATE TABLE pipeline_runs (
+    id INTEGER PRIMARY KEY,
+    pipeline VARCHAR(60) NOT NULL,
+    status VARCHAR(20) NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - cancelled runs ignored, percentage rounded down (2 of 3 is 66)"
+    setup_sql: |
+      INSERT INTO pipeline_runs (id, pipeline, status) VALUES
+        (1, 'web-build', 'success'), (2, 'web-build', 'failed'), (3, 'api-deploy', 'success'), (4, 'web-build', 'cancelled'), (5, 'web-build', 'failed'),
+        (6, 'api-deploy', 'success'), (7, 'api-deploy', 'cancelled'), (8, 'api-deploy', 'failed'), (9, 'api-deploy', 'success');
+    expected_rows: [["api-deploy", 4, 25], ["web-build", 3, 66]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - a pipeline with only cancelled runs has 0 finished runs and NULL percentage"
+    setup_sql: |
+      INSERT INTO pipeline_runs (id, pipeline, status) VALUES
+        (1, 'nightly-fuzz', 'cancelled'), (2, 'docs-publish', 'success'), (3, 'nightly-fuzz', 'cancelled'), (4, 'docs-publish', 'success');
+    expected_rows: [["docs-publish", 2, 0], ["nightly-fuzz", 0, null]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Every finished run failed - 100; a single failed run next to many cancelled ones"
+    setup_sql: |
+      INSERT INTO pipeline_runs (id, pipeline, status) VALUES
+        (1, 'infra-plan', 'failed'), (2, 'infra-plan', 'failed'), (3, 'lint', 'cancelled'), (4, 'lint', 'cancelled'), (5, 'lint', 'cancelled'),
+        (6, 'lint', 'failed');
+    expected_rows: [["infra-plan", 2, 100], ["lint", 1, 100]]
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Rounding down - 1 of 3 is 33, 1 of 6 is 16 (ROUND would give 17), 5 of 6 is 83"
+    setup_sql: |
+      INSERT INTO pipeline_runs (id, pipeline, status) VALUES
+        (1, 'a1', 'failed'), (2, 'a1', 'success'), (3, 'a1', 'success'), (4, 'b2', 'failed'), (5, 'b2', 'success'),
+        (6, 'b2', 'success'), (7, 'b2', 'success'), (8, 'b2', 'success'), (9, 'b2', 'success'), (10, 'c3', 'failed'),
+        (11, 'c3', 'failed'), (12, 'c3', 'failed'), (13, 'c3', 'failed'), (14, 'c3', 'failed'), (15, 'c3', 'success');
+    expected_rows: [["a1", 3, 33], ["b2", 6, 16], ["c3", 6, 83]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Dividing before multiplying by 100 truncates every non-100 percentage to 0"
+    setup_sql: |
+      INSERT INTO pipeline_runs (id, pipeline, status) VALUES
+        (1, 'release', 'failed'), (2, 'release', 'success'), (3, 'release', 'cancelled'), (4, 'smoke', 'success');
+    expected_rows: [["release", 2, 50], ["smoke", 1, 0]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Only cancelled runs across all pipelines - every row has 0 and NULL"
+    setup_sql: |
+      INSERT INTO pipeline_runs (id, pipeline, status) VALUES
+        (1, 'p-one', 'cancelled'), (2, 'p-two', 'cancelled'), (3, 'p-one', 'cancelled');
+    expected_rows: [["p-one", 0, null], ["p-two", 0, null]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Stress - 301 runs over eight pipelines including one never finished"
+    setup_sql: |
+      INSERT INTO pipeline_runs (id, pipeline, status) VALUES
+        (1, 'api-deploy', 'success'), (2, 'api-deploy', 'success'), (3, 'mobile-release', 'success'), (4, 'mobile-release', 'success'), (5, 'api-build', 'cancelled'),
+        (6, 'infra-plan', 'success'), (7, 'api-deploy', 'success'), (8, 'web-build', 'success'), (9, 'web-e2e', 'failed'), (10, 'infra-plan', 'failed'),
+        (11, 'api-deploy', 'success'), (12, 'api-deploy', 'failed'), (13, 'mobile-release', 'success'), (14, 'api-build', 'success'), (15, 'api-build', 'success'),
+        (16, 'mobile-release', 'success'), (17, 'web-e2e', 'success'), (18, 'web-e2e', 'success'), (19, 'mobile-release', 'failed'), (20, 'infra-plan', 'failed'),
+        (21, 'infra-plan', 'success'), (22, 'web-e2e', 'failed'), (23, 'api-deploy', 'failed'), (24, 'api-build', 'success'), (25, 'infra-plan', 'success'),
+        (26, 'web-build', 'success'), (27, 'web-build', 'failed'), (28, 'infra-plan', 'failed'), (29, 'infra-plan', 'failed'), (30, 'mobile-release', 'success'),
+        (31, 'mobile-release', 'success'), (32, 'docs-publish', 'success'), (33, 'api-build', 'failed'), (34, 'mobile-release', 'failed'), (35, 'api-deploy', 'success'),
+        (36, 'docs-publish', 'cancelled'), (37, 'mobile-release', 'success'), (38, 'web-build', 'success'), (39, 'web-build', 'failed'), (40, 'mobile-release', 'success'),
+        (41, 'api-build', 'success'), (42, 'web-e2e', 'failed'), (43, 'infra-plan', 'success'), (44, 'web-e2e', 'success'), (45, 'api-deploy', 'success'),
+        (46, 'infra-plan', 'failed'), (47, 'web-e2e', 'success'), (48, 'mobile-release', 'failed'), (49, 'api-build', 'success'), (50, 'mobile-release', 'success'),
+        (51, 'docs-publish', 'success'), (52, 'api-build', 'success'), (53, 'api-build', 'success'), (54, 'mobile-release', 'success'), (55, 'api-deploy', 'cancelled'),
+        (56, 'docs-publish', 'success'), (57, 'api-deploy', 'success'), (58, 'web-e2e', 'success'), (59, 'docs-publish', 'cancelled'), (60, 'web-e2e', 'success'),
+        (61, 'infra-plan', 'cancelled'), (62, 'infra-plan', 'failed'), (63, 'mobile-release', 'failed'), (64, 'api-build', 'success'), (65, 'web-e2e', 'failed'),
+        (66, 'infra-plan', 'failed'), (67, 'web-build', 'success'), (68, 'docs-publish', 'success'), (69, 'docs-publish', 'success'), (70, 'mobile-release', 'success'),
+        (71, 'web-e2e', 'success'), (72, 'mobile-release', 'success'), (73, 'infra-plan', 'failed'), (74, 'web-build', 'success'), (75, 'web-build', 'success'),
+        (76, 'infra-plan', 'success'), (77, 'docs-publish', 'success'), (78, 'docs-publish', 'success'), (79, 'api-build', 'success'), (80, 'web-build', 'success'),
+        (81, 'docs-publish', 'success'), (82, 'infra-plan', 'success'), (83, 'mobile-release', 'success'), (84, 'docs-publish', 'success'), (85, 'web-e2e', 'success'),
+        (86, 'mobile-release', 'success'), (87, 'web-e2e', 'success'), (88, 'web-e2e', 'failed'), (89, 'mobile-release', 'failed'), (90, 'api-deploy', 'success'),
+        (91, 'api-deploy', 'success'), (92, 'docs-publish', 'success'), (93, 'api-deploy', 'success'), (94, 'web-build', 'success'), (95, 'api-build', 'success'),
+        (96, 'docs-publish', 'success'), (97, 'api-deploy', 'success'), (98, 'web-e2e', 'cancelled'), (99, 'api-build', 'success'), (100, 'web-build', 'success'),
+        (101, 'mobile-release', 'success'), (102, 'api-deploy', 'success'), (103, 'api-build', 'success'), (104, 'api-deploy', 'success'), (105, 'web-e2e', 'failed'),
+        (106, 'api-deploy', 'failed'), (107, 'docs-publish', 'success'), (108, 'web-build', 'success'), (109, 'mobile-release', 'success'), (110, 'api-deploy', 'success'),
+        (111, 'mobile-release', 'failed'), (112, 'docs-publish', 'success'), (113, 'web-build', 'success'), (114, 'infra-plan', 'failed'), (115, 'api-build', 'cancelled'),
+        (116, 'api-deploy', 'success'), (117, 'infra-plan', 'cancelled'), (118, 'mobile-release', 'cancelled'), (119, 'infra-plan', 'failed'), (120, 'web-build', 'success'),
+        (121, 'web-build', 'success'), (122, 'web-e2e', 'failed'), (123, 'mobile-release', 'cancelled'), (124, 'mobile-release', 'success'), (125, 'api-deploy', 'failed'),
+        (126, 'web-e2e', 'failed'), (127, 'docs-publish', 'success'), (128, 'api-deploy', 'success'), (129, 'web-e2e', 'failed'), (130, 'api-deploy', 'failed'),
+        (131, 'infra-plan', 'failed'), (132, 'api-build', 'success'), (133, 'api-build', 'success'), (134, 'docs-publish', 'success'), (135, 'api-build', 'success'),
+        (136, 'infra-plan', 'success'), (137, 'mobile-release', 'success'), (138, 'api-deploy', 'success'), (139, 'web-e2e', 'failed'), (140, 'web-e2e', 'failed'),
+        (141, 'docs-publish', 'success'), (142, 'api-build', 'success'), (143, 'web-e2e', 'success'), (144, 'api-deploy', 'success'), (145, 'web-e2e', 'success'),
+        (146, 'api-build', 'success'), (147, 'mobile-release', 'failed'), (148, 'api-build', 'failed'), (149, 'api-deploy', 'success'), (150, 'mobile-release', 'success'),
+        (151, 'api-build', 'success'), (152, 'web-e2e', 'failed'), (153, 'web-e2e', 'success'), (154, 'api-deploy', 'success'), (155, 'api-build', 'success'),
+        (156, 'api-build', 'failed'), (157, 'api-build', 'success'), (158, 'infra-plan', 'success'), (159, 'docs-publish', 'success'), (160, 'infra-plan', 'failed'),
+        (161, 'mobile-release', 'success'), (162, 'docs-publish', 'success'), (163, 'docs-publish', 'success'), (164, 'api-deploy', 'success'), (165, 'web-build', 'success'),
+        (166, 'web-e2e', 'success'), (167, 'api-deploy', 'success'), (168, 'infra-plan', 'failed'), (169, 'web-e2e', 'failed'), (170, 'web-build', 'failed'),
+        (171, 'mobile-release', 'failed'), (172, 'api-build', 'success'), (173, 'infra-plan', 'failed'), (174, 'docs-publish', 'success'), (175, 'web-build', 'success'),
+        (176, 'api-build', 'success'), (177, 'mobile-release', 'success'), (178, 'mobile-release', 'success'), (179, 'infra-plan', 'success'), (180, 'api-deploy', 'failed'),
+        (181, 'docs-publish', 'success'), (182, 'mobile-release', 'failed'), (183, 'docs-publish', 'success'), (184, 'web-build', 'success'), (185, 'web-e2e', 'failed'),
+        (186, 'web-e2e', 'cancelled'), (187, 'web-e2e', 'success'), (188, 'api-build', 'failed'), (189, 'mobile-release', 'success'), (190, 'web-e2e', 'failed'),
+        (191, 'api-build', 'success'), (192, 'api-deploy', 'success'), (193, 'api-build', 'success'), (194, 'mobile-release', 'success'), (195, 'infra-plan', 'success'),
+        (196, 'api-build', 'success'), (197, 'web-e2e', 'success'), (198, 'web-e2e', 'success'), (199, 'infra-plan', 'cancelled'), (200, 'docs-publish', 'success'),
+        (201, 'web-e2e', 'success'), (202, 'web-e2e', 'failed'), (203, 'mobile-release', 'failed'), (204, 'api-build', 'success'), (205, 'api-build', 'cancelled'),
+        (206, 'api-build', 'success'), (207, 'web-e2e', 'failed'), (208, 'web-e2e', 'success'), (209, 'api-deploy', 'success'), (210, 'infra-plan', 'failed'),
+        (211, 'web-e2e', 'cancelled'), (212, 'docs-publish', 'success'), (213, 'infra-plan', 'cancelled'), (214, 'mobile-release', 'success'), (215, 'api-build', 'success'),
+        (216, 'api-deploy', 'cancelled'), (217, 'infra-plan', 'cancelled'), (218, 'api-deploy', 'success'), (219, 'mobile-release', 'failed'), (220, 'web-build', 'cancelled'),
+        (221, 'web-build', 'success'), (222, 'web-build', 'success'), (223, 'api-deploy', 'success'), (224, 'infra-plan', 'failed'), (225, 'web-build', 'success'),
+        (226, 'infra-plan', 'failed'), (227, 'web-e2e', 'success'), (228, 'docs-publish', 'success'), (229, 'api-deploy', 'success'), (230, 'docs-publish', 'success'),
+        (231, 'web-e2e', 'failed'), (232, 'web-e2e', 'success'), (233, 'web-build', 'failed'), (234, 'mobile-release', 'failed'), (235, 'mobile-release', 'cancelled'),
+        (236, 'api-deploy', 'success'), (237, 'docs-publish', 'success'), (238, 'infra-plan', 'success'), (239, 'mobile-release', 'success'), (240, 'docs-publish', 'success'),
+        (241, 'web-e2e', 'success'), (242, 'web-build', 'success'), (243, 'mobile-release', 'success'), (244, 'mobile-release', 'failed'), (245, 'web-e2e', 'failed'),
+        (246, 'api-build', 'success'), (247, 'web-build', 'success'), (248, 'infra-plan', 'failed'), (249, 'api-build', 'success'), (250, 'api-deploy', 'failed'),
+        (251, 'web-build', 'success'), (252, 'web-build', 'success'), (253, 'api-deploy', 'failed'), (254, 'api-deploy', 'failed'), (255, 'web-e2e', 'success'),
+        (256, 'api-deploy', 'success'), (257, 'web-build', 'failed'), (258, 'docs-publish', 'success'), (259, 'api-build', 'success'), (260, 'infra-plan', 'success'),
+        (261, 'web-e2e', 'success'), (262, 'api-build', 'success'), (263, 'docs-publish', 'success'), (264, 'infra-plan', 'failed'), (265, 'web-build', 'success'),
+        (266, 'api-build', 'success'), (267, 'infra-plan', 'success'), (268, 'api-build', 'success'), (269, 'mobile-release', 'failed'), (270, 'infra-plan', 'success'),
+        (271, 'mobile-release', 'success'), (272, 'docs-publish', 'success'), (273, 'infra-plan', 'success'), (274, 'mobile-release', 'cancelled'), (275, 'api-build', 'success'),
+        (276, 'web-build', 'success'), (277, 'web-e2e', 'success'), (278, 'infra-plan', 'success'), (279, 'web-build', 'success'), (280, 'web-e2e', 'failed'),
+        (281, 'api-build', 'failed'), (282, 'docs-publish', 'success'), (283, 'mobile-release', 'success'), (284, 'web-build', 'success'), (285, 'docs-publish', 'success'),
+        (286, 'docs-publish', 'success'), (287, 'mobile-release', 'failed'), (288, 'web-build', 'success'), (289, 'web-build', 'success'), (290, 'docs-publish', 'success'),
+        (291, 'web-build', 'success'), (292, 'api-build', 'cancelled'), (293, 'api-deploy', 'cancelled'), (294, 'web-build', 'success'), (295, 'mobile-release', 'success'),
+        (296, 'docs-publish', 'success'), (297, 'infra-plan', 'failed'), (298, 'web-e2e', 'success'), (299, 'api-build', 'success'), (300, 'api-deploy', 'success'),
+        (301, 'nightly-fuzz', 'cancelled');
+    expected_rows: [["api-build", 41, 12], ["api-deploy", 39, 23], ["docs-publish", 36, 0], ["infra-plan", 36, 55], ["mobile-release", 45, 33], ["nightly-fuzz", 0, null], ["web-build", 36, 13], ["web-e2e", 45, 44]]
+expected_concepts:
+  - conditional aggregation per group
+  - integer division and the order of multiply and divide
+  - NULLIF to avoid division by zero
+  - keeping groups that a WHERE filter would remove
+optimal_complexity: {time: "O(n) to aggregate plus O(p log p) to sort p pipelines", space: "O(p)"}
+rubric:
+  excellent: Counts finished and failed runs with conditional aggregates, multiplies by 100 before the integer division, uses NULLIF (or CASE) to return NULL for zero finished runs, keeps cancelled-only pipelines and orders by name.
+  good: Correct query after a hint about cancelled-only pipelines or about integer division.
+  weak: Filters cancelled runs in WHERE (losing cancelled-only pipelines), counts cancelled runs as finished, returns decimals or rounded values, or divides by zero.
+  criteria:
+    correctness: All tests pass, including cancelled-only pipelines, rounding down and 0 and 100 percent.
+    efficiency: One grouped pass over the table.
+    code_quality: Readable aggregates with the finished-run expression clearly named.
+    edge_cases: Empty table, pipelines with only cancelled or only failed runs.
+    communication: Explains integer division semantics and why NULL is better than 0 for no data.
+hints:
+  - Each output row summarises one pipeline; the numbers you need are how many runs finished and how many of those failed.
+  - A WHERE filter on status removes pipelines whose runs were all cancelled, so count conditionally inside the aggregates instead. Integer division truncates, so the order of multiplying by 100 and dividing matters.
+  - Group by pipeline, count runs whose status is success or failed and runs whose status is failed with CASE inside COUNT, compute 100 times the failed count divided by NULLIF of the finished count and zero, and order by pipeline.
+followups:
+  - How would you report the percentage with one decimal place portably?
+  - How would you restrict the report to the last 30 days of runs?
+  - Should retried runs of the same commit count once or several times, and how would you model that?
+common_errors:
+  - Excluding cancelled runs in WHERE, which drops pipelines that only have cancelled runs.
+  - Counting cancelled runs as finished.
+  - Dividing before multiplying by 100, which truncates every partial failure rate to 0.
+  - Returning 0 or causing a division-by-zero error instead of NULL when nothing finished.
+  - Using 100.0 or ROUND, which returns 66.67 or 67 instead of the requested 66.

@@ -1,0 +1,177 @@
+version: 1
+slug: negotiate_response_content_type
+title: Negotiate a Response Content Type
+difficulty: medium
+competency_keys: [problem_solving, code_quality]
+role_tags: [backend, fullstack]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Negotiate a Response Content Type
+
+  An API gateway can render each response in several formats. Clients say which formats they will take
+  in an `Accept` header, and the gateway must pick one of the formats it can produce.
+
+  The header is a comma-separated list of **media ranges**. Each range is `type/subtype`, `type/*` or
+  `*/*`, optionally followed by parameters written as `;name=value`. The parameter `q` is the client's
+  preference weight, a decimal between `0` and `1` (default `1` when absent). All other parameters are
+  ignored. Spaces may appear around `,`, `;` and `=`, and empty entries between commas are ignored.
+
+  You also get `available`: the concrete types the gateway can produce (`type/subtype`, no wildcards, no
+  parameters). Decide the weight of each available type as follows:
+
+  - The **most specific** range that matches it decides its weight: an exact `type/subtype` range beats
+    `type/*`, which beats `*/*`. This holds even when a broader range has a higher `q`.
+  - `type/*` matches only when the whole type is equal (`image/*` does not match `imagery/raw`).
+  - Matching ignores case for types, subtypes and parameter names.
+  - If the same range is listed more than once, its **first** listing counts.
+  - A type that no range matches, or whose deciding range has `q=0`, is **not acceptable**.
+
+  Return the acceptable available type with the **highest weight**, spelled exactly as in `available`.
+  Break ties by the **earlier position in `available`**. Return `""` if no type is acceptable. An empty
+  or blank header means the client accepts anything, so return `available[0]`.
+
+  ### Example 1
+  ```
+  Input:  accept = "text/html;q=0.8, application/*;q=0.5, */*;q=0.1", available = ["application/json", "text/html", "image/png"]
+  Output: "text/html"
+  Explanation: application/json gets 0.5 (application/*), text/html gets 0.8, image/png gets 0.1 (*/*)
+  ```
+
+  ### Example 2
+  ```
+  Input:  accept = "application/*;q=0.9, application/json;q=0", available = ["application/json", "application/xml"]
+  Output: "application/xml"
+  Explanation: the exact range refuses application/json even though application/* would allow it
+  ```
+
+  ### Example 3
+  ```
+  Input:  accept = "image/*", available = ["text/html", "application/json"]
+  Output: ""
+  ```
+
+  ### Constraints
+  - `1 <= available.length <= 50`, types are distinct ignoring case
+  - Types and subtypes use letters, digits and `+ - .`
+  - `0 <= accept.length <= 2000`, and the header is well formed
+  - `q` values are decimals in `[0, 1]` with at most three digits after the point
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: negotiate_content_type
+  params:
+    - {name: accept, type: string}
+    - {name: available, type: "string[]"}
+  return_type: string
+  comparison: exact
+reference_solutions:
+  python: |
+    def negotiate_content_type(accept: str, available: list[str]) -> str:
+        if not available:
+            return ""
+        if not accept.strip():
+            return available[0]
+        ranges: dict[str, float] = {}
+        for entry in accept.split(","):
+            parts = entry.split(";")
+            media = parts[0].strip().lower()
+            if not media:
+                continue
+            q = 1.0
+            for param in parts[1:]:
+                name, _, value = param.partition("=")
+                if name.strip().lower() == "q":
+                    q = float(value.strip())
+            if media not in ranges:
+                ranges[media] = q
+        best, best_q = "", 0.0
+        for candidate in available:
+            lowered = candidate.lower()
+            main_type = lowered.split("/", 1)[0]
+            q = 0.0
+            for key in (lowered, main_type + "/*", "*/*"):
+                if key in ranges:
+                    q = ranges[key]
+                    break
+            if q > best_q:
+                best, best_q = candidate, q
+        return best
+  javascript: |
+    function negotiateContentType(accept, available) {
+      if (available.length === 0) return "";
+      if (accept.trim() === "") return available[0];
+      const ranges = new Map();
+      for (const entry of accept.split(",")) {
+        const parts = entry.split(";");
+        const media = parts[0].trim().toLowerCase();
+        if (media === "") continue;
+        let q = 1;
+        for (const param of parts.slice(1)) {
+          const eq = param.indexOf("=");
+          const name = (eq === -1 ? param : param.slice(0, eq)).trim().toLowerCase();
+          if (name === "q") q = parseFloat(param.slice(eq + 1).trim());
+        }
+        if (!ranges.has(media)) ranges.set(media, q);
+      }
+      let best = "";
+      let bestQ = 0;
+      for (const candidate of available) {
+        const lowered = candidate.toLowerCase();
+        const mainType = lowered.split("/")[0];
+        let q = 0;
+        for (const key of [lowered, mainType + "/*", "*/*"]) {
+          if (ranges.has(key)) {
+            q = ranges.get(key);
+            break;
+          }
+        }
+        if (q > bestQ) {
+          best = candidate;
+          bestQ = q;
+        }
+      }
+      return best;
+    }
+tests:
+  - {id: t1, args: ["text/html;q=0.8, application/*;q=0.5, */*;q=0.1", ["application/json", "text/html", "image/png"]], expected: "text/html", description: "Example 1 - exact range beats a type wildcard with lower q"}
+  - {id: t2, args: ["application/*;q=0.9, application/json;q=0", ["application/json", "application/xml"]], expected: "application/xml", description: "Example 2 - specific q=0 excludes a type even though its wildcard is acceptable"}
+  - {id: t3, args: ["image/*", ["text/html", "application/json"]], expected: "", description: "Example 3 - nothing acceptable returns empty string"}
+  - {id: t4, hidden: true, args: ["", ["application/json", "text/html"]], expected: "application/json", description: "Empty header accepts everything - first available wins"}
+  - {id: t5, hidden: true, args: ["TEXT/HTML;Q=0.4, text/*;q=0.2", ["text/plain", "Text/Html"]], expected: "Text/Html", description: "Case-insensitive ranges and parameter names; the available spelling is returned unchanged"}
+  - {id: t6, hidden: true, args: ["application/json, text/csv", ["text/csv", "application/json"]], expected: "text/csv", description: "Tie on q=1 - earliest available type wins, not header order"}
+  - {id: t7, hidden: true, args: ["text/html ; level=1 ; q=0.3 ,text/plain; charset=utf-8", ["text/html", "text/plain"]], expected: "text/plain", description: "Extra parameters ignored, spaces around separators, default q of 1"}
+  - {id: t8, hidden: true, args: ["*/*;q=1, text/*;q=0.2, text/csv;q=0", ["text/csv", "text/plain", "image/png"]], expected: "image/png", description: "Most specific range decides even when a broader range has higher q"}
+  - {id: t9, hidden: true, args: ["image/*;q=0.7, application/json;q=0.6", ["imagery/raw", "image/webp", "application/json"]], expected: "image/webp", description: "Type wildcard must match the whole type, not a prefix"}
+  - {id: t10, hidden: true, args: ["application/json;q=0.2, application/json;q=0.9, application/xml;q=0.5, ,", ["application/json", "application/xml"]], expected: "application/xml", description: "Repeated range - first listing counts; empty entries ignored"}
+  - {id: t11, hidden: true, args: ["text/plain;q=0.001, text/*;q=0, */*;q=0", ["text/html", "text/plain"]], expected: "text/plain", description: "Tiny positive q is still acceptable while wildcards are refused"}
+  - {id: t12, hidden: true, args: ["application/vnd.report.v1+json;q=0.2, application/vnd.report.v2+json;q=0.3, application/vnd.report.v4+json;q=0.5, application/vnd.report.v5+json;q=0.6, application/vnd.report.v7+json;q=0.8, application/vnd.report.v8+json;q=0.9, application/vnd.report.v10+json;q=0.2, application/vnd.report.v11+json;q=0.3, application/vnd.report.v13+json;q=0.5, application/vnd.report.v14+json;q=0.6, application/vnd.report.v16+json;q=0.8, application/vnd.report.v17+json;q=0.9, application/vnd.report.v19+json;q=0.2, application/vnd.report.v20+json;q=0.3, application/vnd.report.v22+json;q=0.5, application/vnd.report.v23+json;q=0.6, application/vnd.report.v25+json;q=0.8, application/vnd.report.v26+json;q=0.9, application/vnd.report.v28+json;q=0.2, application/vnd.report.v29+json;q=0.3, application/vnd.report.v31+json;q=0.5, application/vnd.report.v32+json;q=0.6, application/vnd.report.v34+json;q=0.8, application/vnd.report.v35+json;q=0.9, application/vnd.report.v37+json;q=0.2, application/vnd.report.v38+json;q=0.3, application/vnd.report.v40+json;q=0.5, application/*;q=0.95, */*;q=0.05", ["application/vnd.report.v1+json", "application/vnd.report.v2+json", "application/vnd.report.v3+json", "application/vnd.report.v4+json", "application/vnd.report.v5+json", "application/vnd.report.v6+json", "application/vnd.report.v7+json", "application/vnd.report.v8+json", "application/vnd.report.v9+json", "application/vnd.report.v10+json", "application/vnd.report.v11+json", "application/vnd.report.v12+json", "application/vnd.report.v13+json", "application/vnd.report.v14+json", "application/vnd.report.v15+json", "application/vnd.report.v16+json", "application/vnd.report.v17+json", "application/vnd.report.v18+json", "application/vnd.report.v19+json", "application/vnd.report.v20+json", "application/vnd.report.v21+json", "application/vnd.report.v22+json", "application/vnd.report.v23+json", "application/vnd.report.v24+json", "application/vnd.report.v25+json", "application/vnd.report.v26+json", "application/vnd.report.v27+json", "application/vnd.report.v28+json", "application/vnd.report.v29+json", "application/vnd.report.v30+json", "application/vnd.report.v31+json", "application/vnd.report.v32+json", "application/vnd.report.v33+json", "application/vnd.report.v34+json", "application/vnd.report.v35+json", "application/vnd.report.v36+json", "application/vnd.report.v37+json", "application/vnd.report.v38+json", "application/vnd.report.v39+json", "application/vnd.report.v40+json"]], expected: "application/vnd.report.v3+json", description: "Stress - 40 available vendor types with mixed specific and wildcard ranges"}
+expected_concepts:
+  - "tokenising a header by commas, semicolons and equals signs"
+  - "case-insensitive lookup in a hash map keyed by media range"
+  - "specificity order: exact, type wildcard, full wildcard"
+  - "q=0 as an explicit refusal and stable tie-breaking by server preference"
+optimal_complexity: {time: "O(h + a) where h is the header length and a the total length of available types", space: "O(h)"}
+rubric:
+  excellent: "Parses the header once into a map from lower-cased range to weight, looks up each available type from most to least specific, treats q=0 as a refusal, keeps the first listing of repeated ranges, breaks ties by server order and covers the empty-header case without prompting."
+  good: "Correct parsing and selection with a small slip such as a prefix match for type wildcards or tie order, fixed after a hint."
+  weak: "Takes the maximum q across all matching ranges instead of the most specific one, ignores q=0, compares case-sensitively or returns a lower-cased type."
+  criteria:
+    correctness: "All tests pass, including specific q=0 overrides, repeated ranges, tie-breaking and the empty header."
+    efficiency: "Parses the header once and does constant-time lookups per available type rather than rescanning the header."
+    code_quality: "Parsing is separated from selection; parameter handling is small and readable."
+    edge_cases: "Blank header, whitespace around separators, extra parameters, mixed case and wildcard prefixes such as image versus imagery."
+    communication: "Explains why specificity must decide before weight and how ties are resolved."
+hints:
+  - "Split the work in two: first turn the header into a lookup of range to weight, then score each available type against that lookup."
+  - "For one available type there are only three ranges that could match it: the exact type, its type with a star subtype, and the full wildcard. Check them from most to least specific and stop at the first one that is listed."
+  - "Lower-case each range and keep only the first weight seen for it, defaulting to one when no q parameter exists. Then walk the available types in order, take the weight of the most specific listed range or zero if none is listed, and replace the current best only when the weight is strictly higher and above zero."
+followups:
+  - "How would you extend the rules to media-range parameters such as charset or version that must match?"
+  - "How would you cache negotiation results for a high-traffic endpoint?"
+  - "What should the gateway respond with when nothing is acceptable, and why?"
+  - "How would you handle Accept-Language, where ranges like en match en-GB?"
+common_errors:
+  - "Taking the highest q among all matching ranges, so a broad wildcard overrides a specific refusal."
+  - "Using a string prefix check for type wildcards, so image/* matches imagery/raw."
+  - "Returning the lower-cased type instead of the original spelling from the available list."
+  - "Breaking ties by header order instead of the server's preference order."
+  - "Treating q=0 as acceptable or forgetting the default weight of one."

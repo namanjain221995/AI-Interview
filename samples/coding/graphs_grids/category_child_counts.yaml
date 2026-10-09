@@ -1,0 +1,190 @@
+version: 1
+slug: category_child_counts
+title: "Category Child Counts (SQL)"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, backend, fullstack, dba]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Category Child Counts
+
+  An online store keeps its product categories as a tree in a single table. Top-level categories have no
+  parent; every other category points at the category directly above it.
+
+  Table `categories`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | name | VARCHAR(100) | names are not unique |
+  | parent_id | INTEGER | `id` of the parent category; **NULL** for top-level categories |
+
+  The merchandising team wants to see how wide each part of the tree is. Return **every** category with
+  the columns `id`, `name` and `child_count`, where `child_count` is the number of categories whose
+  `parent_id` is this category's `id` (direct children only, not grandchildren). Categories without
+  children must appear with `child_count = 0`.
+
+  Order the rows by `child_count` descending, then by `id` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  categories
+  +----+-------------+-----------+
+  | id | name        | parent_id |
+  +----+-------------+-----------+
+  | 1  | Electronics | NULL      |
+  | 2  | Phones      | 1         |
+  | 3  | Laptops     | 1         |
+  | 4  | Accessories | 1         |
+  | 5  | Cases       | 4         |
+  | 6  | Garden      | NULL      |
+  | 7  | Chargers    | 4         |
+  +----+-------------+-----------+
+
+  Output
+  +----+-------------+-------------+
+  | id | name        | child_count |
+  +----+-------------+-------------+
+  | 1  | Electronics | 3           |
+  | 4  | Accessories | 2           |
+  | 2  | Phones      | 0           |
+  | 3  | Laptops     | 0           |
+  | 5  | Cases       | 0           |
+  | 6  | Garden      | 0           |
+  | 7  | Chargers    | 0           |
+  +----+-------------+-------------+
+  Cases and Chargers are grandchildren of Electronics and do not count towards it.
+  ```
+
+  ### Example 2
+  ```
+  categories
+  +----+-------+-----------+
+  | id | name  | parent_id |
+  +----+-------+-----------+
+  | 10 | Books | NULL      |
+  | 20 | Music | NULL      |
+  +----+-------+-----------+
+
+  Output
+  +----+-------+-------------+
+  | id | name  | child_count |
+  +----+-------+-------------+
+  | 10 | Books | 0           |
+  | 20 | Music | 0           |
+  +----+-------+-------------+
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return id, name and the number of direct children, ordered by child_count DESC, id.
+    SELECT id, name, 0 AS child_count
+    FROM categories
+    ORDER BY child_count DESC, id;
+reference_solutions:
+  sql: |
+    SELECT c.id, c.name, COUNT(ch.id) AS child_count
+    FROM categories c
+    LEFT JOIN categories ch ON ch.parent_id = c.id
+    GROUP BY c.id, c.name
+    ORDER BY child_count DESC, c.id;
+sql_setup: |
+  CREATE TABLE categories (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    parent_id INTEGER NULL REFERENCES categories (id)
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (1, 'Electronics', NULL), (2, 'Phones', 1), (3, 'Laptops', 1), (4, 'Accessories', 1),
+        (5, 'Cases', 4), (6, 'Garden', NULL), (7, 'Chargers', 4);
+    expected_rows: [[1, "Electronics", 3], [4, "Accessories", 2], [2, "Phones", 0], [3, "Laptops", 0], [5, "Cases", 0], [6, "Garden", 0], [7, "Chargers", 0]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - only top-level categories, all leaves"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES (10, 'Books', NULL), (20, 'Music', NULL);
+    expected_rows: [[10, "Books", 0], [20, "Music", 0]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Single top-level category must show 0, not 1 (COUNT(*) pitfall)"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES (1, 'Toys', NULL);
+    expected_rows: [[1, "Toys", 0]]
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Deep chain - each level has exactly one child, grandchildren not counted"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (1, 'Home', NULL), (2, 'Kitchen', 1), (3, 'Cookware', 2), (4, 'Pans', 3), (5, 'Woks', 4);
+    expected_rows: [[1, "Home", 1], [2, "Kitchen", 1], [3, "Cookware", 1], [4, "Pans", 1], [5, "Woks", 0]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Ties in child_count broken by id with non-sequential insertion order"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (30, 'Sports', NULL), (10, 'Outdoor', NULL), (20, 'Office', NULL),
+        (31, 'Running', 30), (32, 'Cycling', 30), (11, 'Tents', 10), (12, 'Stoves', 10),
+        (21, 'Paper', 20);
+    expected_rows: [[10, "Outdoor", 2], [30, "Sports", 2], [20, "Office", 1], [11, "Tents", 0], [12, "Stoves", 0], [21, "Paper", 0], [31, "Running", 0], [32, "Cycling", 0]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Duplicate names in different branches are separate rows"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (1, 'Men', NULL), (2, 'Women', NULL), (3, 'Shoes', 1), (4, 'Shoes', 2), (5, 'Boots', 3),
+        (6, 'Sandals', 3), (7, 'Boots', 4);
+    expected_rows: [[3, "Shoes", 2], [1, "Men", 1], [2, "Women", 1], [4, "Shoes", 1], [5, "Boots", 0], [6, "Sandals", 0], [7, "Boots", 0]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Wide category with many children above several roots"
+    setup_sql: |
+      INSERT INTO categories (id, name, parent_id) VALUES
+        (1, 'Grocery', NULL), (2, 'Fruit', 1), (3, 'Vegetables', 1), (4, 'Dairy', 1), (5, 'Bakery', 1),
+        (6, 'Frozen', 1), (7, 'Pets', NULL), (8, 'Dogs', 7), (9, 'Cats', 7), (10, 'Auto', NULL);
+    expected_rows: [[1, "Grocery", 5], [7, "Pets", 2], [2, "Fruit", 0], [3, "Vegetables", 0], [4, "Dairy", 0], [5, "Bakery", 0], [6, "Frozen", 0], [8, "Dogs", 0], [9, "Cats", 0], [10, "Auto", 0]]
+expected_concepts:
+  - "self-join of a hierarchy table (parent and child copies)"
+  - "LEFT JOIN to keep categories without children"
+  - "COUNT(column) versus COUNT(*) on outer-joined rows"
+  - "multi-key ORDER BY with a tie-breaker"
+optimal_complexity: {time: "O(n log n) with an index on parent_id", space: "O(n)"}
+rubric:
+  excellent: "LEFT JOINs the table to itself on child.parent_id = parent.id, counts a child column so leaves get 0, groups by id and name, orders by child_count DESC then id, and mentions indexing parent_id."
+  good: "Correct query after a hint about leaves disappearing with an inner join or showing 1 with COUNT(*)."
+  weak: "Uses an inner join so leaves vanish, counts with COUNT(*) so leaves show 1, counts grandchildren, or omits the id tie-breaker."
+  criteria:
+    correctness: "All tests pass, including leaves, deep chains, duplicate names and ties."
+    efficiency: "One set-based self-join with GROUP BY; no correlated subquery is required (though one is acceptable)."
+    code_quality: "Clear parent and child aliases and explicit output column names."
+    edge_cases: "Empty table, a single category, ties in child_count and categories sharing a name."
+    communication: "Explains why COUNT of a child column differs from COUNT(*) after a LEFT JOIN."
+hints:
+  - "Each category plays two roles: a row in the table and, possibly, the parent named by other rows."
+  - "Join the table to a second copy of itself where the second copy's parent_id matches the first copy's id, and make sure categories with no match are still kept."
+  - "Use a LEFT JOIN from the parent copy to the child copy, count a column from the child copy (which is NULL for leaves, so they count as zero), group by the parent's id and name, and order by the count descending and then id ascending."
+followups:
+  - "How would you count all descendants instead of only direct children?"
+  - "How would you return only categories with more than five children?"
+  - "Which index makes this query fast on a table with millions of categories?"
+common_errors:
+  - "Using an inner join, which drops every leaf category."
+  - "Using COUNT(*), which reports 1 instead of 0 for leaves after a LEFT JOIN."
+  - "Grouping by name only, which merges different categories that share a name."
+  - "Forgetting the id tie-breaker, making the order of equal counts nondeterministic."

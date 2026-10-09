@@ -1,0 +1,149 @@
+version: 1
+slug: longest_prefix_route_lookup
+title: "Routing Table Lookup"
+difficulty: medium
+competency_keys: [data_structures, algorithms]
+role_tags: [network, cloud, platform, sre]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## Routing Table Lookup
+
+  A software router forwards packets using a routing table. Route `i` sends traffic for the IPv4
+  network `route_cidrs[i]` to the next hop `next_hops[i]`. Networks use CIDR notation `a.b.c.d/p`
+  (`0 <= p <= 32`): a route matches an address when the first `p` bits of the address equal the first `p`
+  bits of `a.b.c.d`. Bits after the prefix may be set by mistake and are ignored, so `10.9.9.9/16` is the
+  route for `10.9.0.0/16`. The **default route** is written `0.0.0.0/0` and matches every address.
+
+  For each address in `destinations`, pick the matching route with the **longest prefix length** and
+  return its next hop. Rules:
+
+  - If the table contains the same network with the same prefix length more than once (after ignoring
+    host bits), the entry that appears **later** in the table replaces the earlier one.
+  - If no route matches, the answer for that destination is `"unreachable"`.
+
+  Return one next hop per destination, in the order of `destinations`. The table and the batch of
+  destinations can both be large, so checking every route for every destination is too slow.
+
+  ### Example 1
+  ```
+  Input:  route_cidrs  = ["10.0.0.0/8", "10.20.0.0/16", "10.20.30.0/24", "0.0.0.0/0"]
+          next_hops    = ["core", "dc-east", "rack-30", "internet"]
+          destinations = ["10.20.30.40", "10.20.99.1", "10.99.0.1", "8.8.8.8"]
+  Output: ["rack-30", "dc-east", "core", "internet"]
+  ```
+
+  ### Example 2
+  ```
+  Input:  route_cidrs  = ["192.168.1.77/24", "192.168.1.0/24", "192.168.1.128/25"]
+          next_hops    = ["old-gw", "new-gw", "dmz"]
+          destinations = ["192.168.1.5", "192.168.1.200", "192.168.2.1"]
+  Output: ["new-gw", "dmz", "unreachable"]
+  Explanation: the first two routes are the same /24 network, so the later entry (new-gw) wins.
+  192.168.2.1 matches nothing and there is no default route.
+  ```
+
+  ### Constraints
+  - `0 <= route_cidrs.length == next_hops.length <= 10^5`
+  - `0 <= destinations.length <= 10^5`
+  - Every route is a valid `a.b.c.d/p` and every destination a valid `a.b.c.d` (octets `0..255`, no leading
+    zeros).
+  - Next hops are non-empty strings and are never `"unreachable"`.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: longest_prefix_route_lookup
+  params:
+    - {name: route_cidrs, type: "string[]"}
+    - {name: next_hops, type: "string[]"}
+    - {name: destinations, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def longest_prefix_route_lookup(route_cidrs: list[str], next_hops: list[str], destinations: list[str]) -> list[str]:
+        def to_int(address: str) -> int:
+            value = 0
+            for part in address.split("."):
+                value = value * 256 + int(part)
+            return value
+
+        tables: dict[int, dict[int, str]] = {}
+        for cidr, hop in zip(route_cidrs, next_hops):
+            address, prefix = cidr.split("/")
+            length = int(prefix)
+            network = to_int(address) >> (32 - length)
+            tables.setdefault(length, {})[network] = hop
+        lengths = sorted(tables, reverse=True)
+
+        result = []
+        for destination in destinations:
+            value = to_int(destination)
+            hop = "unreachable"
+            for length in lengths:
+                found = tables[length].get(value >> (32 - length))
+                if found is not None:
+                    hop = found
+                    break
+            result.append(hop)
+        return result
+  javascript: |
+    function longestPrefixRouteLookup(routeCidrs, nextHops, destinations) {
+      const toInt = (address) => address.split(".").reduce((acc, part) => acc * 256 + Number(part), 0);
+      const tables = new Map();
+      routeCidrs.forEach((cidr, i) => {
+        const [address, prefix] = cidr.split("/");
+        const length = Number(prefix);
+        const network = Math.floor(toInt(address) / 2 ** (32 - length));
+        if (!tables.has(length)) tables.set(length, new Map());
+        tables.get(length).set(network, nextHops[i]);
+      });
+      const lengths = [...tables.keys()].sort((a, b) => b - a);
+      return destinations.map((destination) => {
+        const value = toInt(destination);
+        for (const length of lengths) {
+          const hop = tables.get(length).get(Math.floor(value / 2 ** (32 - length)));
+          if (hop !== undefined) return hop;
+        }
+        return "unreachable";
+      });
+    }
+tests:
+  - {id: t1, args: [["10.0.0.0/8", "10.20.0.0/16", "10.20.30.0/24", "0.0.0.0/0"], ["core", "dc-east", "rack-30", "internet"], ["10.20.30.40", "10.20.99.1", "10.99.0.1", "8.8.8.8"]], expected: ["rack-30", "dc-east", "core", "internet"], description: "Example 1 - nested routes and a default route"}
+  - {id: t2, args: [["192.168.1.77/24", "192.168.1.0/24", "192.168.1.128/25"], ["old-gw", "new-gw", "dmz"], ["192.168.1.5", "192.168.1.200", "192.168.2.1"]], expected: ["new-gw", "dmz", "unreachable"], description: "Example 2 - host bits, later duplicate wins, unreachable without default"}
+  - {id: t3, hidden: true, args: [[], [], ["1.1.1.1", "0.0.0.0"]], expected: ["unreachable", "unreachable"], description: "Empty routing table - everything unreachable"}
+  - {id: t4, hidden: true, args: [["0.0.0.0/0"], ["isp"], []], expected: [], description: "No destinations - empty result"}
+  - {id: t5, hidden: true, args: [["0.0.0.0/0", "10.0.0.0/8", "7.7.7.7/0", "10.1.1.1/32"], ["isp-a", "core", "isp-b", "host-route"], ["10.1.1.1", "10.1.1.2", "11.0.0.1", "255.255.255.255"]], expected: ["host-route", "core", "isp-b", "isp-b"], description: "Default route redefined later with host bits wins; /32 host route beats /8"}
+  - {id: t6, hidden: true, args: [["128.0.0.0/1", "0.0.0.0/1", "255.255.255.255/32", "255.255.255.0/24"], ["upper", "lower", "bcast", "top-net"], ["127.255.255.255", "128.0.0.0", "255.255.255.255", "255.255.255.254", "0.0.0.0"]], expected: ["lower", "upper", "bcast", "top-net", "lower"], description: "Address-space boundaries and /1 halves - sign-bit handling"}
+  - {id: t7, hidden: true, args: [["10.0.0.0/16", "10.0.0.0/24", "10.0.0.0/20", "10.0.0.0/8"], ["n16", "n24", "n20", "n8"], ["10.0.0.9", "10.0.5.1", "10.0.200.1", "10.200.0.1", "10.0.0.9"]], expected: ["n24", "n20", "n16", "n8", "n24"], description: "Same network address at four prefix lengths; repeated destination"}
+  - {id: t8, hidden: true, args: [["172.16.0.0/12", "172.31.255.0/24", "172.32.0.0/16"], ["vpc", "mgmt", "other"], ["172.31.255.7", "172.31.254.7", "172.32.0.1", "172.15.255.255", "172.16.0.0"]], expected: ["mgmt", "vpc", "other", "unreachable", "vpc"], description: "Edges of a /12 block and an adjacent network outside it"}
+  - {id: t9, hidden: true, args: [["10.10.0.0/16", "10.1.0.0/16", "10.100.0.0/16"], ["a", "b", "c"], ["10.10.1.1", "10.1.10.1", "10.100.0.1", "10.11.0.1"]], expected: ["a", "b", "c", "unreachable"], description: "Routes whose text is a prefix of another - matching must be bitwise, not textual"}
+  - {id: t10, hidden: true, args: [["172.244.37.32/16", "172.188.27.0/24", "10.228.49.160/28", "172.163.243.96/32", "10.39.237.64/12", "10.0.160.224/24", "172.163.7.96/32", "172.70.221.112/32", "172.80.79.176/16", "10.178.61.16/24", "10.39.22.240/32", "173.14.11.0/28", "172.102.10.192/12", "172.147.80.32/8", "172.61.74.0/16", "10.245.216.192/24", "172.179.217.224/12", "10.48.107.16/20", "10.17.81.208/16", "172.151.134.32/8", "10.86.70.96/20", "172.213.114.160/12", "172.223.221.64/12", "172.243.195.112/24", "172.42.240.0/24", "10.191.107.32/32", "172.93.31.144/20", "172.218.157.96/20", "173.10.86.176/8", "172.97.17.48/24", "172.57.89.144/16", "172.170.63.128/20", "10.227.140.160/24", "10.44.81.176/32", "10.173.176.64/24", "172.119.0.64/12", "10.54.25.96/32", "172.252.236.176/32", "172.208.107.160/32", "10.102.1.112/8", "10.84.151.224/24", "172.200.199.176/24", "10.212.169.32/20", "172.48.199.112/24", "10.142.2.112/24", "10.65.86.160/28", "10.47.226.176/32", "10.251.9.32/32", "10.144.89.16/20", "10.167.140.16/24", "172.143.137.48/16", "172.126.164.144/32", "172.211.89.240/8", "172.214.71.192/20", "172.126.110.96/20", "10.6.80.112/16", "10.247.119.0/16", "172.50.221.96/24", "172.195.118.64/24", "172.118.201.80/8", "173.13.180.48/28", "172.249.124.0/24", "10.139.230.112/8", "172.189.61.80/20", "172.98.123.0/24", "10.166.110.96/16", "172.206.136.96/32", "10.216.255.96/16", "172.160.8.64/24", "172.46.172.96/12", "172.86.110.80/32", "173.2.100.160/24", "172.122.130.240/24", "172.21.47.192/28", "172.88.64.144/16", "10.35.44.16/16", "173.10.63.112/32", "172.54.182.96/28", "10.156.81.208/20", "10.194.184.0/16", "10.8.119.0/32", "172.231.35.144/24", "10.158.211.160/24", "10.59.35.48/24", "173.8.27.128/16", "10.153.58.80/24", "172.240.161.80/8", "10.74.23.160/16", "10.6.131.16/16", "172.61.189.48/24", "10.89.68.32/32", "172.65.132.48/24", "10.188.71.96/24", "10.89.187.160/20", "10.216.168.128/24", "10.66.150.240/16", "172.171.130.160/16", "10.61.25.16/16", "10.214.50.64/8", "172.220.38.80/32", "10.11.84.224/28", "10.96.232.192/16", "10.225.184.0/20", "172.140.45.208/28", "172.132.150.112/8", "172.191.12.32/20", "172.207.231.96/16", "172.141.108.80/20", "172.248.8.48/32", "10.79.52.16/32", "10.127.87.80/16", "172.246.65.32/24", "10.178.119.96/12", "10.185.184.16/8", "172.178.9.240/16", "10.37.250.48/16", "10.149.94.0/24", "172.126.117.48/8", "10.171.174.192/16", "10.243.247.192/12", "172.210.40.80/32", "10.248.207.16/20", "10.177.175.144/12", "172.137.146.176/32", "10.79.136.64/16", "172.172.225.112/16", "172.162.126.0/8", "172.135.89.144/16", "10.14.169.48/20", "10.190.177.80/28", "10.219.3.48/8", "173.12.238.192/16", "172.160.207.144/8", "172.44.216.16/24", "172.54.74.96/24", "172.130.27.80/12", "10.250.176.240/24", "172.228.45.160/16", "172.58.249.240/24", "172.55.32.160/24", "10.137.16.160/8", "172.242.215.16/16", "10.38.120.32/24", "10.221.21.144/32", "10.48.4.176/32", "172.240.98.224/16", "10.179.81.192/24", "173.2.147.48/24", "10.104.236.32/16", "10.171.138.48/32", "10.127.226.224/24", "172.199.38.144/16", "10.245.203.192/20", "172.148.159.64/16", "172.22.103.96/16", "172.206.119.240/24", "172.229.85.176/24", "172.165.143.32/24", "10.26.82.192/28", "10.253.30.176/32", "10.205.48.0/12", "10.204.211.48/12", "172.226.119.32/24", "172.135.168.208/12", "10.75.221.96/24", "172.222.79.32/24", "10.129.121.80/16", "172.125.49.96/24", "172.190.127.224/12", "10.231.72.176/8", "10.215.112.16/28", "172.240.150.240/24", "172.63.124.16/24", "10.203.72.128/8", "10.131.157.208/28", "172.62.185.0/32", "10.205.16.160/16", "10.94.3.224/16", "10.105.88.80/32", "172.150.32.112/28", "172.113.13.112/16", "10.114.48.64/20", "10.38.191.160/12", "10.191.107.32/28", "10.218.147.48/8", "10.37.186.176/20", "172.85.239.48/28", "10.181.45.160/28", "172.52.24.160/16", "172.41.109.32/24", "172.36.205.96/24", "172.160.112.0/32", "10.168.86.128/24", "10.195.249.16/24", "172.211.208.96/32", "10.127.21.192/12", "10.220.65.176/16", "10.123.1.64/24", "172.108.16.0/28", "172.157.70.16/20"], ["hop-0", "hop-1", "hop-2", "hop-3", "hop-4", "hop-5", "hop-6", "hop-7", "hop-8", "hop-9", "hop-10", "hop-11", "hop-12", "hop-13", "hop-14", "hop-15", "hop-16", "hop-17", "hop-18", "hop-19", "hop-20", "hop-21", "hop-22", "hop-23", "hop-24", "hop-25", "hop-26", "hop-27", "hop-28", "hop-29", "hop-30", "hop-31", "hop-32", "hop-33", "hop-34", "hop-35", "hop-36", "hop-0", "hop-1", "hop-2", "hop-3", "hop-4", "hop-5", "hop-6", "hop-7", "hop-8", "hop-9", "hop-10", "hop-11", "hop-12", "hop-13", "hop-14", "hop-15", "hop-16", "hop-17", "hop-18", "hop-19", "hop-20", "hop-21", "hop-22", "hop-23", "hop-24", "hop-25", "hop-26", "hop-27", "hop-28", "hop-29", "hop-30", "hop-31", "hop-32", "hop-33", "hop-34", "hop-35", "hop-36", "hop-0", "hop-1", "hop-2", "hop-3", "hop-4", "hop-5", "hop-6", "hop-7", "hop-8", "hop-9", "hop-10", "hop-11", "hop-12", "hop-13", "hop-14", "hop-15", "hop-16", "hop-17", "hop-18", "hop-19", "hop-20", "hop-21", "hop-22", "hop-23", "hop-24", "hop-25", "hop-26", "hop-27", "hop-28", "hop-29", "hop-30", "hop-31", "hop-32", "hop-33", "hop-34", "hop-35", "hop-36", "hop-0", "hop-1", "hop-2", "hop-3", "hop-4", "hop-5", "hop-6", "hop-7", "hop-8", "hop-9", "hop-10", "hop-11", "hop-12", "hop-13", "hop-14", "hop-15", "hop-16", "hop-17", "hop-18", "hop-19", "hop-20", "hop-21", "hop-22", "hop-23", "hop-24", "hop-25", "hop-26", "hop-27", "hop-28", "hop-29", "hop-30", "hop-31", "hop-32", "hop-33", "hop-34", "hop-35", "hop-36", "hop-0", "hop-1", "hop-2", "hop-3", "hop-4", "hop-5", "hop-6", "hop-7", "hop-8", "hop-9", "hop-10", "hop-11", "hop-12", "hop-13", "hop-14", "hop-15", "hop-16", "hop-17", "hop-18", "hop-19", "hop-20", "hop-21", "hop-22", "hop-23", "hop-24", "hop-25", "hop-26", "hop-27", "hop-28", "hop-29", "hop-30", "hop-31", "hop-32", "hop-33", "hop-34", "hop-35", "hop-36", "hop-0", "hop-1", "hop-2", "hop-3", "hop-4", "hop-5", "hop-6", "hop-7", "hop-8", "hop-9", "hop-10", "hop-11", "hop-12", "hop-13", "hop-14"], ["235.214.111.229", "172.213.114.127", "161.177.151.66", "172.72.163.9", "10.173.176.25", "10.194.184.203", "172.222.79.225", "10.127.87.228", "172.246.65.66", "10.220.65.55", "172.222.79.65", "10.190.177.208", "156.150.14.113", "24.42.170.216", "84.77.244.220", "248.9.99.60", "173.10.63.55", "172.211.89.3", "31.181.17.210", "10.8.119.152", "200.210.67.92", "172.141.108.232", "10.86.70.81", "101.236.180.154", "10.89.187.54", "130.106.118.162", "10.228.49.86", "50.252.162.20", "172.191.12.106", "91.135.48.167", "50.104.200.243", "158.109.117.51", "172.223.221.6", "172.240.161.238", "181.238.96.159", "10.129.121.7", "57.8.131.70", "172.46.172.233", "10.166.110.233", "142.190.86.113", "16.34.199.27", "172.240.161.24", "150.137.130.11", "10.166.110.112", "172.190.127.61", "69.185.110.228", "172.214.71.89", "204.142.217.68", "172.150.32.17", "135.147.31.112", "172.102.10.128", "10.185.184.62", "10.251.9.4", "172.170.63.107", "12.166.165.111", "172.118.201.30", "217.8.200.123", "10.178.119.175", "172.88.64.237", "172.151.134.70", "104.130.33.181", "142.66.66.223", "167.169.20.45", "155.199.86.33", "172.58.249.144", "10.195.249.245", "10.179.81.216", "128.6.17.59", "104.88.76.14", "173.2.147.171", "10.6.131.77", "12.61.142.138", "172.61.189.17", "172.88.64.20", "10.198.56.190", "172.3.41.191", "173.8.27.192", "10.144.89.132", "172.206.136.69", "60.38.77.67", "10.26.82.100", "172.70.221.182", "210.135.236.129", "10.181.45.122", "10.188.71.48", "119.61.166.111", "255.253.80.47", "91.105.241.211", "10.227.140.85", "172.243.195.6", "10.203.72.57", "93.143.162.97", "165.255.239.30", "10.139.230.249", "10.149.94.49", "122.144.23.246", "172.148.159.179", "172.240.150.120", "213.83.90.38", "172.151.134.201", "146.194.9.112", "172.156.55.130", "172.126.110.5", "10.89.68.8", "10.79.52.109", "172.126.110.1", "63.163.203.185", "173.12.238.11", "10.167.140.119", "141.250.25.244", "10.231.72.8", "172.58.249.162", "10.35.44.177", "21.157.251.109", "32.55.149.106", "194.109.253.89", "10.44.81.81", "61.247.241.165", "172.165.143.194", "44.91.48.34", "57.69.135.190", "219.23.214.44", "5.227.124.42", "172.140.45.129", "172.223.221.127", "10.35.44.67", "172.160.112.86", "10.37.250.229", "172.188.27.1", "10.218.147.174", "120.88.11.238", "172.213.114.220", "10.188.71.8", "172.207.231.133", "10.66.150.65", "119.161.114.0", "191.227.77.220", "172.135.168.113", "214.9.149.154", "78.168.252.225", "10.137.16.101", "173.13.180.8", "172.207.231.153", "10.142.2.98", "192.41.115.75", "216.249.238.135", "172.229.85.115", "79.212.131.204", "10.228.49.205", "10.185.184.161", "82.181.35.251", "243.212.255.31", "10.191.107.63", "160.176.143.79", "10.225.184.131", "172.249.124.88", "168.153.124.96", "101.8.213.213", "10.19.84.97", "10.166.110.100", "173.2.147.55", "114.112.94.101", "10.59.35.173", "91.240.230.245", "172.130.27.97", "104.140.37.40", "172.244.37.20", "172.222.79.138", "172.113.13.82", "82.231.161.242", "211.204.38.43", "64.111.158.201", "172.41.109.104", "122.5.66.239", "0.163.217.151", "10.225.184.133", "172.50.221.94", "37.137.101.131", "206.236.152.250", "10.139.230.218", "134.90.102.157", "172.143.137.71", "10.245.203.226", "10.177.175.94", "35.10.212.63", "0.206.63.111", "172.125.49.157", "10.131.157.223", "127.235.49.248", "40.63.31.79", "172.223.221.219", "10.214.50.154", "10.48.4.117", "211.95.46.38", "173.10.63.119", "10.250.176.117", "217.45.54.60", "10.37.250.23", "10.204.211.185", "10.227.140.232"]], expected: ["unreachable", "hop-22", "unreachable", "hop-21", "hop-34", "hop-5", "hop-17", "hop-36", "hop-0", "hop-11", "hop-17", "hop-11", "unreachable", "unreachable", "unreachable", "unreachable", "hop-28", "hop-22", "unreachable", "hop-36", "unreachable", "hop-33", "hop-20", "unreachable", "hop-19", "unreachable", "hop-36", "unreachable", "hop-31", "unreachable", "unreachable", "unreachable", "hop-22", "hop-34", "unreachable", "hop-18", "unreachable", "hop-32", "hop-28", "unreachable", "unreachable", "hop-34", "unreachable", "hop-28", "hop-20", "unreachable", "hop-16", "unreachable", "hop-21", "unreachable", "hop-12", "hop-11", "hop-8", "hop-31", "unreachable", "hop-35", "unreachable", "hop-11", "hop-0", "hop-21", "unreachable", "unreachable", "unreachable", "unreachable", "hop-27", "hop-8", "hop-35", "unreachable", "unreachable", "hop-36", "hop-14", "unreachable", "hop-15", "hop-0", "hop-13", "hop-21", "hop-10", "hop-11", "hop-21", "unreachable", "hop-36", "hop-21", "unreachable", "hop-11", "hop-18", "unreachable", "unreachable", "unreachable", "hop-32", "hop-23", "hop-13", "unreachable", "unreachable", "hop-36", "hop-5", "unreachable", "hop-5", "hop-23", "unreachable", "hop-21", "unreachable", "hop-21", "hop-17", "hop-36", "hop-13", "hop-17", "unreachable", "hop-20", "hop-12", "unreachable", "hop-36", "hop-27", "hop-1", "unreachable", "unreachable", "unreachable", "hop-34", "unreachable", "hop-9", "unreachable", "unreachable", "unreachable", "unreachable", "hop-15", "hop-22", "hop-1", "hop-21", "hop-4", "hop-1", "hop-36", "unreachable", "hop-22", "hop-18", "hop-32", "hop-21", "unreachable", "unreachable", "hop-16", "unreachable", "unreachable", "hop-36", "hop-28", "hop-32", "hop-7", "unreachable", "unreachable", "hop-8", "unreachable", "hop-36", "hop-11", "unreachable", "unreachable", "hop-11", "unreachable", "hop-28", "hop-24", "unreachable", "unreachable", "hop-36", "hop-28", "hop-36", "unreachable", "hop-9", "unreachable", "hop-15", "unreachable", "hop-0", "hop-17", "hop-32", "unreachable", "unreachable", "unreachable", "hop-4", "unreachable", "unreachable", "hop-28", "hop-20", "unreachable", "unreachable", "hop-36", "unreachable", "hop-13", "hop-4", "hop-11", "unreachable", "unreachable", "hop-19", "hop-26", "unreachable", "unreachable", "hop-22", "hop-36", "hop-36", "unreachable", "hop-28", "hop-25", "unreachable", "hop-4", "hop-13", "hop-32"], description: "Stress - 200 random routes and 200 destinations, many near existing networks"}
+expected_concepts:
+  - "parsing IPv4 addresses into 32-bit integers"
+  - "masking or shifting to the network prefix"
+  - "hash map per prefix length or a binary trie"
+  - "checking prefix lengths from longest to shortest"
+  - "last-write-wins for duplicate routes"
+optimal_complexity: {time: "O((R + D) * 33) with one hash map per prefix length, or O(R * 32 + D * 32) with a binary trie", space: "O(R)"}
+rubric:
+  excellent: "Normalises each route to its network, builds one hash map per prefix length (or a binary trie) with later entries overwriting earlier ones, probes the populated lengths from longest to shortest for each destination, and explains why this beats scanning every route."
+  good: "Correct results with a per-destination scan of all routes, or the per-length table with a small bug (duplicate handling or /0) fixed after a hint."
+  weak: "Matches routes by string prefix, ignores host bits, lets the first duplicate win, or breaks on addresses above 127.255.255.255."
+  criteria:
+    correctness: "All tests pass, including duplicates, /0, /32 and high addresses."
+    efficiency: "Each lookup costs at most 33 hash probes or 32 trie steps, independent of the table size."
+    code_quality: "Address parsing and network computation are shared helpers; the table structure is clearly named."
+    edge_cases: "Empty table, empty batch, default route, host bits and the top of the address space."
+    communication: "Explains the longest-match rule, the duplicate rule and the chosen data structure's trade-offs."
+hints:
+  - "Convert addresses to numbers. Two addresses share a prefix of length p exactly when they agree after dropping their last 32 minus p bits."
+  - "Group the routes by prefix length and index each group by its network number, so that checking whether some route of a given length matches an address is a single lookup."
+  - "Build a map from prefix length to a map from network number to next hop, inserting routes in table order so later duplicates overwrite earlier ones; for each destination try the lengths present in the table from the longest down to zero and return the first hit, or unreachable if none hits. A binary trie over the address bits works too."
+followups:
+  - "How would you support adding and withdrawing routes while lookups keep running?"
+  - "How does a compressed trie (as used by real routers) reduce memory compared with a plain binary trie?"
+  - "How would you extend the design to IPv6 addresses?"
+common_errors:
+  - "Comparing addresses as strings, so 10.1.0.0/16 seems to match 10.10.1.1."
+  - "Shifting by 32 for a /0 route, which is undefined or a no-op in several languages."
+  - "Using signed 32-bit integers, which makes addresses from 128.0.0.0 upward negative."
+  - "Keeping the first of two duplicate routes instead of the later one."

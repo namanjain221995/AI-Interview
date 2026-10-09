@@ -1,0 +1,651 @@
+# Curated questions: Data engineering (part 1 of 4).
+# Batch pipelines, incremental loads and CDC, file formats, partitioning, Spark performance, backfills.
+# `defaults` are merged into every question (question keys win).
+version: 1
+defaults:
+  role_tags: [data]
+questions:
+  # ------------------------------------------------------------- batch basics
+  - external_key: technical.data_engineering.full_vs_incremental_load
+    competency_key: data_engineering
+    topic: Full refresh versus incremental loads
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      When you build a load for a new table, how do you decide between rebuilding it completely every run
+      and loading only what changed? Give me an example of each from your own work.
+    expected_concepts:
+      - table size and how long a full rebuild takes
+      - whether the source exposes a reliable change marker
+      - handling of updates and deletes in each approach
+      - simplicity and self-healing of full refreshes
+      - compute and source-load cost of reprocessing everything
+    rubric:
+      excellent: Weighs size, run time, source load and the availability of a trustworthy change marker, explains that full refreshes self-heal while incremental loads need explicit handling of updates and deletes, and backs it up with real examples.
+      good: Names size and cost as the main driver and gives at least one concrete example.
+      weak: Always uses one approach without reasoning, or cannot explain what an incremental load has to handle.
+    followups:
+      - At what point did a full refresh stop being viable for one of your tables?
+      - How would you catch drift in an incremental table that never gets rebuilt?
+    common_errors:
+      - Assuming incremental loads are always better without counting the complexity they add.
+
+  - external_key: technical.data_engineering.rerunnable_daily_job
+    competency_key: data_engineering
+    topic: Making batch jobs safe to rerun
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Suppose a daily job fails halfway and someone simply reruns it for the same day. How do you design the
+      job so that rerun gives exactly the same result instead of doubling the data?
+    expected_concepts:
+      - idempotent writes such as overwriting a date partition
+      - merge or upsert on a natural or business key
+      - deterministic inputs bound to the run date, not the current time
+      - writing to staging then swapping atomically
+      - avoiding append-only inserts without a key
+    rubric:
+      excellent: Makes each run own a well-defined slice such as a partition, writes it atomically by overwrite or merge, ties inputs to the logical run date rather than now, and explains how partial output from the failed attempt is cleaned up.
+      good: Proposes overwriting the partition or using a merge on a key so reruns do not duplicate.
+      weak: Relies on people deleting rows by hand before rerunning, or does not see the duplication risk.
+    followups:
+      - The job uses the current timestamp to decide which rows to pick up. What breaks on a rerun?
+      - How would you handle a job that writes to two tables and fails after the first?
+    common_errors:
+      - Using now() inside the job so a rerun the next morning reads a different window.
+
+  - external_key: technical.data_engineering.columnar_file_formats
+    competency_key: data_engineering
+    topic: Columnar versus row-based file formats
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Why do analytics pipelines usually store data as Parquet or ORC rather than CSV or JSON, and when would
+      you still pick a row-oriented format like Avro?
+    expected_concepts:
+      - reading only the columns a query needs
+      - better compression from similar values stored together
+      - column statistics that let engines skip row groups
+      - embedded schema and types instead of text parsing
+      - row formats suit record-at-a-time writes and streaming messages
+    rubric:
+      excellent: Explains column pruning, compression and min/max statistics for skipping data, contrasts this with typed row formats that suit write-heavy or message-based use such as Kafka payloads, and gives a case from their own pipelines.
+      good: Knows columnar formats read fewer bytes and compress well, and names one good use for a row format.
+      weak: Says Parquet is just faster without explaining why, or does not know of any reason to use a row format.
+    followups:
+      - How do row group size and sort order affect how much a query can skip?
+      - What goes wrong when you keep raw data as JSON in the lake for years?
+    common_errors:
+      - Believing columnar formats are good for frequent single-row updates.
+
+  - external_key: technical.data_engineering.partition_column_choice
+    competency_key: data_engineering
+    topic: Choosing a partition column
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      For a large events table in a data lake, how do you choose what to partition it by? Tell me about a
+      partitioning choice you made and how it worked out.
+    expected_concepts:
+      - match the filters most queries actually use, often a date
+      - keep partitions large enough to avoid many tiny files
+      - avoid high-cardinality columns such as user id
+      - how the write pattern of the pipeline maps to partitions
+      - partition pruning at query time
+    rubric:
+      excellent: Bases the choice on real query filters and write patterns, sizes partitions to avoid tiny files, rejects high-cardinality keys with a reason, and describes how their own choice held up over time.
+      good: Picks a date column for a sensible reason and knows high-cardinality partitioning is harmful.
+      weak: Partitions by whatever column seems unique, or cannot explain how partitioning speeds queries up.
+    followups:
+      - Most queries filter by customer as well as date. Would you partition by both?
+      - How would you change partitioning on a table that already holds years of data?
+    common_errors:
+      - Partitioning by hour on a low-volume table and ending up with thousands of tiny files.
+
+  - external_key: technical.data_engineering.realtime_dashboard_request
+    competency_key: data_engineering
+    topic: Deciding whether a use case needs streaming
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A product manager asks you to make the sales dashboard real time. Today it is refreshed once a night.
+      How would you work out what they actually need before you build anything?
+    expected_concepts:
+      - ask what decision the fresher data supports
+      - agree a concrete freshness target such as fifteen minutes or an hour
+      - more frequent micro-batches often meet the need
+      - cost and operational burden of a streaming pipeline
+      - which source systems can provide data that quickly
+    rubric:
+      excellent: Turns "real time" into a measurable freshness target tied to a decision, considers more frequent batch runs first, and compares the cost and on-call burden of streaming against the benefit.
+      good: Asks how fresh the data needs to be and mentions that hourly batches may be enough.
+      weak: Starts designing a streaming system immediately without clarifying the need.
+    followups:
+      - They say five minutes. What changes in your design?
+      - How would you explain the extra running cost to them?
+    common_errors:
+      - Treating every freshness request as a requirement for event streaming.
+
+  - external_key: technical.data_engineering.saas_api_ingestion
+    competency_key: data_engineering
+    topic: Ingesting from a rate-limited third-party API
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      You need to pull data every day from a third-party SaaS API that is paginated and allows only a few
+      requests per second. How would you build that ingestion so it is reliable?
+    expected_concepts:
+      - respecting rate limits with backoff on throttling responses
+      - pagination with cursors and resuming from the last page
+      - incremental extraction using an updated-since filter
+      - landing the raw responses before transforming them
+      - retries, timeouts and alerting on partial loads
+    rubric:
+      excellent: Handles throttling with backoff, pages with cursors and can resume after failure, extracts incrementally, stores raw payloads for replay and detects partial or empty loads.
+      good: Mentions retries with backoff and incremental extraction.
+      weak: Loops over all pages in one go with no handling for throttling or failure.
+    followups:
+      - The vendor changes a field name without notice. How do you find out?
+      - How would you do a one-off pull of three years of history without breaking the daily job?
+    common_errors:
+      - Not saving the raw responses, so a parsing bug means calling the API all over again.
+
+  - external_key: technical.data_engineering.small_files_problem
+    competency_key: data_engineering
+    topic: The small files problem
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      What problems do lots of tiny files cause in a data lake, and how have you prevented or fixed that in
+      pipelines you've worked on?
+    expected_concepts:
+      - per-file overhead in listing, opening and planning
+      - metadata pressure on the catalog or object store
+      - many small tasks and poor parallelism in query engines
+      - coalescing or repartitioning before writing
+      - periodic compaction into larger files
+    rubric:
+      excellent: Explains why per-file overhead dominates for tiny files, names the usual causes such as frequent small writes or over-partitioning, and describes both prevention at write time and compaction after the fact from experience.
+      good: Knows small files slow queries and suggests compaction or fewer output partitions.
+      weak: Unaware that file count matters, or thinks smaller files always parallelise better.
+    followups:
+      - Roughly what file size would you aim for, and why?
+      - How would you compact a table that is being written to continuously?
+    common_errors:
+      - Fixing it with a single giant file that cannot be read in parallel.
+
+  - external_key: technical.data_engineering.timestamps_and_time_zones
+    competency_key: data_engineering
+    topic: Timestamps and time zones across sources
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Your sources record timestamps in different ways: some in UTC, some in local time, some as plain text.
+      How do you handle time zones so that daily reports come out right?
+    expected_concepts:
+      - normalise to UTC at ingestion and keep the original value
+      - timezone-aware types rather than naive timestamps
+      - business day boundaries defined in the reporting time zone
+      - daylight saving transitions
+      - documenting the convention for downstream users
+    rubric:
+      excellent: Normalises to UTC with the original preserved, converts to the business time zone only when defining reporting days, and calls out daylight saving edge cases and documentation.
+      good: Converts everything to UTC and knows reports may need a local day boundary.
+      weak: Leaves timestamps as received or does not see why mixed zones would cause problems.
+    followups:
+      - A report shows a dip every March. What could explain it?
+      - The company operates in three regions. Whose midnight defines a day?
+    common_errors:
+      - Storing local time without an offset, which makes daylight saving hours ambiguous.
+
+  # ------------------------------------------------------------- incremental extraction and CDC
+  - external_key: technical.data_engineering.cdc_versus_timestamp_extraction
+    competency_key: data_engineering
+    topic: Log-based CDC versus timestamp-based extraction
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Compare reading a database's change log, the way Debezium does, with periodically querying rows whose
+      updated-at column is newer than the last run. When have you chosen one over the other?
+    expected_concepts:
+      - log-based capture sees every change including deletes
+      - timestamp queries miss hard deletes and intermediate updates
+      - timestamp queries add load to the source database
+      - log-based capture needs replication access and operational care
+      - ordering and latency differences
+    rubric:
+      excellent: Contrasts completeness (deletes, intermediate states), source load, latency and operational cost, and grounds the choice in a real constraint such as no access to the database log or a need for deletes.
+      good: Knows CDC captures deletes and is lower latency while timestamp polling is simpler.
+      weak: Sees them as equivalent or cannot say what timestamp polling misses.
+    followups:
+      - What does running a CDC connector cost the source database team?
+      - The source table has no updated-at column at all. What are your options?
+    common_errors:
+      - Assuming the updated-at column is always maintained by the application.
+
+  - external_key: technical.data_engineering.updated_at_missed_rows
+    competency_key: data_engineering
+    topic: Incremental extraction that silently misses rows
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your incremental extract picks up rows where updated-at is greater than the high-water mark from the
+      previous run, yet every week a handful of rows never arrive in the warehouse. What could be causing
+      that, and how would you fix it?
+    expected_concepts:
+      - long transactions committing with an earlier timestamp after the extract ran
+      - clock differences between application servers
+      - strict greater-than at the boundary with equal timestamps
+      - updates that bypass the application and do not touch updated-at
+      - overlapping lookback window with deduplication
+      - reconciliation counts against the source
+    rubric:
+      excellent: Explains late-committing transactions and boundary ties as the main causes, proposes an overlapping lookback window with idempotent merge, and adds a reconciliation check to prove the gap is closed.
+      good: Identifies at least one realistic cause and suggests re-reading a window of overlap.
+      weak: Blames the warehouse or suggests running the job more often without understanding the cause.
+    followups:
+      - How large should the overlap window be, and how would you choose it?
+      - How would you find the missing rows that already slipped through?
+    common_errors:
+      - Taking the high-water mark from the extraction run time instead of the data itself.
+
+  - external_key: technical.data_engineering.hard_deletes_in_source
+    competency_key: data_engineering
+    topic: Propagating hard deletes
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      The source application physically deletes rows when customers cancel, and your incremental pipeline
+      never sees those deletions, so the warehouse keeps showing cancelled records. How would you deal with
+      that?
+    expected_concepts:
+      - change data capture to receive delete events
+      - asking the source to soft delete with a flag and timestamp
+      - periodic full key comparison to find missing keys
+      - marking rows deleted rather than removing history
+      - effect on downstream aggregates and snapshots
+    rubric:
+      excellent: Offers several options (CDC, soft deletes at source, periodic key reconciliation), picks one with a reason based on volume and access, and decides deliberately whether to keep a deleted flag for history.
+      good: Proposes a periodic key comparison or CDC to detect deletes.
+      weak: Does not see a way to detect deletes or suggests a full reload with no thought about cost.
+    followups:
+      - The table has two billion rows. How do you make key comparison affordable?
+      - Should deleted customers disappear from last year's revenue report?
+    common_errors:
+      - Removing rows from the warehouse silently and changing historical reports without notice.
+
+  # ------------------------------------------------------------- Spark performance
+  - external_key: technical.data_engineering.spark_shuffles
+    competency_key: data_engineering
+    topic: What causes shuffles and how to reduce them
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      In Spark or a similar engine, what makes a stage shuffle data across the cluster, and what techniques
+      have you used to cut down how much gets shuffled?
+    expected_concepts:
+      - wide operations such as joins, groupBy and distinct
+      - filtering and selecting columns before the shuffle
+      - broadcasting small tables to avoid shuffle joins
+      - pre-aggregation and combiners
+      - tuning shuffle partition counts or adaptive execution
+      - reusing existing partitioning or bucketing
+    rubric:
+      excellent: Explains why wide transformations need data redistributed by key, lists concrete reductions (prune early, broadcast, partial aggregation, bucketing, adaptive execution) and describes reading the query plan or UI to confirm the effect.
+      good: Knows joins and aggregations shuffle and suggests broadcasting or filtering earlier.
+      weak: Cannot say what a shuffle is or why it is expensive.
+    followups:
+      - Where in the Spark UI would you see how much was shuffled?
+      - How do you pick the number of shuffle partitions?
+    common_errors:
+      - Calling repartition everywhere, which adds shuffles rather than removing them.
+
+  - external_key: technical.data_engineering.join_strategies
+    competency_key: data_engineering
+    topic: Broadcast versus sort-merge joins
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Walk me through how a distributed engine chooses between a broadcast join and a sort-merge or shuffle
+      hash join, and tell me about a time you had to override that choice.
+    expected_concepts:
+      - broadcast copies the small side to every executor
+      - size thresholds and statistics drive the planner
+      - sort-merge shuffles both sides by the join key
+      - stale or missing statistics cause bad plans
+      - join hints and memory risk of broadcasting too much
+    rubric:
+      excellent: Explains the mechanics and costs of each strategy, how statistics and thresholds drive selection, why plans go wrong, and gives a real example of forcing or preventing a broadcast with the outcome.
+      good: Correctly describes both join types and when a broadcast helps.
+      weak: Does not know join strategies exist or thinks broadcasting is always faster.
+    followups:
+      - What happens if you broadcast a table that turns out to be several gigabytes?
+      - How does a join on a skewed key change your choice?
+    common_errors:
+      - Forcing a broadcast hint on a table that grows over time until the job runs out of memory.
+
+  - external_key: technical.data_engineering.skewed_straggler_task
+    competency_key: data_engineering
+    topic: Diagnosing data skew
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      A Spark job has two hundred tasks in one stage. One hundred and ninety-nine finish in about a minute,
+      and the last one runs for over an hour. How would you diagnose it and what would you try?
+    expected_concepts:
+      - inspect task input sizes and shuffle read in the UI
+      - find the hot key with a count by key
+      - salting the skewed key
+      - handling null or default keys separately
+      - adaptive skew-join handling
+      - broadcasting the other side when possible
+    rubric:
+      excellent: Confirms skew from task metrics, identifies the hot key with a quick aggregation, and chooses a fitting fix such as salting, isolating nulls or default values, broadcasting, or adaptive skew handling, explaining the trade-offs.
+      good: Recognises data skew and proposes salting or a broadcast join.
+      weak: Adds more executors or memory without finding the cause.
+    followups:
+      - The hot key turns out to be null. What does that tell you about the data?
+      - How does salting change the aggregation logic afterwards?
+    common_errors:
+      - Increasing the partition count, which does nothing when one key holds most rows.
+
+  - external_key: technical.data_engineering.executor_out_of_memory
+    competency_key: data_engineering
+    topic: Executors running out of memory
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your nightly aggregation job started failing with executors being killed for exceeding memory after
+      the input grew by about half. How would you track down the cause and make it stable again?
+    expected_concepts:
+      - check whether failures are in shuffle, aggregation or collect to driver
+      - skewed partitions that are much larger than average
+      - too few partitions for the new volume
+      - memory overhead versus heap configuration
+      - spill behaviour and caching that is no longer needed
+      - collect or toPandas pulling data to one machine
+    rubric:
+      excellent: Pinpoints which stage and task fail, distinguishes skew from under-partitioning from driver collection, and fixes the cause (repartition, skew handling, removing caches or collects) before reaching for more memory.
+      good: Suggests increasing partitions and checks for skew.
+      weak: Only raises executor memory until the job passes.
+    followups:
+      - What is the difference between heap memory and memory overhead for an executor?
+      - When does caching a DataFrame make memory problems worse?
+    common_errors:
+      - Raising memory without checking whether one oversized partition is the real problem.
+
+  - external_key: technical.data_engineering.late_records_daily_partitions
+    competency_key: data_engineering
+    topic: Late-arriving records in a daily batch
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      In a pipeline partitioned by event date, records for earlier days keep arriving days after those days
+      were processed. How do you design the batch job so those older partitions end up correct?
+    expected_concepts:
+      - distinguish event date from arrival or load date
+      - detect which event dates appear in each new batch
+      - reprocess or merge only the affected partitions
+      - a bounded lateness window with a policy beyond it
+      - notifying or recomputing downstream aggregates
+    rubric:
+      excellent: Separates event time from load time, has the job discover affected partitions and rewrite or merge them idempotently, sets a lateness window with an explicit policy for later data, and cascades the update to dependent tables.
+      good: Reprocesses the affected dates rather than only the current day.
+      weak: Puts late records in today's partition or drops them without saying so.
+    followups:
+      - How would downstream tables know an old partition changed?
+      - What would you do with a record that arrives three months late?
+    common_errors:
+      - Partitioning by load date and then filtering by event date, which forces full scans.
+
+  - external_key: technical.data_engineering.predicate_pushdown_pruning
+    competency_key: data_engineering
+    topic: Predicate pushdown and partition pruning
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Explain how partition pruning and predicate pushdown reduce the data a query reads, and how you'd check
+      whether one of your queries is really benefiting from them.
+    expected_concepts:
+      - pruning skips whole partitions from the filter on partition columns
+      - pushdown uses file and row group statistics to skip data
+      - functions or casts on the column can defeat pruning
+      - sorted or clustered data makes statistics selective
+      - reading the physical plan or bytes scanned to verify
+    rubric:
+      excellent: Distinguishes pruning from statistics-based skipping, names concrete ways queries defeat them such as wrapping the column in a function, and verifies with the plan or scanned bytes rather than assuming.
+      good: Explains both ideas correctly and knows to look at the query plan.
+      weak: Confuses them with indexes or cannot say how to verify.
+    followups:
+      - Why might filtering on a date string instead of a date column scan the whole table?
+      - How does the sort order of data inside files change how much gets skipped?
+    common_errors:
+      - Assuming any filter in the query will reduce the bytes read.
+
+  - external_key: technical.data_engineering.backfill_after_logic_change
+    competency_key: data_engineering
+    topic: Planning a large historical backfill
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      The business changed how an important metric is calculated, and you have to recompute two years of
+      history for it. How would you plan and run that backfill?
+    expected_concepts:
+      - build into a separate table or version before switching
+      - chunk by date and run in parallel with limits
+      - protect source systems and shared compute from overload
+      - validate a sample of chunks against expectations before the full run
+      - atomic cut-over and communication to consumers
+      - keep the daily pipeline running during the backfill
+    rubric:
+      excellent: Writes to a side table, runs in bounded date chunks with resource limits, validates early chunks, keeps daily loads flowing, then switches atomically and tells consumers what changed and why numbers moved.
+      good: Splits the work by date and validates before replacing the old data.
+      weak: Reruns everything in place in one huge job with no validation or communication.
+    followups:
+      - How do you estimate how long and how much it will cost before starting?
+      - Halfway through, you find a bug in the new logic. What then?
+    common_errors:
+      - Overwriting the live table chunk by chunk so reports mix old and new logic for days.
+
+  - external_key: technical.data_engineering.python_udf_performance
+    competency_key: python
+    topic: Python UDFs in distributed jobs
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Why can a Python user-defined function make a Spark job much slower, and what alternatives have you
+      used when you hit that?
+    expected_concepts:
+      - serialisation between the JVM and Python workers
+      - the optimiser cannot see inside the function
+      - built-in functions or SQL expressions instead
+      - vectorised pandas UDFs using Arrow
+      - moving the logic to a different stage or engine
+    rubric:
+      excellent: Explains the row-by-row serialisation cost and loss of optimisation, prefers built-in expressions, uses vectorised UDFs when custom code is unavoidable, and quotes a real before-and-after.
+      good: Knows UDFs are slow because of serialisation and suggests built-in functions.
+      weak: Does not know UDFs have a cost or blames Python in general.
+    followups:
+      - How would you test a vectorised UDF outside the cluster?
+      - When is a UDF still the right choice?
+    common_errors:
+      - Writing a UDF for logic that a built-in date or string function already covers.
+
+  # ------------------------------------------------------------- hard
+  - external_key: technical.data_engineering.cdc_initial_snapshot
+    competency_key: data_engineering
+    topic: Bootstrapping CDC with an initial snapshot
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You're switching a large table to change data capture. You need a full initial copy and then the
+      stream of changes, with no gaps and no double-applied changes, while the source keeps taking writes.
+      How would you do it?
+    expected_concepts:
+      - record the log position before or at the start of the snapshot
+      - consistent snapshot isolation or chunked snapshots with watermarks
+      - replay changes from the recorded position after the snapshot
+      - idempotent apply keyed by primary key and ordered by log position
+      - log retention long enough to cover the snapshot duration
+      - reconciliation of counts and checksums after cut-over
+    rubric:
+      excellent: Anchors the snapshot to a log position, explains how changes during the snapshot are replayed and applied idempotently in order, checks log retention and validates with counts or checksums afterwards.
+      good: Knows to record the log position and replay changes after the snapshot.
+      weak: Takes a snapshot and then starts CDC from "now", leaving a gap.
+    followups:
+      - The snapshot takes nine hours but log retention is six. What do you do?
+      - How do you apply an update for a row that the snapshot has not reached yet?
+    common_errors:
+      - Applying changes without comparing log positions, so older events overwrite newer snapshot data.
+
+  - external_key: technical.data_engineering.slow_nightly_job_cost
+    competency_key: data_engineering
+    topic: A batch job that keeps getting slower and costlier
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A nightly Spark pipeline that used to take two hours now takes six, and the cloud bill for it has
+      tripled over a year. You're asked to cut both time and cost roughly in half. How would you approach
+      it?
+    expected_concepts:
+      - profile stages to find where time and money actually go
+      - check whether it reprocesses all history instead of increments
+      - file layout, small files and partition pruning
+      - skew, shuffles and inefficient joins
+      - right-sizing or autoscaling clusters and spot capacity
+      - measure each change and protect correctness with output comparison
+    rubric:
+      excellent: Measures first, finds the dominant stages, tackles the biggest structural cause such as full reprocessing or poor layout before tuning knobs, sizes compute to the workload, and proves each change with timing, cost and output comparisons.
+      good: Profiles the job and proposes several sensible optimisations such as incremental processing and fixing joins.
+      weak: Jumps straight to bigger or smaller clusters without understanding where the time goes.
+    followups:
+      - How would you prove the optimised job produces the same output?
+      - Which single change would you expect to give the most and why?
+    common_errors:
+      - Tuning configuration parameters before checking whether the job does unnecessary work.
+
+  - external_key: technical.data_engineering.task_retries_external_sink
+    competency_key: data_engineering
+    topic: Correct writes to external systems under task retries
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      A Spark job writes its results directly into an operational Postgres database. Because failed tasks and
+      speculative attempts get retried, you sometimes find duplicate or partial rows. How would you make that
+      write correct?
+    expected_concepts:
+      - tasks can run more than once, so writes must be idempotent
+      - upsert on a deterministic key instead of insert
+      - write to a staging table and swap or merge in one transaction
+      - disabling speculation for non-idempotent sinks
+      - batch-level identifiers to detect and clean partial loads
+    rubric:
+      excellent: Explains why at-least-once task execution produces duplicates, makes the sink idempotent with keyed upserts or a staging-then-commit pattern, and considers connection load on the operational database.
+      good: Proposes upserts on a key or a staging table.
+      weak: Suggests turning off retries or adding a distinct afterwards.
+    followups:
+      - How do you avoid overwhelming the database with hundreds of parallel writers?
+      - What changes if the target is a REST API rather than a database?
+    common_errors:
+      - Assuming a job that reports success wrote each row exactly once.
+
+  - external_key: technical.data_engineering.consistent_multi_source_snapshot
+    competency_key: data_engineering
+    topic: Consistency across sources extracted at different times
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Finance wants an end-of-day view built from five source databases, orders, payments, refunds, customers
+      and inventory, which your pipeline extracts at different times overnight. They keep finding payments
+      for orders that don't exist yet. How would you make the daily view consistent?
+    expected_concepts:
+      - extracts at different moments see different points in time
+      - define a common cut-off on business timestamps rather than extraction time
+      - late-arriving parents and orphan handling
+      - reconciliation rules and tolerances agreed with finance
+      - snapshot or log-based extraction to a consistent point
+    rubric:
+      excellent: Diagnoses the timing mismatch, defines a shared business cut-off applied to every source, handles orphans explicitly with a later reconciliation, and agrees tolerances and rules with finance.
+      good: Recognises the extraction timing problem and filters all sources by the same business cut-off.
+      weak: Drops orphan payments or blames the source systems without addressing timing.
+    followups:
+      - What should the view show for a payment whose order arrives the next day?
+      - How do you report on how often this happens?
+    common_errors:
+      - Filtering each source by its extraction time, which keeps the inconsistency in place.
+
+  - external_key: technical.data_engineering.batch_dedup_at_scale
+    competency_key: data_engineering
+    topic: Deduplicating billions of rows in batch
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      You receive about three billion click records a day, and an unknown share are duplicates from client
+      retries. Some duplicates are days apart. How would you deduplicate them in batch without making the job
+      prohibitively expensive?
+    expected_concepts:
+      - define what makes two records the same, ideally an event id
+      - deduplicate within a partition then against a bounded history window
+      - keep a compact index of seen ids per day rather than rescanning raw data
+      - window functions choosing a deterministic survivor
+      - measure duplicate rates to tune the window
+      - probabilistic structures where approximate results are acceptable
+    rubric:
+      excellent: Establishes a dedup key, limits comparisons to a measured lookback window using a compact seen-id index, picks survivors deterministically, and discusses when approximate dedup is acceptable.
+      good: Uses an event id with a window function and limits the comparison to recent days.
+      weak: Runs a distinct over all history every day.
+    followups:
+      - The clients don't send an event id. What would you use instead?
+      - How would you know whether your window is long enough?
+    common_errors:
+      - Hashing the entire row when retries differ by a timestamp field.
+
+  - external_key: technical.data_engineering.legacy_etl_migration
+    competency_key: data_engineering
+    topic: Migrating legacy ETL without breaking reports
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      Your company runs a few hundred stored procedures on an on-premises warehouse that feed most reports,
+      and you're asked to move them to a modern platform with Spark or dbt. How would you plan the migration
+      so nobody's numbers break?
+    expected_concepts:
+      - inventory and lineage of procedures and their consumers
+      - prioritise and migrate in slices by domain or dependency
+      - run old and new in parallel and compare outputs automatically
+      - agree acceptable differences and fix legacy bugs deliberately
+      - decommission each old job once consumers have moved
+    rubric:
+      excellent: Starts with an inventory and dependency map, migrates in slices with parallel runs and automated output reconciliation, handles legacy bugs explicitly with stakeholders and retires old jobs on a schedule.
+      good: Plans a phased migration with parallel running and comparison.
+      weak: Proposes a big-bang rewrite and switch-over.
+    followups:
+      - The new output differs from the old because the old procedure had a bug. What do you do?
+      - How do you keep the parallel run from doubling costs for months?
+    common_errors:
+      - Translating procedures line by line and carrying old inefficiencies into the new platform.

@@ -1,0 +1,200 @@
+version: 1
+slug: child_tickets_older_than_parent
+title: "Child Tickets Older Than Parent"
+difficulty: easy
+competency_keys: [sql, databases, debugging]
+role_tags: [qa, data, support_engineer]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Child Tickets Older Than Parent
+
+  The support desk lets agents split a ticket into sub-tickets. After a clock-skew incident on one
+  of the application nodes, some sub-tickets were stamped **before** the ticket they were split
+  from, which breaks the SLA reports. You are asked to list the affected rows so they can be repaired.
+
+  Table `tickets`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | parent_id | INTEGER | `id` of the ticket this one was split from; NULL for a top-level ticket |
+  | created_at | TEXT | UTC creation time, always formatted `YYYY-MM-DD HH:MM:SS` |
+
+  Some tickets point at a parent that was purged and no longer exists; ignore those tickets. Compare
+  each ticket only with its **direct** parent (not grandparents).
+
+  Return one row per ticket whose `created_at` is **strictly earlier** than its parent's
+  `created_at`, with the columns `child_id`, `parent_id`, `child_created_at` and
+  `parent_created_at`. Equal timestamps are fine and must not be reported. Order by `child_id`
+  ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  tickets
+  +----+-----------+---------------------+
+  | id | parent_id | created_at          |
+  +----+-----------+---------------------+
+  | 1  | NULL      | 2026-03-02 09:00:00 |
+  | 2  | 1         | 2026-03-02 09:15:00 |
+  | 3  | 1         | 2026-03-02 08:59:59 |
+  | 4  | 3         | 2026-03-01 23:00:00 |
+  | 5  | 99        | 2026-01-01 00:00:00 |
+  | 6  | 2         | 2026-03-02 09:15:00 |
+  +----+-----------+---------------------+
+
+  Output
+  +----------+-----------+---------------------+---------------------+
+  | child_id | parent_id | child_created_at    | parent_created_at   |
+  +----------+-----------+---------------------+---------------------+
+  | 3        | 1         | 2026-03-02 08:59:59 | 2026-03-02 09:00:00 |
+  | 4        | 3         | 2026-03-01 23:00:00 | 2026-03-02 08:59:59 |
+  +----------+-----------+---------------------+---------------------+
+  ```
+  Ticket 3 predates parent 1 by one second, and ticket 4 predates its parent 3. Ticket 5 points at a
+  missing parent, and ticket 6 has exactly the same timestamp as its parent 2.
+
+  ### Example 2
+  ```
+  tickets
+  +----+-----------+---------------------+
+  | id | parent_id | created_at          |
+  +----+-----------+---------------------+
+  | 10 | NULL      | 2026-04-01 10:00:00 |
+  | 11 | 10        | 2026-04-01 10:05:00 |
+  +----+-----------+---------------------+
+
+  Output: no rows
+  ```
+
+  ### Constraints
+  - `0 <= rows in tickets <= 10^5`
+  - `created_at` always uses the fixed format above, so text order equals time order.
+  - The output order is part of the answer.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Sub-tickets created strictly before their parent ticket, ordered by child_id.
+    SELECT id AS child_id, parent_id, created_at AS child_created_at, created_at AS parent_created_at
+    FROM tickets
+    ORDER BY child_id;
+reference_solutions:
+  sql: |
+    SELECT c.id AS child_id,
+           c.parent_id,
+           c.created_at AS child_created_at,
+           p.created_at AS parent_created_at
+    FROM tickets c
+    JOIN tickets p ON p.id = c.parent_id
+    WHERE c.created_at < p.created_at
+    ORDER BY child_id;
+sql_setup: |
+  CREATE TABLE tickets (
+    id INTEGER PRIMARY KEY,
+    parent_id INTEGER,
+    created_at TEXT NOT NULL
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - skewed child, skewed grandchild, equal timestamps, missing parent"
+    setup_sql: |
+      INSERT INTO tickets (id, parent_id, created_at) VALUES
+        (1, NULL, '2026-03-02 09:00:00'), (2, 1, '2026-03-02 09:15:00'), (3, 1, '2026-03-02 08:59:59'), (4, 3, '2026-03-01 23:00:00'),
+        (5, 99, '2026-01-01 00:00:00'), (6, 2, '2026-03-02 09:15:00');
+    expected_rows: [[3, 1, "2026-03-02 08:59:59", "2026-03-02 09:00:00"], [4, 3, "2026-03-01 23:00:00", "2026-03-02 08:59:59"]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - a healthy parent and child, nothing to report"
+    setup_sql: |
+      INSERT INTO tickets (id, parent_id, created_at) VALUES
+        (10, NULL, '2026-04-01 10:00:00'), (11, 10, '2026-04-01 10:05:00');
+    expected_rows: []
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty table"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "Only top-level tickets (all parent_id NULL)"
+    setup_sql: |
+      INSERT INTO tickets (id, parent_id, created_at) VALUES
+        (1, NULL, '2026-01-05 08:00:00'), (2, NULL, '2025-12-01 08:00:00');
+    expected_rows: []
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Equal timestamps are not strictly earlier"
+    setup_sql: |
+      INSERT INTO tickets (id, parent_id, created_at) VALUES
+        (1, NULL, '2026-02-02 12:00:00'), (2, 1, '2026-02-02 12:00:00'), (3, 1, '2026-02-02 12:00:00');
+    expected_rows: []
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "All parents missing (dangling parent_id) - ignored even though they look old"
+    setup_sql: |
+      INSERT INTO tickets (id, parent_id, created_at) VALUES
+        (7, 70, '2020-01-01 00:00:00'), (8, 80, '2020-01-01 00:00:01');
+    expected_rows: []
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Grandchild older than grandparent but newer than its direct parent is not reported"
+    setup_sql: |
+      INSERT INTO tickets (id, parent_id, created_at) VALUES
+        (1, NULL, '2026-05-10 10:00:00'), (2, 1, '2026-05-10 09:00:00'), (3, 2, '2026-05-10 09:30:00');
+    expected_rows: [[2, 1, "2026-05-10 09:00:00", "2026-05-10 10:00:00"]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Year boundary by one second and children inserted out of id order"
+    setup_sql: |
+      INSERT INTO tickets (id, parent_id, created_at) VALUES
+        (40, 30, '2025-12-31 23:59:59'), (30, NULL, '2026-01-01 00:00:00'), (20, 30, '2026-01-01 00:00:01'), (35, 30, '2025-06-30 12:00:00');
+    expected_rows: [[35, 30, "2025-06-30 12:00:00", "2026-01-01 00:00:00"], [40, 30, "2025-12-31 23:59:59", "2026-01-01 00:00:00"]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Deep chain where every level is older than its parent"
+    setup_sql: |
+      INSERT INTO tickets (id, parent_id, created_at) VALUES
+        (1, NULL, '2026-07-01 10:00:00'), (2, 1, '2026-07-01 09:00:00'), (3, 2, '2026-07-01 08:00:00'), (4, 3, '2026-07-01 07:00:00'),
+        (5, 4, '2026-06-30 07:00:00');
+    expected_rows:
+      - [2, 1, "2026-07-01 09:00:00", "2026-07-01 10:00:00"]
+      - [3, 2, "2026-07-01 08:00:00", "2026-07-01 09:00:00"]
+      - [4, 3, "2026-07-01 07:00:00", "2026-07-01 08:00:00"]
+      - [5, 4, "2026-06-30 07:00:00", "2026-07-01 07:00:00"]
+expected_concepts:
+  - "self-join of a table to itself through a parent key"
+  - "inner join dropping rows with missing or NULL parents"
+  - "strict versus non-strict comparison"
+  - "lexicographic comparison of fixed-format timestamps"
+optimal_complexity: {time: "O(n log n), or O(n) with the primary-key lookup per child", space: "O(1) beyond the output"}
+rubric:
+  excellent: "Self-joins tickets as child and parent on parent_id = id with an inner join, filters with a strict less-than, names the output columns as requested, orders by child_id and explains why the fixed timestamp format makes text comparison safe."
+  good: "Correct query after a hint about strictness, aliases or missing parents."
+  weak: "Uses a LEFT JOIN that keeps orphans, compares with <=, compares against grandparents or returns unaliased ambiguous columns."
+  criteria:
+    correctness: "All tests pass, including equal timestamps, missing parents and multi-level chains."
+    efficiency: "A single self-join on the primary key; no correlated subquery per row needed."
+    code_quality: "Clear child/parent aliases and output column names that match the contract."
+    edge_cases: "Top-level tickets, dangling parent ids, equal timestamps and year boundaries."
+    communication: "Explains when string comparison of timestamps is safe and when a real timestamp type is needed."
+hints:
+  - "Every row you report combines information from two rows of the same table: the sub-ticket and the ticket it was split from."
+  - "Use the table twice under two aliases, matching the child's parent_id to the parent's id; think about which join type automatically drops tickets with no parent row."
+  - "Inner join tickets c to tickets p on p.id = c.parent_id, keep rows where c.created_at < p.created_at, select the four columns with the requested names and order by the child id."
+followups:
+  - "How would you write the repair UPDATE that moves each affected child to its parent's timestamp?"
+  - "What changes if created_at were stored with mixed time zones?"
+  - "How would you find every ticket older than any of its ancestors, not only its direct parent?"
+common_errors:
+  - "Using <= so tickets created in the same second as their parent are reported."
+  - "Using a LEFT JOIN, which keeps tickets whose parent row is missing (with a NULL parent time)."
+  - "Swapping the aliases so the query reports parents older than children (the normal case)."
+  - "Selecting created_at twice without aliases, producing ambiguous or wrongly named columns."

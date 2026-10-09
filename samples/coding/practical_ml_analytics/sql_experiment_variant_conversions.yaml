@@ -1,0 +1,231 @@
+version: 1
+slug: sql_experiment_variant_conversions
+title: "Experiment Variant Conversions (SQL)"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, data, backend, business_analyst]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Experiment Variant Conversions
+
+  The product analytics team runs a pricing-page experiment. Every participating user is assigned to
+  exactly one variant, and the shop records every purchase.
+
+  Table `experiment_assignments`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | user_id | INTEGER | primary key - each user is assigned once |
+  | variant | VARCHAR(20) | variant name (lowercase letters only) |
+
+  Table `purchases`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | user_id | INTEGER | the buyer; **NULL for guest checkouts**; may belong to a user who is not in the experiment |
+  | amount | INTEGER | order value in cents (can be 0 for a fully discounted order) |
+
+  For **every variant** that has at least one assigned user, return:
+
+  - `variant`
+  - `assigned_users` — how many users are assigned to the variant
+  - `converted_users` — how many **distinct** assigned users of that variant have **at least one**
+    purchase (any amount); `0` when nobody in the variant bought anything
+
+  Purchases by guests or by users who are not in the experiment are ignored. A user who buys several
+  times counts once. Order the result by `variant` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  experiment_assignments      purchases
+  +---------+----------+      +----+---------+--------+
+  | user_id | variant  |      | id | user_id | amount |
+  +---------+----------+      +----+---------+--------+
+  | 1       | control  |      | 1  | 1       | 40     |
+  | 2       | control  |      | 2  | 1       | 25     |
+  | 3       | control  |      | 3  | 4       | 60     |
+  | 4       | redesign |      | 4  | 5       | 15     |
+  | 5       | redesign |      | 5  | 9       | 80     |
+  | 6       | onepage  |      | 6  | 5       | 30     |
+  +---------+----------+      +----+---------+--------+
+
+  Output
+  +----------+----------------+-----------------+
+  | variant  | assigned_users | converted_users |
+  +----------+----------------+-----------------+
+  | control  | 3              | 1               |
+  | onepage  | 1              | 0               |
+  | redesign | 2              | 2               |
+  +----------+----------------+-----------------+
+  User 1 bought twice but counts once; user 9 is not in the experiment; nobody in onepage bought.
+  ```
+
+  ### Example 2
+  ```
+  experiment_assignments      purchases
+  +---------+-----------+     +----+---------+--------+
+  | user_id | variant   |     | id | user_id | amount |
+  +---------+-----------+     +----+---------+--------+
+  | 10      | control   |     | 1  | NULL    | 99     |
+  | 11      | treatment |     | 2  | 11      | 20     |
+  +---------+-----------+     | 3  | NULL    | 5      |
+                              +----+---------+--------+
+
+  Output
+  +-----------+----------------+-----------------+
+  | variant   | assigned_users | converted_users |
+  +-----------+----------------+-----------------+
+  | control   | 1              | 0               |
+  | treatment | 1              | 1               |
+  +-----------+----------------+-----------------+
+  Guest purchases (user_id NULL) belong to nobody in the experiment.
+  ```
+
+  ### Constraints
+  - `0 <= rows in each table <= 10^5`
+  - `0 <= amount <= 10^7`
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return variant, assigned_users and converted_users for every variant, ordered by variant.
+    SELECT variant, COUNT(*) AS assigned_users, 0 AS converted_users
+    FROM experiment_assignments
+    GROUP BY variant
+    ORDER BY variant;
+reference_solutions:
+  sql: |
+    SELECT a.variant,
+           COUNT(*) AS assigned_users,
+           COUNT(b.user_id) AS converted_users
+    FROM experiment_assignments a
+    LEFT JOIN (
+      SELECT DISTINCT user_id
+      FROM purchases
+      WHERE user_id IS NOT NULL
+    ) b ON b.user_id = a.user_id
+    GROUP BY a.variant
+    ORDER BY a.variant;
+sql_setup: |
+  CREATE TABLE experiment_assignments (
+    user_id INTEGER PRIMARY KEY,
+    variant VARCHAR(20) NOT NULL
+  );
+  CREATE TABLE purchases (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER,
+    amount INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - repeat buyers counted once, unassigned buyer ignored, variant with no buyers shows 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO experiment_assignments (user_id, variant) VALUES (1, 'control'), (2, 'control'), (3, 'control'), (4, 'redesign'), (5, 'redesign'), (6, 'onepage');
+      INSERT INTO purchases (id, user_id, amount) VALUES (1, 1, 40), (2, 1, 25), (3, 4, 60), (4, 5, 15), (5, 9, 80), (6, 5, 30);
+    expected_rows: [["control", 3, 1], ["onepage", 1, 0], ["redesign", 2, 2]]
+  - id: t2
+    description: "Example 2 - guest purchases with NULL user_id are ignored"
+    ordered: true
+    setup_sql: |
+      INSERT INTO experiment_assignments (user_id, variant) VALUES (10, 'control'), (11, 'treatment');
+      INSERT INTO purchases (id, user_id, amount) VALUES (1, NULL, 99), (2, 11, 20), (3, NULL, 5);
+    expected_rows: [["control", 1, 0], ["treatment", 1, 1]]
+  - id: t3
+    hidden: true
+    description: "Empty tables return no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Assignments but no purchases at all - every variant reports 0 converted users (LEFT JOIN needed)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO experiment_assignments (user_id, variant) VALUES (1, 'control'), (2, 'beta'), (3, 'beta');
+    expected_rows: [["beta", 2, 0], ["control", 1, 0]]
+  - id: t5
+    hidden: true
+    description: "Purchases only by unassigned users - no variant rows exist"
+    ordered: true
+    setup_sql: |
+      INSERT INTO purchases (id, user_id, amount) VALUES (1, 7, 10), (2, 8, 20);
+    expected_rows: []
+  - id: t6
+    hidden: true
+    description: "One user with many purchases - COUNT of joined rows would inflate both assigned and converted counts"
+    ordered: true
+    setup_sql: |
+      INSERT INTO experiment_assignments (user_id, variant) VALUES (1, 'alpha'), (2, 'alpha'), (3, 'beta');
+      INSERT INTO purchases (id, user_id, amount) VALUES (1, 1, 5), (2, 1, 6), (3, 1, 7), (4, 1, 8), (5, 3, 9), (6, 3, 10);
+    expected_rows: [["alpha", 2, 1], ["beta", 1, 1]]
+  - id: t7
+    hidden: true
+    description: "Every assigned user converted, including zero-amount purchases (any purchase row counts)"
+    ordered: true
+    setup_sql: |
+      INSERT INTO experiment_assignments (user_id, variant) VALUES (1, 'control'), (2, 'control'), (3, 'promo');
+      INSERT INTO purchases (id, user_id, amount) VALUES (1, 1, 0), (2, 2, 15), (3, 3, 30), (4, 3, 30);
+    expected_rows: [["control", 2, 2], ["promo", 1, 1]]
+  - id: t8
+    hidden: true
+    description: "Variant names sort alphabetically, not by insertion order or size"
+    ordered: true
+    setup_sql: |
+      INSERT INTO experiment_assignments (user_id, variant) VALUES (1, 'zeta'), (2, 'alpha'), (3, 'mid'), (4, 'zeta'), (5, 'alpha');
+      INSERT INTO purchases (id, user_id, amount) VALUES (1, 4, 10), (2, 3, 10);
+    expected_rows: [["alpha", 2, 0], ["mid", 1, 1], ["zeta", 2, 1]]
+  - id: t9
+    hidden: true
+    description: "Stress - 40 users over three variants, 50 purchases with repeats, NULL guests and unassigned buyers"
+    ordered: true
+    setup_sql: |
+      INSERT INTO experiment_assignments (user_id, variant) VALUES 
+        (1, 'fast'), (2, 'slim'), (3, 'control'), (4, 'fast'), (5, 'slim'), (6, 'control'),
+        (7, 'slim'), (8, 'slim'), (9, 'control'), (10, 'fast'), (11, 'slim'), (12, 'control'),
+        (13, 'fast'), (14, 'slim'), (15, 'control'), (16, 'fast'), (17, 'slim'), (18, 'control'),
+        (19, 'fast'), (20, 'slim'), (21, 'slim'), (22, 'fast'), (23, 'slim'), (24, 'control'),
+        (25, 'fast'), (26, 'slim'), (27, 'control'), (28, 'slim'), (29, 'slim'), (30, 'control'),
+        (31, 'fast'), (32, 'slim'), (33, 'control'), (34, 'fast'), (35, 'slim'), (36, 'control'),
+        (37, 'fast'), (38, 'slim'), (39, 'control'), (40, 'fast');
+      INSERT INTO purchases (id, user_id, amount) VALUES 
+        (1, 40, 243), (2, 16, 195), (3, 31, 298), (4, NULL, 148), (5, 12, 76), (6, 40, 72),
+        (7, 1, 89), (8, 19, 281), (9, NULL, 157), (10, 24, 79), (11, 51, 6), (12, 43, 186),
+        (13, 31, 251), (14, 42, 16), (15, NULL, 192), (16, NULL, 28), (17, 12, 130), (18, 57, 273),
+        (19, 44, 156), (20, 28, 179), (21, 40, 179), (22, 43, 167), (23, 12, 163), (24, 31, 278),
+        (25, 48, 133), (26, 30, 21), (27, 22, 293), (28, 27, 227), (29, NULL, 155), (30, 30, 272),
+        (31, NULL, 145), (32, 31, 62), (33, NULL, 178), (34, 56, 268), (35, 36, 187), (36, 50, 291),
+        (37, 49, 179), (38, NULL, 285), (39, NULL, 152), (40, 52, 181), (41, NULL, 191), (42, 34, 106),
+        (43, 24, 218), (44, NULL, 159), (45, 40, 105), (46, 38, 117), (47, 3, 89), (48, 44, 97),
+        (49, 31, 217), (50, 30, 109);
+    expected_rows: [["control", 12, 6], ["fast", 12, 7], ["slim", 16, 2]]
+expected_concepts:
+  - LEFT JOIN so that variants without buyers still appear
+  - de-duplicating purchases per user before or while counting (COUNT DISTINCT)
+  - avoiding row multiplication from one-to-many joins
+  - ignoring NULL foreign keys and rows outside the experiment
+optimal_complexity: {time: "O(a + p) with hashing, or O((a + p) log p) with an index on purchases.user_id", space: "O(a + p)"}
+rubric:
+  excellent: Joins assignments to a de-duplicated set of buyers (or uses COUNT DISTINCT on both sides), keeps variants without buyers through a LEFT JOIN, ignores guest and outside purchases naturally and explains how the one-to-many join would inflate counts.
+  good: Correct query after a hint about repeat buyers inflating the counts or variants with zero conversions disappearing.
+  weak: Uses an inner join that drops variants without buyers, counts purchases instead of users, or counts COUNT(*) after the join so assigned_users is inflated.
+  criteria:
+    correctness: All tests pass, including repeat buyers, guest purchases, unassigned buyers and variants with no buyers.
+    efficiency: Set-based query; mentions an index on purchases.user_id for large tables.
+    code_quality: Clear aliases, explicit output column names and an ORDER BY on variant.
+    edge_cases: Empty tables, no purchases at all, only outside purchases and zero-amount orders.
+    communication: Explains why join fan-out changes COUNT results and how DISTINCT or a pre-aggregated subquery fixes it.
+hints:
+  - Start from the assignments table, since every variant with assigned users must appear even if nobody in it bought anything.
+  - Joining each user to all of their purchases repeats that user once per purchase, which inflates any plain row count; decide how to make each buyer appear only once.
+  - LEFT JOIN the assignments to the set of distinct non-NULL buyer ids from purchases, group by variant, count all rows for assigned users and count only the matched buyer ids for converted users, then order by variant (counting distinct user ids on both sides also works).
+followups:
+  - How would you add the conversion rate per variant without integer division in PostgreSQL?
+  - How would you count only purchases made after the user was assigned if assignments had a timestamp?
+  - What index would you add to keep this fast with millions of purchases?
+common_errors:
+  - Using an inner join, which removes variants where nobody purchased.
+  - Counting purchase rows instead of distinct users, so repeat buyers are counted several times.
+  - COUNT(*) after joining to purchases, which inflates assigned_users for every repeat purchase.
+  - Starting from purchases and losing assigned users who never bought.

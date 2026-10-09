@@ -1,0 +1,177 @@
+version: 1
+slug: oncall_timeline_with_overrides
+title: On-Call Handover Timeline
+difficulty: medium
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [sre, devops, support_engineer, engineering_manager]
+time_limit_minutes: 25
+prompt_markdown: |
+  ## On-Call Handover Timeline
+
+  Your paging tool needs the list of **handovers** for an on-call schedule. Hours are counted from `0`.
+
+  - **Base rotation:** at hour `h` the engineer on call is
+    `rotation[(h // shift_hours) % rotation.length]`, so each person covers `shift_hours` consecutive hours
+    and the list wraps around.
+  - **Overrides:** override `j` puts `override_engineers[j]` on call for every hour `h` with
+    `override_starts[j] <= h < override_ends[j]` (a half-open interval). Overrides beat the base rotation,
+    and when several overrides cover the same hour, the one that appears **later in the list** wins
+    (it was entered more recently).
+
+  Consider the hours `0 <= h < horizon_hours`. Return the handovers in time order as strings
+  `"<hour> <engineer>"`: always one entry for hour `0`, and then an entry for every hour at which the
+  on-call engineer is **different** from the engineer of the hour before. If two consecutive shifts or
+  an override hand the pager to the same person, there is no entry. Parts of overrides outside the
+  horizon are ignored.
+
+  ### Example 1
+  ```
+  Input:  rotation = ["ana", "ben", "cho"],
+          shift_hours = 8,
+          override_starts = [10],
+          override_ends = [14],
+          override_engineers = ["dev"],
+          horizon_hours = 24
+  Output: ["0 ana", "8 ben", "10 dev", "14 ben", "16 cho"]
+  Explanation: the base schedule is ana 0-8, ben 8-16 and cho 16-24. dev covers hours 10 to 13,
+  after which ben finishes his shift.
+  ```
+
+  ### Example 2
+  ```
+  Input:  rotation = ["ana", "ben"],
+          shift_hours = 12,
+          override_starts = [6, 10, 30],
+          override_ends = [20, 16, 40],
+          override_engineers = ["ben", "cho", "ana"],
+          horizon_hours = 36
+  Output: ["0 ana", "6 ben", "10 cho", "16 ben", "24 ana"]
+  Explanation: ben's override starts at hour 6; cho's override is later in the list, so it wins for
+  hours 10 to 15. ben is on call from 16 through 23 (override, then his own shift), so there is no
+  entry at 20. The ana override from hour 30 changes nothing because ana is already on call.
+  ```
+
+  ### Constraints
+  - `1 <= rotation.length <= 50`; names are 1 to 20 lowercase letters
+  - `1 <= shift_hours <= 10^9` and `1 <= horizon_hours <= 10^9`
+  - At most `10^5` shifts start before the horizon (`horizon_hours / shift_hours <= 10^5`)
+  - `0 <= overrides <= 1000`; `override_starts`, `override_ends` and `override_engineers` have equal
+    length, and `0 <= override_starts[j] < override_ends[j] <= 10^9`
+  - Simulating every single hour is too slow for a horizon of `10^9` hours.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: oncall_timeline_with_overrides
+  params:
+    - {name: rotation, type: "string[]"}
+    - {name: shift_hours, type: "int"}
+    - {name: override_starts, type: "int[]"}
+    - {name: override_ends, type: "int[]"}
+    - {name: override_engineers, type: "string[]"}
+    - {name: horizon_hours, type: "int"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    import heapq
+
+
+    def oncall_timeline_with_overrides(rotation: list[str], shift_hours: int, override_starts: list[int],
+                                       override_ends: list[int], override_engineers: list[str],
+                                       horizon_hours: int) -> list[str]:
+        # The on-call engineer can only change at a shift boundary or an override endpoint.
+        points = set(range(0, horizon_hours, shift_hours))
+        for start, end in zip(override_starts, override_ends):
+            for p in (start, end):
+                if p < horizon_hours:
+                    points.add(p)
+        order = sorted(range(len(override_starts)), key=lambda j: override_starts[j])
+        active: list[tuple[int, int]] = []  # max-heap by override index: (-index, end)
+        nxt = 0
+        timeline: list[str] = []
+        current = None
+        for hour in sorted(points):
+            while nxt < len(order) and override_starts[order[nxt]] <= hour:
+                j = order[nxt]
+                heapq.heappush(active, (-j, override_ends[j]))
+                nxt += 1
+            while active and active[0][1] <= hour:
+                heapq.heappop(active)  # expired; hours only grow, so it never comes back
+            if active:
+                engineer = override_engineers[-active[0][0]]
+            else:
+                engineer = rotation[(hour // shift_hours) % len(rotation)]
+            if engineer != current:
+                timeline.append(f"{hour} {engineer}")
+                current = engineer
+        return timeline
+  javascript: |
+    function oncallTimelineWithOverrides(rotation, shiftHours, overrideStarts, overrideEnds, overrideEngineers, horizonHours) {
+      const pointSet = new Set();
+      for (let h = 0; h < horizonHours; h += shiftHours) pointSet.add(h);
+      for (let j = 0; j < overrideStarts.length; j++) {
+        if (overrideStarts[j] < horizonHours) pointSet.add(overrideStarts[j]);
+        if (overrideEnds[j] < horizonHours) pointSet.add(overrideEnds[j]);
+      }
+      const points = [...pointSet].sort((a, b) => a - b);
+      const timeline = [];
+      let current = null;
+      for (const hour of points) {
+        // At most 1000 overrides: scan them from the most recent one backwards.
+        let engineer = null;
+        for (let j = overrideStarts.length - 1; j >= 0; j--) {
+          if (overrideStarts[j] <= hour && hour < overrideEnds[j]) {
+            engineer = overrideEngineers[j];
+            break;
+          }
+        }
+        if (engineer === null) engineer = rotation[Math.floor(hour / shiftHours) % rotation.length];
+        if (engineer !== current) {
+          timeline.push(`${hour} ${engineer}`);
+          current = engineer;
+        }
+      }
+      return timeline;
+    }
+tests:
+  - {id: t1, args: [["ana", "ben", "cho"], 8, [10], [14], ["dev"], 24], expected: ["0 ana", "8 ben", "10 dev", "14 ben", "16 cho"], description: "Example 1"}
+  - {id: t2, args: [["ana", "ben"], 12, [6, 10, 30], [20, 16, 40], ["ben", "cho", "ana"], 36], expected: ["0 ana", "6 ben", "10 cho", "16 ben", "24 ana"], description: "Example 2 - nested overrides, later wins, no-op handovers"}
+  - {id: t3, hidden: true, args: [["ops"], 10000, [], [], [], 1000000000], expected: ["0 ops"], description: "One engineer, no overrides, 10^5 shifts over a 10^9-hour horizon - a single entry"}
+  - {id: t4, hidden: true, args: [["ana", "ana", "ben", "ben"], 6, [], [], [], 50], expected: ["0 ana", "12 ben", "24 ana", "36 ben", "48 ana"], description: "Repeated adjacent names in the rotation produce no handover between their shifts"}
+  - {id: t5, hidden: true, args: [["ana", "ben"], 5, [0], [1000], ["cho"], 30], expected: ["0 cho"], description: "Override from hour 0 covering past the horizon - only one entry"}
+  - {id: t6, hidden: true, args: [["ana", "ben"], 10, [25, 40, 18], [40, 55, 20], ["cho", "dev", "ben"], 40], expected: ["0 ana", "10 ben", "20 ana", "25 cho"], description: "Override ending exactly at the horizon, one starting at it (ignored), one matching the base engineer"}
+  - {id: t7, hidden: true, args: [["ana", "ben", "cho"], 10, [0, 5, 8], [30, 25, 12], ["dev", "eli", "dev"], 40], expected: ["0 dev", "5 eli", "8 dev", "12 eli", "25 dev", "30 ana"], description: "Three overlapping overrides - later list position wins regardless of length"}
+  - {id: t8, hidden: true, args: [["ana", "ben", "cho"], 10, [5, 0], [15, 30], ["eli", "dev"], 40], expected: ["0 dev", "30 ana"], description: "A later long override completely hides an earlier short one"}
+  - {id: t9, hidden: true, args: [["ana", "ben", "cho", "dev"], 50000000, [120000000, 130000000, 600000000, 999999990], [140000000, 135000000, 650000000, 1000000000], ["eli", "ana", "dev", "fay"], 1000000000], expected: ["0 ana", "50000000 ben", "100000000 cho", "120000000 eli", "130000000 ana", "135000000 eli", "140000000 cho", "150000000 dev", "200000000 ana", "250000000 ben", "300000000 cho", "350000000 dev", "400000000 ana", "450000000 ben", "500000000 cho", "550000000 dev", "650000000 ben", "700000000 cho", "750000000 dev", "800000000 ana", "850000000 ben", "900000000 cho", "950000000 dev", "999999990 fay"], description: "Horizon of 10^9 hours - hour-by-hour simulation is far too slow"}
+  - {id: t10, hidden: true, args: [["ana", "ben", "cho", "dev", "eli"], 24, [50, 1609, 177, 949, 571, 135, 559, 1833, 839, 483, 1650, 843, 1494, 861, 1705, 245, 736, 835, 1541, 1796, 894, 1771, 793, 897, 1078, 1369, 1973, 1295, 390, 1254, 1208, 789, 1534, 1635, 806, 829, 1821, 198, 483, 488], [81, 1619, 186, 995, 581, 178, 574, 1867, 877, 485, 1672, 865, 1533, 908, 1743, 249, 759, 845, 1543, 1838, 908, 1818, 815, 928, 1100, 1406, 2015, 1309, 441, 1312, 1214, 791, 1579, 1654, 814, 881, 1847, 234, 501, 501], ["ana", "fay", "ana", "gus", "fay", "ana", "eli", "dev", "ana", "gus", "ben", "dev", "ben", "ben", "fay", "gus", "ben", "gus", "ana", "gus", "gus", "cho", "fay", "ana", "cho", "dev", "fay", "fay", "gus", "ben", "ben", "gus", "ana", "cho", "dev", "cho", "gus", "fay", "ana", "ben"], 2160], expected: ["0 ana", "24 ben", "48 cho", "50 ana", "81 dev", "96 eli", "120 ana", "186 cho", "192 dev", "198 fay", "234 eli", "240 ana", "245 gus", "249 ana", "264 ben", "288 cho", "312 dev", "336 eli", "360 ana", "384 ben", "390 gus", "441 dev", "456 eli", "480 ana", "488 ben", "501 ana", "504 ben", "528 cho", "552 dev", "559 eli", "574 fay", "581 eli", "600 ana", "624 ben", "648 cho", "672 dev", "696 eli", "720 ana", "736 ben", "768 cho", "789 gus", "791 cho", "792 dev", "793 fay", "806 dev", "814 fay", "815 dev", "816 eli", "829 cho", "881 ben", "894 gus", "897 ana", "928 dev", "936 eli", "949 gus", "995 ben", "1008 cho", "1032 dev", "1056 eli", "1078 cho", "1100 ana", "1104 ben", "1128 cho", "1152 dev", "1176 eli", "1200 ana", "1208 ben", "1214 ana", "1224 ben", "1248 cho", "1254 ben", "1312 eli", "1320 ana", "1344 ben", "1368 cho", "1369 dev", "1416 eli", "1440 ana", "1464 ben", "1488 cho", "1494 ben", "1533 dev", "1534 ana", "1584 ben", "1608 cho", "1609 fay", "1619 cho", "1632 dev", "1635 cho", "1654 ben", "1672 eli", "1680 ana", "1704 ben", "1705 fay", "1743 cho", "1752 dev", "1771 cho", "1818 gus", "1847 dev", "1867 cho", "1872 dev", "1896 eli", "1920 ana", "1944 ben", "1968 cho", "1973 fay", "2015 dev", "2016 eli", "2040 ana", "2064 ben", "2088 cho", "2112 dev", "2136 eli"], description: "Stress - 40 random overrides over 90 days of daily shifts"}
+expected_concepts:
+  - event points at shift boundaries and override endpoints
+  - half-open intervals
+  - precedence of later overrides (max index among active intervals)
+  - sweep line with a heap or a per-point scan of overrides
+  - emitting only changes of the on-call engineer
+optimal_complexity: {time: O((S + K) log K) for S shift boundaries and K overrides, space: O(S + K)}
+rubric:
+  excellent: Identifies that the on-call engineer can only change at shift boundaries and override endpoints, sorts those points, determines the winning override per point with a heap of active overrides keyed by list position (or a justified scan), and emits an entry only when the engineer changes.
+  good: Correct point-based solution that scans all overrides at each point, or a solution needing one fix around half-open ends or overrides beyond the horizon.
+  weak: Simulates every hour, lets the earliest or the longest override win, treats override ends as inclusive, or emits duplicate entries for the same engineer.
+  criteria:
+    correctness: All tests pass, including nested overrides, no-op handovers and the horizon boundary.
+    efficiency: Work depends on the number of shifts and overrides, not on the number of hours.
+    code_quality: The base rotation lookup and the override precedence are each expressed once and clearly.
+    edge_cases: Overrides starting at 0 or beyond the horizon, ending exactly at the horizon, and repeated names in the rotation.
+    communication: Explains why only boundary hours need to be examined.
+hints:
+  - The on-call engineer can only change at a few special hours; find them instead of looking at every hour.
+  - Collect every shift start below the horizon plus every override start and end below the horizon, and work out who is on call at each of those hours in increasing order.
+  - At each collected hour, the winner is the override with the largest list position whose interval contains the hour (a heap of active overrides ordered by position, discarding those that have ended, does this quickly), falling back to the rotation entry for that hour; record an entry only when that engineer differs from the previous one.
+followups:
+  - How would you answer many queries of the form who is on call at hour h without building the whole timeline?
+  - How would you represent time zones and daylight saving changes in a real scheduler?
+  - How could you detect engineers who would be on call for more than 24 hours in a row?
+  - What would change if overrides could be deleted and the timeline had to be updated incrementally?
+common_errors:
+  - Iterating over every hour of the horizon.
+  - Letting the earliest override in the list win instead of the latest.
+  - Treating the override end as inclusive.
+  - Emitting an entry at a boundary where the same engineer stays on call.
+  - Including override start hours at or after the horizon.

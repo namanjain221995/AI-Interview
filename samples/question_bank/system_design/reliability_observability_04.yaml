@@ -1,0 +1,614 @@
+# System design: reliability and observability (4 of 4) — status pages, incident tooling and reliability automation.
+# Design prompts with expected discussion points; spoken by the AI interviewer.
+version: 1
+defaults:
+  role_tags: [sre, platform, devops]
+  round_types: [system_design, deep_technical, combined]
+  kind: system_design
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: system_design.reliability_observability.status_page_basics
+    competency_key: incident_response
+    topic: A public status page for a SaaS product
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your SaaS product has no status page, so during outages support gets flooded with the same question. How would
+      you design a basic public status page, and what would customers see on it?
+    expected_concepts:
+      - components that match how customers think about the product
+      - status levels such as operational, degraded and outage
+      - incident updates with timestamps
+      - history of past incidents
+      - hosting independent of the main product
+      - who is allowed to post updates
+    rubric:
+      excellent: Defines customer-meaningful components and status levels, plans timely updates and incident history, hosts the page away from the product's own infrastructure and sets clear ownership for posting.
+      good: Proposes components, statuses and incident updates with some thought on hosting.
+      weak: Proposes a page that lists internal service names or that is served by the same stack it reports on.
+    followups:
+      - How would you choose the list of components?
+      - How often should updates be posted during an outage?
+    common_errors:
+      - Exposing internal service names that mean nothing to customers.
+
+  - external_key: system_design.reliability_observability.incident_chat_bot
+    competency_key: incident_response
+    topic: A chat bot that bootstraps incidents
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      When an incident starts, responders waste the first ten minutes creating a channel, finding people and opening a
+      document. How would you design a simple chat bot that sets all that up with one command?
+    expected_concepts:
+      - one command that creates channel, record and timeline
+      - assigning roles such as incident commander and communications lead
+      - pulling in on-call responders for affected services
+      - posting links to dashboards and runbooks
+      - recording key events and decisions automatically
+    rubric:
+      excellent: Designs a single command that creates the channel, incident record and roles, pages the right on-call via ownership data, posts useful links and captures a timeline, with a fallback if chat is unavailable.
+      good: Creates a channel and record with role assignment and paging.
+      weak: Creates a channel only, leaving everything else manual.
+    followups:
+      - What should happen if the chat tool itself is down?
+      - Which information should the bot ask for when the incident is declared?
+    common_errors:
+      - Making the bot ask so many questions up front that responders skip it.
+
+  - external_key: system_design.reliability_observability.postmortem_action_tracking
+    competency_key: incident_response
+    topic: Making postmortem action items actually get done
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Your postmortems produce good action items, but six months later most of them are still open and the same
+      incidents repeat. How would you design a system for tracking those actions to completion?
+    expected_concepts:
+      - action items as tickets in the normal team backlog with owners
+      - priority and due dates linked to incident severity
+      - links between actions and the incidents they address
+      - regular review of overdue items
+      - reporting on completion rate and repeat incidents
+    rubric:
+      excellent: Puts actions where teams already work, gives each an owner and deadline tied to severity, reviews overdue items regularly and reports on repeat incidents linked to unfinished work.
+      good: Tracks actions as owned tickets with due dates and periodic review.
+      weak: Keeps action items as a list inside the postmortem document.
+    followups:
+      - What would you do with an action item nobody wants to own?
+      - How would you show leadership that open actions cause repeat incidents?
+    common_errors:
+      - Writing vague actions such as improve monitoring that can never be closed.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: system_design.reliability_observability.status_page_independence
+    competency_key: system_design
+    topic: A status page that stays up when everything else is down
+    difficulty: medium
+    text: >-
+      During your last major outage the status page went down too, because it shared DNS, the CDN and the login system
+      with the product. How would you design the status page so it stays available in exactly those moments?
+    expected_concepts:
+      - separate domain and DNS provider
+      - static hosting on independent infrastructure or provider
+      - an admin path that does not depend on company SSO
+      - handling sudden traffic spikes with caching
+      - pre-written templates for fast first updates
+      - regular failure testing of the status page path
+    rubric:
+      excellent: Removes shared dependencies across DNS, CDN, hosting and authentication, makes publishing possible even when internal tools are down, caches for spikes and tests the path periodically.
+      good: Hosts the page on a separate provider with a separate domain.
+      weak: Adds more replicas of the status page in the same infrastructure.
+    followups:
+      - How would an engineer post an update if company SSO is down?
+      - How would you test this without a real outage?
+    common_errors:
+      - Overlooking DNS as a shared dependency.
+
+  - external_key: system_design.reliability_observability.status_page_automation
+    competency_key: incident_response
+    topic: Automated versus human status updates
+    difficulty: medium
+    text: >-
+      Customers complain your status page shows green for twenty minutes into every outage, because someone has to
+      remember to update it. How would you design status updates that are fast but don't post false alarms publicly?
+    expected_concepts:
+      - mapping SLO or synthetic signals to public components
+      - automatic draft or internal-only state before publication
+      - auto-publish for clear, high-confidence signals
+      - human approval for wording and severity
+      - automatic reminders for update cadence
+      - resolving and post-incident summary
+    rubric:
+      excellent: Ties components to reliable signals, auto-drafts or auto-publishes based on confidence, keeps humans in charge of wording, enforces update cadence and explains the trade-off between speed and false alarms.
+      good: Links signals to components and prompts a human to publish quickly.
+      weak: Fully automates publication from raw alerts.
+    followups:
+      - Which signals would you trust enough to publish automatically?
+      - How would you handle a partial outage affecting only some customers?
+    common_errors:
+      - Driving public status from noisy internal alerts.
+
+  - external_key: system_design.reliability_observability.status_subscriber_notifications
+    competency_key: distributed_systems
+    topic: Notifying status page subscribers at scale
+    difficulty: medium
+    text: >-
+      Half a million customers subscribe to your status updates by email, SMS and webhooks, and during big outages
+      notifications arrive an hour late. How would you design the notification system so updates go out quickly?
+    expected_concepts:
+      - queue-based fan-out with per-channel workers
+      - provider rate limits and multiple providers
+      - per-component subscription filtering
+      - collapsing rapid updates into the latest state
+      - retries with idempotency to avoid duplicates
+      - webhook timeouts and isolation of slow endpoints
+    rubric:
+      excellent: Designs queued fan-out with channel-specific workers, respects and spreads across provider limits, filters by component, coalesces rapid updates, retries idempotently and isolates slow webhook receivers.
+      good: Uses a queue and workers per channel with retries.
+      weak: Sends notifications in a loop from the web request that posts the update.
+    followups:
+      - A subscriber's webhook takes thirty seconds to respond. What happens?
+      - How would you avoid sending five SMS messages in two minutes to the same person?
+    common_errors:
+      - Letting one slow webhook endpoint hold up email delivery.
+
+  - external_key: system_design.reliability_observability.incident_management_platform
+    competency_key: incident_response
+    topic: An internal incident management platform
+    difficulty: medium
+    text: >-
+      Your company handles about thirty incidents a month using chat threads and ad hoc documents. How would you design
+      an incident management platform that supports the whole lifecycle from declaration to review?
+    expected_concepts:
+      - incident record with severity, roles, impact and status
+      - integrations with paging, chat, status page and ticketing
+      - timeline capture and key decisions
+      - severity definitions and escalation rules
+      - postmortem generation and action tracking
+      - reporting on incident trends
+    rubric:
+      excellent: Defines a data model and lifecycle, integrates with the tools responders already use, captures timeline automatically, links to review and actions, and produces reporting without adding work during the incident.
+      good: Covers declaration, roles, communication and postmortem stages with integrations.
+      weak: Proposes a form to fill in after incidents end.
+    followups:
+      - What fields would you require at declaration time, and which later?
+      - How would you keep the platform from adding friction during a live incident?
+    common_errors:
+      - Requiring heavy data entry while responders are trying to fix the problem.
+
+  - external_key: system_design.reliability_observability.automatic_incident_timeline
+    competency_key: incident_response
+    topic: Assembling incident timelines automatically
+    difficulty: medium
+    text: >-
+      Writing postmortems takes days because someone has to reconstruct what happened from chat, deploy logs and
+      alerts. How would you design a system that assembles the incident timeline automatically?
+    expected_concepts:
+      - ingesting events from alerts, deploys, feature flags, config changes and chat
+      - normalising timestamps to one clock and time zone
+      - filtering to relevant services and time window
+      - letting humans pin, annotate or remove entries
+      - marking key moments such as detection, mitigation and resolution
+    rubric:
+      excellent: Pulls events from all relevant sources with consistent timestamps, scopes them to the incident, lets humans curate and annotate, and derives detection and mitigation times for later analysis.
+      good: Aggregates alerts, deploys and chat into a time-ordered view.
+      weak: Proposes exporting the chat channel into the postmortem document.
+    followups:
+      - How would you decide which events are relevant to this incident?
+      - How would you capture a decision that was made on a call rather than in chat?
+    common_errors:
+      - Mixing time zones so the order of events is wrong.
+
+  - external_key: system_design.reliability_observability.change_event_feed
+    competency_key: observability
+    topic: A central feed of production changes
+    difficulty: medium
+    text: >-
+      Most of your incidents are caused by changes, but deploys, feature flags, config pushes and infrastructure changes
+      are recorded in different tools. How would you design one change feed that responders can line up against their
+      graphs?
+    expected_concepts:
+      - common change event schema (who, what, where, when, link)
+      - emitting events from CI/CD, flag service, config and infrastructure tools
+      - annotations on dashboards
+      - filtering by service, environment and dependency
+      - capturing manual changes too
+      - change correlation when an alert fires
+    rubric:
+      excellent: Defines a common schema, instruments every change source including manual actions, shows changes as dashboard annotations and in alerts, and filters by affected services and dependencies.
+      good: Centralises deploy and flag events with dashboard annotations.
+      weak: Proposes checking each tool's history during an incident.
+    followups:
+      - How would you capture someone running a manual command in production?
+      - How do you avoid drowning a dashboard in hundreds of unrelated changes?
+    common_errors:
+      - Recording only application deploys and missing config and flag changes.
+
+  - external_key: system_design.reliability_observability.runbook_automation
+    competency_key: incident_response
+    topic: Executable runbooks with guardrails
+    difficulty: medium
+    text: >-
+      Many of your runbooks are long lists of copy-pasted commands, and mistakes during incidents have made things
+      worse. How would you design a system for executable runbooks that responders can trust?
+    expected_concepts:
+      - parameterised, versioned automation steps
+      - dry-run or preview of affected resources
+      - approvals and permissions for risky steps
+      - audit log of who ran what
+      - verification checks after each step
+      - linking runbooks to the alerts they address
+    rubric:
+      excellent: Turns runbooks into versioned, parameterised steps with previews, permissions and approvals proportional to risk, verifies outcomes after each step, audits execution and links runbooks from alerts.
+      good: Automates common steps with audit logging and some safety checks.
+      weak: Proposes a shared folder of scripts.
+    followups:
+      - How would you keep runbook automation from breaking silently as systems change?
+      - Which steps would you never automate, and why?
+    common_errors:
+      - Automating a step without a check that confirms it worked.
+
+  - external_key: system_design.reliability_observability.oncall_load_analytics
+    competency_key: incident_response
+    topic: Measuring on-call load across teams
+    difficulty: medium
+    text: >-
+      Some teams say on-call is unbearable, others say it's fine, and leadership has no data either way. How would you
+      design a system that measures on-call load fairly across teams?
+    expected_concepts:
+      - pages per shift and off-hours pages from paging data
+      - time to acknowledge and time spent per incident
+      - share of alerts that were actionable
+      - top noisy alerts per team
+      - normalising by rotation size
+      - regular review with targets
+    rubric:
+      excellent: Measures page volume, timing, effort and actionability from paging and incident data, normalises across rotation sizes, identifies the noisiest alerts and feeds results into a regular review with targets.
+      good: Reports pages per shift and off-hours pages per team.
+      weak: Proposes a survey as the only measure.
+    followups:
+      - How would you measure whether an alert was actionable?
+      - What would you do with a team that is consistently over target?
+    common_errors:
+      - Comparing raw page counts across teams with very different rotation sizes.
+
+  - external_key: system_design.reliability_observability.kill_switch_service
+    competency_key: system_design
+    topic: Kill switches for fast mitigation
+    difficulty: medium
+    text: >-
+      Rolling back a deploy takes twenty minutes, but disabling a misbehaving feature should take seconds. How would you
+      design a kill switch system that responders can use safely during incidents?
+    expected_concepts:
+      - runtime flags evaluated locally with pushed updates
+      - safe default behaviour when the flag service is unreachable
+      - targeting by region, customer or percentage
+      - audit trail and permissions
+      - testing that the off path actually works
+      - cleanup of stale switches
+    rubric:
+      excellent: Designs local evaluation with pushed updates and a safe fallback, supports targeting, audits changes, regularly exercises the off path and manages switch lifecycle.
+      good: Proposes runtime flags with fast propagation and audit.
+      weak: Proposes environment variables that require a restart.
+    followups:
+      - What happens if the flag service is down during an incident?
+      - How do you know the code behind the off switch still works?
+    common_errors:
+      - Making every request call the flag service synchronously.
+
+  - external_key: system_design.reliability_observability.chaos_experiment_platform
+    competency_key: system_design
+    topic: A fault injection platform with safety limits
+    difficulty: medium
+    text: >-
+      Leadership wants regular fault injection in production to find weaknesses before customers do, but teams are
+      worried about causing outages. How would you design a chaos experiment platform with strong safety controls?
+    expected_concepts:
+      - experiment definitions with hypothesis and scope
+      - blast radius limits (percentage, region, tenant)
+      - automatic abort on SLO or health signal degradation
+      - starting in lower environments and scaling up
+      - scheduling and notifying affected teams
+      - recording results and follow-up actions
+    rubric:
+      excellent: Requires a hypothesis, limits blast radius, aborts automatically on user-impact signals, progresses from lower environments, coordinates with teams and turns results into tracked fixes.
+      good: Proposes scoped experiments with abort conditions.
+      weak: Proposes randomly killing production instances without limits or abort criteria.
+    followups:
+      - Which signals would trigger an automatic abort?
+      - How would you run an experiment on a dependency shared by many teams?
+    common_errors:
+      - Running experiments without a stop condition tied to user impact.
+
+  - external_key: system_design.reliability_observability.automated_canary_analysis
+    competency_key: ci_cd
+    topic: Automated canary analysis system
+    difficulty: medium
+    text: >-
+      Your deploys go to a small canary first, but someone eyeballs a dashboard for five minutes before promoting it. How
+      would you design an automated canary analysis system that decides whether to continue or roll back?
+    expected_concepts:
+      - comparing canary against a baseline running the old version at the same time
+      - choosing metrics (errors, latency, saturation, business signals)
+      - statistical comparison with minimum sample sizes
+      - automatic rollback and clear reports
+      - handling low-traffic services
+      - progressive steps after the canary passes
+    rubric:
+      excellent: Compares against a concurrent baseline, picks meaningful metrics, uses statistical tests with sample size requirements, rolls back automatically with an explanation and handles low-traffic cases.
+      good: Automates metric comparison with thresholds and rollback.
+      weak: Compares the canary to yesterday's numbers or relies only on error count.
+    followups:
+      - Why compare to a fresh baseline instead of the existing fleet?
+      - What do you do for a service with ten requests per minute?
+    common_errors:
+      - Comparing a fresh canary against long-running instances with warm caches.
+
+  - external_key: system_design.reliability_observability.customer_impact_estimation
+    competency_key: observability
+    topic: Estimating which customers an incident affects
+    difficulty: medium
+    text: >-
+      During incidents, support and account managers keep asking which customers are affected, and engineers can only
+      guess. How would you design a way to estimate customer impact in near real time?
+    expected_concepts:
+      - tenant or customer ID on requests and telemetry
+      - per-customer error and latency aggregates
+      - comparing to each customer's normal baseline
+      - mapping customers to regions, cells or shards
+      - exporting impacted lists to support tooling
+      - privacy and access limits on the data
+    rubric:
+      excellent: Tags telemetry with customer identifiers in a cardinality-safe way, aggregates per customer against baselines, maps customers to infrastructure, and delivers an access-controlled impact list to support.
+      good: Uses customer IDs in logs or events to count affected customers.
+      weak: Estimates impact from overall error rate only.
+    followups:
+      - How would you avoid a cardinality explosion from customer IDs in metrics?
+      - How would you tell an affected customer from one that simply wasn't active?
+    common_errors:
+      - Adding customer ID as a label on every metric.
+
+  - external_key: system_design.reliability_observability.internal_incident_communications
+    competency_key: communication
+    topic: Internal stakeholder updates during incidents
+    difficulty: medium
+    text: >-
+      Executives, support and sales keep interrupting incident responders to ask for updates. How would you design an
+      internal communication system that keeps stakeholders informed without distracting the people fixing the problem?
+    expected_concepts:
+      - a dedicated communications role separate from the commander
+      - an internal status feed or channel stakeholders can subscribe to
+      - update templates covering impact, actions and next update time
+      - update cadence tied to severity
+      - audience-specific summaries
+    rubric:
+      excellent: Separates the communications role, gives stakeholders a subscribable feed with a fixed cadence and template, tailors summaries by audience and shields the working channel from interruptions.
+      good: Proposes a communications lead and a separate stakeholder channel with regular updates.
+      weak: Proposes adding everyone to the incident channel.
+    followups:
+      - What should every update contain?
+      - How would you handle an executive who joins the working channel anyway?
+    common_errors:
+      - Mixing stakeholder questions into the responders' working channel.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: system_design.reliability_observability.auto_remediation_safety
+    competency_key: system_design
+    topic: Auto-remediation with blast radius limits
+    difficulty: hard
+    text: >-
+      Your platform restarts unhealthy instances and drains bad nodes automatically, and last month a buggy health
+      signal made it drain half the fleet in minutes. How would you redesign the auto-remediation system so it can't
+      make an outage worse?
+    expected_concepts:
+      - rate limits and budgets on remediation actions
+      - circuit breakers that stop automation when too much is affected
+      - sanity checks against independent signals
+      - escalating to humans past a threshold
+      - audit and dry-run modes
+      - testing remediation logic like production code
+    rubric:
+      excellent: Bounds actions with rate limits and fleet-wide budgets, stops automation when a large share is affected, cross-checks signals, escalates to humans and treats remediation logic as tested, reviewed code.
+      good: Adds rate limits and a cap on total affected capacity.
+      weak: Proposes fixing the specific health signal bug only.
+    followups:
+      - How would the system tell a real fleet-wide problem from a broken signal?
+      - What should happen when the automation stops itself?
+    common_errors:
+      - Letting automation act on more capacity than the system can afford to lose.
+
+  - external_key: system_design.reliability_observability.dr_validation_automation
+    competency_key: system_design
+    topic: Continuously validating disaster recovery
+    difficulty: hard
+    text: >-
+      Your regional failover plan exists on paper, and the one time it was used, half the steps didn't work. How would
+      you design a system that continuously validates disaster recovery so you know it works before you need it?
+    expected_concepts:
+      - automated failover runbooks rather than manual steps
+      - scheduled partial and full failover exercises
+      - measuring achieved recovery time and data loss against targets
+      - verifying capacity in the target region
+      - detecting configuration drift between regions
+      - backup restore tests with data validation
+    rubric:
+      excellent: Automates failover, exercises it regularly at increasing scope, measures actual recovery time and data loss against targets, checks capacity and drift continuously and validates restores, not just backups.
+      good: Proposes scheduled failover tests and automated runbooks.
+      weak: Proposes reviewing the document more often.
+    followups:
+      - How would you run a failover test without risking customer impact?
+      - What drift between regions would you check for automatically?
+    common_errors:
+      - Testing backups by checking they exist instead of restoring them.
+
+  - external_key: system_design.reliability_observability.per_customer_status
+    competency_key: system_design
+    topic: Per-customer status in a cell-based platform
+    difficulty: hard
+    text: >-
+      Your platform is split into cells, and an outage usually affects only a few percent of customers, yet the public
+      status page shows a global incident to everyone. How would you design status reporting that shows each enterprise
+      customer what's happening to them specifically?
+    expected_concepts:
+      - mapping customers to cells, regions and features
+      - per-cell health signals and SLOs
+      - authenticated customer-specific status view
+      - keeping a public page for broad incidents
+      - consistency between public and private views
+      - privacy so one customer can't learn about others
+    rubric:
+      excellent: Maps customers to cells, drives status from per-cell signals, offers an authenticated view that stays available during outages, keeps it consistent with the public page and protects other customers' information.
+      good: Proposes per-cell status with a customer-specific view.
+      weak: Proposes emailing affected customers manually.
+    followups:
+      - Where would the customer-specific view be hosted so it works during an outage?
+      - How do you handle a customer spread across several cells?
+    common_errors:
+      - Making the customer status view depend on the product's own login service.
+
+  - external_key: system_design.reliability_observability.incident_tooling_resilience
+    competency_key: incident_response
+    topic: Incident tooling that works during a major outage
+    difficulty: hard
+    text: >-
+      Imagine a major outage takes down your company's identity provider and chat tool along with production. How would
+      you design your incident tooling so responders can still coordinate, see telemetry and act?
+    expected_concepts:
+      - inventory of dependencies of every incident tool
+      - break-glass credentials stored offline and audited
+      - backup communication channel on independent infrastructure
+      - observability access that bypasses SSO in emergencies
+      - pre-agreed fallback procedures that are rehearsed
+      - avoiding circular dependencies such as tooling hosted on production
+    rubric:
+      excellent: Maps dependencies of the incident toolchain, provides independent communication and audited break-glass access, breaks circular dependencies and rehearses the fallback procedure regularly.
+      good: Proposes a backup chat channel and break-glass accounts.
+      weak: Assumes the SaaS tools will stay up.
+    followups:
+      - How do you keep break-glass credentials safe yet usable?
+      - How would you rehearse this without causing an actual outage?
+    common_errors:
+      - Storing break-glass credentials in a secrets manager that itself needs SSO.
+
+  - external_key: system_design.reliability_observability.capacity_forecasting_system
+    competency_key: system_design
+    topic: Capacity forecasting for shared infrastructure
+    difficulty: hard
+    text: >-
+      Your company has had two outages from running out of capacity in shared databases and clusters, both of which
+      were predictable in hindsight. How would you design a system that forecasts capacity needs and warns teams in
+      time?
+    expected_concepts:
+      - choosing the right saturation metric per resource
+      - trend and seasonal forecasting with uncertainty bands
+      - linking to business drivers such as user growth and launches
+      - lead time for procurement or scaling
+      - alerts on predicted exhaustion date, not current usage
+      - feedback by comparing forecasts with actuals
+    rubric:
+      excellent: Picks real saturation metrics, forecasts with seasonality and uncertainty, incorporates business drivers, alerts on predicted exhaustion relative to lead time and measures forecast accuracy over time.
+      good: Proposes trend-based forecasts with alerts on predicted exhaustion.
+      weak: Proposes alerting at eighty percent usage.
+    followups:
+      - How would you account for a product launch that isn't visible in historical data?
+      - Which resource would you be least able to forecast, and why?
+    common_errors:
+      - Forecasting from averages and missing peak-time saturation.
+
+  - external_key: system_design.reliability_observability.service_reliability_scorecards
+    competency_key: system_design
+    topic: Automated production readiness scorecards
+    difficulty: hard
+    text: >-
+      You own reliability standards for three hundred services, and production readiness reviews are manual checklists
+      nobody revisits. How would you design an automated scorecard system that keeps services up to standard over time?
+    expected_concepts:
+      - checks derived automatically from real data (SLOs exist, alerts route, runbooks linked, backups tested)
+      - tiered standards by service criticality
+      - scores visible to teams and leadership
+      - gates for new services and nudges for existing ones
+      - handling exceptions with expiry
+      - avoiding gaming by checking quality not just presence
+    rubric:
+      excellent: Derives checks from live systems, scales requirements with criticality, makes results visible, combines launch gates with ongoing nudges, handles time-limited exceptions and guards against box-ticking.
+      good: Automates checks for key practices with visibility per team.
+      weak: Proposes a yearly manual audit.
+    followups:
+      - How would you check that a runbook is useful rather than just present?
+      - How would you get teams to act on a low score?
+    common_errors:
+      - Scoring the presence of an artefact rather than whether it works.
+
+  - external_key: system_design.reliability_observability.error_budget_release_gating
+    competency_key: ci_cd
+    topic: Release gating driven by error budgets
+    difficulty: hard
+    text: >-
+      Leadership agreed that services which exhaust their error budget should slow down feature releases, but enforcing
+      that by hand hasn't worked. How would you design an automated release gate based on error budgets?
+    expected_concepts:
+      - reading budget status from the SLO platform in the pipeline
+      - policy defining what is blocked and what is allowed (fixes, security patches)
+      - exception process with approvals and audit
+      - handling budget burned by dependencies rather than the team
+      - avoiding gaming such as loosening SLOs
+      - communication and reporting of gate decisions
+    rubric:
+      excellent: Integrates budget status into deploy pipelines with a clear policy, allows reliability and security fixes, defines audited exceptions, handles dependency-caused burn fairly and prevents teams from weakening SLOs to bypass the gate.
+      good: Blocks deploys when budget is exhausted with an exception path.
+      weak: Blocks all deploys including fixes when the budget runs out.
+    followups:
+      - The budget was burned by a cloud provider outage. Should releases stop?
+      - How would you prevent a team from lowering its SLO to escape the gate?
+    common_errors:
+      - Blocking the very fixes that would restore reliability.
+
+  - external_key: system_design.reliability_observability.dependency_degradation_detection
+    competency_key: observability
+    topic: Detecting provider and third-party degradation
+    difficulty: hard
+    text: >-
+      Several of your incidents were caused by a cloud provider or third-party API degrading quietly long before their
+      status page admitted anything. How would you design detection that spots those external problems from your own
+      telemetry?
+    expected_concepts:
+      - client-side metrics for every external call (errors, latency, timeouts)
+      - grouping by provider, region and endpoint
+      - comparing across your own services to separate shared causes from local ones
+      - synthetic probes against provider APIs
+      - routing alerts to whoever owns the integration
+      - linking detection to failover or degradation options
+    rubric:
+      excellent: Instruments every outbound dependency from the client side, aggregates by provider and region to spot shared degradation across services, adds targeted probes and connects detection to concrete mitigations.
+      good: Monitors outbound call errors and latency per provider with alerts.
+      weak: Proposes subscribing to providers' status pages.
+    followups:
+      - How would you tell a provider problem from a problem in your own network path?
+      - What would you do with the signal once you're confident the provider is degraded?
+    common_errors:
+      - Measuring only provider responses and missing timeouts that never get a response.
+
+  - external_key: system_design.reliability_observability.cell_health_and_evacuation
+    competency_key: distributed_systems
+    topic: Detecting and evacuating a bad cell
+    difficulty: hard
+    text: >-
+      Your service runs in twenty independent cells, and a bad config or deploy usually breaks one cell first. How would
+      you design monitoring and automation that detects an unhealthy cell and moves traffic away from it safely?
+    expected_concepts:
+      - per-cell SLIs compared against peer cells
+      - outlier detection across cells rather than fixed thresholds
+      - staged rollouts by cell to limit blast radius
+      - evacuation with capacity checks on receiving cells
+      - limits on how many cells can be drained at once
+      - human confirmation thresholds and rollback of evacuation
+    rubric:
+      excellent: Compares cells against each other to find outliers, rolls out changes cell by cell, evacuates only when receiving cells have capacity, caps simultaneous evacuations and defines when humans must confirm.
+      good: Monitors per-cell SLIs and can shift traffic away from a failing cell.
+      weak: Proposes global alerting with manual traffic moves.
+    followups:
+      - What if three cells look bad at the same time?
+      - How do you avoid overloading the healthy cells during evacuation?
+    common_errors:
+      - Evacuating cells without checking that the rest can absorb the load.

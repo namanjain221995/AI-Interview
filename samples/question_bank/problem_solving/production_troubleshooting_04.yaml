@@ -1,0 +1,593 @@
+# Curated questions: problem solving / production troubleshooting (part 4 of 4).
+# Reasoning through production incidents step by step: symptoms, hypotheses, evidence, mitigation.
+version: 1
+defaults:
+  role_tags: [devops, sre, backend, support_engineer]
+  round_types: [problem_solving, combined]
+  kind: scenario
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: problem_solving.production_troubleshooting.dependency_connection_refused_startup
+    competency_key: debugging
+    topic: Connection refused to a dependency after a move
+    difficulty: easy
+    text: >-
+      You moved a service to a new deployment platform, and on startup it now logs "connection refused" every
+      time it tries to reach its cache, though the cache is up and other services use it fine. How would you
+      troubleshoot this?
+    expected_concepts:
+      - check the host and port the service is actually using (config, env vars)
+      - default values like localhost taking over when a setting is missing
+      - test connectivity from the new environment to the cache
+      - firewall or security group rules for the new network
+      - compare configuration between old and new platforms
+    rubric:
+      excellent: Checks the effective connection target first, recognises a missing setting falling back to a default, tests connectivity from the new environment, and compares old and new configuration systematically.
+      good: Checks configuration and network access from the new platform.
+      weak: Restarts the cache or blames the cache team without checking what the service connects to.
+    followups:
+      - The log shows it connecting to 127.0.0.1. What happened?
+      - How would you make a missing setting fail loudly instead?
+    common_errors:
+      - Not distinguishing connection refused from a timeout, which point to different causes.
+
+  - external_key: problem_solving.production_troubleshooting.job_succeeds_empty_output
+    competency_key: debugging
+    topic: Job reports success but produces nothing
+    difficulty: easy
+    text: >-
+      A daily export job reports success and exits cleanly, but the file it delivered to a partner this morning
+      was empty. How would you find out why?
+    expected_concepts:
+      - check the input data and the query or filter the job used
+      - date or timezone windows selecting no rows
+      - swallowed exceptions or upstream data not ready yet
+      - compare with a previous good run
+      - validate output (row counts, sanity checks) before delivering
+    rubric:
+      excellent: Inspects the job's input and selection logic, considers time windows, late upstream data and swallowed errors, compares with a good run, and adds output validation before delivery.
+      good: Checks the source data and the job's query and finds a likely cause.
+      weak: Reruns the job and resends without understanding why it was empty.
+    followups:
+      - The upstream data landed an hour after the job ran. How would you fix the dependency?
+      - What checks would you add before files go to partners?
+    common_errors:
+      - Trusting an exit code of zero as proof the job did its work.
+
+  - external_key: problem_solving.production_troubleshooting.n_plus_one_query_regression
+    competency_key: databases
+    topic: Endpoint slowed by a jump in query count
+    difficulty: easy
+    text: >-
+      After a small feature change, one listing endpoint went from about fifty milliseconds to two seconds. A
+      trace shows hundreds of short database queries per request. What's likely happening, and how would you
+      fix it?
+    expected_concepts:
+      - an N+1 query pattern from loading related data per item
+      - often caused by lazy loading in an ORM
+      - confirm with query logs or trace spans
+      - batch or join the related data, or eager load
+      - tests or monitoring on query count per request
+    rubric:
+      excellent: Recognises the N+1 pattern, ties it to the change that started loading related data per row, fixes it with batching or eager loading, and adds a guard on query counts.
+      good: Identifies N+1 queries and proposes batching.
+      weak: Adds a cache or a bigger database without addressing the query pattern.
+    followups:
+      - How would you catch this in code review or tests?
+      - When might eager loading make things worse?
+    common_errors:
+      - Looking at individual query speed when the problem is the number of queries.
+
+  - external_key: problem_solving.production_troubleshooting.random_logouts_after_scaling
+    competency_key: distributed_systems
+    topic: Users logged out after adding instances
+    difficulty: easy
+    text: >-
+      Since you added a second and third instance of a web application, users complain that they're randomly
+      logged out or lose their shopping cart. With one instance it never happened. What do you think is going
+      on?
+    expected_concepts:
+      - session state kept in memory on each instance
+      - load balancer sending requests to instances that don't hold the session
+      - confirm by checking which instance served each request
+      - shared session store or stateless tokens
+      - sticky sessions as a stopgap and their downsides
+    rubric:
+      excellent: Explains that sessions live in instance memory, confirms by correlating failures with instance changes, and moves to a shared store or stateless sessions, mentioning sticky sessions only as a stopgap.
+      good: Identifies in-memory sessions and suggests a shared session store.
+      weak: Increases session timeouts or blames browser cookies.
+    followups:
+      - Why are sticky sessions not a full solution?
+      - What else might be stored in memory that breaks with multiple instances?
+    common_errors:
+      - Treating sticky sessions as the permanent fix.
+
+  - external_key: problem_solving.production_troubleshooting.read_only_filesystem
+    competency_key: linux
+    topic: Filesystem suddenly read-only
+    difficulty: easy
+    text: >-
+      A service on a Linux server started failing to write files with "read-only file system" errors, although
+      nobody changed its mount options. How would you figure out why and recover?
+    expected_concepts:
+      - the kernel remounts a filesystem read-only after I/O or filesystem errors
+      - check kernel logs (dmesg, journal) for disk errors
+      - check the underlying disk or volume health
+      - move the workload off the host or replace the volume
+      - run a filesystem check when safe and verify data
+    rubric:
+      excellent: Knows the kernel remounts read-only after errors, finds the disk errors in kernel logs, moves the workload to restore service, and repairs or replaces the storage before reuse.
+      good: Checks kernel logs and suspects a disk problem.
+      weak: Simply remounts read-write and carries on without investigating.
+    followups:
+      - Why is it risky to just remount it read-write?
+      - How would you get early warning of a failing disk?
+    common_errors:
+      - Ignoring the kernel log, which usually explains the remount.
+
+  - external_key: problem_solving.production_troubleshooting.crash_on_specific_customer_file
+    competency_key: debugging
+    topic: Service crashing on one customer's input
+    difficulty: easy
+    text: >-
+      Your file-processing service crashes every time one particular customer uploads their monthly report,
+      and the crash briefly affects other customers too. How would you investigate and contain this?
+    expected_concepts:
+      - obtain the file or a safe sample and reproduce in isolation
+      - read the crash output to find the failing step
+      - unusual input (size, encoding, format quirks)
+      - validate input and fail the single request gracefully
+      - isolate processing so one bad input can't take down others
+    rubric:
+      excellent: Reproduces safely with the file, finds the failing step, handles the problematic input gracefully, and isolates processing so one customer's file can't affect others, while respecting customer data handling.
+      good: Reproduces the crash and fixes the parsing bug.
+      weak: Blocks the customer's uploads or restarts the service each time.
+    followups:
+      - The file contains customer data you're not allowed to copy freely. How do you reproduce it?
+      - Why does one crash affect other customers, and how would you change that?
+    common_errors:
+      - Fixing this file's quirk without making the service resilient to bad input.
+
+  - external_key: problem_solving.production_troubleshooting.fix_deployed_bug_persists
+    competency_key: debugging
+    topic: Bug persisting after the fix shipped
+    difficulty: easy
+    text: >-
+      You shipped a fix for a bug customers reported, and the deploy says it succeeded, but customers still see
+      the bug an hour later. How would you work out why?
+    expected_concepts:
+      - confirm the running version actually contains the fix
+      - check all instances, regions and workers were updated
+      - caching of responses or assets serving the old behaviour
+      - stale data produced before the fix that needs repair
+      - the fix may address a different cause than the real one
+    rubric:
+      excellent: Verifies what is actually running everywhere, checks caching and old data created before the fix, and stays open to the fix being wrong, with a way to verify against a real affected case.
+      good: Checks that the new version is deployed and clears caches.
+      weak: Assumes customers are mistaken or redeploys the same build.
+    followups:
+      - The fix is running everywhere and caches are clear. What next?
+      - How would you verify a fix before telling customers it's resolved?
+    common_errors:
+      - Trusting the deploy tool's status without checking running instances.
+
+  # ---------------------------------------------------------------- medium
+  - external_key: problem_solving.production_troubleshooting.mixed_version_workers_schema
+    competency_key: distributed_systems
+    topic: Background workers on old code after a deploy
+    difficulty: medium
+    text: >-
+      You deployed a new version of your web app that enqueues jobs with an extra field. Within minutes,
+      background job failures spiked, but only for jobs created after the deploy. What's your reasoning?
+    expected_concepts:
+      - workers still running the previous version can't handle the new payload
+      - workers deployed separately or later than the web tier
+      - confirm worker versions and the failing payloads
+      - deploy order (consumers before producers) and tolerant readers
+      - retry or replay failed jobs once workers are updated
+    rubric:
+      excellent: Connects the failures to producer and consumer running different versions, confirms worker versions, replays failed jobs after updating, and proposes deploy ordering and backward-compatible payloads.
+      good: Identifies the version mismatch and updates the workers.
+      weak: Discards the failed jobs or rolls back without understanding the mismatch.
+    followups:
+      - Which should deploy first, producers or consumers, and why?
+      - How do you replay the failed jobs safely?
+    common_errors:
+      - Forgetting that queued jobs outlive the deploy that created them.
+
+  - external_key: problem_solving.production_troubleshooting.unexpected_process_outbound_traffic
+    competency_key: security
+    topic: Unknown process consuming a production host
+    difficulty: medium
+    text: >-
+      You're investigating high CPU on a production server and find a process you don't recognise using most of
+      it and making outbound connections to an unfamiliar address. How would you handle this?
+    expected_concepts:
+      - treat it as a possible security incident and involve security early
+      - preserve evidence (process info, network connections, memory, disk) before changes
+      - isolate the host from the network rather than just killing the process
+      - identify the entry point and check other hosts for the same signs
+      - rebuild from a known good image and rotate credentials
+    rubric:
+      excellent: Switches into security incident mode, preserves evidence, isolates the host, involves the security team, checks for spread and rebuilds from clean images with credential rotation.
+      good: Recognises a possible compromise, isolates the host and escalates.
+      weak: Kills the process and moves on, destroying evidence and missing the entry point.
+    followups:
+      - Why not just kill the process and reboot?
+      - How would you find out how it got there?
+    common_errors:
+      - Cleaning the host and returning it to service without understanding the intrusion.
+
+  - external_key: problem_solving.production_troubleshooting.disk_burst_credits_exhausted
+    competency_key: observability
+    topic: Storage performance falling off a cliff
+    difficulty: medium
+    text: >-
+      A database on cloud block storage performed fine for weeks, then on Tuesday afternoon its disk latency
+      jumped tenfold and stayed there, with no change in query mix. How would you investigate?
+    expected_concepts:
+      - storage tiers with burst credits or throughput caps
+      - check volume-level metrics (IOPS, throughput, queue depth, credit balance)
+      - compare usage against the provisioned limits
+      - a gradual increase in I/O eventually exhausting credits
+      - move to provisioned performance or reduce I/O
+    rubric:
+      excellent: Considers storage-level limits like burst credits, confirms with volume metrics, explains the slow build-up that leads to a sudden cliff, and chooses between provisioned performance and reducing I/O.
+      good: Checks volume metrics and suspects a throughput or IOPS limit.
+      weak: Tunes queries or adds CPU without looking at storage limits.
+    followups:
+      - Why does the problem appear suddenly when the load grew gradually?
+      - What would you alert on to see this coming?
+    common_errors:
+      - Assuming cloud disks deliver constant performance regardless of usage history.
+
+  - external_key: problem_solving.production_troubleshooting.shared_event_schema_break
+    competency_key: distributed_systems
+    topic: Event schema change breaking downstream teams
+    difficulty: medium
+    text: >-
+      Your team changed the structure of an event you publish to a shared topic, and now three downstream teams
+      report their consumers failing. How would you limit the damage and sort it out?
+    expected_concepts:
+      - revert or republish in the previous format quickly
+      - find all consumers and their failure state (lag, dropped messages)
+      - help consumers replay or recover the events they missed
+      - schema registry, compatibility checks and versioned events
+      - communicate across teams with a clear owner
+    rubric:
+      excellent: Restores compatibility quickly, inventories affected consumers and their data gaps, coordinates replay, and introduces schema compatibility enforcement and versioning.
+      good: Reverts the change and adds compatibility checks.
+      weak: Asks downstream teams to update their code while their consumers stay broken.
+    followups:
+      - Some consumers dropped the events instead of failing. How do you recover their data?
+      - What rules would you set for evolving shared event schemas?
+    common_errors:
+      - Not knowing who consumes the events you publish.
+
+  - external_key: problem_solving.production_troubleshooting.mesh_upgrade_latency
+    competency_key: networking
+    topic: Latency added after a service mesh upgrade
+    difficulty: medium
+    text: >-
+      After upgrading your service mesh, every internal call got roughly fifteen milliseconds slower, and some
+      chatty services now miss their latency targets. How would you find where the time is being added?
+    expected_concepts:
+      - compare latency measured by the application versus by the sidecar proxies
+      - proxy resource limits causing throttling or queuing
+      - changed defaults (mTLS handshakes, connection pooling, protocol detection)
+      - test with and without the sidecar for a single service
+      - roll back or tune, and benchmark mesh upgrades beforehand
+    rubric:
+      excellent: Separates application time from proxy time, checks sidecar resources and changed defaults such as connection reuse or TLS, isolates with a controlled test, and decides between tuning and rollback.
+      good: Suspects the proxies and compares before and after metrics.
+      weak: Blames the network or the applications without isolating the mesh.
+    followups:
+      - The proxies are hitting their CPU limits. What would you change?
+      - How would you test the next mesh upgrade before it hits production?
+    common_errors:
+      - Not checking whether connections are now being re-established per request.
+
+  - external_key: problem_solving.production_troubleshooting.two_incidents_one_responder
+    competency_key: incident_response
+    topic: Two incidents at once with one responder
+    difficulty: medium
+    text: >-
+      You're the only engineer on call, and within ten minutes you get paged for a slow admin dashboard and for
+      elevated payment failures. How do you handle both?
+    expected_concepts:
+      - triage by user and business impact
+      - check quickly whether the two are related
+      - escalate to bring in more people rather than working both alone
+      - focus on the higher-impact incident and acknowledge the other
+      - keep stakeholders informed about what is and isn't being worked on
+    rubric:
+      excellent: Prioritises payments by impact, checks for a shared cause, pulls in help through escalation, keeps the lower-priority incident acknowledged and communicated, and works the main one in a structured way.
+      good: Prioritises payments and escalates for help.
+      weak: Tries to work both in parallel alone or handles them in the order they arrived.
+    followups:
+      - How would you check whether the two are related?
+      - What would you say to the admin dashboard users?
+    common_errors:
+      - Not escalating because of reluctance to wake someone up.
+
+  - external_key: problem_solving.production_troubleshooting.provider_status_page_green
+    competency_key: incident_response
+    topic: Suspecting the provider while their status page is green
+    difficulty: medium
+    text: >-
+      You're fairly sure a managed cloud service is misbehaving, because calls to it are slow and failing in one
+      region, but the provider's status page shows everything operational. How would you build your case and
+      protect your users?
+    expected_concepts:
+      - collect precise evidence (timestamps, request IDs, error codes, regions)
+      - rule out your own side (client config, quotas, network path)
+      - compare across regions, accounts or endpoints
+      - open a support case with the evidence and escalate
+      - mitigate with failover, retries with backoff or degraded features
+    rubric:
+      excellent: Rules out own-side causes, collects precise, comparable evidence, engages the provider effectively, and protects users with regional failover or degradation without waiting for confirmation.
+      good: Gathers evidence and opens a support case, with some mitigation.
+      weak: Waits for the status page to change before acting.
+    followups:
+      - What exactly would you put in the support case?
+      - How would you design the system so one managed service's region failing hurts less?
+    common_errors:
+      - Treating the provider's status page as proof that the problem is internal.
+
+  - external_key: problem_solving.production_troubleshooting.one_bad_host_in_large_pool
+    competency_key: observability
+    topic: Finding one bad host among hundreds
+    difficulty: medium
+    text: >-
+      About half a percent of requests to a service running on two hundred hosts are failing, and the failures
+      look random. How would you find out if one or a few hosts are responsible?
+    expected_concepts:
+      - break error rate down by host, zone and version
+      - outlier detection across the fleet
+      - compare outlier hosts against healthy ones (hardware, config, kernel, disk)
+      - remove the bad hosts from rotation and keep one for analysis
+      - automatic outlier ejection at the load balancer or mesh
+    rubric:
+      excellent: Slices error rates by host and other dimensions to find outliers, compares them with healthy peers, removes them while keeping evidence, and proposes automatic outlier ejection.
+      good: Breaks errors down by host and drains the bad ones.
+      weak: Looks only at aggregate metrics and treats the errors as random noise.
+    followups:
+      - The bad hosts are all in the same rack. What would you check?
+      - What are the risks of automatic outlier ejection?
+    common_errors:
+      - Only looking at fleet-wide averages that hide a single bad host.
+
+  - external_key: problem_solving.production_troubleshooting.node_disk_pressure_evictions
+    competency_key: kubernetes
+    topic: Pods evicted for disk pressure
+    difficulty: medium
+    text: >-
+      Pods across several Kubernetes nodes are being evicted with disk pressure warnings, including pods of
+      services that barely use disk. How would you find what's filling the nodes and stop the evictions?
+    expected_concepts:
+      - check node conditions and which filesystem is under pressure
+      - container logs, emptyDir volumes, image layers and writable layers
+      - find the pods writing the most data
+      - ephemeral storage requests and limits
+      - log rotation and image garbage collection settings
+    rubric:
+      excellent: Identifies which node filesystem is filling and which pods or images consume it, explains why unrelated pods get evicted, and fixes it with ephemeral storage limits, log rotation and cleanup settings.
+      good: Finds a pod writing too much data or large logs and fixes it.
+      weak: Adds bigger disks without finding what's consuming the space.
+    followups:
+      - Why were pods that barely use disk evicted?
+      - How do ephemeral storage limits change what happens next time?
+    common_errors:
+      - Not setting ephemeral storage limits, so one pod can starve a whole node.
+
+  - external_key: problem_solving.production_troubleshooting.deploy_502_bursts
+    competency_key: kubernetes
+    topic: Error bursts during every deploy
+    difficulty: medium
+    text: >-
+      Every time you deploy your service, users get a burst of 502 errors for about ten seconds, even though
+      the rolling update looks clean. How would you track down why and get deploys to zero errors?
+    expected_concepts:
+      - load balancer still routing to pods that are terminating
+      - endpoint removal propagation delay versus immediate shutdown
+      - pre-stop delays and graceful handling of termination signals
+      - new pods marked ready before they can serve
+      - verify with load balancer logs around the deploy
+    rubric:
+      excellent: Explains the race between endpoint removal and process shutdown and between readiness and real readiness, verifies with load balancer logs, and fixes it with graceful shutdown, pre-stop delays and accurate readiness.
+      good: Identifies terminating pods still receiving traffic and adds graceful shutdown.
+      weak: Slows the rollout or accepts the errors as normal.
+    followups:
+      - The app handles SIGTERM correctly but errors persist. What else could it be?
+      - How would you verify that a deploy produces zero errors?
+    common_errors:
+      - Assuming the orchestrator stops sending traffic before it stops the pod.
+
+  - external_key: problem_solving.production_troubleshooting.restart_everything_risk
+    competency_key: incident_response
+    topic: Weighing a fleet-wide restart
+    difficulty: medium
+    text: >-
+      During an incident, a teammate proposes restarting every instance of the service at once to clear what
+      looks like bad in-memory state. How would you decide whether to do that, and how would you do it safely?
+    expected_concepts:
+      - evidence that a restart would actually help (did restarting one instance fix it?)
+      - risks such as cold caches, thundering herd on dependencies and losing evidence
+      - restart one instance first as a test
+      - rolling restart to keep capacity
+      - capture diagnostics (heap or thread dumps) before restarting
+    rubric:
+      excellent: Wants evidence first by restarting one instance, weighs cold start and dependency load risks, captures diagnostics beforehand, and uses a rolling restart to keep capacity.
+      good: Prefers a rolling restart and tests on one instance.
+      weak: Restarts everything at once without considering side effects or evidence.
+    followups:
+      - Restarting one instance fixed it for twenty minutes. What does that tell you?
+      - What would you capture before restarting?
+    common_errors:
+      - Destroying the only evidence of the bad state by restarting first.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: problem_solving.production_troubleshooting.deploy_pipeline_depends_on_broken_service
+    competency_key: incident_response
+    topic: Unable to ship a fix because of a circular dependency
+    difficulty: hard
+    text: >-
+      You've found the fix for an outage, but your deployment pipeline can't run because it depends on the very
+      service that's down, such as the artifact registry or the authentication system. How would you get the fix
+      out?
+    expected_concepts:
+      - identify the specific dependency blocking the pipeline
+      - documented manual or emergency deploy path with controls
+      - use cached artifacts or a previous known-good build
+      - restore the dependency first if that's quicker
+      - afterwards, remove circular dependencies from the recovery path
+    rubric:
+      excellent: Identifies exactly what blocks the pipeline, chooses between an audited emergency path, cached artifacts or restoring the dependency first, and afterwards maps and breaks circular dependencies in recovery tooling.
+      good: Uses a manual deploy path and recommends removing the dependency later.
+      weak: Improvises an unaudited path or has no plan beyond waiting.
+    followups:
+      - How would you find circular dependencies like this before an incident?
+      - What controls should an emergency deploy path keep?
+    common_errors:
+      - Assuming recovery tooling is independent of the production systems it recovers.
+
+  - external_key: problem_solving.production_troubleshooting.cache_stale_forever_race
+    competency_key: distributed_systems
+    topic: Stale value stuck in cache after an update
+    difficulty: hard
+    text: >-
+      Occasionally, after a user updates their profile, the old value stays in the cache indefinitely until
+      someone flushes it manually. It's rare and you can't reproduce it on demand. How would you reason about
+      the cause?
+    expected_concepts:
+      - race between invalidation and a concurrent read repopulating the cache
+      - read from a lagging replica refilling the cache with stale data
+      - missing TTL so stale entries never expire
+      - logs or tracing of read and write timing on affected keys
+      - versioned writes, delayed double delete, or TTLs as a backstop
+    rubric:
+      excellent: Describes the concurrent read-after-invalidate race precisely, includes replica lag as a contributor, uses timing evidence on affected keys to confirm, and proposes versioned cache entries or other race-safe patterns with TTLs as a backstop.
+      good: Identifies a race between invalidation and repopulation and suggests a TTL.
+      weak: Flushes the cache periodically without understanding the race.
+    followups:
+      - Draw out the exact interleaving that leaves the stale value behind.
+      - Why does a TTL limit the damage but not fix the bug?
+    common_errors:
+      - Assuming delete-on-write invalidation is always safe under concurrency.
+
+  - external_key: problem_solving.production_troubleshooting.rare_connection_resets_outbound
+    competency_key: networking
+    topic: Rare connection resets on outbound calls
+    difficulty: hard
+    text: >-
+      About one in every five hundred calls from your service to an internal API fails with "connection reset
+      by peer". The failures are spread evenly over time and the API's own logs show nothing. How would you get
+      to the bottom of it?
+    expected_concepts:
+      - reused pooled connections that the server or a middlebox already closed
+      - idle timeouts mismatched between client pool, load balancer and server
+      - packet capture to see which side sent the reset
+      - align keep-alive timeouts or validate connections before reuse
+      - safe retries for idempotent requests
+    rubric:
+      excellent: Hypothesises stale pooled connections from mismatched idle timeouts, proves it by correlating failures with connection idle time or with packet captures showing who sent the reset, and fixes timeouts while limiting retries to idempotent calls.
+      good: Suspects keep-alive or idle timeout mismatch and checks timeout settings.
+      weak: Adds blanket retries for all requests without finding the cause.
+    followups:
+      - Why does the API not log anything for these failures?
+      - Which requests is it safe to retry automatically?
+    common_errors:
+      - Retrying non-idempotent requests to hide the problem.
+
+  - external_key: problem_solving.production_troubleshooting.recurring_short_outage_capture
+    competency_key: debugging
+    topic: Preparing to catch a short recurring outage
+    difficulty: hard
+    text: >-
+      A service has had five outages in two weeks, each lasting about ten minutes, at seemingly random times.
+      By the time anyone looks, everything is normal again and the existing data doesn't explain it. How would
+      you make sure the next occurrence gives you what you need?
+    expected_concepts:
+      - list hypotheses and what evidence would distinguish them
+      - automatic capture triggered by the symptom (thread dumps, profiles, packet captures, query snapshots)
+      - higher-resolution metrics and retained debug logs around the trigger
+      - correlate the five occurrences against every possible periodic or external factor
+      - mitigation to reduce impact while waiting
+    rubric:
+      excellent: Starts from competing hypotheses, designs automatic evidence capture triggered by the symptom, increases telemetry resolution, mines the past occurrences for shared factors, and reduces impact meanwhile.
+      good: Adds more logging and monitoring and looks for patterns in the timing.
+      weak: Waits for it to happen again and hopes someone is watching.
+    followups:
+      - What exactly would your automatic capture collect, and how would you keep it safe?
+      - All five outages started within a minute of a backup snapshot on another system. What next?
+    common_errors:
+      - Adding generic logging without knowing which question it should answer.
+
+  - external_key: problem_solving.production_troubleshooting.lsm_write_stalls
+    competency_key: databases
+    topic: Write stalls in a log-structured store
+    difficulty: hard
+    text: >-
+      Your Cassandra or RocksDB-backed service shows periods where write latency spikes to seconds for a minute
+      or two, then recovers. Read latency also suffers during those periods. How would you investigate?
+    expected_concepts:
+      - compaction falling behind and triggering write throttling or stalls
+      - flush and memtable pressure, too many files at lower levels
+      - disk I/O saturation during compaction
+      - compaction metrics, pending compactions and stall counters
+      - tune compaction strategy and throughput, or add capacity
+    rubric:
+      excellent: Explains how compaction debt leads to write stalls and read amplification, confirms with pending compaction and stall metrics alongside disk I/O, and tunes compaction or adds capacity based on the evidence.
+      good: Suspects compaction and checks pending compactions and disk I/O.
+      weak: Treats it as a network or client problem without examining the storage engine.
+    followups:
+      - A large batch import ran during each spike. How would you protect normal writes?
+      - Why do reads also get slower?
+    common_errors:
+      - Ignoring background work inside the storage engine.
+
+  - external_key: problem_solving.production_troubleshooting.database_saturated_shed_load
+    competency_key: incident_response
+    topic: Choosing what to shed when the database is saturated
+    difficulty: hard
+    text: >-
+      Your primary database is pinned at full CPU, everything that depends on it is slow, and you can't add
+      capacity quickly. How would you decide which traffic or features to turn off to bring it back?
+    expected_concepts:
+      - identify the top queries and the callers behind them
+      - rank traffic by business importance (checkout versus reports or recommendations)
+      - use feature flags, rate limits or kill switches to shed low-value load
+      - move reads to replicas or cache where possible
+      - verify recovery and restore features gradually
+    rubric:
+      excellent: Finds which callers drive the load, sheds the least valuable traffic first using existing controls, protects critical flows, verifies recovery and restores features in stages, and notes the need for prebuilt kill switches.
+      good: Identifies expensive queries and disables some non-critical features.
+      weak: Kills random queries or restarts the database without a plan.
+    followups:
+      - The heaviest load comes from your largest customer's API usage. What do you do?
+      - What would you build beforehand so load shedding is quick next time?
+    common_errors:
+      - Turning features back on all at once and overloading the database again.
+
+  - external_key: problem_solving.production_troubleshooting.errors_only_on_new_instance_family
+    competency_key: debugging
+    topic: Failures only on a new instance family
+    difficulty: hard
+    text: >-
+      You're migrating your fleet to a new cloud instance family. Hosts of the new type show occasional wrong
+      calculation results and rare crashes that never appear on the old type. How would you investigate?
+    expected_concepts:
+      - differences in CPU architecture or features (ARM versus x86, instruction sets)
+      - dependencies compiled for a different architecture or using emulation
+      - memory ordering differences exposing latent concurrency bugs
+      - reproduce on a single new host with controlled workload
+      - pause migration and keep both types side by side for comparison
+    rubric:
+      excellent: Lists concrete hardware and architecture differences, checks binaries and libraries for architecture issues, considers latent concurrency bugs exposed by weaker memory ordering, reproduces in isolation and pauses the migration to protect correctness.
+      good: Suspects architecture differences and checks dependencies.
+      weak: Assumes bad hardware and replaces hosts without investigating.
+    followups:
+      - Wrong results are worse than crashes. How would you assess data already written by these hosts?
+      - How would you test the next migration of this kind?
+    common_errors:
+      - Ignoring silent wrong results because they don't trigger alerts.

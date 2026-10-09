@@ -1,0 +1,163 @@
+version: 1
+slug: compact_cdc_events
+title: Compact a CDC Stream to Net Changes
+difficulty: medium
+competency_keys: [data_structures, problem_solving, code_quality]
+role_tags: [data, backend, dba, platform]
+time_limit_minutes: 20
+prompt_markdown: |
+  ## Compact a CDC Stream to Net Changes
+
+  A change-data-capture (CDC) connector streams every row change of a `prices` table to a data
+  warehouse. Loading each event is expensive, so before every load the pipeline **compacts** a batch of
+  events into the smallest set of changes with the same overall effect.
+
+  Each event is `[op, key, before, after]`:
+
+  - `["I", key, "", after]` - the row `key` was inserted with value `after`.
+  - `["U", key, before, after]` - the row's value changed from `before` to `after`.
+  - `["D", key, before, ""]` - the row was deleted; `before` is its last value.
+
+  Events are in commit order and consistent per key: an `I` only happens when the row does not exist,
+  `U` and `D` only when it exists, and each `before` equals the row's value at that moment.
+
+  Compact each key **separately**, comparing the state before its first event in the batch with the
+  state after its last event:
+
+  - The row **existed before** the batch if its first event is `U` or `D`; its original value is that
+    event's `before`.
+  - The row **exists after** the batch if its last event is `I` or `U`; its final value is that event's
+    `after`.
+
+  | existed before | exists after | output |
+  |---|---|---|
+  | no | yes | `["I", key, "", final]` |
+  | yes | no | `["D", key, original, ""]` |
+  | yes | yes | `["U", key, original, final]`, or **nothing** if `original == final` |
+  | no | no | nothing |
+
+  Return the output rows sorted by `key` in plain character-code (ASCII) order.
+
+  ### Example 1
+  ```
+  Input:  events = [["I", "sku-9", "", "5.00"], ["U", "sku-1", "2.50", "2.75"], ["U", "sku-9", "5.00", "4.80"],
+                    ["D", "sku-1", "2.75", ""], ["I", "sku-5", "", "1.00"], ["D", "sku-5", "1.00", ""],
+                    ["U", "sku-3", "7.00", "7.25"]]
+  Output: [["D", "sku-1", "2.50", ""], ["U", "sku-3", "7.00", "7.25"], ["I", "sku-9", "", "4.80"]]
+  Explanation: sku-5 was inserted and deleted inside the batch, so it disappears; sku-1's delete
+  reports the value it had before the batch.
+  ```
+
+  ### Example 2
+  ```
+  Input:  events = [["U", "a", "10", "12"], ["D", "b", "3", ""], ["I", "b", "", "4"], ["U", "a", "12", "10"]]
+  Output: [["U", "b", "3", "4"]]
+  Explanation: a ends with its original value, so it needs no change. b was deleted and re-inserted,
+  which is an update from 3 to 4.
+  ```
+
+  ### Constraints
+  - `0 <= events.length <= 10^5`
+  - `op` is `"I"`, `"U"` or `"D"`; keys are non-empty printable ASCII strings.
+  - Values are printable ASCII strings and may be empty (an `I` or `U` can store an empty value).
+  - The events are consistent per key as described above.
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: compact_changes
+  params:
+    - {name: events, type: "string[][]"}
+  return_type: "string[][]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def compact_changes(events: list[list[str]]) -> list[list[str]]:
+        first: dict[str, list[str]] = {}
+        last: dict[str, list[str]] = {}
+        for event in events:
+            key = event[1]
+            if key not in first:
+                first[key] = event
+            last[key] = event
+        result: list[list[str]] = []
+        for key in sorted(first):
+            op_first, _, original, _ = first[key]
+            op_last, _, _, final = last[key]
+            existed = op_first != "I"
+            exists = op_last != "D"
+            if existed and exists:
+                if original != final:
+                    result.append(["U", key, original, final])
+            elif exists:
+                result.append(["I", key, "", final])
+            elif existed:
+                result.append(["D", key, original, ""])
+        return result
+  javascript: |
+    function compactChanges(events) {
+      const first = new Map();
+      const last = new Map();
+      for (const event of events) {
+        const key = event[1];
+        if (!first.has(key)) first.set(key, event);
+        last.set(key, event);
+      }
+      const keys = [...first.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      const result = [];
+      for (const key of keys) {
+        const [opFirst, , original] = first.get(key);
+        const lastEvent = last.get(key);
+        const existed = opFirst !== "I";
+        const exists = lastEvent[0] !== "D";
+        if (existed && exists) {
+          if (original !== lastEvent[3]) result.push(["U", key, original, lastEvent[3]]);
+        } else if (exists) {
+          result.push(["I", key, "", lastEvent[3]]);
+        } else if (existed) {
+          result.push(["D", key, original, ""]);
+        }
+      }
+      return result;
+    }
+tests:
+  - {"id": "t1", "args": [[["I", "sku-9", "", "5.00"], ["U", "sku-1", "2.50", "2.75"], ["U", "sku-9", "5.00", "4.80"], ["D", "sku-1", "2.75", ""], ["I", "sku-5", "", "1.00"], ["D", "sku-5", "1.00", ""], ["U", "sku-3", "7.00", "7.25"]]], "expected": [["D", "sku-1", "2.50", ""], ["U", "sku-3", "7.00", "7.25"], ["I", "sku-9", "", "4.80"]], "description": "Example 1"}
+  - {"id": "t2", "args": [[["U", "a", "10", "12"], ["D", "b", "3", ""], ["I", "b", "", "4"], ["U", "a", "12", "10"]]], "expected": [["U", "b", "3", "4"]], "description": "Example 2 - reverted update is dropped and delete-then-insert becomes an update"}
+  - {"id": "t3", "hidden": true, "args": [[]], "expected": [], "description": "Empty batch"}
+  - {"id": "t4", "hidden": true, "args": [[["D", "x", "7", ""]]], "expected": [["D", "x", "7", ""]], "description": "Single delete passes through"}
+  - {"id": "t5", "hidden": true, "args": [[["I", "k", "", "1"], ["D", "k", "1", ""], ["I", "k", "", "2"], ["U", "k", "2", "3"]]], "expected": [["I", "k", "", "3"]], "description": "Insert, delete, re-insert and update collapse to one insert with the final value"}
+  - {"id": "t6", "hidden": true, "args": [[["D", "k", "1", ""], ["I", "k", "", "1"]]], "expected": [], "description": "Delete then re-insert of the same value is a no-op"}
+  - {"id": "t7", "hidden": true, "args": [[["U", "k", "a", "b"], ["U", "k", "b", "c"], ["D", "k", "c", ""], ["I", "k", "", "d"], ["D", "k", "d", ""]]], "expected": [["D", "k", "a", ""]], "description": "Long chain ending in delete reports the original value from the first event"}
+  - {"id": "t8", "hidden": true, "args": [[["U", "e", "", "x"], ["I", "f", "", ""], ["U", "g", "v", ""], ["U", "h", "", ""]]], "expected": [["U", "e", "", "x"], ["I", "f", "", ""], ["U", "g", "v", ""]], "description": "Empty-string values are real values - update from empty, insert of empty, update to empty, no-op on empty"}
+  - {"id": "t9", "hidden": true, "args": [[["I", "b", "", "1"], ["I", "B", "", "2"], ["I", "a", "", "3"], ["I", "A10", "", "4"], ["I", "A9", "", "5"]]], "expected": [["I", "A10", "", "4"], ["I", "A9", "", "5"], ["I", "B", "", "2"], ["I", "a", "", "3"], ["I", "b", "", "1"]], "description": "Character-code key order - uppercase before lowercase and A10 before A9"}
+  - {"id": "t10", "hidden": true, "args": [[["U", "r06", "2", "3"], ["I", "r03", "", "1"], ["I", "r11", "", "1"], ["D", "r06", "3", ""], ["I", "r06", "", "1"], ["I", "r01", "", "1"], ["I", "r09", "", "3"], ["I", "r07", "", "1"], ["I", "r02", "", "1"], ["I", "r00", "", "1"], ["U", "r03", "1", "1"], ["D", "r02", "1", ""], ["U", "r03", "1", "3"], ["D", "r10", "2", ""], ["D", "r11", "1", ""], ["D", "r06", "1", ""], ["I", "r05", "", "2"], ["I", "r02", "", "1"], ["I", "r04", "", "1"], ["U", "r05", "2", "3"], ["D", "r09", "3", ""], ["I", "r10", "", "3"], ["D", "r05", "3", ""], ["I", "r05", "", "2"], ["U", "r07", "1", "1"], ["U", "r07", "1", "1"], ["D", "r00", "1", ""], ["I", "r00", "", "3"], ["U", "r05", "2", "1"], ["U", "r08", "1", "2"], ["I", "r06", "", "3"], ["U", "r00", "3", "3"], ["U", "r02", "1", "1"], ["U", "r01", "1", "2"], ["U", "r05", "1", "3"], ["U", "r04", "1", "1"], ["I", "r09", "", "3"], ["U", "r05", "3", "1"], ["U", "r06", "3", "1"], ["U", "r03", "3", "3"], ["U", "r05", "1", "2"], ["U", "r04", "1", "3"], ["U", "r01", "2", "2"], ["D", "r04", "3", ""], ["U", "r01", "2", "3"], ["I", "r11", "", "2"], ["D", "r07", "1", ""], ["D", "r00", "3", ""], ["U", "r09", "3", "2"], ["I", "r00", "", "1"], ["U", "r11", "2", "2"], ["I", "r07", "", "3"], ["D", "r06", "1", ""], ["D", "r10", "3", ""], ["U", "r07", "3", "1"], ["U", "r02", "1", "3"], ["U", "r02", "3", "2"], ["D", "r01", "3", ""], ["D", "r05", "2", ""], ["I", "r06", "", "2"], ["U", "r02", "2", "3"], ["U", "r02", "3", "2"], ["U", "r07", "1", "2"], ["D", "r07", "2", ""], ["I", "r07", "", "2"], ["D", "r02", "2", ""], ["U", "r08", "2", "3"], ["U", "r07", "2", "1"], ["I", "r01", "", "2"], ["I", "r04", "", "3"], ["U", "r08", "3", "2"], ["U", "r01", "2", "2"], ["U", "r11", "2", "1"], ["U", "r04", "3", "3"], ["I", "r10", "", "2"], ["D", "r07", "1", ""], ["U", "r11", "1", "2"], ["D", "r10", "2", ""], ["U", "r00", "1", "2"], ["I", "r05", "", "3"]]], "expected": [["I", "r00", "", "2"], ["I", "r01", "", "2"], ["I", "r03", "", "3"], ["I", "r04", "", "3"], ["I", "r05", "", "3"], ["U", "r08", "1", "2"], ["I", "r09", "", "2"], ["D", "r10", "2", ""], ["I", "r11", "", "2"]], "description": "Stress - 80 consistent random events over 12 keys with every outcome type"}
+expected_concepts:
+  - per-key grouping with hash maps (first and last event)
+  - net effect from the state before and after the batch
+  - before and after images in change-data-capture events
+  - dropping no-op updates and insert-then-delete pairs
+  - deterministic character-code ordering of keys
+optimal_complexity: {time: O(n + k log k) for k distinct keys, space: O(k)}
+rubric:
+  excellent: Explains that only the first and last event per key matter, derives the four cases from existed-before and exists-after, drops insert-then-delete and no-op updates, and sorts keys in character-code order with a linear pass otherwise.
+  good: Correct compaction for most patterns but needs a nudge on one case such as delete-then-insert becoming an update, the original value of a delete, or the no-op update.
+  weak: Replays events into a final-state table and loses the original values, emits the last op per key unchanged, or keeps rows for keys inserted and deleted in the batch.
+  criteria:
+    correctness: All tests pass, including delete-then-insert, insert-then-delete and updates that revert.
+    efficiency: One pass to record the first and last events plus a sort of the distinct keys.
+    code_quality: The four outcomes are explicit and mirror the table; no deep nesting over op combinations.
+    edge_cases: Empty batch, a single event, empty-string values, keys that differ only in letter case, long chains on one key.
+    communication: Explains why intermediate events can be ignored when the stream is consistent.
+hints:
+  - For one key, do the events in the middle of its history matter, or only how the row looked before the first event and after the last one?
+  - The first event tells you whether the row existed before the batch and, through its before image, what its original value was. The last event tells you whether the row exists afterwards and its final value.
+  - Store the first and last event of every key in two hash maps. Then, for each key in sorted order, compute existed = first op is not I and exists = last op is not D, and emit I, D, U or nothing according to the table, skipping a U whose original and final values are equal.
+followups:
+  - How would you compact a stream that also contains events for many different tables?
+  - What changes if the connector can deliver an event twice or out of order?
+  - Why is dropping an insert-then-delete pair safe for the warehouse but maybe not for an audit log?
+  - How would you compact in a streaming fashion with bounded memory per key?
+common_errors:
+  - Emitting the last op of each key unchanged, so delete-then-insert becomes an insert of an existing row.
+  - Reporting a delete with the last before image instead of the value the row had before the batch.
+  - Keeping a row for a key that was inserted and deleted inside the batch.
+  - Emitting an update whose final value equals the original value.
+  - Sorting keys case-insensitively or by first appearance.

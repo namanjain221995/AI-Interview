@@ -1,0 +1,279 @@
+version: 1
+slug: items_below_reorder_point
+title: Items Below Reorder Point
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [backend, business_analyst, data_analyst]
+time_limit_minutes: 15
+prompt_markdown: |
+  ## Items Below Reorder Point
+
+  A spare-parts distributor keeps the same products in several warehouses. Every morning purchasing gets
+  a list of products that need to be reordered.
+
+  Table `products`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | sku | VARCHAR(20) | primary key |
+  | name | VARCHAR(100) | |
+  | reorder_level | INTEGER | reorder when the total stock is **below** this number, `>= 0` |
+
+  Table `stock_levels`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | sku | VARCHAR(20) | the product held; may name a SKU that is no longer in `products` |
+  | warehouse | VARCHAR(40) | at most one row per `(sku, warehouse)` |
+  | qty | INTEGER | units in that warehouse, `>= 0` |
+
+  A product's `on_hand` is the sum of `qty` over all its warehouses, or `0` when it has no rows in
+  `stock_levels`. A product needs reordering when `on_hand < reorder_level` (strictly below; a product
+  exactly at its reorder level is fine).
+
+  Return `sku`, `name`, `on_hand` and `reorder_level` for every product that needs reordering. Order the
+  rows by the shortfall `reorder_level - on_hand` descending (biggest gap first), then by `sku` ascending.
+  Stock rows whose SKU is not in `products` are ignored.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  products
+  +---------+---------------+---------------+
+  | sku     | name          | reorder_level |
+  +---------+---------------+---------------+
+  | BRK-210 | Brake pad set | 40            |
+  | FLT-004 | Oil filter    | 30            |
+  | GSK-118 | Head gasket   | 10            |
+  | HNG-300 | Door hinge    | 25            |
+  | VLV-052 | Intake valve  | 12            |
+  +---------+---------------+---------------+
+
+  stock_levels
+  +---------+-----------+-----+
+  | sku     | warehouse | qty |
+  +---------+-----------+-----+
+  | BRK-210 | lyon      | 15  |
+  | BRK-210 | porto     | 10  |
+  | FLT-004 | lyon      | 22  |
+  | FLT-004 | porto     | 9   |
+  | HNG-300 | porto     | 25  |
+  | VLV-052 | lyon      | 4   |
+  +---------+-----------+-----+
+
+  Output
+  +---------+---------------+---------+---------------+
+  | sku     | name          | on_hand | reorder_level |
+  +---------+---------------+---------+---------------+
+  | BRK-210 | Brake pad set | 25      | 40            |
+  | GSK-118 | Head gasket   | 0       | 10            |
+  | VLV-052 | Intake valve  | 4       | 12            |
+  +---------+---------------+---------+---------------+
+  BRK-210 has 15 + 10 = 25 units (shortfall 15); GSK-118 has no stock rows, so on_hand is 0 (shortfall 10);
+  VLV-052 is short by 8. FLT-004 (31 >= 30) and HNG-300 (exactly 25) do not need reordering.
+  ```
+
+  ### Example 2
+  ```
+  products
+  +---------+----------------------+---------------+
+  | sku     | name                 | reorder_level |
+  +---------+----------------------+---------------+
+  | CBL-900 | Ethernet patch cable | 50            |
+  | CBL-120 | Power cord           | 20            |
+  | BRK-007 | Rotor                | 8             |
+  +---------+----------------------+---------------+
+
+  stock_levels
+  +---------+-----------+-----+
+  | sku     | warehouse | qty |
+  +---------+-----------+-----+
+  | CBL-900 | lyon      | 44  |
+  | CBL-120 | porto     | 14  |
+  | BRK-007 | porto     | 9   |
+  | OLD-001 | lyon      | 0   |
+  +---------+-----------+-----+
+
+  Output
+  +---------+----------------------+---------+---------------+
+  | sku     | name                 | on_hand | reorder_level |
+  +---------+----------------------+---------+---------------+
+  | CBL-120 | Power cord           | 14      | 20            |
+  | CBL-900 | Ethernet patch cable | 44      | 50            |
+  +---------+----------------------+---------+---------------+
+  CBL-120 and CBL-900 are both short by 6, so they are ordered by sku. OLD-001 is not a product and is ignored.
+  ```
+
+  ### Constraints
+  - `0 <= rows in products <= 10^4`, `0 <= rows in stock_levels <= 10^5`
+  - `0 <= qty <= 10^6` and `0 <= reorder_level <= 10^6`; no column is NULL.
+  - SKUs have the form `AAA-000` (three upper-case letters, a hyphen and three digits).
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return sku, name, on_hand and reorder_level for products whose total stock is below reorder_level,
+    -- ordered by (reorder_level - on_hand) descending, then sku.
+    SELECT p.sku, p.name, s.qty AS on_hand, p.reorder_level
+    FROM products p
+    JOIN stock_levels s ON s.sku = p.sku;
+reference_solutions:
+  sql: |
+    SELECT p.sku, p.name, COALESCE(SUM(s.qty), 0) AS on_hand, p.reorder_level
+    FROM products p
+    LEFT JOIN stock_levels s ON s.sku = p.sku
+    GROUP BY p.sku, p.name, p.reorder_level
+    HAVING COALESCE(SUM(s.qty), 0) < p.reorder_level
+    ORDER BY p.reorder_level - COALESCE(SUM(s.qty), 0) DESC, p.sku;
+sql_setup: |
+  CREATE TABLE products (
+    sku VARCHAR(20) PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    reorder_level INTEGER NOT NULL
+  );
+  CREATE TABLE stock_levels (
+    sku VARCHAR(20) NOT NULL,
+    warehouse VARCHAR(40) NOT NULL,
+    qty INTEGER NOT NULL,
+    PRIMARY KEY (sku, warehouse)
+  );
+tests:
+  - id: t1
+    ordered: true
+    description: "Example 1 - stock summed across warehouses; a product without stock rows has on_hand 0; equal to level is not listed"
+    setup_sql: |
+      INSERT INTO products (sku, name, reorder_level) VALUES
+        ('BRK-210', 'Brake pad set', 40), ('FLT-004', 'Oil filter', 30), ('GSK-118', 'Head gasket', 10), ('HNG-300', 'Door hinge', 25), ('VLV-052', 'Intake valve', 12);
+      INSERT INTO stock_levels (sku, warehouse, qty) VALUES
+        ('BRK-210', 'lyon', 15), ('BRK-210', 'porto', 10), ('FLT-004', 'lyon', 22), ('FLT-004', 'porto', 9), ('HNG-300', 'porto', 25),
+        ('VLV-052', 'lyon', 4);
+    expected_rows: [["BRK-210", "Brake pad set", 25, 40], ["GSK-118", "Head gasket", 0, 10], ["VLV-052", "Intake valve", 4, 12]]
+  - id: t2
+    ordered: true
+    description: "Example 2 - equal shortfalls ordered by sku; stock for an unknown SKU is ignored"
+    setup_sql: |
+      INSERT INTO products (sku, name, reorder_level) VALUES
+        ('CBL-900', 'Ethernet patch cable', 50), ('CBL-120', 'Power cord', 20), ('BRK-007', 'Rotor', 8);
+      INSERT INTO stock_levels (sku, warehouse, qty) VALUES
+        ('CBL-900', 'lyon', 44), ('CBL-120', 'porto', 14), ('BRK-007', 'porto', 9), ('OLD-001', 'lyon', 0);
+    expected_rows: [["CBL-120", "Power cord", 14, 20], ["CBL-900", "Ethernet patch cable", 44, 50]]
+  - id: t3
+    hidden: true
+    ordered: true
+    description: "Empty tables - no rows"
+    expected_rows: []
+  - id: t4
+    hidden: true
+    ordered: true
+    description: "No stock rows at all - every product with a positive level is listed with on_hand 0; level 0 is never below"
+    setup_sql: |
+      INSERT INTO products (sku, name, reorder_level) VALUES
+        ('AAA-001', 'Bolt', 5), ('AAA-002', 'Nut', 0), ('AAA-003', 'Washer', 12);
+    expected_rows: [["AAA-003", "Washer", 0, 12], ["AAA-001", "Bolt", 0, 5]]
+  - id: t5
+    hidden: true
+    ordered: true
+    description: "Exactly at the level versus one below (strict < boundary) and zero-quantity rows"
+    setup_sql: |
+      INSERT INTO products (sku, name, reorder_level) VALUES
+        ('KEY-100', 'Key blank', 10), ('KEY-101', 'Key ring', 10), ('KEY-102', 'Key tag', 1);
+      INSERT INTO stock_levels (sku, warehouse, qty) VALUES
+        ('KEY-100', 'lyon', 6), ('KEY-100', 'porto', 4), ('KEY-101', 'lyon', 9), ('KEY-101', 'porto', 0), ('KEY-102', 'lyon', 0);
+    expected_rows: [["KEY-101", "Key ring", 9, 10], ["KEY-102", "Key tag", 0, 1]]
+  - id: t6
+    hidden: true
+    ordered: true
+    description: "Per-warehouse check is wrong - every warehouse is below the level but the total is not"
+    setup_sql: |
+      INSERT INTO products (sku, name, reorder_level) VALUES ('PMP-500', 'Pump', 30), ('PMP-501', 'Pump seal', 30);
+      INSERT INTO stock_levels (sku, warehouse, qty) VALUES
+        ('PMP-500', 'lyon', 12), ('PMP-500', 'porto', 11), ('PMP-500', 'oslo', 10), ('PMP-501', 'lyon', 29);
+    expected_rows: [["PMP-501", "Pump seal", 29, 30]]
+  - id: t7
+    hidden: true
+    ordered: true
+    description: "Ordering by shortfall differs from ordering by reorder_level; ties broken by sku ascending"
+    setup_sql: |
+      INSERT INTO products (sku, name, reorder_level) VALUES
+        ('DRV-300', 'Drive belt', 100), ('DRV-200', 'Idler', 30), ('DRV-100', 'Tensioner', 30), ('DRV-400', 'Pulley', 50);
+      INSERT INTO stock_levels (sku, warehouse, qty) VALUES
+        ('DRV-300', 'lyon', 95), ('DRV-400', 'porto', 20), ('DRV-400', 'lyon', 10);
+    expected_rows: [["DRV-100", "Tensioner", 0, 30], ["DRV-200", "Idler", 0, 30], ["DRV-400", "Pulley", 30, 50], ["DRV-300", "Drive belt", 95, 100]]
+  - id: t8
+    hidden: true
+    ordered: true
+    description: "Large quantities near the constraint limits"
+    setup_sql: |
+      INSERT INTO products (sku, name, reorder_level) VALUES
+        ('BIG-001', 'Rivet', 1000000), ('BIG-002', 'Screw', 1000000);
+      INSERT INTO stock_levels (sku, warehouse, qty) VALUES
+        ('BIG-001', 'lyon', 999999), ('BIG-002', 'lyon', 600000), ('BIG-002', 'porto', 400000);
+    expected_rows: [["BIG-001", "Rivet", 999999, 1000000]]
+  - id: t9
+    hidden: true
+    ordered: true
+    description: "Stress - 48 products in three warehouses plus an orphan stock row"
+    setup_sql: |
+      INSERT INTO products (sku, name, reorder_level) VALUES
+        ('GSK-163', 'Part GSK-163', 0), ('GSK-415', 'Part GSK-415', 5), ('VLV-429', 'Part VLV-429', 10), ('BRK-310', 'Part BRK-310', 40), ('VLV-261', 'Part VLV-261', 25),
+        ('VLV-135', 'Part VLV-135', 0), ('BRK-226', 'Part BRK-226', 5), ('HNG-212', 'Part HNG-212', 0), ('CBL-275', 'Part CBL-275', 20), ('GSK-205', 'Part GSK-205', 50),
+        ('GSK-247', 'Part GSK-247', 5), ('FLT-408', 'Part FLT-408', 10), ('CBL-191', 'Part CBL-191', 0), ('HNG-338', 'Part HNG-338', 40), ('HNG-170', 'Part HNG-170', 50),
+        ('VLV-345', 'Part VLV-345', 50), ('VLV-177', 'Part VLV-177', 20), ('FLT-324', 'Part FLT-324', 40), ('GSK-289', 'Part GSK-289', 10), ('GSK-121', 'Part GSK-121', 40),
+        ('CBL-401', 'Part CBL-401', 40), ('VLV-303', 'Part VLV-303', 0), ('CBL-149', 'Part CBL-149', 10), ('FLT-156', 'Part FLT-156', 50), ('HNG-422', 'Part HNG-422', 5),
+        ('BRK-100', 'Part BRK-100', 20), ('BRK-142', 'Part BRK-142', 20), ('FLT-198', 'Part FLT-198', 5), ('BRK-184', 'Part BRK-184', 10), ('FLT-366', 'Part FLT-366', 40),
+        ('VLV-387', 'Part VLV-387', 25), ('CBL-107', 'Part CBL-107', 20), ('CBL-233', 'Part CBL-233', 20), ('HNG-254', 'Part HNG-254', 50), ('BRK-352', 'Part BRK-352', 25),
+        ('CBL-359', 'Part CBL-359', 0), ('VLV-219', 'Part VLV-219', 50), ('FLT-114', 'Part FLT-114', 50), ('HNG-128', 'Part HNG-128', 25), ('BRK-394', 'Part BRK-394', 40),
+        ('HNG-296', 'Part HNG-296', 20), ('GSK-373', 'Part GSK-373', 50), ('FLT-240', 'Part FLT-240', 10), ('CBL-317', 'Part CBL-317', 40), ('GSK-331', 'Part GSK-331', 10),
+        ('HNG-380', 'Part HNG-380', 0), ('BRK-268', 'Part BRK-268', 20), ('FLT-282', 'Part FLT-282', 0);
+      INSERT INTO stock_levels (sku, warehouse, qty) VALUES
+        ('CBL-107', 'ams-1', 18), ('CBL-107', 'fra-2', 16), ('CBL-107', 'lon-3', 19), ('FLT-114', 'ams-1', 14), ('FLT-114', 'fra-2', 2),
+        ('FLT-114', 'lon-3', 22), ('GSK-121', 'ams-1', 12), ('VLV-135', 'ams-1', 6), ('VLV-135', 'lon-3', 24), ('BRK-142', 'ams-1', 18),
+        ('BRK-142', 'lon-3', 20), ('CBL-149', 'ams-1', 21), ('CBL-149', 'fra-2', 20), ('CBL-149', 'lon-3', 17), ('FLT-156', 'ams-1', 8),
+        ('FLT-156', 'fra-2', 7), ('FLT-156', 'lon-3', 0), ('GSK-163', 'ams-1', 3), ('GSK-163', 'fra-2', 9), ('GSK-163', 'lon-3', 0),
+        ('HNG-170', 'fra-2', 1), ('HNG-170', 'lon-3', 22), ('VLV-177', 'ams-1', 18), ('BRK-184', 'ams-1', 9), ('BRK-184', 'fra-2', 13),
+        ('CBL-191', 'ams-1', 22), ('CBL-191', 'fra-2', 1), ('CBL-191', 'lon-3', 15), ('FLT-198', 'fra-2', 16), ('FLT-198', 'lon-3', 23),
+        ('GSK-205', 'ams-1', 20), ('GSK-205', 'fra-2', 12), ('GSK-205', 'lon-3', 6), ('HNG-212', 'ams-1', 18), ('HNG-212', 'fra-2', 0),
+        ('HNG-212', 'lon-3', 12), ('VLV-219', 'fra-2', 1), ('BRK-226', 'ams-1', 0), ('BRK-226', 'lon-3', 9), ('CBL-233', 'ams-1', 2),
+        ('CBL-233', 'fra-2', 20), ('CBL-233', 'lon-3', 19), ('FLT-240', 'ams-1', 14), ('FLT-240', 'fra-2', 18), ('FLT-240', 'lon-3', 18),
+        ('GSK-247', 'fra-2', 4), ('GSK-247', 'lon-3', 7), ('HNG-254', 'lon-3', 20), ('VLV-261', 'ams-1', 12), ('BRK-268', 'ams-1', 3),
+        ('BRK-268', 'fra-2', 8), ('BRK-268', 'lon-3', 22), ('CBL-275', 'ams-1', 19), ('CBL-275', 'fra-2', 16), ('CBL-275', 'lon-3', 23),
+        ('FLT-282', 'ams-1', 15), ('FLT-282', 'fra-2', 19), ('GSK-289', 'ams-1', 6), ('GSK-289', 'lon-3', 13), ('HNG-296', 'ams-1', 1),
+        ('HNG-296', 'fra-2', 11), ('HNG-296', 'lon-3', 4), ('VLV-303', 'ams-1', 14), ('BRK-310', 'ams-1', 4), ('BRK-310', 'fra-2', 0),
+        ('BRK-310', 'lon-3', 11), ('CBL-317', 'ams-1', 1), ('CBL-317', 'fra-2', 20), ('CBL-317', 'lon-3', 2), ('FLT-324', 'ams-1', 4),
+        ('FLT-324', 'lon-3', 17), ('HNG-338', 'ams-1', 10), ('HNG-338', 'fra-2', 21), ('HNG-338', 'lon-3', 2), ('VLV-345', 'lon-3', 15),
+        ('BRK-352', 'ams-1', 21), ('BRK-352', 'fra-2', 18), ('BRK-352', 'lon-3', 2), ('CBL-359', 'ams-1', 3), ('FLT-366', 'ams-1', 23),
+        ('FLT-366', 'lon-3', 14), ('GSK-373', 'ams-1', 16), ('GSK-373', 'lon-3', 19), ('HNG-380', 'ams-1', 7), ('HNG-380', 'lon-3', 24),
+        ('VLV-387', 'fra-2', 0), ('VLV-387', 'lon-3', 4), ('BRK-394', 'fra-2', 24), ('CBL-401', 'fra-2', 7), ('CBL-401', 'lon-3', 21),
+        ('FLT-408', 'ams-1', 13), ('GSK-415', 'fra-2', 18), ('HNG-422', 'ams-1', 15), ('HNG-422', 'fra-2', 1), ('VLV-429', 'fra-2', 15),
+        ('VLV-429', 'lon-3', 6), ('ZZZ-999', 'ams-1', 3);
+    expected_rows: [["VLV-219", "Part VLV-219", 1, 50], ["FLT-156", "Part FLT-156", 15, 50], ["VLV-345", "Part VLV-345", 15, 50], ["HNG-254", "Part HNG-254", 20, 50], ["GSK-121", "Part GSK-121", 12, 40], ["HNG-170", "Part HNG-170", 23, 50], ["BRK-310", "Part BRK-310", 15, 40], ["HNG-128", "Part HNG-128", 0, 25], ["VLV-387", "Part VLV-387", 4, 25], ["BRK-100", "Part BRK-100", 0, 20], ["FLT-324", "Part FLT-324", 21, 40], ["CBL-317", "Part CBL-317", 23, 40], ["BRK-394", "Part BRK-394", 24, 40], ["GSK-373", "Part GSK-373", 35, 50], ["VLV-261", "Part VLV-261", 12, 25], ["CBL-401", "Part CBL-401", 28, 40], ["FLT-114", "Part FLT-114", 38, 50], ["GSK-205", "Part GSK-205", 38, 50], ["GSK-331", "Part GSK-331", 0, 10], ["HNG-338", "Part HNG-338", 33, 40], ["HNG-296", "Part HNG-296", 16, 20], ["FLT-366", "Part FLT-366", 37, 40], ["VLV-177", "Part VLV-177", 18, 20]]
+expected_concepts:
+  - LEFT JOIN to keep products without stock rows
+  - aggregating with SUM and COALESCE for missing groups
+  - HAVING to filter on an aggregate
+  - ORDER BY a computed expression with a tie-breaker
+optimal_complexity: {time: "O(n + m) to aggregate plus O(k log k) to sort the k results", space: "O(n) for the per-product totals"}
+rubric:
+  excellent: Aggregates stock per product with a LEFT JOIN and COALESCE(SUM(qty), 0), filters with HAVING on the strict inequality, orders by the shortfall then sku, and explains why an inner join silently drops out-of-stock products.
+  good: Correct query after a hint about products with no stock rows or about the ordering rule.
+  weak: Uses an inner join (losing products with no stock), compares per warehouse instead of the total, or orders by reorder_level instead of the shortfall.
+  criteria:
+    correctness: All tests pass, including products with no stock rows, the strict boundary and tied shortfalls.
+    efficiency: One grouped join; mentions an index on stock_levels.sku (or its primary key) for the join.
+    code_quality: Readable aliases and the on_hand expression written once or consistently.
+    edge_cases: Empty tables, zero-quantity rows, reorder level 0 and orphaned stock rows.
+    communication: Explains the difference between WHERE and HAVING and why COALESCE is needed after a LEFT JOIN.
+hints:
+  - Work out the total stock per product first; the most urgent items may be the ones that have no stock rows at all.
+  - An inner join drops products without any stock rows, and summing nothing gives NULL rather than zero. The comparison with reorder_level uses the total, so it belongs after grouping.
+  - Left-join products to stock_levels, group by the product columns, turn a missing sum into 0, keep groups whose total is strictly below the level with HAVING, and sort by the gap descending with sku as the tie-breaker.
+followups:
+  - How would you include the suggested order quantity to bring each product back to twice its reorder level?
+  - How would the query change if each warehouse had its own reorder level?
+  - Which index supports this report on a large stock table?
+common_errors:
+  - Using an inner join, which hides products that have no stock rows at all.
+  - Leaving SUM(qty) NULL for products without stock, so the comparison and the output are NULL.
+  - Using <= instead of <, which lists products that are exactly at their reorder level.
+  - Comparing each warehouse row with the reorder level instead of the total across warehouses.
+  - Ordering by reorder_level or on_hand alone instead of the shortfall.

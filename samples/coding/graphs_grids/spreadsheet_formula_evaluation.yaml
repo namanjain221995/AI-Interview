@@ -1,0 +1,174 @@
+version: 1
+slug: spreadsheet_formula_evaluation
+title: Spreadsheet Formula Evaluation
+difficulty: hard
+competency_keys: [algorithms, data_structures, problem_solving]
+role_tags: [frontend, fullstack, backend]
+time_limit_minutes: 35
+prompt_markdown: |
+  ## Spreadsheet Formula Evaluation
+
+  You are building the recalculation engine for a lightweight budgeting spreadsheet in a web app. The
+  sheet is sent to you as two parallel lists: `cells[i]` is the name of a cell (such as `"B2"`) and
+  `formulas[i]` is what the user typed into it. Each entry of `formulas` is one of:
+
+  - an **integer literal**, optionally negative, such as `"42"`, `"0"` or `"-7"`;
+  - a **formula**: `'='` followed by one or more terms joined by `'+'`, such as `"=A1+B2+100"`. Each term
+    is either a cell name or a non-negative integer. There are no spaces, parentheses or other operators.
+
+  A formula's value is the sum of its terms. A term that names a cell **not** present in `cells` counts as
+  `0`. A cell referenced several times in one formula is added once per occurrence.
+
+  Some sheets contain circular references. A cell whose formula takes part in a reference cycle
+  (including a cell that references itself), or that depends directly or indirectly on such a cell, has
+  no value and must be reported as `"#CYCLE"`.
+
+  Return a list of the same length as `cells` where entry `i` is the value of `cells[i]` written as a
+  decimal string (with a leading `'-'` when negative), or `"#CYCLE"`. Values can be larger than 32 bits.
+
+  ### Example 1
+  ```
+  Input:  cells = ["A1", "A2", "B1", "C3"], formulas = ["5", "=A1+10", "=A1+A2+Z9", "=B1+B1"]
+  Output: ["5", "15", "20", "40"]
+  Explanation: Z9 is not defined, so it counts as 0; C3 adds B1 twice.
+  ```
+
+  ### Example 2
+  ```
+  Input:  cells = ["A1", "B1", "C1", "D1"], formulas = ["=B1+1", "=A1+1", "=A1+2", "7"]
+  Output: ["#CYCLE", "#CYCLE", "#CYCLE", "7"]
+  Explanation: A1 and B1 reference each other, and C1 depends on A1.
+  ```
+
+  ### Example 3
+  ```
+  Input:  cells = ["X1", "X2"], formulas = ["=X1", "=3+4"]
+  Output: ["#CYCLE", "7"]
+  Explanation: X1 references itself; X2 is a formula made only of numbers.
+  ```
+
+  ### Constraints
+  - `1 <= cells.length == formulas.length <= 1000`
+  - cell names are distinct and consist of 1 to 3 uppercase letters followed by 1 to 4 digits
+  - a formula has at most 50 terms; integer literals and numeric terms are at most `10^15` in absolute value
+  - every value that is not `"#CYCLE"`, and every partial sum while adding up a formula, fits in a signed 64-bit integer
+  - cells may appear in any order; a cell can be referenced before it is listed
+languages: [python, javascript, typescript, java, go, cpp]
+signature:
+  function_name: evaluate_sheet
+  params:
+    - {name: cells, type: "string[]"}
+    - {name: formulas, type: "string[]"}
+  return_type: "string[]"
+  comparison: exact
+reference_solutions:
+  python: |
+    def evaluate_sheet(cells: list[str], formulas: list[str]) -> list[str]:
+        index = {name: i for i, name in enumerate(cells)}
+        n = len(cells)
+        value = [0] * n
+        dependents: list[list[int]] = [[] for _ in range(n)]
+        pending = [0] * n  # references to defined cells not yet resolved
+        for i, text in enumerate(formulas):
+            if not text.startswith("="):
+                value[i] = int(text)
+                continue
+            for term in text[1:].split("+"):
+                if term[0].isdigit():
+                    value[i] += int(term)
+                elif term in index:
+                    dependents[index[term]].append(i)
+                    pending[i] += 1
+                # an undefined cell name contributes 0
+        # Kahn's algorithm: a cell is final once every cell it references is final.
+        ready = [i for i in range(n) if pending[i] == 0]
+        for cell in ready:  # the list grows while we walk it
+            for user in dependents[cell]:
+                value[user] += value[cell]
+                pending[user] -= 1
+                if pending[user] == 0:
+                    ready.append(user)
+        # Cells never released are on a cycle or depend on one.
+        return [str(value[i]) if pending[i] == 0 else "#CYCLE" for i in range(n)]
+  javascript: |
+    function evaluateSheet(cells, formulas) {
+      const n = cells.length;
+      const index = new Map(cells.map((name, i) => [name, i]));
+      // BigInt keeps 64-bit sums exact (Number loses precision above 2^53).
+      const value = new Array(n).fill(0n);
+      const dependents = Array.from({ length: n }, () => []);
+      const pending = new Array(n).fill(0); // references to defined cells not yet resolved
+      formulas.forEach((text, i) => {
+        if (!text.startsWith("=")) {
+          value[i] = BigInt(text);
+          return;
+        }
+        for (const term of text.slice(1).split("+")) {
+          if (term[0] >= "0" && term[0] <= "9") {
+            value[i] += BigInt(term);
+          } else if (index.has(term)) {
+            dependents[index.get(term)].push(i);
+            pending[i]++;
+          }
+          // an undefined cell name contributes 0
+        }
+      });
+      // Kahn's algorithm: a cell is final once every cell it references is final.
+      const ready = [];
+      for (let i = 0; i < n; i++) if (pending[i] === 0) ready.push(i);
+      for (let head = 0; head < ready.length; head++) {
+        const cell = ready[head];
+        for (const user of dependents[cell]) {
+          value[user] += value[cell];
+          pending[user]--;
+          if (pending[user] === 0) ready.push(user);
+        }
+      }
+      // Cells never released are on a cycle or depend on one.
+      return value.map((v, i) => (pending[i] === 0 ? v.toString() : "#CYCLE"));
+    }
+tests:
+  - {id: t1, args: [["A1", "A2", "B1", "C3"], ["5", "=A1+10", "=A1+A2+Z9", "=B1+B1"]], expected: ["5", "15", "20", "40"], description: "Example 1 - undefined Z9 counts as 0; repeated reference counted twice"}
+  - {id: t2, args: [["A1", "B1", "C1", "D1"], ["=B1+1", "=A1+1", "=A1+2", "7"]], expected: ["#CYCLE", "#CYCLE", "#CYCLE", "7"], description: "Example 2 - two-cell cycle plus a cell that depends on it"}
+  - {id: t3, args: [["X1", "X2"], ["=X1", "=3+4"]], expected: ["#CYCLE", "7"], description: "Example 3 - self reference and a formula made only of numbers"}
+  - {id: t4, hidden: true, args: [["A1"], ["0"]], expected: ["0"], description: "Single literal zero"}
+  - {id: t5, hidden: true, args: [["N1", "N2", "N3"], ["-12", "=N1+N1", "=N2+5+0"]], expected: ["-12", "-24", "-19"], description: "Negative literal propagated through formulas"}
+  - {id: t6, hidden: true, args: [["Q1", "Q2"], ["=ZZ99+UNDEF1", "=Q1+Q1+Q1"]], expected: ["0", "0"], description: "Formula referencing only undefined cells evaluates to 0"}
+  - {id: t7, hidden: true, args: [["R60", "R59", "R58", "R57", "R56", "R55", "R54", "R53", "R52", "R51", "R50", "R49", "R48", "R47", "R46", "R45", "R44", "R43", "R42", "R41", "R40", "R39", "R38", "R37", "R36", "R35", "R34", "R33", "R32", "R31", "R30", "R29", "R28", "R27", "R26", "R25", "R24", "R23", "R22", "R21", "R20", "R19", "R18", "R17", "R16", "R15", "R14", "R13", "R12", "R11", "R10", "R9", "R8", "R7", "R6", "R5", "R4", "R3", "R2", "R1"], ["=R59+1", "=R58+1", "=R57+1", "=R56+1", "=R55+1", "=R54+1", "=R53+1", "=R52+1", "=R51+1", "=R50+1", "=R49+1", "=R48+1", "=R47+1", "=R46+1", "=R45+1", "=R44+1", "=R43+1", "=R42+1", "=R41+1", "=R40+1", "=R39+1", "=R38+1", "=R37+1", "=R36+1", "=R35+1", "=R34+1", "=R33+1", "=R32+1", "=R31+1", "=R30+1", "=R29+1", "=R28+1", "=R27+1", "=R26+1", "=R25+1", "=R24+1", "=R23+1", "=R22+1", "=R21+1", "=R20+1", "=R19+1", "=R18+1", "=R17+1", "=R16+1", "=R15+1", "=R14+1", "=R13+1", "=R12+1", "=R11+1", "=R10+1", "=R9+1", "=R8+1", "=R7+1", "=R6+1", "=R5+1", "=R4+1", "=R3+1", "=R2+1", "=R1+1", "1"]], expected: ["60", "59", "58", "57", "56", "55", "54", "53", "52", "51", "50", "49", "48", "47", "46", "45", "44", "43", "42", "41", "40", "39", "38", "37", "36", "35", "34", "33", "32", "31", "30", "29", "28", "27", "26", "25", "24", "23", "22", "21", "20", "19", "18", "17", "16", "15", "14", "13", "12", "11", "10", "9", "8", "7", "6", "5", "4", "3", "2", "1"], description: "60-cell chain listed in reverse dependency order (deep recursion and order handling)"}
+  - {id: t8, hidden: true, args: [["D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", "D11", "D12", "D13", "D14", "D15", "D16", "D17", "D18", "D19", "D20", "D21", "D22", "D23", "D24", "D25", "D26", "D27", "D28", "D29", "D30", "D31", "D32", "D33", "D34", "D35", "D36", "D37", "D38", "D39", "D40", "D41", "D42", "D43", "D44", "D45", "D46", "D47", "D48", "D49", "D50", "D51", "D52", "D53", "D54", "D55", "D56", "D57", "D58", "D59", "D60", "D61", "D62"], ["1", "=D0+D0", "=D1+D1", "=D2+D2", "=D3+D3", "=D4+D4", "=D5+D5", "=D6+D6", "=D7+D7", "=D8+D8", "=D9+D9", "=D10+D10", "=D11+D11", "=D12+D12", "=D13+D13", "=D14+D14", "=D15+D15", "=D16+D16", "=D17+D17", "=D18+D18", "=D19+D19", "=D20+D20", "=D21+D21", "=D22+D22", "=D23+D23", "=D24+D24", "=D25+D25", "=D26+D26", "=D27+D27", "=D28+D28", "=D29+D29", "=D30+D30", "=D31+D31", "=D32+D32", "=D33+D33", "=D34+D34", "=D35+D35", "=D36+D36", "=D37+D37", "=D38+D38", "=D39+D39", "=D40+D40", "=D41+D41", "=D42+D42", "=D43+D43", "=D44+D44", "=D45+D45", "=D46+D46", "=D47+D47", "=D48+D48", "=D49+D49", "=D50+D50", "=D51+D51", "=D52+D52", "=D53+D53", "=D54+D54", "=D55+D55", "=D56+D56", "=D57+D57", "=D58+D58", "=D59+D59", "=D60+D60", "=D61+D61"]], expected: ["1", "2", "4", "8", "16", "32", "64", "128", "256", "512", "1024", "2048", "4096", "8192", "16384", "32768", "65536", "131072", "262144", "524288", "1048576", "2097152", "4194304", "8388608", "16777216", "33554432", "67108864", "134217728", "268435456", "536870912", "1073741824", "2147483648", "4294967296", "8589934592", "17179869184", "34359738368", "68719476736", "137438953472", "274877906944", "549755813888", "1099511627776", "2199023255552", "4398046511104", "8796093022208", "17592186044416", "35184372088832", "70368744177664", "140737488355328", "281474976710656", "562949953421312", "1125899906842624", "2251799813685248", "4503599627370496", "9007199254740992", "18014398509481984", "36028797018963968", "72057594037927936", "144115188075855872", "288230376151711744", "576460752303423488", "1152921504606846976", "2305843009213693952", "4611686018427387904"], description: "Doubling chain reaching 2^62: needs 64-bit integers and memoisation (naive recursion is exponential)"}
+  - {id: t9, hidden: true, args: [["A1", "B1", "C1", "D1", "E1", "F1", "G1"], ["=B1+C1", "=C1", "=B1+1", "=E1", "=F1+D1", "100", "=F1+1000000000000000"]], expected: ["#CYCLE", "#CYCLE", "#CYCLE", "#CYCLE", "#CYCLE", "100", "1000000000000100"], description: "Two separate cycles (B1-C1 and D1-E1), a cell feeding into a cycle stays numeric, large literal"}
+  - {id: t10, hidden: true, args: [["AB12", "AB13", "AB14"], ["=AB13+AB14+AB13", "=AB14+1", "1000000000000"]], expected: ["3000000000002", "1000000000001", "1000000000000"], description: "Diamond-shaped dependencies with large values"}
+  - {id: t11, hidden: true, args: [["AZ1", "Q2", "U3", "M4", "P5", "M6", "BA7", "H8", "S9", "AE10", "AJ11", "AN12", "P13", "J14", "AJ15", "AO16", "AQ17", "AG18", "A19", "BC20", "R21", "B22", "BB23", "AF24", "L25", "AY26", "BA27", "M28", "AG29", "BB30", "Y31", "L32", "V33", "U34", "H35", "F36", "AJ37", "AX38", "Q39", "AI40", "AE41", "N42", "O43", "M44", "E45", "F46", "BC47", "M48", "AS49", "AJ50", "BF51", "AC52", "AM53", "AT54", "AI55", "E56", "G57", "BB58", "AZ59", "AT60", "AV61", "N62", "AV63", "V64", "BC65", "F66", "G67", "AK68", "AD69", "BA70", "F71", "BG72", "AY73", "AY74", "AI75", "G76", "R77", "AC78", "AO79", "AX80", "BG81", "AJ82", "H83", "W84", "BH85", "AH86", "D87", "BB88", "BB89", "AX90", "Z91", "AW92", "AL93", "AM94", "AH95", "P96", "O97", "AK98", "AE99", "Z100", "AV101", "I102", "AX103", "AZ104", "Y105", "A106", "C107", "D108", "AF109", "AO110", "C111", "AV112", "W113", "AW114", "AB115", "H116", "Q117", "AG118", "BF119", "AK120", "AS121", "AF122", "D123", "AP124", "AE125", "BA126", "AS127", "AP128", "G129", "J130", "T131", "AH132", "F133", "B134", "BB135", "AF136", "BG137", "W138", "BH139", "BA140", "AW141", "AA142", "AK143", "A144", "D145", "AY146", "AE147", "J148", "AW149", "BB150", "AW151", "BF152", "B153", "AS154", "A155", "P156", "F157", "AQ158", "BH159", "AD160", "H161", "BD162", "Y163", "AE164", "G165", "BE166", "BC167", "I168", "P169", "Q170", "N171", "AX172", "BB173", "F174", "K175", "K176", "J177", "B178", "D179", "BD180", "O181", "AQ182", "AG183", "AX184", "Y185", "AK186", "AT187", "AU188", "AM189", "AA190", "AF191", "AG192", "R193", "AM194", "BB195", "BE196", "G197", "AE198", "AN199", "AA200", "S201", "AI202", "R203", "S204", "AD205", "BD206", "M207", "B208", "AL209", "AF210", "E211", "C212", "B213", "AV214", "J215", "A216", "F217", "AQ218", "BE219", "G220", "AG221", "N222", "AR223", "F224", "AX225", "AB226", "K227", "G228", "AQ229", "Y230", "S231", "AD232", "BE233", "AF234", "AI235", "AS236", "BA237", "AX238", "Z239", "M240", "BE241", "BB242", "AP243", "AB244", "BC245", "Q246", "S247", "BD248", "BF249", "BD250", "F251", "BC252", "AH253", "U254", "U255", "BG256", "M257", "AX258", "R259", "X260", "AW261", "AU262", "AR263", "AE264", "AV265", "AX266", "AX267", "AP268", "AH269", "Z270", "AG271", "AI272", "Z273", "BD274", "Q275", "Y276", "AV277", "BE278", "AJ279", "BB280", "AT281", "AQ282", "T283", "BH284", "F285", "R286", "AR287", "G288", "J289", "I290", "X291", "BH292", "AY293", "AS294", "D295", "N296", "BG297", "BA298", "AL299", "AN300"], ["=ZZ1", "=AZ1", "=Q2+66", "=89+Q2+U3+AZ1", "532", "=P5+AZ1+AZ1+99", "885", "=U3+BA7+85", "-908", "=Q2+61+72+M6", "=73+AE10", "=Q2+78", "=M6+AJ11+S9", "=P13+20", "=S9+P5", "=Q2+AJ11", "-408", "=J14", "=M4+AG18+AO16+M6", "=S9+76+AE10+AJ15", "=P13", "=BC20+M4+P5", "430", "=73+AN12", "=P5+54+AO16", "=92+Q2+AO16+54", "=92", "=AG18+24+AQ17+89", "358", "=71+S9", "=69+AQ17+81", "=M4+AJ15+AF24+AJ15", "-656", "17", "=B22+AF24+AJ15", "=71", "=M6", "=62+AO16+AO16+H8", "=L32+51+BA27+3", "=46", "=BB30+AG18+H35+59", "895", "=20+BC20", "=BA27", "=37+A19+AY26", "=F36", "=S9+H8", "=R21+AO16+39+AG29", "=AX38+O43", "=85+AQ17+AJ11+53", "-437", "=E45+63", "=F46+91+AJ37", "=4", "=B22+19+AC52+AJ37", "=38+AF24", "=53", "=BA27+L32+BC47", "=E45+N42+R21+AY26", "=AY26", "=97+M48+B22", "=AI40+AE41+Q39", "=AF24+AM53", "743", "=M28+AV61+AS49+AI40", "=AY26+G57", "973", "=BC47+2+N42+F46", "=BB58+AV61", "=AV63+E56+F66+N42", "788", "=60", "=BC47+M44+AE41", "=AJ37+17+AZ59", "=G67", "=96+AY73+F46+51", "-682", "=98+2+R77", "=BG72+AD69+72+AD69", "=72", "=M48+F46+AE41+AI55", "-774", "=AD69", "=BF51+AY73+BF51", "-909", "=59", "=30+AI75+G67+4", "=17+BG81", "=F71", "=AD69+4+AY73", "=BB88", "=AT54+AI75", "=AY74+41", "=97", "=45", "779", "=G67+92+AY73+AW92", "=AJ82", "=BB89", "749", "=AH95+AD69+AH86+AM94", "=AV101+BA70", "=57+73+AV101", "=AJ82", "=AW92+AK98", "=22+AY74+42+59", "=R77+Y105+AH95+AW92", "203", "=D87+AV101+Z100+AY73", "649", "=AX103+AY73", "=35+R77", "=W84", "=BG81+P96+AK98", "=AH95+AH95", "=C107+53+88+AM94", "=H83+O97+AW92", "-747", "=AO110", "=AZ104+58+AM94", "=15+79+AX103", "=52+Z91+Z100+D87", "=AH86", "=P96+17", "-669", "=AZ104", "=AV101+BB88+12+AV101", "=BB89+AX103", "-885", "=I102+AV112+O97+BF119", "=O97", "=AB115", "=BF119+65+85", "=AH95", "=14", "=AK98+26+A106+25", "=BB135+AZ104+73+9", "=J130+AF136+AE99", "-560", "=H116+D123", "=10", "555", "=AK120+AP124", "=AK120+AZ104+AS121+AZ104", "-594", "=C111+BA126+D123", "=BB135+G129+BB135+B134", "=AP124", "39", "=AO110+Q117+F133+BA126", "=C111+70+89", "=BB135", "=AS121+AE147+BG137+BF152", "=0+BB150+AW151+BG137", "=85+AE125+AS121", "=D145+D145+70+F133", "492", "=BF152+AG118+AW151+BG137", "=98", "=AY146+93", "-540", "=13+AK143", "=AS154+A155+BA140", "=BH139+BA126+BA140+AS154", "=18", "=3+23+BF152", "=AS127+A155+82", "=AS154+J148", "=H161+AW151+AS154", "=BG137+I168", "=J148+I168+AW151", "-811", "-655", "=A155+67+AF136+11", "=AE164+87+67+AY146", "=AW151+86+BH159", "-84", "-753", "=25", "-711", "=BD162+AY146+H161+BH159", "-559", "-863", "=A155", "=P169+A155", "=G165+19", "=Y185+G165+AG183", "=AQ158", "-351", "=F157", "=41+15+AQ182", "=Q170+AQ158+AQ158+AA190", "4", "=50", "=H161", "=AU188+49", "=34+Q170+B178+Y163", "=AK186+AM189+Q170", "666", "=AE164+D179", "=AE198", "-899", "=AA190", "=P169+S201+10+68", "=AN199+BB195+34", "=O181", "=79", "=AE198+4+Q170+AU188", "=AQ182+98+AX184", "-372", "=AG183+AM194", "=B178+F174+AM194+7", "-514", "=B213+57+AD205+AL209", "=G197+AG192+AA200", "=AU188+69", "=BB195", "=AU188+AF210+E211+AM194", "=16", "=35", "=39+B208+AF210+AA200", "-587", "222", "=AL209+AQ218+F217+AN199", "=B213+J215+AE198+AQ218", "=19+AU188+AA200", "=34+F224+C212", "-562", "-726", "=R193", "187", "=59+AA200+G197+K227", "56", "=AQ229+AL209+AM194+AY293", "=AW261+C212+N222+A216", "=AE198+R203+BE278", "=S231+AF210+91", "=AJ279+BE233", "=S247+AA200+S247", "=AX225+AF210", "=AH269+S231+47+G228", "-144", "-180", "=S231+C212+N222", "=G288+51+G288", "=BB242+82+AQ218", "=J215", "=BD250+Z273+F217+BA237", "=Q246+95", "=N222+G228+BB242+34", "=Z239+48+BE278+E211", "=38", "=48+AX225", "=AX225+53+26+AJ279", "-112", "509", "=F224+Z273+K227", "=15", "=AX258", "-31", "=AQ229+F224", "=AW261+AS294+11", "=BD248+Y230+AU262+BC245", "=BD248+U255+F251+95", "-256", "850", "=F251", "=BB242+AD232+78+F251", "=75", "=27+AX238", "=6+S247", "=58+S247", "=AG271", "=34+BC245+AB244", "=AX258+AB244+X260+49", "=28", "=22", "-123", "=AJ279", "=X260+6+BB280", "=AW261+N296", "=Y276+AS294+AP243+BD250", "=Q275+AU262+BH292+AU262", "-727", "491", "=AQ282", "=BG297", "=9+U255+92+T283", "=F251", "=U255+AQ282+AY293+BD250", "=AP268+AX258+57+BG256", "=AR263+0+0+AH253", "=U254+AH253", "=97+Q275+M257", "=AQ282+R259+G288+13", "=AG271+AT281", "=BB280+Q275+88", "=AP268+68+AU262", "=Y276+AN300+AL299+AP268", "=AH269+T283"]], expected: ["0", "0", "66", "155", "532", "631", "885", "1036", "-908", "764", "837", "78", "560", "580", "-376", "837", "-408", "580", "2203", "-444", "560", "243", "430", "151", "1423", "983", "92", "285", "358", "-837", "-258", "-446", "-656", "17", "18", "71", "631", "2772", "-300", "46", "-180", "895", "-424", "92", "3223", "71", "128", "1794", "2348", "567", "-437", "3286", "793", "4", "4179", "189", "53", "-226", "5661", "983", "2134", "-434", "944", "743", "4813", "1036", "973", "1096", "1908", "3064", "788", "60", "40", "6309", "973", "258", "-682", "-582", "3948", "72", "5864", "-774", "1908", "-834", "-909", "59", "1980", "5881", "788", "1952", "5881", "977", "6350", "97", "45", "779", "2082", "-774", "788", "749", "2109", "5173", "2239", "-774", "203", "6432", "543", "203", "4878", "649", "2279", "-647", "-834", "5869", "90", "781", "4967", "-747", "649", "-619", "2333", "8662", "59", "796", "-669", "-774", "10111", "3027", "-885", "7257", "2082", "90", "799", "45", "14", "5709", "-678", "13754", "-560", "840", "10", "555", "177", "166", "-594", "1564", "-812", "796", "39", "5641", "2438", "14", "857", "7401", "1749", "-319", "492", "1027", "98", "1657", "-540", "190", "9990", "6907", "18", "40", "11942", "8197", "9299", "7519", "11431", "-811", "-655", "7536", "8625", "2622", "-84", "-753", "25", "-711", "1312", "-559", "-863", "1749", "11048", "37", "10203", "1027", "-351", "492", "-503", "10065", "4", "50", "-540", "1076", "16790", "7205", "666", "6932", "7205", "-899", "492", "16582", "160", "1312", "79", "15755", "1288", "-372", "-813", "6840", "-514", "991", "33787", "1096", "-540", "-108", "16", "35", "22354", "-587", "222", "1306", "40370", "7978", "8180", "-562", "-726", "4", "187", "31961", "56", "#CYCLE", "7929", "7574", "-94", "#CYCLE", "74506", "39998", "-253", "-144", "-180", "6440", "#CYCLE", "-170", "33787", "31900", "-75", "-1259", "73618", "38", "40418", "#CYCLE", "-112", "509", "43279", "15", "15", "-31", "580", "50440", "#CYCLE", "105501", "-256", "850", "73618", "105513", "75", "#CYCLE", "33793", "33845", "33793", "#CYCLE", "6473", "28", "22", "-123", "#CYCLE", "#CYCLE", "#CYCLE", "48438", "#CYCLE", "-727", "491", "48438", "#CYCLE", "#CYCLE", "73618", "#CYCLE", "106094", "#CYCLE", "#CYCLE", "49849", "#CYCLE", "#CYCLE", "#CYCLE", "156021", "#CYCLE", "#CYCLE"], description: "300 random cells, mostly acyclic with a few cycle-closing references (stress)"}
+expected_concepts:
+  - building a dependency graph from parsed formulas
+  - topological order (Kahn's algorithm) or DFS with three colours and memoisation
+  - cycle detection and propagation to every dependent cell
+  - memoisation so shared sub-formulas are evaluated once, not exponentially often
+  - 64-bit arithmetic (BigInt in JavaScript) and string output
+optimal_complexity: {time: O(n + t) where t is the total number of terms, space: O(n + t)}
+rubric:
+  excellent: Parses each formula into a constant plus a list of references, builds the dependency graph, evaluates in topological order (or memoised DFS with an in-progress state), marks every cell left on or behind a cycle as #CYCLE, counts repeated references, treats undefined names as 0, uses 64-bit or arbitrary-precision sums and states O(n + t).
+  good: Correct memoised DFS or Kahn solution with minor slips (for example missing the cells that only depend on a cycle, or losing precision above 2^53 in JavaScript) fixed after looking at the examples.
+  weak: Re-evaluates references recursively without memoisation (exponential on shared references), loops forever on cycles, or only flags the cells that close the cycle.
+  criteria:
+    correctness: Every value matches, cycle members and their dependents are #CYCLE, undefined names count as 0 and duplicates count each time.
+    efficiency: Each cell is evaluated once; total work linear in the number of terms.
+    code_quality: Parsing separated from evaluation, a name-to-index map and clear state for pending or in-progress cells.
+    edge_cases: Self references, negative literals, formulas made only of numbers, references to cells listed later and values beyond 2^53.
+    communication: Explains how cycles are detected and why a cell that depends on a cycle cannot have a value.
+hints:
+  - Each formula is a constant plus references to other cells; think of the references as edges in a graph and ask in which order the cells can be computed.
+  - A cell can be computed once every cell it references is known; cells that never reach that point are exactly those on a cycle or behind one. Remember that the same reference can be shared by many cells, so each cell should be computed only once.
+  - Count each cell's unresolved references to defined cells, start a queue with the cells that have none, and when a cell is finished add its value to every cell that references it (once per occurrence) and release those whose count reaches zero; cells never released are "#CYCLE". Use 64-bit (or BigInt) sums.
+followups:
+  - How would you recalculate efficiently when the user edits a single cell?
+  - How would you support subtraction, multiplication and ranges such as SUM(A1:A10)?
+  - How would you report one concrete cycle path to the user instead of just #CYCLE?
+  - What changes if the sheet has millions of cells and does not fit in memory?
+common_errors:
+  - Recursing into references without memoisation, which explodes on chains that reference the same cell twice.
+  - Marking only the cells on the cycle and computing a value for cells that depend on it.
+  - Treating undefined cell names as an error or as a cycle instead of 0.
+  - Counting a repeated reference only once.
+  - Using JavaScript Number or 32-bit integers, which lose precision for large sums.
+  - Assuming cells are listed in dependency order.

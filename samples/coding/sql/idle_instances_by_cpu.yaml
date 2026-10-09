@@ -1,0 +1,292 @@
+version: 1
+slug: idle_instances_by_cpu
+title: "Idle Instances by CPU"
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [cloud, devops, sre]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Idle Instances by CPU
+
+  The cloud cost team collects CPU utilisation samples from every virtual machine and wants a short
+  list of machines that are safe to downsize.
+
+  Table `cpu_samples`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | instance_id | VARCHAR(40) | machine identifier |
+  | sampled_at | TEXT | sample time, `YYYY-MM-DD HH:MM` (not needed for this report) |
+  | cpu_pct | INTEGER | CPU utilisation in whole percent, 0 to 100 |
+
+  Each row is one sample. An instance is **idle** when:
+
+  - it has **at least 5 samples**, and
+  - **every** one of its samples is **below 5** percent (a sample of exactly 5 disqualifies it).
+
+  Return one row per idle instance with the columns `instance_id`, `sample_count` (the number of
+  samples of the instance) and `peak_cpu` (its highest sample). Order the rows by `instance_id`
+  ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example 1
+  ```
+  cpu_samples
+  +----+-------------+------------------+---------+
+  | id | instance_id | sampled_at       | cpu_pct |
+  +----+-------------+------------------+---------+
+  | 1  | i-0a17      | 2026-05-04 10:00 | 2       |
+  | 2  | i-0b22      | 2026-05-04 10:00 | 1       |
+  | 3  | i-0c35      | 2026-05-04 10:00 | 0       |
+  | 4  | i-0a17      | 2026-05-04 10:05 | 1       |
+  | 5  | i-0b22      | 2026-05-04 10:05 | 2       |
+  | 6  | i-0c35      | 2026-05-04 10:05 | 0       |
+  | 7  | i-0a17      | 2026-05-04 10:10 | 3       |
+  | 8  | i-0b22      | 2026-05-04 10:10 | 1       |
+  | 9  | i-0c35      | 2026-05-04 10:10 | 1       |
+  | 10 | i-0a17      | 2026-05-04 10:15 | 0       |
+  | 11 | i-0b22      | 2026-05-04 10:15 | 7       |
+  | 12 | i-0c35      | 2026-05-04 10:15 | 0       |
+  | 13 | i-0a17      | 2026-05-04 10:20 | 4       |
+  | 14 | i-0b22      | 2026-05-04 10:20 | 1       |
+  | 15 | i-0b22      | 2026-05-04 10:25 | 0       |
+  +----+-------------+------------------+---------+
+
+  Output
+  +-------------+--------------+----------+
+  | instance_id | sample_count | peak_cpu |
+  +-------------+--------------+----------+
+  | i-0a17      | 5            | 4        |
+  +-------------+--------------+----------+
+  i-0b22 has five samples below 5 but one sample of 7, so it is not idle.
+  i-0c35 is always quiet but has only 4 samples.
+  ```
+
+  ### Example 2
+  ```
+  cpu_samples
+  +----+-------------+------------------+---------+
+  | id | instance_id | sampled_at       | cpu_pct |
+  +----+-------------+------------------+---------+
+  | 1  | i-07fe      | 2026-05-04 10:00 | 0       |
+  | 2  | i-08ed      | 2026-05-04 10:00 | 4       |
+  | 3  | i-07fe      | 2026-05-04 10:05 | 0       |
+  | 4  | i-08ed      | 2026-05-04 10:05 | 5       |
+  | 5  | i-07fe      | 2026-05-04 10:10 | 0       |
+  | 6  | i-08ed      | 2026-05-04 10:10 | 3       |
+  | 7  | i-07fe      | 2026-05-04 10:15 | 0       |
+  | 8  | i-08ed      | 2026-05-04 10:15 | 2       |
+  | 9  | i-07fe      | 2026-05-04 10:20 | 0       |
+  | 10 | i-08ed      | 2026-05-04 10:20 | 1       |
+  +----+-------------+------------------+---------+
+
+  Output
+  +-------------+--------------+----------+
+  | instance_id | sample_count | peak_cpu |
+  +-------------+--------------+----------+
+  | i-07fe      | 5            | 0        |
+  +-------------+--------------+----------+
+  i-08ed has one sample of exactly 5, which is not below 5.
+  ```
+
+  ### Constraints
+  - `0 <= rows in cpu_samples <= 10^5`
+  - `0 <= cpu_pct <= 100`
+  - `instance_id` values use lowercase letters, digits and hyphens.
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return instance_id, sample_count and peak_cpu for every idle instance.
+    SELECT instance_id, COUNT(*) AS sample_count, MAX(cpu_pct) AS peak_cpu
+    FROM cpu_samples
+    GROUP BY instance_id
+    ORDER BY instance_id;
+reference_solutions:
+  sql: |
+    SELECT instance_id, COUNT(*) AS sample_count, MAX(cpu_pct) AS peak_cpu
+    FROM cpu_samples
+    GROUP BY instance_id
+    HAVING COUNT(*) >= 5 AND MAX(cpu_pct) < 5
+    ORDER BY instance_id;
+sql_setup: |
+  CREATE TABLE cpu_samples (
+    id INTEGER PRIMARY KEY,
+    instance_id VARCHAR(40) NOT NULL,
+    sampled_at TEXT NOT NULL,
+    cpu_pct INTEGER NOT NULL
+  );
+tests:
+  - id: t1
+    description: "Example 1 - one idle instance; one with a single busy sample; one with too few samples"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cpu_samples (id, instance_id, sampled_at, cpu_pct) VALUES
+        (1, 'i-0a17', '2026-05-04 10:00', 2), (2, 'i-0b22', '2026-05-04 10:00', 1),
+        (3, 'i-0c35', '2026-05-04 10:00', 0), (4, 'i-0a17', '2026-05-04 10:05', 1),
+        (5, 'i-0b22', '2026-05-04 10:05', 2), (6, 'i-0c35', '2026-05-04 10:05', 0),
+        (7, 'i-0a17', '2026-05-04 10:10', 3), (8, 'i-0b22', '2026-05-04 10:10', 1),
+        (9, 'i-0c35', '2026-05-04 10:10', 1), (10, 'i-0a17', '2026-05-04 10:15', 0),
+        (11, 'i-0b22', '2026-05-04 10:15', 7), (12, 'i-0c35', '2026-05-04 10:15', 0),
+        (13, 'i-0a17', '2026-05-04 10:20', 4), (14, 'i-0b22', '2026-05-04 10:20', 1),
+        (15, 'i-0b22', '2026-05-04 10:25', 0);
+    expected_rows: [["i-0a17", 5, 4]]
+  - id: t2
+    description: "Example 2 - a sample of exactly 5 disqualifies; all-zero instance qualifies with peak 0"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cpu_samples (id, instance_id, sampled_at, cpu_pct) VALUES
+        (1, 'i-07fe', '2026-05-04 10:00', 0), (2, 'i-08ed', '2026-05-04 10:00', 4),
+        (3, 'i-07fe', '2026-05-04 10:05', 0), (4, 'i-08ed', '2026-05-04 10:05', 5),
+        (5, 'i-07fe', '2026-05-04 10:10', 0), (6, 'i-08ed', '2026-05-04 10:10', 3),
+        (7, 'i-07fe', '2026-05-04 10:15', 0), (8, 'i-08ed', '2026-05-04 10:15', 2),
+        (9, 'i-07fe', '2026-05-04 10:20', 0), (10, 'i-08ed', '2026-05-04 10:20', 1);
+    expected_rows: [["i-07fe", 5, 0]]
+  - id: t3
+    hidden: true
+    description: "Empty table returns no rows"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Every instance is busy at least once - no rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cpu_samples (id, instance_id, sampled_at, cpu_pct) VALUES
+        (1, 'i-aa01', '2026-05-04 10:00', 90), (2, 'i-bb02', '2026-05-04 10:00', 1),
+        (3, 'i-aa01', '2026-05-04 10:05', 85), (4, 'i-bb02', '2026-05-04 10:05', 1),
+        (5, 'i-aa01', '2026-05-04 10:10', 70), (6, 'i-bb02', '2026-05-04 10:10', 1),
+        (7, 'i-aa01', '2026-05-04 10:15', 88), (8, 'i-bb02', '2026-05-04 10:15', 1),
+        (9, 'i-aa01', '2026-05-04 10:20', 91), (10, 'i-bb02', '2026-05-04 10:20', 1),
+        (11, 'i-bb02', '2026-05-04 10:25', 1), (12, 'i-bb02', '2026-05-04 10:30', 1),
+        (13, 'i-bb02', '2026-05-04 10:35', 100);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Threshold on the count - exactly 5 samples included, 4 samples excluded"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cpu_samples (id, instance_id, sampled_at, cpu_pct) VALUES
+        (1, 'i-c100', '2026-05-04 10:00', 4), (2, 'i-c200', '2026-05-04 10:00', 4),
+        (3, 'i-c100', '2026-05-04 10:05', 4), (4, 'i-c200', '2026-05-04 10:05', 4),
+        (5, 'i-c100', '2026-05-04 10:10', 4), (6, 'i-c200', '2026-05-04 10:10', 4),
+        (7, 'i-c100', '2026-05-04 10:15', 4), (8, 'i-c200', '2026-05-04 10:15', 4),
+        (9, 'i-c200', '2026-05-04 10:20', 4);
+    expected_rows: [["i-c200", 5, 4]]
+  - id: t6
+    hidden: true
+    description: "WHERE cpu_pct < 5 pitfall - many low samples plus one spike must exclude the instance"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cpu_samples (id, instance_id, sampled_at, cpu_pct) VALUES
+        (1, 'i-d300', '2026-05-04 10:00', 0), (2, 'i-d400', '2026-05-04 10:00', 2),
+        (3, 'i-d300', '2026-05-04 10:05', 1), (4, 'i-d400', '2026-05-04 10:05', 2),
+        (5, 'i-d300', '2026-05-04 10:10', 0), (6, 'i-d400', '2026-05-04 10:10', 2),
+        (7, 'i-d300', '2026-05-04 10:15', 2), (8, 'i-d400', '2026-05-04 10:15', 2),
+        (9, 'i-d300', '2026-05-04 10:20', 1), (10, 'i-d400', '2026-05-04 10:20', 2),
+        (11, 'i-d300', '2026-05-04 10:25', 0), (12, 'i-d400', '2026-05-04 10:25', 2),
+        (13, 'i-d300', '2026-05-04 10:30', 3), (14, 'i-d300', '2026-05-04 10:35', 1),
+        (15, 'i-d300', '2026-05-04 10:40', 0), (16, 'i-d300', '2026-05-04 10:45', 60);
+    expected_rows: [["i-d400", 6, 2]]
+  - id: t7
+    hidden: true
+    description: "Single instance with many samples, peak 4 - sample_count must count all rows"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cpu_samples (id, instance_id, sampled_at, cpu_pct) VALUES
+        (1, 'i-e500', '2026-05-04 10:00', 0), (2, 'i-e500', '2026-05-04 10:05', 4),
+        (3, 'i-e500', '2026-05-04 10:10', 1), (4, 'i-e500', '2026-05-04 10:15', 3),
+        (5, 'i-e500', '2026-05-04 10:20', 2), (6, 'i-e500', '2026-05-04 10:25', 0),
+        (7, 'i-e500', '2026-05-04 10:30', 1), (8, 'i-e500', '2026-05-04 10:35', 4),
+        (9, 'i-e500', '2026-05-04 10:40', 2), (10, 'i-e500', '2026-05-04 10:45', 3),
+        (11, 'i-e500', '2026-05-04 10:50', 0), (12, 'i-e500', '2026-05-04 10:55', 1);
+    expected_rows: [["i-e500", 12, 4]]
+  - id: t8
+    hidden: true
+    description: "Ordering by instance_id with rows interleaved; mix of idle, busy and short instances"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cpu_samples (id, instance_id, sampled_at, cpu_pct) VALUES
+        (1, 'i-z9', '2026-05-04 10:00', 1), (2, 'i-a1', '2026-05-04 10:00', 3),
+        (3, 'i-m5', '2026-05-04 10:00', 0), (4, 'i-k3', '2026-05-04 10:00', 0),
+        (5, 'i-b2', '2026-05-04 10:00', 4), (6, 'i-z9', '2026-05-04 10:05', 1),
+        (7, 'i-a1', '2026-05-04 10:05', 0), (8, 'i-m5', '2026-05-04 10:05', 0),
+        (9, 'i-k3', '2026-05-04 10:05', 0), (10, 'i-b2', '2026-05-04 10:05', 4),
+        (11, 'i-z9', '2026-05-04 10:10', 1), (12, 'i-a1', '2026-05-04 10:10', 0),
+        (13, 'i-m5', '2026-05-04 10:10', 0), (14, 'i-k3', '2026-05-04 10:10', 0),
+        (15, 'i-b2', '2026-05-04 10:10', 4), (16, 'i-z9', '2026-05-04 10:15', 1),
+        (17, 'i-a1', '2026-05-04 10:15', 2), (18, 'i-m5', '2026-05-04 10:15', 0),
+        (19, 'i-b2', '2026-05-04 10:15', 4), (20, 'i-z9', '2026-05-04 10:20', 1),
+        (21, 'i-a1', '2026-05-04 10:20', 1), (22, 'i-m5', '2026-05-04 10:20', 5),
+        (23, 'i-b2', '2026-05-04 10:20', 4), (24, 'i-a1', '2026-05-04 10:25', 1),
+        (25, 'i-b2', '2026-05-04 10:25', 4), (26, 'i-b2', '2026-05-04 10:30', 4);
+    expected_rows: [["i-a1", 6, 3], ["i-b2", 7, 4], ["i-z9", 5, 1]]
+  - id: t9
+    hidden: true
+    description: "Larger randomised fleet - 12 instances with 4 to 7 samples and varied load"
+    ordered: true
+    setup_sql: |
+      INSERT INTO cpu_samples (id, instance_id, sampled_at, cpu_pct) VALUES
+        (1, 'i-00a9', '2026-05-04 10:00', 29), (2, 'i-01b9', '2026-05-04 10:00', 5),
+        (3, 'i-02c9', '2026-05-04 10:00', 0), (4, 'i-03d9', '2026-05-04 10:00', 0),
+        (5, 'i-04e9', '2026-05-04 10:00', 12), (6, 'i-05f9', '2026-05-04 10:00', 10),
+        (7, 'i-06g9', '2026-05-04 10:00', 5), (8, 'i-07h9', '2026-05-04 10:00', 0),
+        (9, 'i-08i9', '2026-05-04 10:00', 0), (10, 'i-09j9', '2026-05-04 10:00', 50),
+        (11, 'i-10k9', '2026-05-04 10:00', 0), (12, 'i-11l9', '2026-05-04 10:00', 1),
+        (13, 'i-00a9', '2026-05-04 10:05', 28), (14, 'i-01b9', '2026-05-04 10:05', 4),
+        (15, 'i-02c9', '2026-05-04 10:05', 3), (16, 'i-03d9', '2026-05-04 10:05', 0),
+        (17, 'i-04e9', '2026-05-04 10:05', 33), (18, 'i-05f9', '2026-05-04 10:05', 58),
+        (19, 'i-06g9', '2026-05-04 10:05', 16), (20, 'i-07h9', '2026-05-04 10:05', 3),
+        (21, 'i-08i9', '2026-05-04 10:05', 0), (22, 'i-09j9', '2026-05-04 10:05', 53),
+        (23, 'i-10k9', '2026-05-04 10:05', 2), (24, 'i-11l9', '2026-05-04 10:05', 0),
+        (25, 'i-00a9', '2026-05-04 10:10', 32), (26, 'i-01b9', '2026-05-04 10:10', 6),
+        (27, 'i-02c9', '2026-05-04 10:10', 3), (28, 'i-03d9', '2026-05-04 10:10', 1),
+        (29, 'i-04e9', '2026-05-04 10:10', 14), (30, 'i-05f9', '2026-05-04 10:10', 83),
+        (31, 'i-06g9', '2026-05-04 10:10', 20), (32, 'i-07h9', '2026-05-04 10:10', 0),
+        (33, 'i-08i9', '2026-05-04 10:10', 1), (34, 'i-09j9', '2026-05-04 10:10', 9),
+        (35, 'i-10k9', '2026-05-04 10:10', 2), (36, 'i-11l9', '2026-05-04 10:10', 0),
+        (37, 'i-00a9', '2026-05-04 10:15', 37), (38, 'i-01b9', '2026-05-04 10:15', 1),
+        (39, 'i-02c9', '2026-05-04 10:15', 1), (40, 'i-03d9', '2026-05-04 10:15', 1),
+        (41, 'i-04e9', '2026-05-04 10:15', 40), (42, 'i-05f9', '2026-05-04 10:15', 35),
+        (43, 'i-06g9', '2026-05-04 10:15', 14), (44, 'i-07h9', '2026-05-04 10:15', 2),
+        (45, 'i-08i9', '2026-05-04 10:15', 1), (46, 'i-09j9', '2026-05-04 10:15', 72),
+        (47, 'i-10k9', '2026-05-04 10:15', 0), (48, 'i-11l9', '2026-05-04 10:15', 0),
+        (49, 'i-00a9', '2026-05-04 10:20', 12), (50, 'i-01b9', '2026-05-04 10:20', 0),
+        (51, 'i-02c9', '2026-05-04 10:20', 0), (52, 'i-03d9', '2026-05-04 10:20', 0),
+        (53, 'i-04e9', '2026-05-04 10:20', 18), (54, 'i-06g9', '2026-05-04 10:20', 32),
+        (55, 'i-08i9', '2026-05-04 10:20', 0), (56, 'i-09j9', '2026-05-04 10:20', 80),
+        (57, 'i-10k9', '2026-05-04 10:20', 3), (58, 'i-00a9', '2026-05-04 10:25', 11),
+        (59, 'i-01b9', '2026-05-04 10:25', 3), (60, 'i-03d9', '2026-05-04 10:25', 3),
+        (61, 'i-04e9', '2026-05-04 10:25', 31), (62, 'i-06g9', '2026-05-04 10:25', 18),
+        (63, 'i-08i9', '2026-05-04 10:25', 3), (64, 'i-09j9', '2026-05-04 10:25', 25),
+        (65, 'i-01b9', '2026-05-04 10:30', 2), (66, 'i-03d9', '2026-05-04 10:30', 2);
+    expected_rows: [["i-02c9", 5, 3], ["i-03d9", 7, 3], ["i-08i9", 6, 3], ["i-10k9", 5, 3]]
+expected_concepts:
+  - "GROUP BY with aggregate functions (COUNT, MAX)"
+  - "HAVING to filter groups after aggregation"
+  - "expressing 'every row satisfies' as a condition on MAX"
+  - "WHERE versus HAVING semantics"
+optimal_complexity: {time: "O(n log n) for grouping and sorting (O(n) with hash aggregation)", space: "O(m) for m instances"}
+rubric:
+  excellent: "Writes one GROUP BY with HAVING COUNT(*) >= 5 AND MAX(cpu_pct) < 5, explains why a WHERE filter on cpu_pct would wrongly keep instances with spikes, and orders by instance_id."
+  good: "Reaches the correct query after a hint about the strict bound or about WHERE versus HAVING."
+  weak: "Filters samples with WHERE before counting, uses 5 as an inclusive bound, or returns instances with fewer than 5 samples."
+  criteria:
+    correctness: "All tests pass, including spikes among quiet samples and both thresholds."
+    efficiency: "Single aggregation pass with no self-joins or per-instance subqueries."
+    code_quality: "Clear output aliases and a HAVING clause that reads like the requirement."
+    edge_cases: "Empty table, exactly 5 samples, a sample of exactly 5 percent and instances that are always busy."
+    communication: "Explains how MAX turns 'every sample' into one group condition and why WHERE changes the meaning."
+hints:
+  - "Both conditions are about an instance as a whole, not about individual samples. Think about grouping first and testing the group afterwards."
+  - "Every sample being below 5 is the same as the highest sample being below 5, and conditions on groups go in HAVING rather than WHERE."
+  - "Group by instance_id, select the row count and the maximum cpu_pct, keep groups whose count is at least 5 and whose maximum is strictly below 5 with a HAVING clause, and order by instance_id."
+followups:
+  - "How would you restrict the analysis to the last 7 days of samples, and where would that condition go?"
+  - "How would you also require the 95th percentile of memory usage to be low if there were a memory column?"
+  - "What index would help this report on a table with billions of samples?"
+common_errors:
+  - "Filtering WHERE cpu_pct < 5 before grouping, which keeps instances that have spikes as long as five quiet samples exist."
+  - "Using cpu_pct <= 5, which treats a sample of exactly 5 as idle."
+  - "Forgetting the minimum sample count, so instances with one quiet sample are flagged."

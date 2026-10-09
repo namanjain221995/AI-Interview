@@ -1,0 +1,642 @@
+# Curated questions: mobile engineering (native Android/iOS, React Native, Flutter), part 1.
+# Lifecycle, offline storage, performance, push, security basics, release and crash analysis.
+# round_types follow difficulty: easy -> screening/combined, medium -> all three, hard -> deep/combined.
+version: 1
+defaults:
+  role_tags: [mobile]
+questions:
+  # ------------------------------------------------------------------ easy
+  - external_key: technical.mobile.android_config_change_state
+    competency_key: mobile_development
+    topic: Android lifecycle and configuration changes
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      On Android, what actually happens to an Activity when the user rotates the device or switches to dark mode,
+      and how do you make sure the screen keeps its state through that?
+    expected_concepts:
+      - activity is destroyed and recreated on configuration change
+      - ViewModel survives configuration changes
+      - saved instance state or SavedStateHandle for small UI state
+      - rememberSaveable in Compose
+      - avoid holding Activity references in long-lived objects
+    rubric:
+      excellent: Explains the destroy and recreate cycle, separates ViewModel-held data from saved instance state, and notes that saved state is for small values only and that leaking the old Activity is a risk.
+      good: Knows the Activity is recreated and uses a ViewModel or saved state to keep data.
+      weak: Suggests locking orientation or disabling configuration changes in the manifest as the default fix.
+    followups:
+      - What is the difference between surviving a rotation and surviving process death?
+      - Why can't you put a large list into the saved instance state bundle?
+    common_errors:
+      - Assuming a ViewModel also survives the process being killed.
+      - Using android configChanges to hide the problem instead of handling state properly.
+
+  - external_key: technical.mobile.ios_app_states
+    competency_key: mobile_development
+    topic: iOS app and scene lifecycle
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Walk me through the states an iOS app moves through, from launch to being in the background to being suspended.
+      What kind of work would you do, or stop doing, at each transition?
+    expected_concepts:
+      - not running, inactive, active, background and suspended states
+      - scene delegate callbacks for multi-window apps
+      - pausing timers, media and UI work when going inactive
+      - saving user progress when entering background
+      - limited background execution time and suspension
+    rubric:
+      excellent: Names the states accurately, ties concrete work to each transition such as saving drafts and pausing work, and explains that a suspended app can be terminated without further callbacks.
+      good: Describes foreground and background transitions and saving state before backgrounding.
+      weak: Believes apps keep running normally in the background or cannot name any lifecycle callbacks.
+    followups:
+      - What happens if your app is suspended and the system needs memory?
+      - How does the scene-based lifecycle change things for an iPad app with several windows?
+    common_errors:
+      - Expecting a callback before the system terminates a suspended app.
+
+  - external_key: technical.mobile.form_resets_on_rotation
+    competency_key: mobile_development
+    topic: Lost user input after interruption
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      Support forwards a complaint that a long sign-up form clears itself when the user takes a phone call or turns
+      the phone sideways halfway through. How would you track this down and fix it?
+    expected_concepts:
+      - reproduce with rotation and backgrounding
+      - identify where form state is held (view versus state holder)
+      - move state into a ViewModel or equivalent state holder
+      - persist draft input across process death if needed
+      - test with developer options such as don't keep activities
+    rubric:
+      excellent: Reproduces deliberately, explains why state held in the view is lost, moves it to a lifecycle-aware holder plus saved state, and verifies with process-death testing.
+      good: Identifies recreation as the cause and moves state into a ViewModel or similar.
+      weak: Proposes disabling rotation or cannot explain why the input disappears.
+    followups:
+      - The fix works for rotation but users still lose data after switching apps for a while. Why?
+      - Which pieces of the form would you deliberately not restore, and why?
+    common_errors:
+      - Testing only rotation and missing the process-death case.
+
+  - external_key: technical.mobile.local_storage_options
+    competency_key: mobile_development
+    topic: Choosing local storage
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Mobile apps have several places to keep data on the device, like key-value preferences, a local database and plain files.
+      How do you decide which one to use for a given piece of data? Give me examples from apps you've built.
+    expected_concepts:
+      - key-value stores for small settings and flags
+      - SQLite-based databases (Room, Core Data, SQLDelight, drift) for structured queryable data
+      - files for blobs such as images or downloads
+      - secure storage for secrets (Keychain, Keystore)
+      - cache versus durable data and backup implications
+    rubric:
+      excellent: Chooses by data shape, size, query needs and sensitivity, gives concrete examples for each store, and mentions cache directories and secure storage for secrets.
+      good: Distinguishes preferences from a database with sensible examples.
+      weak: Stores everything in preferences or serialised JSON without considering queries, size or sensitivity.
+    followups:
+      - Where would you keep an access token, and why not in preferences?
+      - What changes if the operating system can clear the folder you picked?
+    common_errors:
+      - Storing large lists as a single JSON string in key-value preferences.
+
+  - external_key: technical.mobile.push_notification_flow
+    competency_key: mobile_development
+    topic: Push notification architecture
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Explain how a push notification gets from your backend to a user's phone, starting from the moment the app is installed.
+      Which pieces are yours to manage and which belong to Apple or Google?
+    expected_concepts:
+      - app requests permission and registers for a device token
+      - token sent to and stored by your backend per user and device
+      - backend sends through APNs or FCM
+      - tokens change and must be refreshed and cleaned up
+      - notification versus data or silent payloads
+    rubric:
+      excellent: Describes the full path including token registration, refresh and invalidation, the platform push services, and the difference between visible and data-only messages.
+      good: Covers token registration, sending via APNs or FCM and showing the notification.
+      weak: Thinks the backend connects to the phone directly or does not know device tokens exist.
+    followups:
+      - What should your backend do when APNs or FCM reports a token as invalid?
+      - How would the flow differ for a user logged in on two phones?
+    common_errors:
+      - Treating the device token as permanent and never updating it.
+
+  - external_key: technical.mobile.frozen_ui_on_load
+    competency_key: mobile_development
+    topic: Main thread blocking
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      A teammate's new screen freezes for two or three seconds every time it opens, and buttons don't respond during that time.
+      What would you suspect, and how would you confirm and fix it?
+    expected_concepts:
+      - work on the main or UI thread (network, disk, JSON parsing, database)
+      - profiler or main-thread checker to confirm
+      - move work to background threads, coroutines or async tasks
+      - show loading state and update UI on the main thread
+      - strict mode or equivalent detection in development
+    rubric:
+      excellent: Names main-thread blocking as the likely cause, confirms with a profiler or strict mode, moves the work off the main thread correctly and returns results to the UI thread with a loading state.
+      good: Suspects main-thread work and moves it to the background.
+      weak: Suggests adding a spinner without moving the work, or blames the device.
+    followups:
+      - How would you catch this class of problem before it reaches code review?
+      - What goes wrong if you update a view from a background thread?
+    common_errors:
+      - Wrapping the call in a background thread but then touching views from that thread.
+
+  - external_key: technical.mobile.token_storage_basics
+    competency_key: security
+    topic: Storing credentials on the device
+    difficulty: easy
+    kind: technical
+    round_types: [technical_screening, combined]
+    text: >-
+      Your app gets an access token and a refresh token after login. Where do you store them on iOS and Android,
+      and what are you protecting against by doing it that way?
+    expected_concepts:
+      - iOS Keychain with an appropriate accessibility class
+      - Android Keystore-backed encryption or EncryptedSharedPreferences
+      - avoid plain preferences, files or logs
+      - protect against other apps, backups and rooted or jailbroken extraction
+      - clear tokens on logout
+    rubric:
+      excellent: Names Keychain and Keystore-backed storage, explains the threats (backups, device compromise, log leakage) and covers clearing tokens on logout and short-lived access tokens.
+      good: Uses Keychain and Keystore and avoids plain preferences.
+      weak: Stores tokens in plain preferences or a file, or believes obfuscation is enough.
+    followups:
+      - What does the Keychain accessibility setting change for a token after the phone restarts?
+      - How would you handle storage in a React Native or Flutter app?
+    common_errors:
+      - Logging tokens in debug output that ships to production.
+
+  - external_key: technical.mobile.first_production_crash
+    competency_key: debugging
+    topic: Investigating a production crash
+    difficulty: easy
+    kind: scenario
+    round_types: [technical_screening, combined]
+    text: >-
+      The morning after a release, your crash reporting tool shows a new crash affecting a few hundred users.
+      Talk me through what you'd look at first and how you'd get to the cause.
+    expected_concepts:
+      - stack trace and exception type in crash tooling
+      - affected app version, OS versions and devices
+      - breadcrumbs or logs leading up to the crash
+      - reproduce locally using the same conditions
+      - decide whether to halt rollout or hotfix
+    rubric:
+      excellent: Reads the symbolicated stack trace, segments by version, OS and device, uses breadcrumbs to reproduce, and weighs halting the rollout against a hotfix.
+      good: Uses the stack trace and device information to narrow the cause and reproduce it.
+      weak: Starts changing code by guesswork without using the crash data.
+    followups:
+      - The stack trace points into framework code, not yours. What now?
+      - How do you decide whether this is worth a hotfix release?
+    common_errors:
+      - Ignoring which app version and OS the crashes are concentrated on.
+
+  # ------------------------------------------------------------------ medium
+  - external_key: technical.mobile.process_death_restoration
+    competency_key: mobile_development
+    topic: Process death and state restoration
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      When the operating system kills your app in the background and the user later returns to it, what should
+      they see, and how have you designed apps to restore that experience?
+    expected_concepts:
+      - process killed while app appears in recents
+      - system restores navigation stack but not in-memory state
+      - saved state for UI, database or disk for data
+      - re-fetching data and handling missing dependencies
+      - testing with don't keep activities or terminating from Xcode
+    rubric:
+      excellent: Explains that the app is relaunched into the last screen with only saved state, designs restoration around a persisted source of truth, and describes how they test it deliberately.
+      good: Knows process death loses memory state and uses saved state or persistence to recover.
+      weak: Confuses process death with a configuration change or assumes singletons survive.
+    followups:
+      - A screen deep in the stack depends on an object created three screens earlier. What happens after restoration?
+      - How would you test process death in an automated way?
+    common_errors:
+      - Relying on global singletons or static fields that are empty after relaunch.
+
+  - external_key: technical.mobile.offline_notes_design
+    competency_key: mobile_development
+    topic: Offline-first app design
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You're building a field-inspection app that technicians use in basements and rural sites with no signal for hours.
+      How would you design it so they can keep working offline and nothing gets lost?
+    expected_concepts:
+      - local database as the source of truth for the UI
+      - outbox or pending-operations queue for writes
+      - background sync when connectivity returns
+      - idempotent server API and client-generated ids
+      - clear sync status and error states for the user
+      - conflict handling strategy
+    rubric:
+      excellent: Makes the local store the source of truth, queues writes durably with client ids, syncs with retries and backoff when online, and shows sync status while planning for conflicts and failures.
+      good: Stores data locally, queues changes and syncs later with some retry logic.
+      weak: Caches responses only for reading, or assumes requests can simply be retried in memory.
+    followups:
+      - How do you show the technician which records have not reached the server yet?
+      - What happens to the queue if the app is updated before it syncs?
+    common_errors:
+      - Keeping the pending queue in memory so it is lost when the app is killed.
+
+  - external_key: technical.mobile.background_work_scheduling
+    competency_key: mobile_development
+    topic: Background work scheduling
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Suppose your app needs to upload logs and refresh content periodically even when it isn't open.
+      How do you schedule that work on Android and iOS, and what limits does each platform put on you?
+    expected_concepts:
+      - WorkManager with constraints and backoff on Android
+      - BGTaskScheduler app refresh and processing tasks on iOS
+      - system decides timing (Doze, App Standby, usage patterns)
+      - expedited work or foreground services for user-visible tasks
+      - work must be idempotent and resumable
+    rubric:
+      excellent: Uses the right schedulers with constraints, explains that the OS controls timing and may skip runs, and designs the work to be short, idempotent and safe to retry.
+      good: Names WorkManager and BGTaskScheduler and knows timing is not guaranteed.
+      weak: Proposes timers or a permanently running service and expects exact schedules.
+    followups:
+      - Product wants the refresh to happen exactly every fifteen minutes. How do you respond?
+      - How do you debug a background task that never seems to run on iOS?
+    common_errors:
+      - Expecting iOS background tasks to run on a fixed schedule.
+
+  - external_key: technical.mobile.cold_start_regression
+    competency_key: mobile_development
+    topic: App startup performance
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Your monitoring shows cold start time went up by about forty percent over the last two releases.
+      How would you find out what got slower and bring it back down?
+    expected_concepts:
+      - define and measure cold start (to first frame or first meaningful content)
+      - compare traces between releases (Perfetto, Instruments, Android Studio profiler)
+      - work added to Application or AppDelegate init and SDK initialisation
+      - lazy or deferred initialisation and background work
+      - baseline profiles or reducing dynamic libraries
+      - guard against regressions with startup benchmarks
+    rubric:
+      excellent: Measures precisely, diffs traces between versions to find new startup work, defers or removes it, and adds a benchmark or budget so it does not regress again.
+      good: Profiles startup, finds heavy initialisation and defers it.
+      weak: Guesses at causes without measuring or only suggests a splash screen.
+    followups:
+      - A third-party SDK you can't remove takes 300 milliseconds to initialise. What are your options?
+      - How do lab measurements differ from what real users experience?
+    common_errors:
+      - Hiding slow startup behind a longer splash screen instead of fixing it.
+
+  - external_key: technical.mobile.list_scroll_jank
+    competency_key: mobile_development
+    topic: Smooth scrolling in long lists
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      What usually causes dropped frames when scrolling a long, image-heavy list, and what techniques have you used
+      to make lists scroll smoothly?
+    expected_concepts:
+      - frame budget of about 16 or 8 milliseconds
+      - view recycling or lazy lists with stable keys
+      - expensive layout, overdraw or deep hierarchies
+      - image decoding off the main thread and downsampling
+      - avoid work in bind or build functions
+      - measure with frame timing tools
+    rubric:
+      excellent: Explains the frame budget, identifies per-row work, layout cost and image decoding as causes, and describes concrete fixes verified with profiling tools.
+      good: Mentions recycling and image loading libraries and avoiding heavy work while scrolling.
+      weak: Only suggests pagination or a faster device.
+    followups:
+      - How would you prove a fix actually reduced jank rather than just feeling smoother?
+      - What changes when the list is built with Compose, SwiftUI or Flutter instead of the older view systems?
+    common_errors:
+      - Formatting dates or parsing data inside every row bind.
+
+  - external_key: technical.mobile.battery_drain_reports
+    competency_key: mobile_development
+    topic: Battery drain investigation
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Several app store reviews say your app is draining the battery even when people aren't using it.
+      How would you investigate and what would you change?
+    expected_concepts:
+      - battery and energy tools (Battery Historian, Android vitals, Xcode energy organizer)
+      - wake locks, frequent alarms or background location
+      - polling and chatty networking keeping the radio awake
+      - batching and deferring work with system schedulers
+      - verifying improvement with field metrics
+    rubric:
+      excellent: Uses platform energy tooling and field data to find background work, wake locks, location or network patterns, then batches or removes them and confirms with metrics.
+      good: Identifies likely culprits such as polling or location and reduces them.
+      weak: Dismisses the reports or can only suggest generic optimisation.
+    followups:
+      - How does the radio's power state affect how you design networking?
+      - The drain only happens for users with a particular feature enabled. How do you use that?
+    common_errors:
+      - Looking only at CPU and ignoring radio and location usage.
+
+  - external_key: technical.mobile.rn_bridge_and_jsi
+    competency_key: mobile_development
+    topic: React Native architecture
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      In React Native, how does JavaScript code end up talking to native views and modules, and how has the newer
+      architecture changed that compared with the old bridge?
+    expected_concepts:
+      - separate JS thread, UI thread and native modules
+      - old bridge serialised asynchronous JSON messages
+      - JSI allows direct synchronous calls into native code
+      - Fabric renderer and TurboModules with lazy loading
+      - Hermes engine and codegen for typed interfaces
+    rubric:
+      excellent: Describes the threading model, why the asynchronous bridge caused overhead, and how JSI, Fabric and TurboModules address it, with practical implications for performance.
+      good: Knows there is a JS thread and a bridge and roughly what the new architecture improves.
+      weak: Believes React Native compiles JavaScript into native code or cannot describe how native modules are called.
+    followups:
+      - What kind of feature would make you write a native module instead of staying in JavaScript?
+      - How does the threading model explain animations stuttering during heavy JS work?
+    common_errors:
+      - Thinking React Native renders inside a web view.
+
+  - external_key: technical.mobile.flutter_widget_rebuilds
+    competency_key: mobile_development
+    topic: Flutter rendering and rebuilds
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      In a Flutter app, a screen becomes sluggish as it grows. How do widget rebuilds work, and how do you keep them
+      from becoming a performance problem?
+    expected_concepts:
+      - widget, element and render object trees
+      - setState rebuilding a subtree
+      - const constructors and splitting widgets
+      - scoping state listeners (selectors, Consumer, BlocBuilder)
+      - DevTools rebuild and performance overlays
+      - RepaintBoundary for costly painting
+    rubric:
+      excellent: Explains the three trees and that rebuilds are cheap until they cause layout or paint work, and narrows rebuild scope with const widgets, smaller widgets and scoped listeners, verified in DevTools.
+      good: Knows setState rebuilds the subtree and uses const and smaller widgets.
+      weak: Thinks every rebuild redraws the whole screen or has no way to measure rebuilds.
+    followups:
+      - When does putting state high in the tree become a problem?
+      - Where would you do heavy JSON parsing in Flutter so the UI stays responsive?
+    common_errors:
+      - Calling setState at the top of a large screen for a small change.
+
+  - external_key: technical.mobile.staged_rollout_crash_spike
+    competency_key: mobile_development
+    topic: Staged rollouts
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      You've released version 5.2 to ten percent of Android users through a staged rollout, and crash rates for that
+      version are double the previous one. What do you do in the next few hours?
+    expected_concepts:
+      - halt the staged rollout in Play Console
+      - compare crash clusters between versions
+      - feature flags to disable the new code path remotely
+      - prepare a fixed build with a higher version code
+      - communicate status to stakeholders and support
+    rubric:
+      excellent: Halts the rollout immediately, uses crash data to find new clusters, disables the feature remotely if possible, ships a fix with a new version code and keeps stakeholders informed.
+      good: Stops the rollout and investigates the new crashes before resuming.
+      weak: Lets the rollout continue while investigating or believes the release can be rolled back like a server deploy.
+    followups:
+      - Users who already have 5.2 installed can't be rolled back. How do you help them?
+      - How is this different on iOS phased release?
+    common_errors:
+      - Assuming the Play Console can downgrade users to the previous version.
+
+  - external_key: technical.mobile.oauth_pkce_mobile
+    competency_key: security
+    topic: OAuth login on mobile
+    difficulty: medium
+    kind: technical
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      How would you implement single sign-on with an OAuth provider in a mobile app, and why are some approaches
+      that work on the web a bad idea on a phone?
+    expected_concepts:
+      - authorisation code flow with PKCE
+      - system browser or ASWebAuthenticationSession and Custom Tabs, not embedded web views
+      - no client secret in the app
+      - redirect via app links or universal links
+      - secure token storage and refresh
+    rubric:
+      excellent: Uses authorisation code with PKCE in a system browser session, explains why client secrets and embedded web views are unsafe, and covers redirect handling and token storage.
+      good: Mentions PKCE and the system browser with a reasonable explanation.
+      weak: Embeds the client secret in the app or collects the user's password in a native form for a third-party provider.
+    followups:
+      - What attack does PKCE protect against on mobile specifically?
+      - How do you handle the refresh token expiring while the user is offline?
+    common_errors:
+      - Using the implicit flow or an embedded web view for third-party login.
+
+  - external_key: technical.mobile.anr_rate_spike
+    competency_key: debugging
+    topic: Application Not Responding errors
+    difficulty: medium
+    kind: scenario
+    round_types: [technical_screening, deep_technical, combined]
+    text: >-
+      Google Play shows your app's ANR rate has crossed the bad-behaviour threshold, but you've never seen one in testing.
+      How would you work out what's causing them?
+    expected_concepts:
+      - ANR traces in Play Console or crash tooling
+      - main thread blocked on locks, disk, network or binder calls
+      - broadcast receivers or services exceeding time limits
+      - reproduce on slow or low-memory devices
+      - strict mode and main-thread profiling
+    rubric:
+      excellent: Reads the main thread stacks from ANR reports, identifies blocking patterns such as locks or disk work, reproduces on constrained devices and moves the work off the main thread.
+      good: Knows ANRs mean the main thread was blocked and uses the reported traces.
+      weak: Treats ANRs as crashes with no stack or cannot explain what triggers them.
+    followups:
+      - The ANR traces show the main thread waiting on a lock. What does that tell you?
+      - Why might ANRs appear mostly on cheaper devices?
+    common_errors:
+      - Testing only on high-end development phones.
+
+  # ------------------------------------------------------------------ hard
+  - external_key: technical.mobile.sync_conflict_resolution
+    competency_key: mobile_development
+    topic: Sync conflict resolution
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      A user edits the same shared checklist on their phone while offline, and a colleague edits it on another device
+      at the same time. When both come back online, how should your sync handle it, and what trade-offs are you making?
+    expected_concepts:
+      - detecting conflicts with versions, timestamps or vector clocks
+      - last-writer-wins versus field-level merge
+      - operation-based sync or CRDTs for collaborative data
+      - server as arbiter and clock skew concerns
+      - surfacing unresolvable conflicts to users
+      - tombstones for deletions
+    rubric:
+      excellent: Detects conflicts with versioning rather than device clocks, chooses a merge strategy per data type with clear trade-offs, handles deletes with tombstones and explains when users must resolve conflicts.
+      good: Describes version-based conflict detection and a reasonable merge or last-writer-wins policy.
+      weak: Uses device timestamps for last-writer-wins without recognising data loss or clock skew.
+    followups:
+      - One user deleted an item the other just edited. What wins and why?
+      - When would you reach for a CRDT, and what does it cost you?
+    common_errors:
+      - Trusting device clocks to order edits.
+
+  - external_key: technical.mobile.memory_leak_hunting
+    competency_key: mobile_development
+    topic: Memory leaks
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Tell me how memory leaks typically happen in mobile apps you've worked on, and how you'd find a leak that
+      only shows up after users navigate around for twenty minutes.
+    expected_concepts:
+      - retain cycles from closures or delegates (weak and unowned references)
+      - Activity or Context leaks via static fields, listeners or callbacks
+      - uncancelled subscriptions, coroutines or streams
+      - heap dumps and tools (LeakCanary, Instruments, memory graph debugger)
+      - reproducing with repeated navigation loops
+    rubric:
+      excellent: Explains platform-specific leak patterns, reproduces by repeating navigation while watching memory, uses heap dumps or the memory graph to find the retaining path and fixes it at the ownership level.
+      good: Names common leak causes and a tool to detect them.
+      weak: Relies on the garbage collector to handle it or cannot describe how to find what is holding memory.
+    followups:
+      - How would you catch leaks automatically before release?
+      - What does a growing heap that drops after backgrounding tell you?
+    common_errors:
+      - Sprinkling weak references everywhere without understanding ownership.
+
+  - external_key: technical.mobile.certificate_pinning
+    competency_key: security
+    topic: Certificate pinning
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Your security team wants certificate pinning in the banking app. How would you implement it, and what are the
+      operational risks you'd want everyone to understand before shipping it?
+    expected_concepts:
+      - pin public key hashes rather than leaf certificates
+      - include backup pins for rotation
+      - network security config or URLSession delegate or OkHttp CertificatePinner
+      - risk of bricking the app if certificates change
+      - remote kill switch or expiry and coordination with infrastructure teams
+      - pinning does not stop a compromised device
+    rubric:
+      excellent: Pins public keys with backups, explains the outage risk when certificates rotate and how to mitigate it, and is clear about what pinning does and does not defend against.
+      good: Implements pinning with a library or config and mentions certificate rotation risk.
+      weak: Pins a leaf certificate with no backup or believes pinning makes the app immune to reverse engineering.
+    followups:
+      - How would you coordinate a certificate rotation with millions of installed apps?
+      - What does pinning protect against that standard TLS validation doesn't?
+    common_errors:
+      - Forgetting that old app versions in the wild still carry the old pins.
+
+  - external_key: technical.mobile.forced_upgrade_api_change
+    competency_key: api_design
+    topic: Supporting old app versions
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      The backend team needs to change an API in a way that will break the current mobile client, and analytics show
+      people are still running app versions from two years ago. How would you plan this change?
+    expected_concepts:
+      - API versioning or backward-compatible additive changes
+      - version distribution analytics and support windows
+      - minimum supported version and forced or soft update prompts
+      - server-driven feature flags and graceful degradation
+      - deprecation timeline communicated across teams
+    rubric:
+      excellent: Prefers backward-compatible changes or parallel API versions, uses version analytics to set a support window, and adds soft and hard update mechanisms with a staged deprecation plan.
+      good: Keeps the old API running while new clients migrate and introduces a forced-update check.
+      weak: Expects every user to update immediately or breaks old clients without a plan.
+    followups:
+      - The app has no forced-update mechanism today. How do you get one into old versions?
+      - What should an app do when the server tells it the version is no longer supported?
+    common_errors:
+      - Assuming mobile clients update as quickly as a web deploy.
+
+  - external_key: technical.mobile.push_delivery_debugging
+    competency_key: mobile_development
+    topic: Push notification reliability
+    difficulty: hard
+    kind: technical
+    round_types: [deep_technical, combined]
+    text: >-
+      Product says a meaningful share of users never receive time-sensitive push notifications. What are all the
+      reasons a push can fail to show on the device, and how would you measure where they are being lost?
+    expected_concepts:
+      - permission denied or notification channels disabled
+      - stale or invalid tokens and environment mismatch
+      - OS throttling, Doze, low-power mode and priority settings
+      - force-stopped apps on some Android manufacturers
+      - collapse keys and time-to-live expiry
+      - delivery funnel instrumentation from send to display to open
+    rubric:
+      excellent: Covers permission, token, platform throttling, device-specific and payload causes, and builds an end-to-end funnel with send responses, client receipt and display events to locate the loss.
+      good: Names several causes such as permissions, tokens and battery restrictions and suggests tracking receipt.
+      weak: Assumes push delivery is guaranteed or blames the provider without measuring.
+    followups:
+      - How would you confirm the message reached the device but wasn't displayed?
+      - When would you choose high priority, and what's the cost of overusing it?
+    common_errors:
+      - Treating a successful send response as proof of delivery.
+
+  - external_key: technical.mobile.native_crash_symbolication
+    competency_key: debugging
+    topic: Native crash analysis
+    difficulty: hard
+    kind: scenario
+    round_types: [deep_technical, combined]
+    text: >-
+      You're seeing a crash in production that comes from native code inside a third-party library, and the stack traces
+      are just memory addresses. How would you get to a usable stack trace and then to a fix?
+    expected_concepts:
+      - symbol files (dSYMs, native debug symbols, mapping files) uploaded per build
+      - build ids and UUID matching between binary and symbols
+      - signal types such as SIGSEGV or SIGABRT and what they suggest
+      - reproducing with sanitizers or debug builds of the library
+      - working with the vendor, pinning or replacing the version
+    rubric:
+      excellent: Explains how symbolication depends on matching build ids, ensures symbols are archived in CI, interprets the signal and frames, and lays out options from reproduction to vendor escalation or rollback of the dependency.
+      good: Knows symbols must be uploaded and uses them to get readable frames before investigating.
+      weak: Does not know what symbolication is or gives up because the code isn't theirs.
+    followups:
+      - Your CI didn't keep symbols for that build. Can you still recover?
+      - The crash only happens on one chipset family. How does that change your approach?
+    common_errors:
+      - Rebuilding the app to regenerate symbols and expecting them to match the old binary.

@@ -1,0 +1,615 @@
+# Curated questions: system design for ML and LLM systems (1 of 4).
+# Recommendation and ranking systems, feature pipelines and real-time prediction services.
+# `defaults` are merged into every question (question keys win). Easy questions override round_types.
+version: 1
+defaults:
+  role_tags: [ml, llm, data_scientist]
+  kind: system_design
+  round_types: [system_design, deep_technical, combined]
+questions:
+  # ------------------------------------------------------------- easy
+  - external_key: system_design.ml_llm_systems.store_recs_first_version
+    competency_key: system_design
+    topic: First version of a product recommender
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      An online store with a few thousand products wants a "recommended for you" row on its home page, and
+      there's no recommender today. Walk me through what a sensible first version would look like, from the
+      data you'd use to how the row gets rendered.
+    expected_concepts:
+      - start from interaction data such as views, carts and purchases
+      - a simple baseline like popularity or item co-occurrence before a learned model
+      - precomputing recommendations in a batch job and storing them per user
+      - a fallback for users with no history
+      - a way to measure whether the row is helping, such as click-through and conversion
+    rubric:
+      excellent: Proposes a simple, shippable baseline with batch precomputation and a key-value lookup, covers the no-history fallback and says how success will be measured before reaching for a complex model.
+      good: Describes a workable pipeline from interactions to a stored list but is thin on fallbacks or measurement.
+      weak: Jumps straight to a deep learning model with no data, serving or measurement story.
+    followups:
+      - How would you know whether this row actually sells more than a hand-picked bestseller list?
+      - What would make you move from a nightly batch to computing recommendations at request time?
+    common_errors:
+      - Designing for millions of items and real-time updates when the catalog and traffic are small.
+
+  - external_key: system_design.ml_llm_systems.homepage_batch_vs_request_time
+    competency_key: system_design
+    topic: Precomputed versus request-time recommendations
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      For a news site's personalised home page, one option is to precompute each reader's list overnight and
+      another is to score articles when the page loads. How would you think through that choice for this
+      product?
+    expected_concepts:
+      - freshness requirements since news goes stale within hours
+      - cost of scoring every user nightly versus only active users on demand
+      - request-time latency budget and caching
+      - hybrid of precomputed candidates with request-time reranking
+      - handling breaking stories that did not exist at batch time
+    rubric:
+      excellent: Ties the decision to how quickly content goes stale and how many users are active, weighs compute and latency costs, and lands on a reasoned hybrid such as batch candidates plus fresh items reranked at request time.
+      good: Identifies freshness and latency as the key trade-off and picks a reasonable option.
+      weak: Picks one approach without relating it to the news use case or its costs.
+    followups:
+      - A major story breaks at 9am. How does it reach readers under your design?
+      - What would you cache, and for how long?
+    common_errors:
+      - Precomputing lists for every registered user nightly, including the many who will not visit that day.
+
+  - external_key: system_design.ml_llm_systems.feature_store_data_flow
+    competency_key: mlops
+    topic: Data flow through an online and offline feature store
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Take a single feature like "number of orders this customer placed in the last 30 days." Walk me through
+      how it would flow through a feature store, from raw data to being used in training and then at
+      prediction time.
+    expected_concepts:
+      - one shared definition of the feature computed by a pipeline
+      - offline store holding history with timestamps for training
+      - online store holding the latest value for low-latency lookup
+      - materialisation or sync from the pipeline into the online store
+      - point-in-time lookups so training does not see future values
+    rubric:
+      excellent: Traces one definition into both an offline historical store and an online latest-value store, explains why timestamps and point-in-time joins matter for training, and notes how freshness of the online value is maintained.
+      good: Distinguishes the offline and online stores and explains roughly how each is populated.
+      weak: Describes a single table or cannot say why training and serving need different access patterns.
+    followups:
+      - What goes wrong if the training query just takes the customer's current order count?
+      - How fresh does this particular feature need to be online?
+    common_errors:
+      - Assuming the online store can be used to build training sets, losing the history needed for point-in-time correctness.
+
+  - external_key: system_design.ml_llm_systems.similar_items_widget
+    competency_key: machine_learning
+    topic: Similar items on a product page
+    difficulty: easy
+    round_types: [system_design, combined]
+    text: >-
+      Suppose you're building the "customers who viewed this also viewed" strip on a product page. How would
+      you design it, from computing the similarities to serving them quickly on every page view?
+    expected_concepts:
+      - co-view or co-purchase counts within sessions
+      - normalising for popularity so bestsellers do not dominate every list
+      - content-based similarity for items with little interaction data
+      - offline computation stored as an item-to-items lookup
+      - filtering out-of-stock or unavailable items at serving time
+    rubric:
+      excellent: Explains co-occurrence with popularity normalisation, covers sparse items with content similarity, precomputes an item-to-items table and filters availability at serve time.
+      good: Gives a working co-occurrence approach with offline computation and a fast lookup.
+      weak: Suggests computing similarities live for every page view or ignores items with no history.
+    followups:
+      - Why might raw co-view counts recommend the same three bestsellers for everything?
+      - How often would you recompute the table, and what drives that?
+    common_errors:
+      - Leaving out-of-stock or delisted items in the precomputed lists with no serving-time filter.
+
+  # ------------------------------------------------------------- medium
+  - external_key: system_design.ml_llm_systems.retrieval_then_ranking
+    competency_key: machine_learning
+    topic: Two-stage retrieval and ranking architecture
+    difficulty: medium
+    text: >-
+      A video platform has around ten million items and needs personalised recommendations in under a hundred
+      milliseconds. Most large systems split this into a retrieval stage and a ranking stage. Explain why, and
+      how you'd design each stage.
+    expected_concepts:
+      - scoring every item with a heavy model is infeasible at this latency
+      - cheap retrieval sources such as embeddings with nearest-neighbour search, co-occurrence and trending
+      - merging and deduplicating candidates from several sources
+      - a richer ranking model over a few hundred candidates using many features
+      - latency budget split across stages
+      - final filtering and business rules after ranking
+    rubric:
+      excellent: Justifies the split with concrete cost and latency numbers, describes multiple retrieval sources and how they are merged, and explains what features and model the ranker uses and how the latency budget is divided.
+      good: Explains the funnel and gives a sensible design for each stage with some latency reasoning.
+      weak: Describes one model scoring everything or cannot explain why the stages exist.
+    followups:
+      - How many candidates would you pass to the ranker, and how would you choose that number?
+      - How do you know whether a quality problem is in retrieval or in ranking?
+    common_errors:
+      - Evaluating only the ranker and never measuring the recall of the retrieval stage.
+
+  - external_key: system_design.ml_llm_systems.two_tower_serving
+    competency_key: machine_learning
+    topic: Serving a two-tower retrieval model
+    difficulty: medium
+    text: >-
+      Your team has trained a two-tower model, one tower for users and one for items, to retrieve candidates.
+      How would you put it into production so that retrieval happens on every request?
+    expected_concepts:
+      - item embeddings computed offline and loaded into an approximate nearest-neighbour index
+      - user tower run at request time or user embeddings cached
+      - keeping user and item embeddings from the same model version
+      - index rebuild or incremental updates as the catalog changes
+      - filtering for availability and eligibility alongside the vector search
+    rubric:
+      excellent: Separates offline item embedding and indexing from online user embedding, enforces version consistency between towers and index, and covers catalog churn and eligibility filters.
+      good: Describes precomputed item embeddings in an index queried with a user embedding at request time.
+      weak: Runs both towers over the whole catalog per request or ignores how the index is kept current.
+    followups:
+      - What breaks if a new model version's user tower queries last week's item index?
+      - How would you roll out a retrained model without a gap in recommendations?
+    common_errors:
+      - Swapping the user model and the item index at different times, mixing embedding spaces.
+
+  - external_key: system_design.ml_llm_systems.marketplace_new_items
+    competency_key: machine_learning
+    topic: Cold start for new items
+    difficulty: medium
+    text: >-
+      On a second-hand marketplace about a fifth of listings are less than a day old, and they often sell
+      within hours. How would you design the recommender so that new listings get shown to the right buyers
+      quickly?
+    expected_concepts:
+      - content features such as title, images, category and price available at listing time
+      - content-based or hybrid embeddings that do not need interaction history
+      - near-real-time indexing of new listings
+      - reserved exploration slots for fresh items
+      - quickly updating item signals from early views and saves
+    rubric:
+      excellent: Combines content-based representations available at creation time with fast indexing, deliberate exploration for fresh items and rapid incorporation of early engagement signals.
+      good: Uses content features to place new items and mentions getting them indexed quickly.
+      weak: Relies on collaborative filtering alone, which cannot place items with no history.
+    followups:
+      - How would you stop exploration from showing buyers lots of low-quality new listings?
+      - How long should a listing count as new in your system?
+    common_errors:
+      - Waiting for the nightly index rebuild, so listings sell or expire before the recommender ever sees them.
+
+  - external_key: system_design.ml_llm_systems.new_user_onboarding_recs
+    competency_key: machine_learning
+    topic: Cold start for new users
+    difficulty: medium
+    text: >-
+      A music streaming service loses a lot of people in their first week, and recommendations for brand-new
+      users are generic. How would you design the experience and the system behind it to personalise from the
+      very first session?
+    expected_concepts:
+      - lightweight onboarding signals such as picked genres or artists
+      - context available immediately, such as device, locale setting or referral source
+      - fast in-session updates from the first few plays and skips
+      - popularity and diverse starter sets as a fallback
+      - measuring first-week retention for new-user cohorts specifically
+    rubric:
+      excellent: Designs both the onboarding signals and a system that updates within the session from early plays and skips, with sensible fallbacks and a new-user-specific success metric.
+      good: Uses onboarding choices plus popularity fallbacks and mentions learning from early behaviour.
+      weak: Shows global top charts to every new user with no plan to learn from early behaviour.
+    followups:
+      - How quickly could a skip in the first session change what's played next under your design?
+      - How would you test whether the onboarding step is worth the extra friction?
+    common_errors:
+      - Measuring the new-user experience with metrics dominated by long-time users.
+
+  - external_key: system_design.ml_llm_systems.impression_click_logging
+    competency_key: data_engineering
+    topic: Logging impressions and outcomes for training data
+    difficulty: medium
+    text: >-
+      To train a ranking model you need to know what was shown to each user and what they did next. How would
+      you design the logging and the pipeline that turns those events into training examples?
+    expected_concepts:
+      - log impressions with a request id, position, model version and feature snapshot
+      - join clicks and conversions back to impressions by request id
+      - attribution windows and handling labels that arrive late
+      - deduplication and bot filtering
+      - logging features at serving time to avoid skew
+    rubric:
+      excellent: Logs impressions with request ids, positions, model version and served features, joins outcomes within a defined attribution window, and handles late events, duplicates and bots.
+      good: Logs impressions and clicks and joins them, with some thought about timing.
+      weak: Logs only clicks, leaving no negatives and no record of what was shown.
+    followups:
+      - A purchase can happen three days after the click. How does your pipeline handle that?
+      - Why log the feature values at serving time instead of recomputing them later?
+    common_errors:
+      - Treating every unclicked item as a negative even if it was below the fold and never seen.
+
+  - external_key: system_design.ml_llm_systems.position_bias_exploration
+    competency_key: machine_learning
+    topic: Position bias and exploration traffic
+    difficulty: medium
+    text: >-
+      Items at the top of a list get clicked more just because they're at the top, and your model is trained
+      on those clicks. How would you design the system so the training data isn't simply reinforcing the
+      previous model's ordering?
+    expected_concepts:
+      - position bias in click data
+      - a small randomised or exploration traffic slice
+      - logging positions and propensities
+      - position as a training feature set to a constant at inference, or inverse propensity weighting
+      - cost of exploration on user experience and how to bound it
+    rubric:
+      excellent: Explains the feedback loop, proposes bounded exploration with logged propensities and a correction method such as position features or inverse propensity weighting, and weighs the cost to users.
+      good: Recognises position bias and proposes either randomisation or a position feature.
+      weak: Does not see the bias, or proposes fully random rankings for everyone.
+    followups:
+      - How much traffic would you spend on exploration, and how would you justify it?
+      - How would you check whether your correction actually removed the bias?
+    common_errors:
+      - Using position as a feature in training and forgetting to fix it to a constant at inference.
+
+  - external_key: system_design.ml_llm_systems.in_session_personalisation
+    competency_key: system_design
+    topic: Updating recommendations within a session
+    difficulty: medium
+    text: >-
+      A short-video app wants the feed to adapt within seconds when someone starts watching cooking videos all
+      the way through. How would you design the pipeline that gets those signals into the next batch of
+      recommendations?
+    expected_concepts:
+      - client events streamed through a message queue
+      - session features maintained in a low-latency store
+      - sequence or session-aware model inputs at ranking time
+      - small prefetch batches so the next request sees new signals
+      - balancing short-term reaction with long-term interests
+    rubric:
+      excellent: Builds an end-to-end path from client events through a stream processor to a session store read at ranking time, keeps prefetch small enough to react, and guards against overreacting to one signal.
+      good: Streams events into a fast store that the ranker reads and explains the latency path roughly.
+      weak: Relies on nightly retraining or batch features for a within-session requirement.
+    followups:
+      - How would you avoid the feed becoming nothing but cooking after two videos?
+      - What happens to personalisation if the event stream lags by a minute?
+    common_errors:
+      - Prefetching a large batch of items up front so new signals cannot affect what the user sees next.
+
+  - external_key: system_design.ml_llm_systems.card_velocity_features
+    competency_key: data_engineering
+    topic: Streaming velocity features for fraud scoring
+    difficulty: medium
+    text: >-
+      A fraud model needs features like "how many transactions this card made in the last ten minutes" and
+      "how many distinct merchants in the last hour," available within milliseconds at authorisation time.
+      How would you build the pipeline behind those features?
+    expected_concepts:
+      - stream processing over transaction events with sliding or tumbling windows
+      - keyed state per card stored in a low-latency store
+      - event time versus processing time and late events
+      - including the current transaction consistently in training and serving
+      - backfilling the same definitions over history for training data
+    rubric:
+      excellent: Designs windowed stream aggregations keyed by card with event-time handling, serves them from a low-latency store, and guarantees the same definition and current-event treatment in training and serving.
+      good: Proposes a stream processor writing windowed counts to a fast store with some attention to timing.
+      weak: Proposes querying the transactions database with a count query on every authorisation.
+    followups:
+      - Does the count include the transaction being scored, and why does that decision matter for training?
+      - How would you compute the same feature over two years of history for training?
+    common_errors:
+      - Computing training features with batch SQL and serving features with a stream job whose window logic differs subtly.
+
+  - external_key: system_design.ml_llm_systems.checkout_fraud_service
+    competency_key: mlops
+    topic: Real-time fraud decision service
+    difficulty: medium
+    text: >-
+      Design the service that decides, during checkout, whether a payment should be approved, challenged or
+      declined. You have roughly a hundred milliseconds end to end. What does the architecture look like, and
+      what happens when parts of it are slow or down?
+    expected_concepts:
+      - synchronous scoring path with feature fetch and model inference
+      - thresholds or policy layer mapping scores to approve, challenge or decline
+      - timeouts and a safe default when the model or features are unavailable
+      - logging decisions, features and model version for audit and retraining
+      - asynchronous deeper checks after approval
+    rubric:
+      excellent: Lays out the synchronous path with a latency budget per hop, separates the score from a configurable policy layer, defines explicit degraded behaviour and logs everything needed for audit and retraining.
+      good: Describes a reasonable request path and some fallback behaviour.
+      weak: No latency reasoning, or the checkout simply fails when the model is unavailable.
+    followups:
+      - Who should be able to change the decline threshold, and how fast?
+      - What's your default decision if the feature store times out, and who chose it?
+    common_errors:
+      - Hard-coding thresholds inside the model service so policy changes need a redeploy.
+
+  - external_key: system_design.ml_llm_systems.ranking_business_rules
+    competency_key: system_design
+    topic: Combining model scores with business rules
+    difficulty: medium
+    text: >-
+      Merchandising wants sponsored items in fixed slots, no more than two items from the same brand in a row,
+      and nothing that's out of stock, on top of what the ranking model returns. Where would you put that logic
+      in the system, and how would you keep it manageable?
+    expected_concepts:
+      - a separate re-ranking or blending layer after model scoring
+      - hard filters versus soft constraints
+      - rules expressed as configuration with ownership and versioning
+      - measuring the cost each rule imposes on model metrics
+      - avoiding rule logic leaking into training data unknowingly
+    rubric:
+      excellent: Puts rules in a distinct post-ranking layer with config-driven, owned and versioned rules, separates hard filters from soft diversity constraints and measures what each rule costs.
+      good: Separates rules from the model and gives a reasonable layering.
+      weak: Bakes rules into the model or scatters them through the code with no ownership.
+    followups:
+      - How would you find out that a rule added last year is now costing a lot of engagement?
+      - How do sponsored slots affect the training data for the organic ranker?
+    common_errors:
+      - Adding rules ad hoc with no record of why they exist or what they cost.
+
+  - external_key: system_design.ml_llm_systems.recommender_online_test
+    competency_key: statistics_experimentation
+    topic: Online testing of a new recommender
+    difficulty: medium
+    text: >-
+      Your new recommendation model beats the old one offline. Talk me through how you'd set up the online
+      experiment to decide whether to ship it, including what you'd measure and what could mislead you.
+    expected_concepts:
+      - randomisation unit such as user rather than request
+      - a primary success metric plus guardrail metrics
+      - sample size and duration including weekly cycles
+      - novelty effects and slow-moving outcomes like retention
+      - interference, for example shared inventory or creator-side effects
+      - ramping traffic gradually with a kill switch
+    rubric:
+      excellent: Picks a sensible randomisation unit and metrics with guardrails, sizes the test, and calls out novelty effects, slow outcomes and interference with a plan for each.
+      good: Designs a standard A/B test with sensible metrics and duration.
+      weak: Ships on offline results, or runs the test for a day and reads the dashboard.
+    followups:
+      - Clicks go up but time spent goes down. How do you decide?
+      - How would interference between groups show up in a marketplace?
+    common_errors:
+      - Randomising by request, so the same user sees both models and the comparison is contaminated.
+
+  - external_key: system_design.ml_llm_systems.push_notification_targeting
+    competency_key: system_design
+    topic: Deciding which users get which notifications
+    difficulty: medium
+    text: >-
+      A shopping app sends promotional push notifications and wants a model to decide who gets which message
+      and when, without annoying people into turning notifications off. How would you design that system?
+    expected_concepts:
+      - candidate messages per user and a model predicting engagement
+      - modelling the cost of unsubscribes or opt-outs, not just opens
+      - frequency caps and quiet hours enforced centrally
+      - send-time selection and a scheduling pipeline
+      - holdout groups to measure incremental value
+    rubric:
+      excellent: Designs candidate generation, scoring that accounts for opt-out risk, central caps and scheduling, and a long-running holdout to measure incremental impact rather than raw opens.
+      good: Scores users and messages and enforces some frequency limit.
+      weak: Optimises open rate alone and sends whatever scores highest.
+    followups:
+      - Why might a model trained only on opens make the app worse over time?
+      - How would you measure whether notifications drive purchases that wouldn't have happened anyway?
+    common_errors:
+      - Measuring success on users who received notifications with no untreated holdout to compare against.
+
+  # ------------------------------------------------------------- hard
+  - external_key: system_design.ml_llm_systems.feed_multi_objective
+    competency_key: machine_learning
+    topic: Multi-objective feed ranking
+    difficulty: hard
+    text: >-
+      A social feed wants to optimise for clicks, time spent, shares and long-term satisfaction, and those
+      sometimes pull in different directions. How would you design the ranking system and the process for
+      deciding how those objectives are traded off?
+    expected_concepts:
+      - separate prediction heads or models per objective
+      - a value function combining predictions with tunable weights
+      - weights tuned through online experiments, not offline loss alone
+      - surveys or explicit feedback as signals for long-term satisfaction
+      - guardrails for negative outcomes such as hides and reports
+      - governance for who owns weight changes
+    rubric:
+      excellent: Designs multi-task prediction with an explicit combination layer, explains how weights are tuned online against long-term metrics and how negative signals are weighted, and addresses ownership of the trade-off.
+      good: Predicts several objectives and combines them with weights tuned by experiment.
+      weak: Picks one objective or adds scores together with arbitrary weights and no evaluation plan.
+    followups:
+      - How would you detect that higher clicks today are hurting retention in three months?
+      - The shares model is badly calibrated. What does that do to the combined score?
+    common_errors:
+      - Combining uncalibrated probabilities from different heads as if they were on the same scale.
+
+  - external_key: system_design.ml_llm_systems.catalog_concentration_loop
+    competency_key: machine_learning
+    topic: Feedback loops that narrow the catalog
+    difficulty: hard
+    text: >-
+      Over a year, your recommender has concentrated most traffic on a small share of the catalog, and newer
+      creators complain they can't get any exposure. How would you confirm what's happening and change the
+      system to address it?
+    expected_concepts:
+      - measuring exposure concentration with Gini or coverage metrics over time
+      - separating genuine preference from feedback-loop effects with exploration data
+      - exposure-aware objectives or diversity constraints
+      - dedicated exploration or new-creator boosting with bounded cost
+      - long-term ecosystem metrics such as creator retention
+    rubric:
+      excellent: Quantifies concentration, uses exploration or holdout data to establish causality, and proposes measured changes to objectives and exposure policy with ecosystem metrics to judge them.
+      good: Recognises the feedback loop and proposes diversity or exploration measures.
+      weak: Treats it as working as intended or proposes random boosts with no measurement.
+    followups:
+      - How would you convince leadership that a small short-term engagement drop is worth it?
+      - How would you keep new-creator boosting from being gamed?
+    common_errors:
+      - Measuring the fix only on short-term clicks, which will almost always favour the concentrated status quo.
+
+  - external_key: system_design.ml_llm_systems.ads_ctr_calibration
+    competency_key: machine_learning
+    topic: Calibrated click predictions for an ad auction
+    difficulty: hard
+    text: >-
+      In an ad auction, the predicted click probability is multiplied by the bid, so the numbers have to be
+      calibrated, not just well ordered. How would you design the training and serving system to keep
+      predictions calibrated as models, traffic and advertisers change?
+    expected_concepts:
+      - calibration measured by predicted versus observed rates across segments
+      - a calibration layer such as isotonic or Platt scaling fitted on recent data
+      - effects of negative downsampling and correcting for it
+      - monitoring calibration per placement, advertiser and new campaigns
+      - recalibrating on model launch and alerting on drift
+      - revenue and advertiser cost impact of miscalibration
+    rubric:
+      excellent: Explains why calibration matters for pricing, designs a calibration stage with downsampling correction, monitors it across segments and builds recalibration into model launches.
+      good: Knows calibration matters and proposes a post-hoc calibration step with monitoring.
+      weak: Focuses only on ranking metrics such as AUC and does not see the pricing problem.
+    followups:
+      - The model is calibrated overall but over-predicts for new advertisers. What happens, and how do you fix it?
+      - How does training on downsampled negatives affect the predicted probabilities?
+    common_errors:
+      - Forgetting to correct for negative downsampling, leaving predictions systematically too high.
+
+  - external_key: system_design.ml_llm_systems.feature_platform_governance
+    competency_key: mlops
+    topic: Running a shared feature platform across many teams
+    difficulty: hard
+    text: >-
+      Forty teams now publish into a shared feature store. The online cluster's cost has tripled, many
+      features have no readers, and a schema change last month silently broke two models. How would you
+      redesign the platform's processes and architecture?
+    expected_concepts:
+      - ownership metadata and lineage from features to consuming models
+      - usage tracking to find and retire unused features
+      - schema contracts, versioned features and breaking-change checks
+      - cost attribution and online materialisation only where needed
+      - tiering by freshness and latency requirements
+    rubric:
+      excellent: Introduces lineage and usage-based retirement, versioned contracts with automated breaking-change detection, per-team cost attribution and tiered materialisation, with a rollout plan that does not break existing models.
+      good: Addresses ownership, versioning and unused features with workable mechanisms.
+      weak: Proposes a bigger cluster or a review meeting without technical controls.
+    followups:
+      - How would you safely delete a feature you think nobody reads?
+      - Which features actually need to be in the online store?
+    common_errors:
+      - Deleting features based on a guess about usage instead of measured reads and lineage.
+
+  - external_key: system_design.ml_llm_systems.ride_eta_service
+    competency_key: system_design
+    topic: Arrival-time prediction for a ride-hailing app
+    difficulty: hard
+    text: >-
+      Design the system that predicts arrival times in a ride-hailing app, both for the driver getting to the
+      rider and for the trip itself. It's queried constantly as people browse, and the predictions drive
+      pricing and matching.
+    expected_concepts:
+      - routing engine estimates as a base with a learned correction
+      - real-time traffic features from driver GPS streams
+      - caching or coarse-grained precomputation for browsing traffic
+      - segmenting error by city, time and trip length
+      - consistency between displayed, pricing and matching estimates
+      - fallbacks when live data is stale
+    rubric:
+      excellent: Combines a routing baseline with a learned correction on live traffic features, handles very high read volume with caching, evaluates error by meaningful segments and keeps the estimate consistent across consumers.
+      good: Gives a reasonable model and data flow with some attention to scale.
+      weak: Treats it as a single regression model with no live data, scale or consistency considerations.
+    followups:
+      - How would you evaluate whether a new model is better when errors matter more for long trips?
+      - The GPS stream in one city lags by five minutes. What does your system do?
+    common_errors:
+      - Showing one estimate to the rider while pricing and matching use different, inconsistent ones.
+
+  - external_key: system_design.ml_llm_systems.ecommerce_search_ranking
+    competency_key: machine_learning
+    topic: Learning to rank for product search
+    difficulty: hard
+    text: >-
+      Design the search ranking system for a large e-commerce site, from understanding the query to the final
+      ordered list. Assume you're starting from keyword search with hand-tuned boosts.
+    expected_concepts:
+      - query understanding such as spelling, category intent and attribute extraction
+      - hybrid retrieval combining lexical and semantic matching
+      - learning-to-rank model with query, item and query-item features
+      - labels from clicks, carts and purchases with bias correction plus human relevance judgements
+      - offline metrics such as NDCG and online tests on conversion
+      - handling zero-result and long-tail queries
+    rubric:
+      excellent: Covers query understanding, hybrid retrieval and a learning-to-rank model, explains how labels are built and debiased, and plans offline and online evaluation including long-tail and zero-result handling.
+      good: Designs retrieval plus a learned ranker with sensible features and evaluation.
+      weak: Only tweaks keyword boosts or proposes a model with no label or evaluation strategy.
+    followups:
+      - How would you get relevance labels for rare queries that hardly anyone clicks on?
+      - How would you migrate from hand-tuned boosts without a visible quality dip?
+    common_errors:
+      - Training directly on raw clicks without correcting for position bias in the existing ranking.
+
+  - external_key: system_design.ml_llm_systems.delayed_conversion_labels
+    competency_key: machine_learning
+    topic: Training with conversions that arrive weeks later
+    difficulty: hard
+    text: >-
+      You're predicting whether an ad click leads to a purchase, but purchases can arrive up to thirty days
+      after the click, and the model needs retraining daily. How would you design the training pipeline so the
+      model stays fresh without learning that recent clicks never convert?
+    expected_concepts:
+      - recent examples look negative only because their window has not closed
+      - waiting for the full window versus freshness trade-off
+      - delayed-feedback modelling or importance weighting
+      - correcting labels as late conversions arrive
+      - evaluating calibration on matured data only
+    rubric:
+      excellent: Explains the false-negative bias from open windows, compares waiting, label correction and delayed-feedback models, and designs evaluation on matured data.
+      good: Recognises the bias and proposes a reasonable mitigation.
+      weak: Trains on whatever labels exist today without noticing the systematic under-prediction.
+    followups:
+      - How would you measure how much this bias is hurting you today?
+      - What does a holiday sale do to the conversion delay distribution, and how does your pipeline cope?
+    common_errors:
+      - Evaluating the model on recent data whose labels are still incomplete and concluding it over-predicts.
+
+  - external_key: system_design.ml_llm_systems.off_policy_evaluation
+    competency_key: machine_learning
+    topic: Offline evaluation of a new ranking policy from logs
+    difficulty: hard
+    text: >-
+      Online experiments are slow and your team has dozens of ranking ideas. How would you design an offline
+      evaluation system that uses logged traffic to estimate how a new ranking policy would perform before it
+      gets live traffic?
+    expected_concepts:
+      - logged data reflects only what the old policy showed
+      - logging propensities and using inverse propensity scoring or doubly robust estimators
+      - high variance when policies differ a lot and clipping trade-offs
+      - replay or simulation as alternatives with their limits
+      - validating offline estimates against past online results
+    rubric:
+      excellent: Explains why naive replay is biased, designs propensity logging with IPS or doubly robust estimators, discusses variance and support limits, and validates the estimator against historical online tests.
+      good: Proposes propensity-based evaluation and knows it requires logged probabilities.
+      weak: Scores the new model on held-out clicks and treats the result as an online estimate.
+    followups:
+      - What happens to your estimate when the new policy shows items the old one almost never did?
+      - How would you know whether your offline estimator can be trusted?
+    common_errors:
+      - Running offline evaluation without logged propensities, which makes unbiased estimates impossible.
+
+  - external_key: system_design.ml_llm_systems.surge_pricing_system
+    competency_key: machine_learning
+    topic: Model-driven dynamic pricing in a marketplace
+    difficulty: hard
+    text: >-
+      A food delivery marketplace wants to adjust delivery fees every few minutes per neighbourhood based on
+      predicted demand and courier supply. How would you design the system, keeping in mind that the prices
+      themselves change the demand you're trying to predict?
+    expected_concepts:
+      - short-horizon demand and supply forecasts per area from streaming data
+      - a pricing policy layer separate from the forecasts with caps and smoothing
+      - price effects on demand making observational data biased, needing experiments or randomised price variation
+      - switchback or geo experiments because users and couriers interact across groups
+      - guardrails for extreme prices and fast manual override
+    rubric:
+      excellent: Separates forecasting from a capped, smoothed pricing policy, recognises that prices confound the training data and plans randomised variation and switchback experiments, with guardrails and overrides.
+      good: Designs forecasting plus a pricing rule with limits and some experimentation plan.
+      weak: Trains a model on historical prices and demand and sets prices from it with no awareness of the feedback effect.
+    followups:
+      - Why would a normal user-level A/B test give you misleading results here?
+      - How would you stop prices oscillating every few minutes?
+    common_errors:
+      - Treating historical price and demand data as if prices had been set independently of demand.

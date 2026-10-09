@@ -1,0 +1,184 @@
+version: 1
+slug: sql_skip_level_managers
+title: Skip-Level Managers (SQL)
+difficulty: easy
+competency_keys: [sql, databases]
+role_tags: [data_analyst, backend, dba, business_analyst]
+time_limit_minutes: 12
+prompt_markdown: |
+  ## Skip-Level Managers
+
+  The people-operations team schedules **skip-level 1:1s**: each employee meets their manager's
+  manager once a quarter. Build the list from the reporting table.
+
+  Table `employees`:
+
+  | column | type | notes |
+  |--------|------|-------|
+  | id | INTEGER | primary key |
+  | name | VARCHAR(100) | names are not unique |
+  | manager_id | INTEGER | references `employees.id`; **NULL** for people without a manager |
+
+  Return one row per employee who has a skip-level manager (a manager whose own `manager_id` is not
+  NULL), with the columns `employee_name` (the employee) and `skip_level_manager_name` (their
+  manager's manager). Employees without a manager, and employees whose manager has no manager, are
+  left out.
+
+  Order the rows by the employee's `id` ascending.
+
+  Write standard SQL that runs on both PostgreSQL and SQLite.
+
+  ### Example
+  ```
+  employees
+  +----+-------+------------+
+  | id | name  | manager_id |
+  +----+-------+------------+
+  | 1  | Asha  | NULL       |
+  | 2  | Bruno | 1          |
+  | 3  | Chen  | 1          |
+  | 4  | Dana  | 2          |
+  | 5  | Eli   | 2          |
+  | 6  | Farid | 3          |
+  | 7  | Gwen  | 6          |
+  +----+-------+------------+
+
+  Output
+  +---------------+-------------------------+
+  | employee_name | skip_level_manager_name |
+  +---------------+-------------------------+
+  | Dana          | Asha                    |
+  | Eli           | Asha                    |
+  | Farid         | Asha                    |
+  | Gwen          | Chen                    |
+  +---------------+-------------------------+
+  Asha has no manager, and Bruno and Chen report directly to Asha, who has no manager.
+  ```
+languages: [sql]
+starter_code:
+  sql: |
+    -- Return employee_name and skip_level_manager_name, ordered by employee id.
+    SELECT e.name AS employee_name, NULL AS skip_level_manager_name
+    FROM employees e
+    ORDER BY e.id;
+reference_solutions:
+  sql: |
+    SELECT e.name AS employee_name, g.name AS skip_level_manager_name
+    FROM employees e
+    JOIN employees m ON m.id = e.manager_id
+    JOIN employees g ON g.id = m.manager_id
+    ORDER BY e.id;
+sql_setup: |
+  CREATE TABLE employees (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    manager_id INTEGER REFERENCES employees (id)
+  );
+tests:
+  - id: t1
+    description: "Example"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES
+        (1, 'Asha', NULL), (2, 'Bruno', 1), (3, 'Chen', 1), (4, 'Dana', 2),
+        (5, 'Eli', 2), (6, 'Farid', 3), (7, 'Gwen', 6);
+    expected_rows:
+      - ["Dana", "Asha"]
+      - ["Eli", "Asha"]
+      - ["Farid", "Asha"]
+      - ["Gwen", "Chen"]
+  - id: t2
+    description: "Flat team - nobody has a skip-level manager"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES
+        (1, 'Lead', NULL), (2, 'Ana', 1), (3, 'Ben', 1);
+    expected_rows: []
+  - id: t3
+    hidden: true
+    description: "Empty table"
+    ordered: true
+    expected_rows: []
+  - id: t4
+    hidden: true
+    description: "Single employee without a manager"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES (1, 'Solo', NULL);
+    expected_rows: []
+  - id: t5
+    hidden: true
+    description: "Rows inserted out of id order - ORDER BY e.id is required, not insert order or the manager's id"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES
+        (9, 'Ivy', 4), (1, 'Root', NULL), (7, 'Gus', 4), (4, 'Mid', 1), (3, 'Cal', 7), (2, 'Bea', 9);
+    expected_rows:
+      - ["Bea", "Mid"]
+      - ["Cal", "Mid"]
+      - ["Gus", "Root"]
+      - ["Ivy", "Root"]
+  - id: t6
+    hidden: true
+    description: "Deep chain of six levels - each employee's skip level is two steps up only"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES
+        (1, 'L1', NULL), (2, 'L2', 1), (3, 'L3', 2), (4, 'L4', 3), (5, 'L5', 4), (6, 'L6', 5);
+    expected_rows:
+      - ["L3", "L1"]
+      - ["L4", "L2"]
+      - ["L5", "L3"]
+      - ["L6", "L4"]
+  - id: t7
+    hidden: true
+    description: "Duplicate names - rows must come from ids, not be de-duplicated by name"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES
+        (1, 'Sam', NULL), (2, 'Sam', 1), (3, 'Sam', 2), (4, 'Sam', 2), (5, 'Kim', 1), (6, 'Kim', 5);
+    expected_rows:
+      - ["Sam", "Sam"]
+      - ["Sam", "Sam"]
+      - ["Kim", "Sam"]
+  - id: t8
+    hidden: true
+    description: "Two separate org trees and a manager with no manager of their own - only rows with a real skip level"
+    ordered: true
+    setup_sql: |
+      INSERT INTO employees (id, name, manager_id) VALUES
+        (1, 'Ops Head', NULL), (2, 'Data Head', NULL), (3, 'Ops Lead', 1), (4, 'Data Lead', 2),
+        (5, 'Ops Eng', 3), (6, 'Data Eng', 4), (7, 'Intern', 6), (8, 'Advisor', 2);
+    expected_rows:
+      - ["Ops Eng", "Ops Head"]
+      - ["Data Eng", "Data Head"]
+      - ["Intern", "Data Lead"]
+expected_concepts:
+  - self-join of a table to itself with distinct aliases
+  - chaining two joins to walk two levels of a hierarchy
+  - inner join semantics dropping rows with NULL foreign keys
+  - deterministic ORDER BY on the employee key
+optimal_complexity: {time: "O(n) with the primary key index (two indexed lookups per employee)", space: "O(1) beyond the result"}
+rubric:
+  excellent: Writes two inner self-joins with clear aliases (employee, manager, skip-level manager), explains that inner joins drop employees without a two-level chain, orders by the employee id and mentions indexing manager_id for the reverse lookup.
+  good: Correct self-join query, possibly after a prompt about the ordering or about which join type drops missing managers.
+  weak: Uses a single join and returns the direct manager, uses LEFT JOIN and returns NULL skip-level rows, or orders by name instead of id.
+  criteria:
+    correctness: All tests pass, including empty tables, deep chains, duplicate names and separate org trees.
+    efficiency: Set-based joins on the primary key rather than correlated subqueries per row.
+    code_quality: Meaningful aliases and output column names exactly as specified.
+    edge_cases: Employees without managers, managers without managers and rows inserted out of order.
+    communication: Explains why the inner joins already exclude employees without a skip-level manager.
+hints:
+  - The manager of a manager lives in the same table. How can one table appear several times in the same query?
+  - Join the employees table to itself once to reach each employee's manager, and a second time to reach that manager's manager.
+  - Use three aliases for the same table, joining the employee's manager id to the manager row and the manager's manager id to the skip-level row with inner joins, which drop anyone missing a link, then select the two names and order by the employee id.
+followups:
+  - How would you return the full chain up to the top for each employee with a recursive CTE?
+  - How would you count the number of skip-level reports each senior manager has?
+  - Which index helps if you start from a manager and look for everyone two levels below?
+common_errors:
+  - Returning the direct manager instead of the manager's manager.
+  - Using LEFT JOIN and returning rows with a NULL skip-level manager.
+  - Ordering by name or relying on insert order instead of ordering by employee id.
+  - Joining on names instead of ids, which breaks with duplicate names.
