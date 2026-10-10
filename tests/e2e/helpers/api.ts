@@ -23,6 +23,12 @@ export async function apiPost<T>(s: StaffSession, url: string, data: unknown): P
   return (await res.json()) as T;
 }
 
+export async function apiPatch<T>(s: StaffSession, url: string, data: unknown): Promise<T> {
+  const res = await s.request.patch(url, { data, headers: { "X-CSRF-Token": s.csrf } });
+  expect(res.ok(), `${url} -> ${res.status()} ${await res.text()}`).toBeTruthy();
+  return (await res.json()) as T;
+}
+
 export async function apiGet<T>(s: StaffSession, url: string): Promise<T> {
   const res = await s.request.get(url);
   expect(res.ok(), `${url} -> ${res.status()} ${await res.text()}`).toBeTruthy();

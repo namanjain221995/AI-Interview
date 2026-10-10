@@ -55,7 +55,9 @@ async def test_end_session_reapplies_on_a_concurrent_write(interview_env, monkey
     await driver.start()
     assert (await driver.state()).status is SessionStatus.LIVE
 
-    async def closing_text_with_race(state: Any, reason: Any, last_answer: Any, generated: bool) -> tuple[str, str]:
+    async def closing_text_with_race(
+        state: Any, reason: Any, last_answer: Any, generated: bool
+    ) -> tuple[str, str]:
         await _concurrent_write(engine, sid, "saved by the other writer")
         return "Thank you for your time today.", "template"
 
@@ -77,7 +79,9 @@ async def test_end_session_skips_when_the_other_writer_already_ended_it(intervie
     driver = Driver(interview_env, engine, sid)
     await driver.start()
 
-    async def closing_text_with_race(state: Any, reason: Any, last_answer: Any, generated: bool) -> tuple[str, str]:
+    async def closing_text_with_race(
+        state: Any, reason: Any, last_answer: Any, generated: bool
+    ) -> tuple[str, str]:
         fresh = await engine.store.load(sid)
         fresh.status = SessionStatus.ABORTED
         fresh.end_reason = SessionEndReason.CANCELLED
@@ -96,7 +100,9 @@ async def test_pause_reapplies_on_a_concurrent_write(interview_env, monkeypatch)
     await driver.start()
     real_log_event = engine_module.log_event
 
-    async def log_event_with_race(db: Any, session_id: Any, event_type: str, *args: Any, **kwargs: Any) -> Any:
+    async def log_event_with_race(
+        db: Any, session_id: Any, event_type: str, *args: Any, **kwargs: Any
+    ) -> Any:
         if event_type == "session.paused":
             await _concurrent_write(engine, sid, "turn saved during the pause")
         return await real_log_event(db, session_id, event_type, *args, **kwargs)

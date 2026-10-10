@@ -146,7 +146,7 @@ ci-api: ## CI: ruff, mypy, API unit tests, single Alembic head, integration test
 	cd $(API) && $(UV) ruff check . $(ROOT)/infra && $(UV) mypy app
 	cd $(API) && $(UV) pytest -m "not live and not integration" -q
 	cd $(API) && test "$$($(UV) alembic heads | sed '/^\s*$$/d' | wc -l)" -eq 1 || { echo 'more than one Alembic head'; exit 1; }
-	cd $(API) && $(UV) pytest -m integration -q
+	cd $(API) && $(UV) pytest -m "integration and not live" -q
 
 ci-web: ## CI: typecheck, vitest, production build
 	cd $(WEB) && npm run typecheck && npm test && npm run build
@@ -160,7 +160,7 @@ test-web: ## Web unit tests (vitest)
 	cd $(WEB) && npm test
 
 test-integration: ## API integration tests against the running postgres/redis
-	cd $(API) && $(UV) pytest -m integration $(ARGS)
+	cd $(API) && $(UV) pytest -m "integration and not live" $(ARGS)
 
 test-live: ## Tests that call the real local AI endpoints (keep them small: shared GPUs)
 	cd $(API) && $(UV) pytest -m live $(ARGS)

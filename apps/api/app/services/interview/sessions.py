@@ -623,7 +623,9 @@ async def mark_session_completed(db: AsyncSession, session_id: Any) -> bool:
             await store.save_with_retry(str(session_id), _complete)
         except Exception as exc:  # noqa: BLE001
             log.warning(
-                "engine.state_complete_failed", session_id=str(session_id), error=f"{type(exc).__name__}: {exc}"[:200]
+                "engine.state_complete_failed",
+                session_id=str(session_id),
+                error=f"{type(exc).__name__}: {exc}"[:200],
             )
     return completed
 

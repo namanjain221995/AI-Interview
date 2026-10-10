@@ -59,7 +59,9 @@ def test_config_rejects_required_endpoints_and_normalises(settings: Settings) ->
         Settings.model_validate(data)
 
 
-async def test_registry_reports_disabled_without_probing(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_registry_reports_disabled_without_probing(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     data = settings.model_dump()
     data["ai_disabled_endpoints"] = ["vision", "reranker"]
     services = RealAIServices(Settings.model_validate(data))

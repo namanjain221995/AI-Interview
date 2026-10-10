@@ -79,14 +79,19 @@ async def probe(*, force: bool = False, budget_s: float = PROBE_TIMEOUT_SECONDS)
         if not force and _cache is not None and _cache[1] == key and now - _cache[0] < CACHE_TTL_SECONDS:
             return _cache[2]
         if services is None:
-            report = {name: {"status": "unknown", "latency_ms": None, "detail": "AI registry unavailable"} for name in ALL_ENDPOINTS}
+            report = {
+                name: {"status": "unknown", "latency_ms": None, "detail": "AI registry unavailable"}
+                for name in ALL_ENDPOINTS
+            }
         else:
             try:
                 async with asyncio.timeout(budget_s):
                     report = _normalise(await services.health())
             except Exception as exc:  # noqa: BLE001 - a probe failure is reported, never raised
                 detail = f"{type(exc).__name__}: {exc}"[:200]
-                report = {name: {"status": "down", "latency_ms": None, "detail": detail} for name in ALL_ENDPOINTS}
+                report = {
+                    name: {"status": "down", "latency_ms": None, "detail": detail} for name in ALL_ENDPOINTS
+                }
         _record_gauges(report)
         _cache = (time.monotonic(), key, report)
         return report

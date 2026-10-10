@@ -11,7 +11,9 @@ from app.core import ai_health
 
 
 class _Stub:
-    def __init__(self, report: dict[str, dict[str, Any]] | None = None, fail: Exception | None = None) -> None:
+    def __init__(
+        self, report: dict[str, dict[str, Any]] | None = None, fail: Exception | None = None
+    ) -> None:
         self.report = report or {}
         self.fail = fail
         self.calls = 0
@@ -93,6 +95,10 @@ async def test_startup_probe_logs_per_endpoint(monkeypatch: pytest.MonkeyPatch) 
         await ai_health.log_startup_probe("api")  # never raises
     finally:
         set_ai(previous)
-    unreachable = {(level, kw["endpoint"], kw["required"]) for level, event, kw in events if event == "ai.endpoint_unreachable"}
+    unreachable = {
+        (level, kw["endpoint"], kw["required"])
+        for level, event, kw in events
+        if event == "ai.endpoint_unreachable"
+    }
     assert unreachable == {("error", "whisper", True), ("warning", "vision", False)}
     assert all(kw.get("process") == "api" for _, event, kw in events if event == "ai.endpoint_unreachable")

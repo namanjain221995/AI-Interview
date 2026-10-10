@@ -162,7 +162,13 @@ async def on_report_exhausted(ctx: JobContext, exc: BaseException) -> None:
         await log_event(
             db, sid, "report.failed", {"job_id": ctx.job_id, "error": f"{type(exc).__name__}: {exc}"[:200]}
         )
-    log.error("reports.job_exhausted", session_id=str(sid), job_id=ctx.job_id, completed=completed, error=type(exc).__name__)
+    log.error(
+        "reports.job_exhausted",
+        session_id=str(sid),
+        job_id=ctx.job_id,
+        completed=completed,
+        error=type(exc).__name__,
+    )
     await publish_session_event(sid, {"type": "report.failed", "session_id": str(sid)})
 
 

@@ -486,13 +486,20 @@ class InterviewEngine:
                 return state
             try:
                 await self.store.save(fresh, durable=durable, db=db, extra_columns=extra_columns)
-                log.info("engine.state_conflict", session_id=state.session_id, resolution="reapplied", attempt=attempt)
+                log.info(
+                    "engine.state_conflict",
+                    session_id=state.session_id,
+                    resolution="reapplied",
+                    attempt=attempt,
+                )
                 # Callers keep using their own object: make it the saved state.
                 state.__dict__.update(fresh.__dict__)
                 return state
             except StateConflict:
                 continue
-        log.warning("engine.state_conflict", session_id=state.session_id, resolution="force_overwrite_after_retries")
+        log.warning(
+            "engine.state_conflict", session_id=state.session_id, resolution="force_overwrite_after_retries"
+        )
         current = await self.store.load(state.session_id)
         state.version = max(state.version, current.version if current is not None else 0)
         await self.store.save(state, durable=durable, db=db, force=True, extra_columns=extra_columns)
@@ -719,7 +726,9 @@ class InterviewEngine:
                 },
             )
         await publish_session_event(session_id, {"type": "session.ready", "session_id": session_id})
-        log.info("engine.session_prepared", session_id=session_id, plan_source="intake", duration_ms=duration_ms)
+        log.info(
+            "engine.session_prepared", session_id=session_id, plan_source="intake", duration_ms=duration_ms
+        )
 
     async def _profile_gate(self, state: InterviewState) -> tuple[str, Any | None]:
         """("ok"|"wait"|"timeout", newly found profile row). Waits only while a
@@ -2054,12 +2063,21 @@ class InterviewEngine:
                 db,
                 state.session_id,
                 "turn.flow",
-                {"intent": heard.intent.value, "topic": heard.topic, "question_id": question_id, "streak": streak},
+                {
+                    "intent": heard.intent.value,
+                    "topic": heard.topic,
+                    "question_id": question_id,
+                    "streak": streak,
+                },
                 elapsed_s=elapsed,
             )
             await self._save(state, db=db)
         yield UtteranceBegin(
-            utterance_id=utterance_id, kind="acknowledgment", behavior=spec, question_id=question_id, text=text
+            utterance_id=utterance_id,
+            kind="acknowledgment",
+            behavior=spec,
+            question_id=question_id,
+            text=text,
         )
         yield UtteranceMeta(
             utterance_id=utterance_id,
@@ -2429,6 +2447,7 @@ class InterviewEngine:
             last = state.utterances[-1] if state.utterances else None
             if last is not None and not last.delivered:
                 last.interrupted = True  # will be re-spoken on resume
+
             def reapply_pause(fresh: InterviewState) -> bool:
                 # A turn handler saved meanwhile: pause its state, never resurrect ours (G1).
                 if fresh.status != SessionStatus.LIVE:
@@ -2490,7 +2509,10 @@ class InterviewEngine:
                     elapsed_s=elapsed,
                 )
                 await self._save(
-                    state, durable=True, db=db, extra_columns={"reconnect_count": state.reconnects} if reconnect else None
+                    state,
+                    durable=True,
+                    db=db,
+                    extra_columns={"reconnect_count": state.reconnects} if reconnect else None,
                 )
             async with aclosing(
                 self.intake.resume_events(state, reconnect=reconnect, mid_answer=mid_answer)

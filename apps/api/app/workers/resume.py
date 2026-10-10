@@ -64,7 +64,12 @@ async def on_resume_job_exhausted(ctx: JobContext, exc: BaseException) -> None:
     log.error("resume.job_exhausted", resume_id=str(resume_id), job_type=ctx.job_type, job_id=ctx.job_id)
 
 
-@job_handler("resume.process", concurrency=3, timeout_seconds=PROCESS_TIMEOUT_SECONDS, on_exhausted=on_resume_job_exhausted)
+@job_handler(
+    "resume.process",
+    concurrency=3,
+    timeout_seconds=PROCESS_TIMEOUT_SECONDS,
+    on_exhausted=on_resume_job_exhausted,
+)
 async def resume_process(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     resume_id = _uuid(payload.get("resume_id"), "resume_id")
     job_id = _optional_uuid(payload.get("job_id"))
@@ -77,7 +82,12 @@ async def resume_process(payload: dict[str, Any], ctx: JobContext) -> dict[str, 
     )
 
 
-@job_handler("profile.generate", concurrency=3, timeout_seconds=PROFILE_TIMEOUT_SECONDS, on_exhausted=on_resume_job_exhausted)
+@job_handler(
+    "profile.generate",
+    concurrency=3,
+    timeout_seconds=PROFILE_TIMEOUT_SECONDS,
+    on_exhausted=on_resume_job_exhausted,
+)
 async def profile_generate(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     resume_id = _uuid(payload.get("resume_id"), "resume_id")
     candidate_id = _uuid(payload.get("candidate_id"), "candidate_id")

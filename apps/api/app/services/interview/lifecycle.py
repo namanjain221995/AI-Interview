@@ -181,7 +181,11 @@ async def sweep_abandoned_sessions(
             await db.scalar(select(func.count()).select_from(InterviewSession).where(*condition)) or 0
         )
         ids = list(
-            (await db.scalars(select(InterviewSession.id).where(*condition).order_by(last_activity).limit(batch))).all()
+            (
+                await db.scalars(
+                    select(InterviewSession.id).where(*condition).order_by(last_activity).limit(batch)
+                )
+            ).all()
         )
     for sid in ids:
         try:
@@ -214,7 +218,12 @@ async def sweep_abandoned_sessions(
 
 # ------------------------------------------------------------- stuck in COMPLETING (S2)
 
-REPORT_JOB_TYPES: tuple[str, ...] = ("report.generate", "intake.report", "intake.evaluate", "scoring.finalize")
+REPORT_JOB_TYPES: tuple[str, ...] = (
+    "report.generate",
+    "intake.report",
+    "intake.evaluate",
+    "scoring.finalize",
+)
 _LIVE_JOB_STATES: frozenset[str] = frozenset({JobState.QUEUED.value, JobState.RUNNING.value})
 
 
@@ -302,7 +311,9 @@ async def recover_stuck_completing(
             log.warning("session.recovery_report_enqueued", session_id=str(sid))
         except Exception as exc:  # noqa: BLE001 - one bad session must not stop the sweep
             summary.errors += 1
-            log.error("session.recovery_failed", session_id=str(sid), error=f"{type(exc).__name__}: {exc}"[:200])
+            log.error(
+                "session.recovery_failed", session_id=str(sid), error=f"{type(exc).__name__}: {exc}"[:200]
+            )
     SESSIONS_COMPLETING_STALE.set(max(0, summary.stale - summary.completed))
     log.info("session.recovery_sweep", **summary.as_dict(), window_s=window)
     return summary

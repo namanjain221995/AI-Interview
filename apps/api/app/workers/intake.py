@@ -55,7 +55,13 @@ async def on_intake_job_exhausted(ctx: JobContext, exc: BaseException) -> None:
     if sid is None:
         return
     completed = await complete_intake_session(sid)
-    log.error("intake.job_exhausted", session_id=str(sid), job_type=ctx.job_type, job_id=ctx.job_id, completed=completed)
+    log.error(
+        "intake.job_exhausted",
+        session_id=str(sid),
+        job_type=ctx.job_type,
+        job_id=ctx.job_id,
+        completed=completed,
+    )
 
 
 @job_handler(EVALUATE_JOB, concurrency=2, timeout_seconds=900, on_exhausted=on_intake_job_exhausted)

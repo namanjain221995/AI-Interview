@@ -248,7 +248,9 @@ class Settings(BaseSettings):
     seed_password: SecretStr | None = None
 
     # ------------------------------------------------------------ validators
-    @field_validator("cors_allowed_origins", "whisper_extra_base_urls", "ai_disabled_endpoints", mode="before")
+    @field_validator(
+        "cors_allowed_origins", "whisper_extra_base_urls", "ai_disabled_endpoints", mode="before"
+    )
     @classmethod
     def _split_csv(cls, value: Any) -> Any:
         if isinstance(value, str):
