@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select, update
 
-from app.db.models import BackgroundJob, InterviewEvent, InterviewSession
+from app.db.models import BackgroundJob, Interview, InterviewEvent, InterviewSession
 from app.db.session import session_scope
 from app.domain.enums import SessionEndReason, SessionStatus
 from app.realtime.lock import SessionLock
@@ -142,6 +142,36 @@ async def test_cancel_reason_aborts_without_scoring(interview_env, redis) -> Non
         row = await db.get(InterviewSession, uuid.UUID(sid))
         assert row.status == "aborted" and row.end_reason == "cancelled"
     assert "scoring.finalize" not in await _jobs(sid)
+
+
+async def test_the_sweep_never_scores_a_cancelled_interview(interview_env, redis) -> None:
+    # Staff cancelled while the session sat paused (before S1 a cancel only notified a live room).
+    sid, engine = await _paused_session(interview_env, idle_minutes=30)
+    async with session_scope() as db:
+        interview_id = (await db.get(InterviewSession, uuid.UUID(sid))).interview_id
+        await db.execute(update(Interview).where(Interview.id == interview_id).values(status="cancelled"))
+    summary = await sweep_abandoned_sessions(abandon_after_s=1200, dry_run=False, engine=engine, redis=redis)
+    assert summary.ended == 1
+    async with session_scope() as db:
+        row = await db.get(InterviewSession, uuid.UUID(sid))
+        assert row.status == "aborted" and row.end_reason == "cancelled"
+    assert not {"scoring.finalize", "report.generate"} & await _jobs(sid)
+
+
+async def test_offline_end_recovers_from_a_stale_hot_copy(interview_env, redis) -> None:
+    # A closing reached Redis but its database write failed: the hot copy says completing, the row says paused.
+    sid, engine = await _paused_session(interview_env, idle_minutes=30)
+    state = await engine.store.load(sid)
+    state.status = SessionStatus.COMPLETING
+    await engine.store._write_redis(state, expected=state.version, force=True, bump=True)
+    outcome = await end_session_offline(
+        sid, SessionEndReason.DISCONNECT_TIMEOUT, actor="sweeper", engine=engine, redis=redis
+    )
+    assert outcome.action == "ended", outcome
+    async with session_scope() as db:
+        row = await db.get(InterviewSession, uuid.UUID(sid))
+        assert row.status == "completing" and row.end_reason == "disconnect_timeout"
+    assert {"scoring.finalize", "report.generate"} <= await _jobs(sid)
 
 
 def test_disconnect_timeout_holds_open_link_progression_for_review() -> None:

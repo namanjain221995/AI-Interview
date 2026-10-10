@@ -30,9 +30,9 @@ from app.core.logging import get_logger
 from app.core.metrics import SESSIONS_ABANDONED_PENDING, SESSIONS_COMPLETING_STALE, SESSIONS_ENDED_OFFLINE
 from app.core.queue import enqueue
 from app.core.redis import get_redis
-from app.db.models import BackgroundJob, InterviewSession, Report
+from app.db.models import BackgroundJob, Interview, InterviewSession, Report
 from app.db.session import session_scope
-from app.domain.enums import JobState, ReportStatus, SessionEndReason, SessionStatus
+from app.domain.enums import InterviewStatus, JobState, ReportStatus, SessionEndReason, SessionStatus
 from app.realtime.lock import SessionLock
 from app.services.interview.engine import SessionNotFound, get_engine
 from app.services.interview.records import log_event
@@ -42,6 +42,9 @@ from app.services.interview.state_store import ENDED_STATUSES
 log = get_logger(__name__)
 
 SWEEPABLE_STATUSES: frozenset[str] = frozenset({SessionStatus.LIVE.value, SessionStatus.PAUSED.value})
+#: A session the sweep could not end (error, state mismatch) is left alone this long so it cannot hold the
+#: oldest-first batch on every run.
+SWEEP_COOLDOWN_S = 3600
 _ENDED_VALUES: frozenset[str] = frozenset(status.value for status in ENDED_STATUSES)
 
 
@@ -49,7 +52,8 @@ _ENDED_VALUES: frozenset[str] = frozenset(status.value for status in ENDED_STATU
 class OfflineEndOutcome:
     session_id: str
     action: Literal["ended", "skipped", "dry_run"]
-    reason: str  # ended/dry_run: the end reason; skipped: not_found | already_ended | active | locked
+    # ended/dry_run: the end reason; skipped: not_found | already_ended | active | locked | state_mismatch
+    reason: str
     status_before: str | None = None
     detail: str | None = None
 
@@ -106,6 +110,7 @@ async def end_session_offline(
         status_before = str(row.status)
         if status_before in _ENDED_VALUES:
             return OfflineEndOutcome(session_id, "skipped", "already_ended", status_before)
+        interview_status = await db.scalar(select(Interview.status).where(Interview.id == row.interview_id))
         if require_idle_s is not None:
             last = _last_activity(row)
             idle = (now - last).total_seconds() if last is not None else float("inf")
@@ -123,6 +128,17 @@ async def end_session_offline(
     )
     if not await lock.acquire():
         return OfflineEndOutcome(session_id, "skipped", "locked", status_before, lock.holder)
+    if interview_status == InterviewStatus.CANCELLED.value and reason is not SessionEndReason.CANCELLED:
+        # A cancelled invitation is never scored or reported, whoever ends its session (e.g. the sweep finding
+        # a session that was still paused when staff cancelled before S1).
+        reason = SessionEndReason.CANCELLED
+
+    async def _lock_lost() -> None:
+        log.warning("session.offline_end_lock_lost", session_id=session_id)
+
+    # Held for the whole end (a coding finish alone can take ~20 s): a reconnecting runtime must not resume the
+    # session underneath us once the TTL would have run out.
+    lock.start_refresh(_lock_lost)
     try:
         if dry_run:
             log.info(
@@ -135,8 +151,22 @@ async def end_session_offline(
             async with aclosing(active_engine.end_session(session_id, reason)) as stream:
                 async for _event in stream:
                     pass
+            status_after = await _row_status(session_id)
+            store = getattr(active_engine, "store", None)
+            if status_after not in _ENDED_VALUES and store is not None:
+                # The Redis hot copy already said "ended" (a closing whose database write failed), so the engine
+                # did nothing: end once more from the durable snapshot.
+                log.warning("session.offline_end_stale_cache", session_id=session_id, status=status_after)
+                await store.delete_cached(session_id)
+                async with aclosing(active_engine.end_session(session_id, reason)) as stream:
+                    async for _event in stream:
+                        pass
+                status_after = await _row_status(session_id)
         except SessionNotFound:
             return OfflineEndOutcome(session_id, "skipped", "not_found", status_before)
+        if status_after not in _ENDED_VALUES:
+            log.warning("session.offline_end_no_effect", session_id=session_id, status=status_after)
+            return OfflineEndOutcome(session_id, "skipped", "state_mismatch", status_before, status_after)
         async with session_scope() as db:
             await log_event(
                 db,
@@ -152,6 +182,35 @@ async def end_session_offline(
         return OfflineEndOutcome(session_id, "ended", reason.value, status_before)
     finally:
         await lock.release()
+
+
+def _cooldown_key(session_id: uuid.UUID) -> str:
+    return f"lifecycle:sweep_cooldown:{session_id}"
+
+
+async def _without_cooldown(redis: Any, ids: list[uuid.UUID]) -> list[uuid.UUID]:
+    if not ids:
+        return ids
+    try:
+        flags = await redis.mget([_cooldown_key(sid) for sid in ids])
+    except Exception:  # noqa: BLE001 - best effort: without Redis every candidate is tried
+        return ids
+    return [sid for sid, flag in zip(ids, flags, strict=True) if flag is None]
+
+
+async def _cool_down(redis: Any, session_id: uuid.UUID) -> None:
+    try:
+        await redis.set(_cooldown_key(session_id), "1", ex=SWEEP_COOLDOWN_S)
+    except Exception:  # noqa: BLE001 - best effort
+        log.warning("session.sweep_cooldown_failed", session_id=str(session_id))
+
+
+async def _row_status(session_id: str) -> str | None:
+    async with session_scope() as db:
+        status = await db.scalar(
+            select(InterviewSession.status).where(InterviewSession.id == uuid.UUID(session_id))
+        )
+    return str(status) if status is not None else None
 
 
 async def sweep_abandoned_sessions(
@@ -183,10 +242,12 @@ async def sweep_abandoned_sessions(
         ids = list(
             (
                 await db.scalars(
-                    select(InterviewSession.id).where(*condition).order_by(last_activity).limit(batch)
+                    select(InterviewSession.id).where(*condition).order_by(last_activity).limit(batch * 4)
                 )
             ).all()
         )
+    cooling = redis if redis is not None else get_redis()
+    ids = (await _without_cooldown(cooling, ids))[:batch]
     for sid in ids:
         try:
             outcome = await end_session_offline(
@@ -202,7 +263,10 @@ async def sweep_abandoned_sessions(
         except Exception as exc:  # noqa: BLE001 - one bad session must not stop the sweep
             summary.errors += 1
             log.error("session.sweep_failed", session_id=str(sid), error=f"{type(exc).__name__}: {exc}"[:200])
+            await _cool_down(cooling, sid)
             continue
+        if outcome.action == "skipped" and outcome.reason == "state_mismatch":
+            await _cool_down(cooling, sid)
         if outcome.action == "ended":
             summary.ended += 1
         elif outcome.action == "dry_run":
