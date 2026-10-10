@@ -112,11 +112,12 @@ async def require_intake_enabled() -> None:
     ensure_enabled()
 
 
-async def require_intake_entitled(principal: CurrentPrincipal, db: DbSession) -> None:
+async def require_intake_entitled(principal: CurrentPrincipal, db: DbSession, request: Request) -> None:
     """Staff intake routes: 404 unless the caller's organisation's plan includes intake (G8); platform staff
     see every organisation's. Candidate routes only use ``require_intake_enabled``: removing the feature from a
-    plan never locks out candidates already in an intake."""
-    if principal.is_super_admin:
+    plan never locks out candidates already in an intake. Deleting existing intake data never depends on the
+    plan either (DELETE passes; the route's own permission and organisation checks still apply)."""
+    if principal.is_super_admin or request.method == "DELETE":
         return
     if not await intake_entitled(db, principal.organization_id):
         raise NotFound("Intake interviews are not part of this workspace.", code="intake_disabled")
