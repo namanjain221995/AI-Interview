@@ -77,7 +77,9 @@ from app.realtime.turns import (
     TurnController,
     is_backchannel,
     is_repeat_or_clarification,
+    resume_after_backchannel,
     spoken_portion,
+    unspoken_words,
 )
 from app.schemas.realtime import (
     FRAME_MIC_AUDIO,
@@ -1332,6 +1334,7 @@ class SessionRuntime:
             full_text=utt.text,
             spoken_text=spoken,
             played_ms=int(played),
+            text_complete=utt.ended,
         )
         try:
             await _maybe_await(self.engine.handle_interruption(self.session_id, interrupted))
@@ -2453,7 +2456,7 @@ class SessionRuntime:
             )
         )
         interrupted = await capture.interrupted_task if capture.interrupted_task is not None else None
-        if interrupted is not None and capture.typed_text is None and is_backchannel(text):
+        if resume_after_backchannel(interrupted, text, typed=capture.typed_text is not None):
             capture.engine_called = True
             await self._drive(
                 self.engine.handle_backchannel_resume(self.session_id, interrupted),
@@ -2462,6 +2465,15 @@ class SessionRuntime:
                 capture=capture,
             )
             return
+        if interrupted is not None and capture.typed_text is None and is_backchannel(text):
+            # Spoken over the last moments of the question: a short "Yes." answers it instead of resuming (S10).
+            log.info(
+                "realtime.overlap_answer",
+                session_id=self.session_id,
+                utterance_id=interrupted.utterance_id,
+                unspoken_words=unspoken_words(interrupted.full_text, interrupted.spoken_text),
+                words=len(text.split()),
+            )
         if capture.typed_text is None and capture.end_reason not in ("manual", "max_utterance"):
             waited = await self._await_commit(capture, text)
             if waited:

@@ -206,6 +206,37 @@ async def test_barge_in_backchannel_resumes_interrupted_question(realtime_env, w
     assert isinstance(ChunkRecord, type)
 
 
+async def test_short_reply_over_the_end_of_a_question_is_an_answer(realtime_env, ws_connect, mock_ai) -> None:
+    """S10 (audit B8): "Yes." spoken while the last word of a yes-no question plays answers it; nothing is re-spoken."""
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    env.engine.replies = ["Got it. Did you own the Karpenter configuration yourself?"]
+    await ws.send_json({"type": "answer.text", "text": "We ran EKS with three node groups."})
+    reply = await ws.wait_type("ai.utterance.start", kind="question")
+    await ws.wait_type("turn.state", state="ai_speaking")
+    # Both sentences are synthesized before the candidate speaks over the last word.
+    await ws.wait_type("tts.chunk", utterance_id=reply["utterance_id"], index=1)
+    await ws.send_json({"type": "playback.started", "utterance_id": reply["utterance_id"], "played_ms": 0})
+
+    mark = len(ws.messages)
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("Yes.")
+    await ws.send_audio(load_clip("backchannel"))
+    await ws.wait_type("barge_in", after=mark)
+    # The client reports that the whole question had already played when the candidate spoke.
+    await ws.send_json(
+        {"type": "playback.interrupted", "utterance_id": reply["utterance_id"], "played_ms": 600_000}
+    )
+    await ws.send_audio(silence(2000))
+    for _ in range(250):
+        if len(env.engine.turns) == 2:
+            break
+        await asyncio.sleep(0.02)
+    assert [t.text for t in env.engine.turns] == ["We ran EKS with three node groups.", "Yes."]
+    assert env.engine.turns[-1].interrupted_ai
+    assert not [c for c in env.engine.calls if c[0] == "backchannel_resume"]
+
+
 async def test_barge_in_with_substantive_answer_starts_new_turn(realtime_env, ws_connect, mock_ai) -> None:
     env = await realtime_env()
     ws, _, intro = await live(env, ws_connect)

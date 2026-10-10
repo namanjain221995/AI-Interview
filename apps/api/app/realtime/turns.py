@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from app.core.logging import get_logger
 from app.domain.enums import TurnState
+from app.services.interview.contracts import InterruptedUtterance
 
 log = get_logger(__name__)
 
@@ -89,6 +90,33 @@ class ChunkRecord:
 
 
 FULLY_PLAYED_FRACTION = 0.9
+
+
+# A short reply while at least this many words of the interviewer's utterance were still unspoken is a backchannel
+# ("mm-hmm", "okay") and the utterance resumes; the same words over the last word or two of a question answer it (S10).
+UNSPOKEN_WORDS_FOR_ANSWER = 2
+
+
+def unspoken_words(full_text: str, spoken_text: str | None) -> int:
+    """Words of ``full_text`` the candidate did not get to hear (``spoken_text`` is the played prefix)."""
+    return max(0, len(full_text.split()) - len((spoken_text or "").split()))
+
+
+def resume_after_backchannel(interrupted: InterruptedUtterance | None, text: str, *, typed: bool) -> bool:
+    """Whether a turn that interrupted the interviewer resumes the utterance instead of being an answer.
+
+    Audit finding B8: "Yes." / "Okay, sure." spoken over the last word of a yes-no question was swallowed as a
+    backchannel and the question's tail re-spoken. When at most ``UNSPOKEN_WORDS_FOR_ANSWER`` words were left
+    the candidate heard the question, so the reply is theirs to keep. Noise and empty captures still resume
+    (there is nothing to answer with), and so does an utterance whose text was still being generated. The decision
+    is text-based on purpose: the audio length is only known for the chunks already synthesized, which is
+    misleading while TTS is still streaming.
+    """
+    if interrupted is None or typed or not is_backchannel(text):
+        return False
+    if not text.strip() or not interrupted.text_complete:
+        return True  # nothing to answer with / the question was still being generated: not heard in full
+    return unspoken_words(interrupted.full_text, interrupted.spoken_text) > UNSPOKEN_WORDS_FOR_ANSWER
 
 
 def spoken_portion(chunks: Sequence[ChunkRecord], played_ms: int) -> tuple[str, int]:

@@ -6,12 +6,16 @@ import pytest
 
 from app.domain.enums import TurnState
 from app.realtime.turns import (
+    UNSPOKEN_WORDS_FOR_ANSWER,
     ChunkRecord,
     TurnController,
     is_backchannel,
     is_repeat_or_clarification,
+    resume_after_backchannel,
     spoken_portion,
+    unspoken_words,
 )
+from app.services.interview.contracts import InterruptedUtterance
 
 CHUNKS = [
     ChunkRecord(chunk_id=11, index=0, text="Thanks, that's helpful.", duration_ms=1200, offset_ms=0),
@@ -127,3 +131,59 @@ def test_turn_fsm_rejects_invalid_and_ignores_same_state() -> None:
     assert calls == []
     fsm.state = TurnState.ENDED
     assert not fsm.can(TurnState.PAUSED)
+
+
+# ------------------------------------------------------------------ short replies over the end of a question (S10)
+
+QUESTION = "Got it. Did you own the Karpenter configuration yourself?"
+
+
+def _interrupted(spoken: str) -> InterruptedUtterance:
+    return InterruptedUtterance("u1", "q1", QUESTION, spoken, played_ms=1000)
+
+
+def test_backchannel_in_the_middle_of_a_question_resumes_it() -> None:
+    assert resume_after_backchannel(_interrupted("Got it."), "Mm-hmm.", typed=False)
+    assert resume_after_backchannel(_interrupted("Got it. Did you own the"), "Okay.", typed=False)
+    assert resume_after_backchannel(_interrupted(""), "Yeah.", typed=False)
+
+
+def test_short_reply_over_the_last_words_is_an_answer() -> None:
+    assert not resume_after_backchannel(_interrupted(QUESTION), "Yes.", typed=False)
+    assert not resume_after_backchannel(
+        _interrupted("Got it. Did you own the Karpenter configuration"), "Yes.", typed=False
+    )
+    assert not resume_after_backchannel(
+        _interrupted("Got it. Did you own the Karpenter"), "Okay, sure.", typed=False
+    )
+
+
+def test_resume_threshold_is_exact() -> None:
+    words = QUESTION.split()
+    heard_all_but_limit = " ".join(words[: len(words) - UNSPOKEN_WORDS_FOR_ANSWER])
+    assert not resume_after_backchannel(_interrupted(heard_all_but_limit), "Right.", typed=False)
+    one_more_unspoken = " ".join(words[: len(words) - UNSPOKEN_WORDS_FOR_ANSWER - 1])
+    assert resume_after_backchannel(_interrupted(one_more_unspoken), "Right.", typed=False)
+    assert unspoken_words(QUESTION, heard_all_but_limit) == UNSPOKEN_WORDS_FOR_ANSWER
+    assert unspoken_words(QUESTION, None) == len(words) and unspoken_words(QUESTION, QUESTION + " extra") == 0
+
+
+def test_a_question_still_being_generated_always_resumes() -> None:
+    streaming = InterruptedUtterance(
+        "u1", "q1", "Got it. Did", "Got it. Did", played_ms=300, text_complete=False
+    )
+    assert resume_after_backchannel(streaming, "Yes.", typed=False)
+    assert not resume_after_backchannel(
+        _interrupted(QUESTION), "Yes.", typed=False
+    )  # complete and fully heard
+
+
+def test_noise_keeps_resuming_even_at_the_end() -> None:
+    assert resume_after_backchannel(_interrupted(QUESTION), "", typed=False)
+    assert resume_after_backchannel(_interrupted(QUESTION), "   ", typed=False)
+
+
+def test_typed_substantive_and_uninterrupted_turns_never_resume() -> None:
+    assert not resume_after_backchannel(_interrupted("Got it."), "Yes.", typed=True)
+    assert not resume_after_backchannel(_interrupted("Got it."), "Yes, but we used four zones.", typed=False)
+    assert not resume_after_backchannel(None, "Yes.", typed=False)

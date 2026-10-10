@@ -84,13 +84,25 @@ class InterruptedUtterance:
     full_text: str
     spoken_text: str  # what the candidate actually heard (played chunks)
     played_ms: int
+    text_complete: bool = (
+        True  # additive: False while the utterance was still being generated when interrupted
+    )
 
 
 @dataclass(slots=True)
 class CodingActivity:
     """Code-related signal from the runtime."""
 
-    kind: Literal["edit", "run_completed", "submitted", "hint_requested", "language_changed", "idle", "time_warning", "time_up"]
+    kind: Literal[
+        "edit",
+        "run_completed",
+        "submitted",
+        "hint_requested",
+        "language_changed",
+        "idle",
+        "time_warning",
+        "time_up",
+    ]
     coding_session_id: str
     code: str | None = None
     language: str | None = None
@@ -112,7 +124,13 @@ class TimerEvent:
     """
 
     kind: Literal[
-        "tick", "time_warning", "time_up", "max_time", "silence_timeout", "resume_after_disconnect", "disconnect"
+        "tick",
+        "time_warning",
+        "time_up",
+        "max_time",
+        "silence_timeout",
+        "resume_after_disconnect",
+        "disconnect",
     ]
     elapsed_s: float
     detail: dict[str, Any] = field(default_factory=dict)
@@ -233,8 +251,17 @@ class ActivityEnded:
 
 
 TurnEvent = (
-    UtteranceBegin | SpeechDelta | UtteranceMeta | CodingStarted | CodingHintIssued | CodingEnded | SessionClosing | StateChanged
-    | ActivityStarted | ActivityPhaseChanged | ActivityEnded
+    UtteranceBegin
+    | SpeechDelta
+    | UtteranceMeta
+    | CodingStarted
+    | CodingHintIssued
+    | CodingEnded
+    | SessionClosing
+    | StateChanged
+    | ActivityStarted
+    | ActivityPhaseChanged
+    | ActivityEnded
 )
 
 
@@ -264,20 +291,26 @@ class TurnEngine(Protocol):
         quick assessment). Must never commit state."""
         ...
 
-    async def handle_candidate_turn(self, session_id: str, turn: CandidateTurn) -> AsyncIterator[TurnEvent]: ...
+    async def handle_candidate_turn(
+        self, session_id: str, turn: CandidateTurn
+    ) -> AsyncIterator[TurnEvent]: ...
 
     async def handle_interruption(self, session_id: str, interrupted: InterruptedUtterance) -> None:
         """Record that an utterance was cut off (spoken portion only)."""
         ...
 
-    async def handle_backchannel_resume(self, session_id: str, interrupted: InterruptedUtterance) -> AsyncIterator[TurnEvent]:
+    async def handle_backchannel_resume(
+        self, session_id: str, interrupted: InterruptedUtterance
+    ) -> AsyncIterator[TurnEvent]:
         """Barge-in turned out to be a backchannel ('mm-hmm'): continue the
         interrupted utterance from where it stopped."""
         ...
 
     async def repeat_question(self, session_id: str) -> AsyncIterator[TurnEvent]: ...
 
-    async def handle_coding_activity(self, session_id: str, activity: CodingActivity) -> AsyncIterator[TurnEvent]:
+    async def handle_coding_activity(
+        self, session_id: str, activity: CodingActivity
+    ) -> AsyncIterator[TurnEvent]:
         """May yield nothing (silence is the default while coding)."""
         ...
 
