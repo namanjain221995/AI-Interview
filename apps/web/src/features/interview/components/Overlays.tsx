@@ -227,8 +227,9 @@ export function ReconnectOverlay({ store, onRetry }: { store: InterviewStore; on
   const ended = useInterviewState(store, (s) => Boolean(s.ended));
   const fatal = useInterviewState(store, (s) => s.fatalError);
   if (!begun || ended) return null;
-  const firstConnect = !connection.everConnected && (connection.status === "connecting" || connection.status === "idle");
-  if (connection.status === "connected" || connection.status === "closed") return null;
+  // Nothing to cover before the first connection attempt (device setup, or a failed Begin): the lobby owns the screen.
+  if (connection.status === "idle" || connection.status === "connected" || connection.status === "closed") return null;
+  const firstConnect = !connection.everConnected && connection.status === "connecting";
   const offline = connection.status === "offline";
   const copy = offline ? offlineCopy(connection.reason, fatal?.message ?? null) : null;
   return (

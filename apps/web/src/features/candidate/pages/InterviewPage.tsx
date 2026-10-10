@@ -37,11 +37,24 @@ function StageMessage({ icon, title, body, action }: { icon: ReactNode; title: s
   );
 }
 
+/**
+ * The error that may replace the room: only one that left a query without data. A background refetch that
+ * fails while the room is live (focus change, flaky network, expired cookie) keeps the room on screen; the
+ * interview itself runs over the WebSocket and ends through it.
+ */
+export function roomError<E>(interview: { data: unknown; error: E | null }, session: { data: unknown; error: E | null }): E | null {
+  if (interview.error && !interview.data) return interview.error;
+  if (session.error && !session.data) return session.error;
+  return null;
+}
+
 /** /candidate/:interviewId/interview — full-screen interview room (outside the candidate frame). */
 export default function InterviewPage() {
   const { interviewId = "" } = useParams();
   const navigate = useNavigate();
-  const interview = usePortalInterview(interviewId);
+  // Once the room is up, the interview is driven over the WebSocket: background refetches of the portal view
+  // are never allowed to unmount it (S5, audit B5).
+  const interview = usePortalInterview(interviewId, { refetchOnWindowFocus: false, refetchOnReconnect: false });
   const session = useQuery({
     queryKey: ["portal", "interview", interviewId, "ensure-session"],
     queryFn: () => createOrResumeSession(interviewId),
@@ -50,6 +63,7 @@ export default function InterviewPage() {
     gcTime: 0,
     retry: (count, error) => !(isApiError(error) && error.status < 500) && count < 2,
     refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     meta: { errorToast: false },
   });
 
@@ -62,7 +76,7 @@ export default function InterviewPage() {
     if (finished && session.data) navigate(`/candidate/${interviewId}/complete?session=${encodeURIComponent(session.data.sessionId)}`, { replace: true });
   }, [finished, session.data, interviewId, navigate]);
 
-  const error = interview.error ?? session.error;
+  const error = roomError({ data: interview.data, error: interview.error }, { data: session.data, error: session.error });
   const code = isApiError(error) ? error.code : "";
   useEffect(() => {
     // The server knows exactly which step is missing; take the candidate there.

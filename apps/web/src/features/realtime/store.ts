@@ -191,6 +191,7 @@ export type LocalAction =
   | { type: "rtt"; ms: number }
   | { type: "seed"; session: Partial<SessionView> & { id: string } }
   | { type: "begun" }
+  | { type: "begin.failed" }
   | { type: "playback.chunk_started"; utteranceId: string; text: string }
   | { type: "playback.word"; utteranceId: string }
   | { type: "playback.done"; utteranceId: string; interrupted: boolean }
@@ -608,6 +609,9 @@ export function reduceInterview(state: InterviewViewState, action: InterviewActi
     }
     case "begun":
       return { ...state, begun: true };
+    case "begin.failed":
+      // Device setup or the first connection failed before a socket existed: back to the lobby (S5).
+      return { ...state, begun: false, connection: { ...state.connection, status: "idle" } };
     case "playback.chunk_started": {
       const index = state.utterances.findIndex((u) => u.id === action.utteranceId);
       if (index === -1) return state;

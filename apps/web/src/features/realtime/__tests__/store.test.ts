@@ -228,6 +228,15 @@ describe("interview reducer", () => {
     expect(s.warnings.map((w) => w.eventType)).toEqual(["tab_hidden", "fullscreen_exited"]);
   });
 
+  it("returns to the lobby when Begin fails before a connection exists", () => {
+    const store = createInterviewStore();
+    store.dispatch({ type: "begun" });
+    store.dispatch({ type: "connection", status: "connecting", attempt: 1, reason: null, at: 1 });
+    store.dispatch({ type: "begin.failed" });
+    expect(store.getState().begun).toBe(false);
+    expect(store.getState().connection.status).toBe("idle");
+  });
+
   it("records the end of the session and fatal errors", () => {
     let s = apply([sessionState(), server({ type: "session.ended", reason: "time_limit", report_status: "pending", candidate_report_available: false })]);
     expect(s.ended).toEqual({ reason: "time_limit", reportStatus: "pending", candidateReportAvailable: false });

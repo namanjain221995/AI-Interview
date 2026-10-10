@@ -45,6 +45,8 @@ export interface RuntimeApi {
 }
 
 const DEFAULT_API: RuntimeApi = { fetchTicket: getWsTicket, postIntegrityEvents, uploadFrame, uploadRecording, completeRecording, endSession: endPortalSession };
+/** A start the server could not complete is retried this many times before the candidate has to act (S5). */
+const START_RETRIES = 3;
 /** A recording part that failed for a transient reason is retried as a new part this many times. */
 const RECORDING_RESTARTS = 3;
 const RECORDING_RETRY_MS = 15_000;
@@ -138,6 +140,7 @@ export class InterviewRuntime {
   /** Utterances whose ai.utterance.end arrived (their text is complete). */
   private readonly endedUtterances = new Set<string>();
   private endFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+  private startRetries = 0;
   private ttsMode: ClientPrefs["ttsMode"];
   private micAvailable = true;
   /** Intake read-and-relay: removes the passage at the local countdown zero even if the server is late. */
@@ -656,6 +659,20 @@ export class InterviewRuntime {
         this.clearTextTrack(msg.utterance_id);
         this.pendingFallback.delete(msg.utterance_id);
         avatar?.interrupt();
+        break;
+      }
+      case "error": {
+        // A start the server could not complete for a transient reason (model hiccup) is retried a few times
+        // with a short backoff before the candidate has to act; the store already shows the notice (S5).
+        if (msg.code === "start_failed" && this.startRetries < START_RETRIES) {
+          const attempt = ++this.startRetries;
+          this.startSent = false;
+          setTimeout(() => {
+            if (this.ended || this.startSent) return;
+            this.startSent = true;
+            this.send({ type: "control.start" });
+          }, 1500 * attempt);
+        }
         break;
       }
       case "session.ended":

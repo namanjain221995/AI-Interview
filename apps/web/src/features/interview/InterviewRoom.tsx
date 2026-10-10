@@ -52,6 +52,12 @@ export function InterviewRoom({ interview, sessionId, sessionStatus }: Interview
   const consent = useMemo(() => readLocal<ConsentFlags | null>(interview.id, "consent", null), [interview.id]);
   const liveIntegrity = useInterviewState(store, (s) => s.session?.integrity ?? null);
   const policy = useMemo(() => effectivePolicy(interview.policy, liveIntegrity, consent), [interview.policy, liveIntegrity, consent]);
+  // The code editor is its own chunk: fetch it while the network is idle, so a flaky connection during the
+  // coding phase cannot stall the round (S5).
+  const codingAhead = selectedRound(interview)?.codingEnabled ?? false;
+  useEffect(() => {
+    if (codingAhead) void import("@/features/coding/CodeEditor").catch(() => undefined);
+  }, [codingAhead]);
   const [runtime, setRuntime] = useState<InterviewRuntime | null>(null);
   const runtimeRef = useRef<InterviewRuntime | null>(null);
   const screenRef = useRef<ScreenShareManager | null>(null);
@@ -194,6 +200,7 @@ export function InterviewRoom({ interview, sessionId, sessionStatus }: Interview
         runtimeRef.current?.dispose();
         runtimeRef.current = null;
         setRuntime(null);
+        store.dispatch({ type: "begin.failed" });
         setBeginError(describeBeginError(error));
       })
       .finally(() => setStarting(false));

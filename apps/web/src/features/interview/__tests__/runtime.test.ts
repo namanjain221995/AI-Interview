@@ -405,6 +405,21 @@ describe("InterviewRuntime", () => {
     expect(onEnded).toHaveBeenCalledTimes(1);
   });
 
+  it("retries a failed start a few times before leaving it to the candidate", async () => {
+    const { socket } = await startRuntime();
+    socket.push(stateMsg("ready"));
+    const starts = () => socket.types().filter((t) => t === "control.start").length;
+    expect(starts()).toBe(1);
+    socket.push(msg({ type: "error", code: "start_failed", message: "The interview could not start.", recoverable: true }));
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(starts()).toBe(2);
+    for (let i = 0; i < 3; i++) {
+      socket.push(msg({ type: "error", code: "start_failed", message: "The interview could not start.", recoverable: true }));
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(starts()).toBe(4); // the first attempt plus three retries, then the notice stands
+  });
+
   it("ends over REST when the socket is down, and leaves", async () => {
     const onEnded = vi.fn();
     const endSession = vi.fn(async () => ({ status: "ending" }));
