@@ -31,6 +31,7 @@ from typing import Any
 import uvicorn
 from sqlalchemy import text
 
+from app.core.ai_health import log_startup_probe
 from app.core.config import Settings, get_settings
 from app.core.lifecycle import LifecycleRunner, import_submodules, init_ai_registry, shutdown_ai_registry
 from app.core.logging import configure_logging, get_logger
@@ -189,6 +190,9 @@ async def run_worker(settings: Settings | None = None, *, stop: asyncio.Event | 
     await get_storage().ensure_root()
     await _wait_for_dependencies(STARTUP_WAIT_SECONDS)
     ai_started = await init_ai_registry(strict=strict, is_test=settings.is_test)
+    if ai_started:
+        # One log line per unreachable AI endpoint (S16); runs in the background, never delays startup.
+        _startup_probe = asyncio.create_task(log_startup_probe("worker"), name="ai.startup_probe")
     import_submodules(WORKERS_PACKAGE, strict=strict)
     log.info("worker.handlers_registered", job_types=registered_job_types())
     runner = LifecycleRunner("worker", strict=strict)

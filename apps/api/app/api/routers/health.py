@@ -16,10 +16,11 @@ import asyncio
 import time
 from typing import Any
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.core import ai_health
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.metrics import render_latest
@@ -84,16 +85,56 @@ async def healthz() -> dict[str, Any]:
     return _liveness()
 
 
-@root_router.get("/readyz", summary="Readiness probe (database, Redis, storage)")
-async def readyz() -> JSONResponse:
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _is_loopback(request: Request) -> bool:
+    """True only for clients on this host.
+
+    Direct connections: the peer address must be loopback. Through the edge the peer is the
+    edge itself (loopback), so the first ``X-Forwarded-For`` hop it adds must be loopback as
+    well; a direct loopback client never sends that header, and anyone who can forge it from
+    loopback is already on the host."""
+    host = request.client.host if request.client else ""
+    if host not in _LOOPBACK_HOSTS:
+        return False
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if not forwarded:
+        return True
+    first_hop = forwarded.split(",")[0].strip()
+    return first_hop in _LOOPBACK_HOSTS
+
+
+@root_router.get(
+    "/readyz",
+    summary="Readiness probe (database, Redis, storage; ?deep=1 adds the AI endpoints, loopback clients only)",
+)
+async def readyz(
+    request: Request,
+    deep: bool = Query(False, description="Also probe the AI endpoints (cached 15 s). Loopback clients only."),
+) -> JSONResponse:
     results = await asyncio.gather(
         run_check("database", check_database), run_check("redis", check_redis), run_check("storage", check_storage)
     )
+    body: dict[str, Any] = {"checks": {r["name"]: r for r in results}}
     ready = all(r["status"] == "ok" for r in results)
-    return JSONResponse(
-        {"status": "ready" if ready else "not_ready", "checks": {r["name"]: r for r in results}},
-        status_code=200 if ready else 503,
-    )
+    if deep:
+        if not _is_loopback(request):
+            return JSONResponse(
+                {"status": "forbidden", "detail": "deep readiness is available to loopback clients only"},
+                status_code=403,
+            )
+        # main, whisper and tts are required for an interview; the others only degrade features.
+        report = await ai_health.probe()
+        required_down, optional_down = ai_health.classify(report)
+        body["ai"] = {
+            name: {"status": data.get("status"), "latency_ms": data.get("latency_ms")} for name, data in report.items()
+        }
+        body["required_down"] = required_down
+        body["degraded"] = optional_down
+        ready = ready and not required_down
+    body["status"] = "ready" if ready else "not_ready"
+    return JSONResponse(body, status_code=200 if ready else 503)
 
 
 @root_router.get("/metrics", include_in_schema=False)

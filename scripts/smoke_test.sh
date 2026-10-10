@@ -85,6 +85,7 @@ PY
 info "== API"
 http "api /healthz" "$API_URL/healthz" 200 || true
 http "api /readyz (db, redis, storage)" "$API_URL/readyz" 200 || true
+http "api /readyz?deep=1 (AI: main, whisper, tts required)" "$API_URL/readyz?deep=1" 200 || true
 http "worker /healthz" "$WORKER_URL/healthz" 200 || true
 
 info "== Edge"

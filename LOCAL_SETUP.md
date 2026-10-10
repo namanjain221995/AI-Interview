@@ -46,13 +46,23 @@ Text-to-speech is not an external endpoint: the platform runs its own Kokoro ser
    `make optimize-avatar` (builds `apps/web/public/avatars/interviewer.glb` only when it is missing).
    `make setup` never overwrites an existing `.env` (`scripts/setup.sh --force` regenerates every secret).
 
-2. **Build the code runner images** (needed before the first coding round):
+2. **Check the node** (tooling, `.env`, the AI endpoints the `.env` points at, assets, runtime images):
+
+   ```bash
+   make doctor            # add --no-stack before the first `make up`: scripts/doctor.sh --no-stack
+   ```
+
+   Required checks (main LLM, Whisper, TTS reachable; secrets generated) fail the command; optional endpoints
+   (vision, embeddings, reranker, OCR) only warn. Once the stack runs it also calls the API's deep readiness probe,
+   `GET /readyz?deep=1` (loopback clients only, cached 15 s), which `make smoke` checks too.
+
+3. **Build the code runner images** (needed before the first coding round):
 
    ```bash
    make sandbox-images   # interview-sandbox-{python,node,java,go,cpp}:local
    ```
 
-3. **Start the stack.**
+4. **Start the stack.**
 
    ```bash
    make up
@@ -63,7 +73,7 @@ Text-to-speech is not an external endpoint: the platform runs its own Kokoro ser
    and `scripts/wait_for_healthy.sh --timeout 600` waits until every service is healthy (on failure it prints
    the state of each service and the last log lines of the unhealthy ones).
 
-4. **Seed accounts and the catalog.**
+5. **Seed accounts and the catalog.**
 
    ```bash
    make seed    # or: make demo (adds demo jobs, two demo candidates and their invite links)
@@ -71,13 +81,13 @@ Text-to-speech is not an external endpoint: the platform runs its own Kokoro ser
 
    See [What the seed creates](#what-the-seed-creates). The password is printed at the end.
 
-5. **Check the deployment.**
+6. **Check the deployment.**
 
    ```bash
    make smoke
    ```
 
-6. **Open the app** at http://localhost:3200/login and sign in as `recruiter@demo.local`. To run an interview:
+7. **Open the app** at http://localhost:3200/login and sign in as `recruiter@demo.local`. To run an interview:
    Jobs > Senior DevOps Engineer > Invite candidate, then open the invite link in a private window (or on another
    device, see [LAN HTTPS](#testing-from-other-devices-on-the-lan-https)).
 
@@ -128,6 +138,28 @@ before `make api-dev`.
 
 `CORS_ALLOWED_ORIGINS=http://localhost:5173` in `.env.example` exists only for the Vite dev server; through the
 edge, the SPA and the API share one origin.
+
+## Running on a second DGX node (worker node, e.g. spark-476e)
+
+On a node that is not the model host, the `.env.example` endpoint defaults are wrong and nothing checks them at
+startup (`make doctor` does). Point the `.env` at the addresses that answer from that node, for example:
+
+```
+MAIN_LLM_BASE_URL=http://10.100.184.1:8000/v1        # head node over the interconnect
+WHISPER_BASE_URL=http://192.168.9.68:30007/v1        # this node's LAN address
+OCR_BASE_URL=http://192.168.9.68:30004/v1
+VISION_LLM_BASE_URL=http://127.0.0.1:8002/v1         # SSH tunnel to the head node (below)
+EMBEDDING_BASE_URL=http://127.0.0.1:8003/v1
+RERANKER_BASE_URL=http://127.0.0.1:8005
+```
+
+Model servers that only listen on the head node's loopback are reached through a persistent SSH tunnel
+(`ssh -N -L 127.0.0.1:8002:127.0.0.1:8002 -L 127.0.0.1:8003:127.0.0.1:8003 -L 127.0.0.1:8005:127.0.0.1:8005
+<user>@10.100.184.1`, as a `systemd --user` unit with `Restart=always`; run `sudo loginctl enable-linger <user>`
+so it survives logout). `api`, `worker`, `migrate` and `edge` use `network_mode: host`, so `127.0.0.1` inside them
+is the node's loopback where the tunnel listens. Memory is shared with the vLLM tensor-parallel shard on these
+nodes: build one image at a time and use `systemctl reload docker` (never `restart`). Only one compose stack fits
+per node (host networking).
 
 ## Ports
 
@@ -186,6 +218,7 @@ All settings are environment variables declared in `apps/api/app/core/config.py`
 | `WHISPER_EXTRA_BASE_URLS` | empty | comma-separated extra Whisper replicas; each replica transcribes one request at a time, so a second replica cuts end-of-turn waits |
 | `STT_PARTIAL_INTERVAL_MS` | `1500` in code, `2000` in `.env.example` | interim transcript interval; raise it when Whisper is busy |
 | `TTS_THREADS`, `TTS_CPUS` | `TTS_THREADS=4` in `.env.example` (compose falls back to 8 when unset); `TTS_CPUS` 8 | keep `TTS_THREADS x TTS_WORKERS (2) <= TTS_CPUS` (the service logs `tts.cpu_oversubscribed` otherwise) |
+| `AI_DISABLED_ENDPOINTS` | empty | nodes without a vision, embedding, reranker or OCR server (comma separated): calls fail fast, health shows `disabled`, camera-frame AI analysis / question-bank semantic search / scanned-resume OCR degrade cleanly; `main`, `whisper` and `tts` can never be disabled |
 | `MODEL_ROUTING_OVERRIDES` | `{}` | move an LLM task to another endpoint, e.g. `{"answer_assessment":"vision"}` |
 | `MALWARE_SCAN_MODE` | `optional` | `required` with `docker compose --profile security up -d clamav` and `CLAMAV_HOST=127.0.0.1` |
 | `INTERVIEWER_NAME`, `TTS_VOICE` | `Maya`, `af_heart` | fallbacks only: the interviewer's name and voice come from the organisation's avatar settings (recruiter app > Settings), which default to the same values |
@@ -232,6 +265,10 @@ build adds Kokoro's per-phoneme duration output to the model (see [AI_PIPELINE.m
 | Symptom | Cause and fix |
 |---|---|
 | `make up` waits, then prints logs of one service | read the printed log lines; `make logs SERVICE=<name>` |
+| `make doctor` fails on `MAIN_LLM_BASE_URL` / `WHISPER_BASE_URL` | the `.env` still has the example endpoints; set the addresses that answer from this node (see the worker-node section), then `docker compose up -d --force-recreate api worker` |
+| `make setup` stops at `download-assets` with a checksum error | an upstream file moved; the URLs are pinned to commits, so re-run `scripts/download_assets.sh tts vad face`; if it persists, copy the verified file from another checkout and run `scripts/download_assets.sh --check` |
+| `docker compose build api` fails with `"/models": not found` | run `scripts/download_assets.sh vad face` first; `apps/api/models/README.md` keeps the directory present on a clean clone |
+| `make seed` fails with `uv: command not found` | install uv (`curl -LsSf https://astral.sh/uv/install.sh \| sh`) or seed from the container: `make seed-docker` (`make demo-docker`) |
 | `make seed` fails with `SEED_PASSWORD is not set` | `.env` predates the seed settings: add `SEED_PASSWORD` (12+ characters, satisfying the password policy) or regenerate with `scripts/setup.sh --force` (rotates every secret) |
 | Edge answers 502 with `upstream_unavailable` | the API is down or restarting (the edge retries for 5 s first): `make logs SERVICE=api` |
 | Frontend changes do not show up at :3200 | the edge serves the built SPA: `make build-edge && docker compose up -d edge` (or use `make web-dev`) |

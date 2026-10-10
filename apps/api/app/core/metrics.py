@@ -6,9 +6,9 @@ and label sets stay consistent across the api, the worker and dashboards.
 
 from __future__ import annotations
 
-from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 from prometheus_client import CONTENT_TYPE_LATEST as PROM_CONTENT_TYPE  # noqa: N811
 from prometheus_client import REGISTRY as DEFAULT_REGISTRY
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 
 REGISTRY: CollectorRegistry = DEFAULT_REGISTRY
 
@@ -56,6 +56,14 @@ CODING_EXECUTION_SECONDS = Histogram(
 )
 
 ERRORS = Counter("interview_errors_total", "Unexpected errors by component", ["component"])
+AI_ENDPOINT_UP = Gauge(
+    "interview_ai_endpoint_up",
+    "AI endpoint reachable at the last health probe (1 up, 0 down, -1 unknown or disabled)",
+    ["endpoint"],
+)
+VAD_ENGINE = Gauge(
+    "interview_vad_engine_info", "Voice-activity-detection engine in use by this process (1 = active)", ["engine"]
+)
 QUEUE_DEPTH = Gauge("interview_queue_depth", "Pending messages per job stream", ["queue"])
 JOBS = Counter("interview_jobs_total", "Background jobs processed", ["type", "status"])
 JOB_SECONDS = Histogram("interview_job_seconds", "Background job duration", ["type"], buckets=_LATENCY_BUCKETS)

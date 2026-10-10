@@ -74,7 +74,7 @@ async def test_system_health_aggregates_components(auth_client, settings, redis)
     await redis.sadd("jobs:types", "system.ping")
     await redis.xadd("jobs:system.ping", {"job_id": str(uuid.uuid4()), "type": "system.ping"})
     try:
-        staff = await auth_client(Role.INTERVIEWER)
+        staff = await auth_client(Role.ADMIN)  # settings:manage
         with respx.mock(assert_all_called=False) as mock:
             mock.get(f"{settings.tts_base_url}/health").respond(200, json={"status": "ok"})
             mock.get(f"{settings.sandbox_base_url}/health").respond(503)
@@ -96,10 +96,67 @@ async def test_system_health_aggregates_components(auth_client, settings, redis)
     assert settings.tts_base_url not in response.text  # no internal URLs leak
 
 
-async def test_system_health_requires_staff(client, candidate_auth_client):
+async def test_system_health_requires_settings_manage(client, candidate_auth_client, auth_client):
     assert (await client.get("/api/v1/system/health")).status_code == 401
     candidate = await candidate_auth_client()
     assert (await candidate.get("/api/v1/system/health")).status_code == 403
+    interviewer = await auth_client(Role.INTERVIEWER)  # operational detail is for administrators only
+    assert (await interviewer.get("/api/v1/system/health")).status_code == 403
+
+
+# ------------------------------------------------------------- deep readiness
+
+
+class _HealthStub:
+    def __init__(self, **statuses: str) -> None:
+        names = ("main", "vision", "embedding", "reranker", "whisper", "ocr", "tts")
+        self.report = {n: {"status": statuses.get(n, "ok"), "latency_ms": 1.0, "detail": None} for n in names}
+
+    async def health(self):
+        return self.report
+
+
+async def test_deep_readiness_classifies_required_and_optional_endpoints(client):
+    from app.ai.registry import set_ai
+    from app.core import ai_health
+
+    ai_health.invalidate()
+    previous = set_ai(_HealthStub())  # type: ignore[arg-type]
+    try:
+        ready = await client.get("/readyz?deep=1")
+        assert ready.status_code == 200, ready.text
+        body = ready.json()
+        assert body["status"] == "ready" and body["required_down"] == [] and body["degraded"] == []
+        assert set(body["ai"]) == set(ai_health.ALL_ENDPOINTS)
+
+        set_ai(_HealthStub(vision="down", reranker="disabled"))  # type: ignore[arg-type]
+        degraded = await client.get("/readyz?deep=1")
+        assert degraded.status_code == 200, degraded.text  # optional endpoints only degrade features
+        assert degraded.json()["degraded"] == ["vision", "reranker"]
+
+        set_ai(_HealthStub(whisper="down"))  # type: ignore[arg-type]
+        not_ready = await client.get("/readyz?deep=1")
+        assert not_ready.status_code == 503
+        assert not_ready.json()["status"] == "not_ready" and not_ready.json()["required_down"] == ["whisper"]
+
+        shallow = await client.get("/readyz")  # the shallow probe never touches the AI endpoints
+        assert shallow.status_code == 200 and "ai" not in shallow.json()
+    finally:
+        set_ai(previous)
+        ai_health.invalidate()
+
+
+async def test_deep_readiness_is_loopback_only(app, client):
+    transport = httpx.ASGITransport(app=app, client=("192.168.9.5", 40000))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as lan:
+        response = await lan.get("/readyz?deep=1")
+    assert response.status_code == 403
+    assert response.json()["status"] == "forbidden"
+    # Through the edge the peer is loopback but X-Forwarded-For names the real (LAN) client.
+    via_edge = await client.get("/readyz?deep=1", headers={"X-Forwarded-For": "192.168.9.5, 127.0.0.1"})
+    assert via_edge.status_code == 403
+    local_via_edge = await client.get("/readyz?deep=1", headers={"X-Forwarded-For": "127.0.0.1"})
+    assert local_via_edge.status_code in (200, 503)  # loopback client through the edge is allowed
 
 
 # ------------------------------------------------------ request transactions

@@ -918,6 +918,47 @@ def ai_models() -> Dashboard:
     d.add(timeseries("GPU temperature", [("max(dgx_gpu_temperature_celsius)", "temperature")], unit="celsius",
                      min_value=None), 4, 7)  # fmt: skip
     d.add(timeseries("GPU power", [("max(dgx_gpu_power_watts)", "power")], unit="watt"), 4, 7)
+    d.row("Endpoint reachability (deep readiness probe)")
+    d.add(
+        timeseries(
+            "AI endpoints up (1 up, 0 down, -1 unknown or disabled)",
+            [("min by (endpoint) (interview_ai_endpoint_up)", "{{endpoint}}")],
+            decimals=0,
+            description="From the 15 s cached health probe behind /readyz?deep=1 and the staff system-health page. "
+            "main, whisper and tts are required for interviews; vision, embedding, reranker and ocr only degrade features.",
+        ),
+        16, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "VAD engine in use",
+            [("max by (engine) (interview_vad_engine_info)", "{{engine}}")],
+            decimals=0,
+            description="silero is expected; energy means the Silero model file was missing or failed to load (turn-taking degrades).",
+        ),
+        8, 8,
+    )  # fmt: skip
+
+    d.row("Circuit breakers and call ledger")
+    d.add(
+        timeseries(
+            "Circuit breaker state by endpoint",
+            [("max by (endpoint) (interview_circuit_breaker_state)", "{{endpoint}}")],
+            decimals=0,
+            description="0 closed (healthy), 1 half-open (probing), 2 open (calls fail fast and fall back).",
+        ),
+        16, 8,
+    )  # fmt: skip
+    d.add(
+        stat(
+            "Ledger records dropped (range)",
+            "sum(increase(interview_model_call_ledger_dropped_total[$__range])) or vector(0)",
+            decimals=0, thresholds=status_thresholds(1, 100),
+            description="model_calls ledger records lost because the write queue was full or closed; should stay 0.",
+        ),
+        8, 8,
+    )  # fmt: skip
+
     return d
 
 
@@ -1114,6 +1155,66 @@ def workers_infra() -> Dashboard:
     )  # fmt: skip
     d.add(timeseries("Host memory available", [('max(node_memory_MemAvailable_bytes{job="host"})', "available")],
                      unit="bytes"), 12, 7)  # fmt: skip
+    d.row("Intake interviews and open links")
+    d.add(
+        timeseries(
+            "Open-link registrations per minute by outcome",
+            [("sum by (outcome) (rate(interview_open_link_registrations_total[$__rate_interval])) * 60", "{{outcome}}")],
+            decimals=1,
+            description="registered / resumed are normal; blocked, rejected and unavailable spikes suggest abuse or a full link.",
+        ),
+        12, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Intake activities ended per minute by end reason",
+            [("sum by (end_reason) (rate(interview_intake_activities_total[$__rate_interval])) * 60", "{{end_reason}}")],
+            decimals=1,
+        ),
+        12, 8,
+    )  # fmt: skip
+    d.add(
+        stat(
+            "Intake invitations (range)",
+            "sum(increase(interview_intake_invitations_total[$__range])) or vector(0)",
+            decimals=0, description="Single, batch and draft invitations sent in the selected range.",
+        ),
+        4, 4,
+    )  # fmt: skip
+    d.add(
+        stat(
+            "Intake evaluation p95",
+            "histogram_quantile(0.95, sum by (le) (rate(interview_intake_evaluation_seconds_bucket[$__range])))",
+            unit="s", decimals=0, thresholds=status_thresholds(180, 600),
+            description="All evaluators plus scoring; the candidate waits for nothing, reviewers do.",
+        ),
+        4, 4,
+    )  # fmt: skip
+    d.add(
+        ranking(
+            "Intake evaluations by status (range)",
+            "sort_desc(sum by (status) (increase(interview_intake_evaluations_total[$__range])) > 0)",
+            "{{status}}", decimals=0,
+        ),
+        8, 8,
+    )  # fmt: skip
+    d.add(
+        ranking(
+            "Intake stage duration p50 (range)",
+            "sort_desc(histogram_quantile(0.5, sum by (le, stage) (rate(interview_intake_stage_seconds_bucket[$__range]))))",
+            "{{stage}}", unit="s",
+        ),
+        8, 8,
+    )  # fmt: skip
+    d.add(
+        ranking(
+            "Human intake decisions (range)",
+            "sort_desc(sum by (outcome, overrides_ai) (increase(interview_intake_decisions_total[$__range])) > 0)",
+            "{{outcome}} (overrides AI: {{overrides_ai}})", decimals=0,
+        ),
+        8, 8,
+    )  # fmt: skip
+
     return d
 
 

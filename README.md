@@ -33,6 +33,7 @@ Node.js 20.19+ or 22.12+, about 4 GB of disk, and network access to the local mo
 
 ```bash
 make setup            # .env with fresh secrets, model/avatar assets (sha256-checked), uv + npm dependencies
+make doctor           # preflight: tooling, .env, the configured AI endpoints, assets, runtime images
 make sandbox-images   # per-language code runner images (python, node, java, go, cpp)
 make up               # docker compose up -d, then wait until every service is healthy
 make seed             # organisation, one account per staff role, global catalog; prints the logins

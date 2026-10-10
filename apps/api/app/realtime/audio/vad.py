@@ -22,6 +22,7 @@ from typing import Any, Protocol
 import numpy as np
 
 from app.core.logging import get_logger
+from app.core.metrics import VAD_ENGINE
 from app.realtime.audio.pcm import SAMPLE_RATE
 
 log = get_logger(__name__)
@@ -134,10 +135,20 @@ def create_vad(engine: str, model_path: str) -> VadStream:
     """Silero when configured and loadable, otherwise the energy fallback."""
     if engine == "silero" and model_path not in _failed_paths:
         try:
-            return SileroVad(model_path)
+            vad = SileroVad(model_path)
         except Exception as exc:  # noqa: BLE001 - missing file, bad model, ORT error
             _failed_paths.add(model_path)
             log.error(
                 "realtime.vad.silero_unavailable", path=model_path, error=f"{type(exc).__name__}: {exc}"[:300]
             )
+        else:
+            _record_engine("silero")
+            return vad
+    _record_engine("energy")
     return EnergyVad()
+
+
+def _record_engine(active: str) -> None:
+    """``interview_vad_engine_info{engine}``: 1 for the engine in use, so a silent energy fallback is visible."""
+    for name in ("silero", "energy"):
+        VAD_ENGINE.labels(engine=name).set(1 if name == active else 0)

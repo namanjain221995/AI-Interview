@@ -13,23 +13,28 @@ import json
 import shutil
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.api.routers.health import app_version, check_database, check_redis, check_storage
+from app.core import ai_health
 from app.core.config import get_settings
-from app.core.deps import StaffPrincipal
-from app.core.lifecycle import optional_import
+from app.core.deps import require_permission
 from app.core.logging import get_logger
 from app.core.queue import DEAD_STREAM, DELAYED_ZSET, JOB_TYPES_SET, stream_key
+from app.core.rbac import Permission, Principal
 from app.core.redis import get_redis
 from app.schemas.api.common import ERROR_RESPONSES, HealthComponent, SystemHealthResponse
 
 log = get_logger(__name__)
 
 router = APIRouter(prefix="/system", tags=["system"], responses=ERROR_RESPONSES)
+
+# Operational detail (component latencies, circuit states) is for administrators (settings:manage),
+# not every staff role.
+SettingsManager = Annotated[Principal, Depends(require_permission(Permission.SETTINGS_MANAGE))]
 
 PROBE_TIMEOUT_SECONDS = 5.0
 WORKER_HEARTBEAT_PREFIX = "worker:heartbeat:"
@@ -116,18 +121,13 @@ async def _http_component(name: str, base_url: str) -> HealthComponent:
 
 
 async def _ai_components() -> list[HealthComponent]:
-    registry = optional_import("app.ai.registry", strict=False)
-    get_ai = getattr(registry, "get_ai", None) if registry is not None else None
-    if get_ai is None:
-        return [HealthComponent(name="ai", status="unknown", detail="AI registry unavailable")]
+    """AI endpoints from the shared, 15 s cached probe (a page refresh never re-probes the GPUs)."""
     try:
-        async with asyncio.timeout(PROBE_TIMEOUT_SECONDS + 3):
-            report = await get_ai().health()
-    except Exception as exc:
+        report = await ai_health.probe()
+    except Exception as exc:  # noqa: BLE001 - probe() reports failures itself; this is belt and braces
         return [HealthComponent(name="ai", status="down", detail=type(exc).__name__)]
     components: list[HealthComponent] = []
-    for endpoint, raw in (report or {}).items():
-        data = raw if isinstance(raw, dict) else {"status": "ok" if raw else "down"}
+    for endpoint, data in report.items():
         status = _STATUS_MAP.get(str(data.get("status", "unknown")).lower(), "unknown")
         latency = data.get("latency_ms")
         detail = data.get("detail")
@@ -144,7 +144,7 @@ async def _ai_components() -> list[HealthComponent]:
 
 
 @router.get("/health", response_model=SystemHealthResponse, summary="Health of every platform dependency")
-async def system_health(principal: StaffPrincipal) -> SystemHealthResponse:
+async def system_health(principal: SettingsManager) -> SystemHealthResponse:
     settings = get_settings()
     results: list[Any] = await asyncio.gather(
         _timed("database", check_database),
