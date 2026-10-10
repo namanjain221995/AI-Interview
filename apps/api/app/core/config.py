@@ -129,6 +129,12 @@ class Settings(BaseSettings):
     whisper_language: str = "en"
     whisper_timeout_seconds: float = 30.0
 
+    # Capability flags (S18): endpoints a node does not have. Calls fail fast with EndpointDisabled
+    # (no I/O, no breaker noise, no retries), health reports "disabled" and dependent work takes its
+    # fallback on the first attempt. Only optional endpoints may be disabled: main, whisper and tts
+    # are required for an interview.
+    ai_disabled_endpoints: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
     ocr_base_url: str = "http://192.168.9.68:30004/v1"
     ocr_model: str = "baidu/Unlimited-OCR"
     ocr_prompt: str = "OCR"
@@ -233,7 +239,7 @@ class Settings(BaseSettings):
     seed_password: SecretStr | None = None
 
     # ------------------------------------------------------------ validators
-    @field_validator("cors_allowed_origins", "whisper_extra_base_urls", mode="before")
+    @field_validator("cors_allowed_origins", "whisper_extra_base_urls", "ai_disabled_endpoints", mode="before")
     @classmethod
     def _split_csv(cls, value: Any) -> Any:
         if isinstance(value, str):
@@ -322,6 +328,21 @@ class Settings(BaseSettings):
     @property
     def is_test(self) -> bool:
         return self.app_env == "test"
+
+    @field_validator("ai_disabled_endpoints", mode="after")
+    @classmethod
+    def _disabled_endpoints_allowed(cls, value: list[str]) -> list[str]:
+        names = sorted({str(v).strip().lower() for v in value if str(v).strip()})
+        allowed = {"vision", "embedding", "reranker", "ocr"}
+        bad = [n for n in names if n not in allowed]
+        if bad:
+            raise ValueError(
+                f"AI_DISABLED_ENDPOINTS: {', '.join(bad)} cannot be disabled (allowed: vision, embedding, reranker, ocr)"
+            )
+        return names
+
+    def ai_endpoint_disabled(self, name: str) -> bool:
+        return name in self.ai_disabled_endpoints
 
     @property
     def whisper_endpoints(self) -> list[str]:

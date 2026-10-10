@@ -28,7 +28,7 @@ from typing import Any
 
 import httpx
 
-from app.ai.base import AIError, AIOutputInvalid, AIRejected, AITimeout, AIUnavailable
+from app.ai.base import AIError, AIOutputInvalid, AIRejected, AITimeout, AIUnavailable, EndpointDisabled
 from app.ai.breaker import CircuitBreaker, CircuitOpenError
 from app.core.logging import get_logger
 from app.domain.enums import ModelCallStatus
@@ -79,8 +79,11 @@ class EndpointClient:
         breaker_timeout_floor: float = 10.0,
         headers: Mapping[str, str] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        disabled: bool = False,
     ) -> None:
         self.name = name
+        # AI_DISABLED_ENDPOINTS: every call fails fast with EndpointDisabled before any I/O (S18).
+        self.disabled = disabled
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.max_concurrency = max(1, max_concurrency)
@@ -131,6 +134,10 @@ class EndpointClient:
         await self._client.aclose()
 
     # --------------------------------------------------------------- request
+    def _ensure_enabled(self) -> None:
+        if self.disabled:
+            raise EndpointDisabled(f"{self.name}: disabled by AI_DISABLED_ENDPOINTS", endpoint=self.name)
+
     async def request(
         self,
         method: str,
@@ -150,6 +157,7 @@ class EndpointClient:
     ) -> HttpResult:
         """Send a request with retries. ``files`` must hold bytes (not file
         objects) so the body can be re-sent on retry."""
+        self._ensure_enabled()
         loop = asyncio.get_running_loop()
         budget = self.timeout if timeout is None else timeout
         deadline = loop.time() + max(budget, 0.001)
@@ -258,6 +266,7 @@ class EndpointClient:
         headers arrive; nothing is retried once the body is being consumed.
         The concurrency slot is held until the context exits, and exiting
         (normally, on error or on cancellation) closes the HTTP stream."""
+        self._ensure_enabled()
         handle = await self._open_stream(
             method, path, json=json, timeout=timeout, max_retries=max_retries, task=task
         )

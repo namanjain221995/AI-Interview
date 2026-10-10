@@ -47,8 +47,12 @@ async def analyze_frame(payload: dict[str, Any], ctx: JobContext) -> dict[str, A
     try:
         # Last attempt: a vision outage no longer fails the frame - camera frames are
         # then analysed with the face detection made when they were received.
+        # With the vision endpoint disabled (AI_DISABLED_ENDPOINTS) the face-detector path runs on the
+        # first attempt instead of after two failing retries.
         outcomes = await get_integrity_service().analyze_frame(
-            session_id, media_id, vision_optional=ctx.is_last_attempt
+            session_id,
+            media_id,
+            vision_optional=ctx.is_last_attempt or get_settings().ai_endpoint_disabled("vision"),
         )
     except NotFound as exc:
         raise PermanentJobError(str(exc)) from None

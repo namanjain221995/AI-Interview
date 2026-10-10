@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Generic, Literal, Protocol, TypeVar, runtime_checkable
+from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -56,6 +56,13 @@ class AIOutputInvalid(AIError):
     retryable = False
 
 
+class EndpointDisabled(AIUnavailable):
+    """The endpoint is switched off by configuration (``AI_DISABLED_ENDPOINTS``): callers take their
+    fallback immediately, nothing is retried and the circuit breaker is not touched."""
+
+    retryable = False
+
+
 class TtsUnavailable(AIUnavailable):
     """Server-side speech synthesis is not possible right now (provider down,
     circuit open, or the ``browser`` provider is configured). The realtime
@@ -94,7 +101,7 @@ class LLMResult:
 
 
 @dataclass(slots=True)
-class StructuredResult(Generic[T]):
+class StructuredResult[T: BaseModel]:
     value: T
     raw_text: str
     repaired: bool = False
@@ -166,7 +173,7 @@ class LLMClient(Protocol):
         max_tokens: int = 1024,
         json_schema: dict[str, Any] | None = None,
         thinking: bool = False,
-        timeout: float | None = None,
+        timeout: float | None = None,  # noqa: ASYNC109 - per-call budget forwarded to the HTTP client, not an asyncio timeout
     ) -> LLMResult:
         """Non-streaming completion. ``endpoint`` None = router decides by task."""
         ...
@@ -181,7 +188,7 @@ class LLMClient(Protocol):
         max_tokens: int = 1024,
         json_schema: dict[str, Any] | None = None,
         thinking: bool = False,
-        timeout: float | None = None,
+        timeout: float | None = None,  # noqa: ASYNC109 - per-call budget forwarded to the HTTP client, not an asyncio timeout
     ) -> AsyncIterator[str]:
         """Yield content deltas as they arrive. Cancellation (aclose / task
         cancel) must close the HTTP stream immediately (barge-in)."""
@@ -197,7 +204,7 @@ class LLMClient(Protocol):
         temperature: float = 0.2,
         max_tokens: int = 2048,
         thinking: bool = False,
-        timeout: float | None = None,
+        timeout: float | None = None,  # noqa: ASYNC109 - per-call budget forwarded to the HTTP client, not an asyncio timeout
         max_attempts: int = 3,
         fallback: Callable[[], T] | None = None,
     ) -> StructuredResult[T]:
