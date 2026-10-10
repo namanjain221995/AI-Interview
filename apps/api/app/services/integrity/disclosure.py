@@ -215,7 +215,8 @@ def _build_items(
                 [
                     "Everything said in the interview, by you and by the AI interviewer, is converted to text.",
                     "Typed answers and code you write in the editor are saved with it.",
-                    f"The transcript is used to evaluate your answers and is kept for {_days(ret.transcript_days)}.",
+                    "The transcript is used to evaluate your answers. It stays in the hiring team's records until "
+                    "they delete it, and you can ask them to delete it at any time.",
                 ]
             ),
             required=True,
@@ -529,27 +530,32 @@ def _seconds(value: float) -> str:
     return "1 second" if n == 1 else f"{n} seconds"
 
 
-def _retention_summary(snap: PolicySnapshot) -> str:
+def auto_deleted_items(snap: PolicySnapshot) -> list[tuple[str, str, int]]:
+    """``(class key, label, days)`` of the stored files this interview keeps, each deleted automatically after
+    its period (``retention_classes.AUTO_DELETED``; the G3 test holds every key to that registry)."""
     integ, rec, ret = snap.integrity, snap.recording, snap.retention
-    on = integ.enabled
-    parts = [
-        f"transcript: {_days(ret.transcript_days)}",
-        f"interview reports: {_days(ret.report_days)}",
-        f"uploaded resume: {_days(ret.resume_days)}",
-    ]
+    found = [("resume_file", "uploaded resume file", ret.resume_days)]
     if rec.record_answer_audio:
-        parts.append(f"answer audio: {_days(ret.audio_days)}")
+        found.append(("answer_audio", "answer audio", ret.audio_days))
     if rec.record_video or rec.record_screen:
-        parts.append(f"video recordings: {_days(ret.video_days)}")
+        found.append(("video", "video recordings", ret.video_days))
     if (
-        on
+        integ.enabled
         and integ.store_evidence_frames
         and (integ.camera_frame_analysis or integ.screen_share_analysis or face_check_enabled(snap))
     ):
-        parts.append(f"images linked to an integrity observation: {_days(ret.frame_days)}")
+        found.append(("frames", "images linked to an integrity observation", ret.frame_days))
+    return found
+
+
+def _retention_summary(snap: PolicySnapshot) -> str:
+    # Only stored files are deleted on a schedule today (retention.sweep); transcripts, reports and the text
+    # read from a resume are database rows without one yet (C23). Promise exactly that (G3, audit E1).
+    files = "; ".join(f"{label}: {_days(days)}" for _key, label, days in auto_deleted_items(snap))
     return (
-        f"Data from this interview is kept for a limited time and then deleted automatically. "
-        f"Retention periods: {'; '.join(parts)}."
+        f"Stored files from this interview are deleted automatically after these periods: {files}. "
+        "Your transcript, the written assessment and the details read from your resume stay in the hiring "
+        "team's records until they delete them; you can ask them to delete them at any time."
     )
 
 
@@ -708,6 +714,7 @@ def disclosure_payload(disclosure: Disclosure, snapshot: Mapping[str, Any] | Non
 
 
 __all__ = [
+    "auto_deleted_items",
     "LIMITATIONS_CORE",
     "DefaultDisclosureBuilder",
     "build_disclosure",

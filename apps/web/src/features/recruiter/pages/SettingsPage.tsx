@@ -214,7 +214,7 @@ function SettingsForm({ initial }: { initial: OrganizationSettings }) {
             />
           </SectionBlock>
 
-          <SectionBlock id="settings-retention" title="Data retention" description="Each type of data is deleted automatically after this period. Candidates see these periods in the consent step.">
+          <SectionBlock id="settings-retention" title="Data retention" description="Recordings, snapshots and uploaded files are deleted automatically after these periods. Transcripts, reports and text read from résumés are not deleted automatically yet: candidates are told they stay until you delete them.">
             <PolicyFieldsEditor
               fields={RETENTION_FIELDS.map((f) => ({ ...f, help: `${f.help} ${describeDays(draft.retention[f.key])}.` }))}
               values={draft.retention as unknown as Record<string, unknown>}

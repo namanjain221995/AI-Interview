@@ -58,7 +58,11 @@ describe("RegistrationForm", () => {
     const panel = screen.getByTestId("open-link-data-use");
     expect(within(panel).getByText(/records your voice and keeps a written transcript/)).toBeInTheDocument();
     expect(within(panel).getByText(/switching tabs or windows is noted/)).toBeInTheDocument();
-    expect(within(panel).getByText(/your résumé for 30 days/)).toBeInTheDocument();
+    // G3: only stored files carry a deletion deadline; the transcript and assessment stay until deleted.
+    const retention = within(panel).getByText(/Stored files are deleted automatically/);
+    expect(retention).toHaveTextContent("your résumé file after 30 days and audio after 30 days");
+    expect(retention).toHaveTextContent("Your transcript and the assessment stay with Demo Corp until they delete them");
+    expect(retention.textContent).not.toMatch(/transcript for|report for|60 days/);
   });
 
   it("validates on submit and sends typed answers, multiselect limits and the confirmation", () => {

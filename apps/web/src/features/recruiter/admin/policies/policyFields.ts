@@ -197,12 +197,12 @@ export const RECORDING_FIELDS: ReadonlyArray<PolicyFieldDef<keyof RecordingPolic
 ];
 
 export const RETENTION_FIELDS: ReadonlyArray<PolicyFieldDef<keyof RetentionPolicy>> = [
-  { key: "resume_days", label: "Resumes", help: "Uploaded files and the text extracted from them.", kind: { type: "integer", min: 1, max: 3650, unit: "days" } },
-  { key: "transcript_days", label: "Transcripts", help: "Questions, answers and evaluations.", kind: { type: "integer", min: 1, max: 3650, unit: "days" } },
+  { key: "resume_days", label: "Resumes", help: "Uploaded files are deleted after this period; the text read from them is not deleted automatically yet.", kind: { type: "integer", min: 1, max: 3650, unit: "days" } },
+  { key: "transcript_days", label: "Transcripts", help: "Questions, answers and evaluations. Not deleted automatically yet.", kind: { type: "integer", min: 1, max: 3650, unit: "days" } },
   { key: "audio_days", label: "Answer audio", help: "Recorded spoken answers.", kind: { type: "integer", min: 1, max: 3650, unit: "days" } },
   { key: "video_days", label: "Video", help: "Camera and screen recordings.", kind: { type: "integer", min: 1, max: 3650, unit: "days" } },
   { key: "frame_days", label: "Snapshots", help: "Camera and screen frames kept as evidence.", kind: { type: "integer", min: 1, max: 3650, unit: "days" } },
-  { key: "report_days", label: "Reports", help: "Recruiter and candidate reports.", kind: { type: "integer", min: 1, max: 3650, unit: "days" } },
+  { key: "report_days", label: "Reports", help: "Report files are deleted after this period; report content is not deleted automatically yet.", kind: { type: "integer", min: 1, max: 3650, unit: "days" } },
 ];
 
 /** Is `key` effectively disabled because a parent toggle is off? */

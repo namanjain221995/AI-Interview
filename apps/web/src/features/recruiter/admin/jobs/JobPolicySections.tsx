@@ -134,7 +134,7 @@ export function RecordingOverrides({ settings, recording, retention, onRecording
       <div className="grid gap-2">
         <div className="grid gap-0.5">
           <h3 className="text-sm font-semibold text-fg">How long this job's data is kept</h3>
-          <p className="text-xs text-fg-muted">Each type is deleted automatically after this many days. Candidates see these periods before they consent.</p>
+          <p className="text-xs text-fg-muted">Recordings, snapshots and uploaded files are deleted automatically after this many days. Transcripts, reports and text read from résumés are not deleted automatically yet; candidates are told so before they consent.</p>
         </div>
         <PolicyFieldsEditor
           fields={RETENTION_FIELDS.map((f) => ({ ...f, help: `${f.help} ${describeDays(effectiveRetention[f.key])}.` }))}
