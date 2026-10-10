@@ -283,7 +283,7 @@ class PortalSessionEndRequest(_In):
 
 
 class PortalSessionEndResponse(_Out):
-    status: Literal["ending", "already_ended"]
+    status: Literal["ending", "already_ended", "not_started"]
 
 
 class WsTicketResponse(_Out):

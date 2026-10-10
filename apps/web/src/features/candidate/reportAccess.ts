@@ -45,13 +45,16 @@ export function useReportMode(interview: PortalInterviewView | null | undefined,
 }
 
 /** Session statuses in which the interview is not over yet (the complete page says so instead of "saved"). */
-const WRAPPING_STATUSES = new Set(["created", "preparing", "ready", "live", "paused"]);
+const WRAPPING_STATUSES = new Set(["live", "paused"]);
+/** The candidate left before the interview started: nothing was ended, the link still works until its deadline. */
+const NOT_STARTED_STATUSES = new Set(["created", "preparing", "ready"]);
 const EARLY_END_REASONS = new Set(["disconnect_timeout", "technical_failure", "cancelled", "policy_termination"]);
 
-export type SessionOutcome = "unknown" | "wrapping_up" | "complete" | "ended_early" | "cancelled";
+export type SessionOutcome = "unknown" | "not_started" | "wrapping_up" | "complete" | "ended_early" | "cancelled";
 
 export function sessionOutcome(status: string | null | undefined, endReason: string | null | undefined): SessionOutcome {
   if (!status) return "unknown";
+  if (NOT_STARTED_STATUSES.has(status)) return "not_started";
   if (WRAPPING_STATUSES.has(status)) return "wrapping_up";
   if (endReason === "cancelled") return "cancelled";
   if (status === "aborted" || status === "failed" || (endReason && EARLY_END_REASONS.has(endReason))) return "ended_early";

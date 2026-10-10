@@ -724,6 +724,7 @@ export function getPortalSession(sessionId: string): Promise<PortalSessionView> 
  * Ends the interview over REST when the WebSocket is down (S6). The server finishes it on whichever
  * instance holds the room, or offline a few seconds later when no room is attached anywhere.
  */
+/** `ending` | `already_ended` | `not_started` (nothing to end yet: the candidate may come back to the link). */
 export async function endPortalSession(sessionId: string, reason = "candidate_ended"): Promise<{ status: string }> {
   const raw = rec(await api.post<unknown>(`/portal/sessions/${encodeURIComponent(sessionId)}/end`, { reason }, { keepalive: true, timeoutMs: 8000 }));
   return { status: str(raw.status) ?? "ending" };

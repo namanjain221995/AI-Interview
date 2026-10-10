@@ -121,6 +121,8 @@ export class InterviewRuntime {
   private avatarUnsub: (() => void) | null = null;
   private reportedAvatarErrors = new Set<string>();
   private startSent = false;
+  /** The server's session status from the last session.state (null until the first one arrives). */
+  private serverStatus: string | null = null;
   private ended = false;
   private disposed = false;
   private micLevel = 0;
@@ -242,6 +244,7 @@ export class InterviewRuntime {
     }
 
     await this.acquireMedia();
+    if (this.abandoned()) return;
 
     this.client = new RealtimeClient({
       sessionId: this.sessionId,
@@ -304,6 +307,7 @@ export class InterviewRuntime {
         });
       }
     }
+    if (this.abandoned(stream)) return;
     this.media = stream;
     const audioTrack = stream?.getAudioTracks()[0];
     const videoTrack = stream?.getVideoTracks()[0];
@@ -329,6 +333,7 @@ export class InterviewRuntime {
         this.send({ type: "client.error", component: "audio_capture", message: `worklet: ${String(error)}`.slice(0, 500), fatal: false });
         this.capture = null;
       }
+      if (this.abandoned()) return;
     }
 
     this.notifyMedia();
@@ -354,6 +359,17 @@ export class InterviewRuntime {
       this.startFaceCheck(cameraStream);
     }
     void this.startRecording("begin");
+  }
+
+  /**
+   * True when the room was left (or the interview ended) while a device prompt or setup step was pending: what
+   * that step produced is released and nothing more starts (dispose() already ran with nothing to stop).
+   */
+  private abandoned(stream?: MediaStream | null): boolean {
+    if (!this.disposed && !this.ended) return false;
+    for (const track of stream?.getTracks() ?? []) track.stop();
+    this.capture?.stop();
+    return true;
   }
 
   /** On-device face check (lazy: MediaPipe loads only here and in the system check). */
@@ -616,8 +632,9 @@ export class InterviewRuntime {
         this.onServerRecordingFlag(msg.integrity);
         this.faceCheck?.onServerFlags(msg.integrity as Record<string, unknown> | null | undefined);
         avatar?.setState(msg.avatar_state);
+        this.serverStatus = msg.status;
         if (msg.status === "live" || msg.status === "paused") this.startSent = true;
-        if (!this.startSent && ["created", "preparing", "ready"].includes(msg.status)) {
+        if (!this.startSent && !this.ended && ["created", "preparing", "ready"].includes(msg.status)) {
           this.startSent = true;
           this.send({ type: "control.start" });
         }
@@ -993,8 +1010,11 @@ export class InterviewRuntime {
   endInterview(reason = "candidate_ended"): void {
     if (this.ended) return;
     // Over the socket while it is up; over REST (keepalive) while it is not. A press while offline used to be
-    // dropped, leaving the server session paused until the sweeper found it (S6, audit B6).
-    const overSocket = this.client?.status === "connected" && this.send({ type: "control.end_interview", reason });
+    // dropped, leaving the server session paused until the sweeper found it (S6, audit B6). Before the interview
+    // has started there is nothing to end: REST answers not_started and the candidate simply leaves (the socket
+    // would only refuse with not_started and keep them waiting).
+    const started = this.serverStatus === "live" || this.serverStatus === "paused";
+    const overSocket = started && this.client?.status === "connected" && this.send({ type: "control.end_interview", reason });
     if (overSocket) {
       // If the server never confirms (connection lost right after), still leave after a while.
       this.endFallbackTimer = setTimeout(() => this.finish(), 12_000);

@@ -978,6 +978,11 @@ async def portal_ws_ticket(
     )
 
 
+_NOT_STARTED_VALUES = frozenset(
+    {SessionStatus.CREATED.value, SessionStatus.PREPARING.value, SessionStatus.READY.value}
+)
+
+
 @router.post("/sessions/{session_id}/end", response_model=PortalSessionEndResponse)
 async def portal_end_session(
     session_id: uuid.UUID, body: PortalSessionEndRequest, principal: CandidatePrincipal, db: DbSession
@@ -986,11 +991,15 @@ async def portal_end_session(
 
     The room that holds the session (on any instance) hears ``session.end_requested`` on the session bus and
     ends it exactly like a ``control.end_interview`` message; when no room is attached anywhere, the lifecycle
-    job ends it offline a few seconds later. Idempotent: an ended session answers ``already_ended``.
+    job ends it offline a few seconds later. Idempotent: an ended session answers ``already_ended``. Before the
+    interview has started there is nothing to end (``not_started``): the candidate leaves and may come back to
+    the link before its deadline, as the WebSocket path already behaved.
     """
     row, _interview_row = await _session(db, principal, session_id)
     if _session_status(row) in TERMINAL_STATUSES or row.status == SessionStatus.COMPLETING.value:
         return PortalSessionEndResponse(status="already_ended")
+    if row.status in _NOT_STARTED_VALUES:
+        return PortalSessionEndResponse(status="not_started")
     await enforce_rate_limit("portal_end_session", str(row.id), limit=10, window_s=60)
     sid = str(row.id)
     await publish_session_event(

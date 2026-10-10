@@ -436,10 +436,52 @@ describe("InterviewRuntime", () => {
   it("asks to end, and leaves even if the server never confirms", async () => {
     const onEnded = vi.fn();
     const { socket, runtime } = await startRuntime({ onEnded });
+    socket.push(stateMsg("live", "listening"));
     runtime.endInterview();
     expect(socket.json().find((m) => m.type === "control.end_interview")).toMatchObject({ reason: "candidate_ended" });
     await vi.advanceTimersByTimeAsync(13_000);
     expect(onEnded).toHaveBeenCalled();
+  });
+});
+
+describe("InterviewRuntime before the interview starts", () => {
+  it("leaves over REST without ending anything when End is pressed before the start", async () => {
+    const onEnded = vi.fn();
+    const endSession = vi.fn(async () => ({ status: "not_started" }));
+    const { socket, runtime } = await startRuntime({ onEnded, api: { endSession } });
+    socket.push(stateMsg("ready")); // Begin sent control.start; the server is still preparing the interview
+    runtime.endInterview();
+    expect(endSession).toHaveBeenCalledWith("s1", "candidate_ended"); // the server answers not_started
+    expect(socket.json().some((m) => m.type === "control.end_interview")).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onEnded).toHaveBeenCalled(); // no 12 s wait for a refusal
+  });
+
+  it("releases the devices and never connects when the room is left during the permission prompt", async () => {
+    const track = { stop: vi.fn(), kind: "audio" };
+    const stream = { getTracks: () => [track], getAudioTracks: () => [track], getVideoTracks: () => [] };
+    let grant!: (value: unknown) => void;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn(() => new Promise((resolve) => (grant = resolve))) },
+    });
+    const runtime = new InterviewRuntime({
+      interviewId: "i1",
+      sessionId: "s1",
+      store: createInterviewStore(),
+      policy: effectivePolicy({ integrity: { ...effectivePolicy(null, null, null).integrity, require_fullscreen: false, camera_required: false, camera_frame_analysis: false } }, null, null),
+      prefs: { avatarMode: "3d", avatarFps: 60, ttsMode: "server" },
+      api: { fetchTicket: async () => ({ ticket: "tk", ws_url: "/ws/sessions/s1" }), postIntegrityEvents: vi.fn(), uploadFrame: vi.fn(), uploadRecording: vi.fn() },
+    });
+    runtime.prepareGesture();
+    const begun = runtime.begin();
+    await vi.advanceTimersByTimeAsync(0);
+    runtime.dispose(); // End pressed (or the page left) while the browser still shows the prompt
+    grant(stream); // the candidate clicks Allow afterwards
+    await begun;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(track.stop).toHaveBeenCalled(); // microphone released at once
+    expect(FakeSocket.all).toHaveLength(0); // and the room never connects
   });
 });
 

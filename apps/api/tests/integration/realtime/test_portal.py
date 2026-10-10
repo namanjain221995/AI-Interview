@@ -749,6 +749,23 @@ async def test_candidate_ends_over_rest_when_the_socket_is_down(app, org_factory
     r = await http.post(f"/api/v1/portal/sessions/{ended['session_id']}/end", json={})
     assert r.status_code == 200 and r.json()["status"] == "already_ended"
     await http.aclose()
+    # Before the interview has started there is nothing to end: the invitation stays usable.
+    waiting = await create_interview(org, consent_items={"microphone": True}, session_status="ready")
+    http = await verified_client(app, waiting)
+    r = await http.post(f"/api/v1/portal/sessions/{waiting['session_id']}/end", json={})
+    assert r.status_code == 200 and r.json()["status"] == "not_started"
+    async with session_scope() as db:
+        queued = await db.scalar(
+            select(func.count())
+            .select_from(BackgroundJob)
+            .where(
+                BackgroundJob.type == "session.end",
+                BackgroundJob.payload["session_id"].astext == str(waiting["session_id"]),
+            )
+        )
+        row = await db.get(InterviewSession, waiting["session_id"])
+    assert queued == 0 and row.status == "ready"
+    await http.aclose()
 
 
 async def _start_session(session_id) -> None:

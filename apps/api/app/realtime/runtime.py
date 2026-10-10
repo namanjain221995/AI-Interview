@@ -942,6 +942,10 @@ class SessionRuntime:
                 await self.aclose("ended_disconnect")
                 return
             if not self.started:
+                # A Begin deferred while the interview was being prepared must not start it with nobody here
+                # (on session.ready or the start retry): the candidate presses Begin again on reconnect.
+                self._awaiting_ready = False
+                self._start_requested = False
                 self._schedule_grace()
                 return
             if not self._interview_began():
@@ -1694,8 +1698,9 @@ class SessionRuntime:
             await self._run_end(SessionEndReason.TIME_LIMIT)
 
     async def request_end(self, reason: str) -> bool:
-        """End the session the way a ``control.end_interview`` message would; False when already ending."""
-        if self.ended or self.ending is not None:
+        """End the session the way a ``control.end_interview`` message would; False when already ending or
+        when the interview has not started (nothing to end, like ``control.end_interview`` before the start)."""
+        if self.ended or self.ending is not None or not self.started:
             return False
         try:
             end_reason = SessionEndReason(reason)

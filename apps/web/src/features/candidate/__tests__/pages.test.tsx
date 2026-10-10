@@ -254,6 +254,17 @@ describe("Completion and report", () => {
     expect(screen.queryByTestId("feedback-card")).not.toBeInTheDocument(); // nothing promised before it is closed
   });
 
+  it("tells a candidate who left before the start that nothing ended and offers the way back", async () => {
+    interviewState = { ...INTERVIEW, status: "in_progress", steps_completed: ["consent", "resume", "system_check"] };
+    sessionState = { id: "s1", interview_id: "i1", status: "ready", candidate_report_available: false, candidate_report_mode: "immediate" };
+    renderAt("/candidate/i1/complete?session=s1", [{ path: ":interviewId/complete", Component: CompletePage }]);
+    const outcome = await screen.findByTestId("complete-outcome");
+    await waitFor(() => expect(outcome).toHaveAttribute("data-outcome", "not_started"));
+    expect(outcome).toHaveTextContent("hasn't started yet");
+    expect(screen.getByTestId("return-to-interview")).toHaveAttribute("href", "/candidate/i1/interview");
+    expect(screen.queryByTestId("feedback-card")).not.toBeInTheDocument();
+  });
+
   it("hides every feedback element when the session's report mode is never (the session wins over the invitation)", async () => {
     interviewState = { ...INTERVIEW, organization: { name: "TechSara Solutions" }, status: "completed", steps_completed: ["consent", "resume", "system_check"] };
     sessionState = { id: "s1", interview_id: "i1", status: "completed", candidate_report_available: false, candidate_report_mode: "never" };

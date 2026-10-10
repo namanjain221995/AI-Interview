@@ -21,9 +21,10 @@ export default function CompletePage() {
   const { mode, pending: modePending } = useReportMode(data, sessionId);
   const { outcome } = useSessionOutcome(sessionId);
   const wrappingUp = outcome === "wrapping_up";
+  const notStarted = outcome === "not_started";
   // No feedback is shared (the default): no report card, no polling, no promise. Nothing is promised either
-  // while the interview is still being closed.
-  const sharesFeedback = Boolean(data) && !modePending && mode !== "never" && !wrappingUp && !data?.intake; // intake: never a report (S21)
+  // while the interview is still being closed, or when it never started.
+  const sharesFeedback = Boolean(data) && !modePending && mode !== "never" && !wrappingUp && !notStarted && !data?.intake; // intake: never a report (S21)
   const report = useCandidateReport(sharesFeedback ? sessionId : null, { poll: true, intervalMs: mode === "immediate" ? 5000 : 30_000 });
   const ready = isReportReady(report.data ?? undefined);
   const firstName = me.data?.firstName ?? (data?.candidateName ?? "").split(/\s+/)[0] ?? null;
@@ -34,10 +35,12 @@ export default function CompletePage() {
       <JourneyBoundary query={interview}>
         <div>
           <h1 className="max-w-2xl text-[2rem] leading-[2.5rem] font-semibold tracking-[-0.022em] text-fg sm:text-display">
-            {firstName ? `Thank you, ${firstName}.` : "Thank you."}
+            {notStarted ? (firstName ? `See you soon, ${firstName}.` : "See you soon.") : firstName ? `Thank you, ${firstName}.` : "Thank you."}
           </h1>
           <p className="mt-4 max-w-2xl text-[15px] leading-7 text-fg-muted" data-testid="complete-outcome" data-outcome={outcome}>
-            {wrappingUp
+            {notStarted
+              ? "Your interview hasn't started yet, so there was nothing to end. You can come back and begin whenever you're ready, before your invitation expires."
+              : wrappingUp
               ? "We're closing your interview and saving your answers. This page updates by itself; you can close it whenever you like."
               : outcome === "cancelled"
                 ? `This interview was cancelled by ${org}. Nothing more is needed from you; ${org} will be in touch if anything changes.`
@@ -45,6 +48,13 @@ export default function CompletePage() {
                   ? `Your interview ended early. Your answers so far are saved; ${org} will see where it stopped and be in touch about next steps.`
                   : `Your interview is complete and saved. ${org} will review it and be in touch about next steps. You can close this window whenever you like.`}
           </p>
+          {notStarted ? (
+            <Button asChild size="lg" className="mt-6">
+              <Link to={`/candidate/${interviewId}/interview`} data-testid="return-to-interview">
+                Back to your interview
+              </Link>
+            </Button>
+          ) : null}
 
           <NextRoundCard poll className="mt-10" />
 
