@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.db.models import Interview, InterviewSession, Job, Round
-from app.domain.enums import InterviewStatus
+from app.domain.enums import InterviewStatus, RoundType
 from app.schemas.api.catalog import RoundCreate, RoundUpdate
 from app.services.jobs.catalog import (
     deep_merge,
@@ -52,6 +52,13 @@ async def get_round(db: AsyncSession, round_id: uuid.UUID, organization_id: uuid
     return row, job
 
 
+async def _ensure_intake_entitled(db: AsyncSession, organization_id: uuid.UUID) -> None:
+    from app.services.intake.access import intake_entitled
+
+    if not await intake_entitled(db, organization_id):
+        raise NotFound("Intake interviews are not part of this workspace.", code="intake_disabled")
+
+
 async def create_round(db: AsyncSession, job: Job, body: RoundCreate) -> Round:
     template_id: uuid.UUID | None = None
     if body.template_id is not None:
@@ -64,6 +71,8 @@ async def create_round(db: AsyncSession, job: Job, body: RoundCreate) -> Round:
         base, _, _ = await round_type_default(db, round_type)
     else:
         raise ValidationFailed("round_type or template_id is required.", details={"field": "round_type"})
+    if round_type is RoundType.INTAKE:
+        await _ensure_intake_entitled(db, job.organization_id)
     data = deep_merge(base, body.config or {})
     data["round_type"] = round_type.value
     values = body.model_dump(exclude={"config", "template_id", "is_active"})

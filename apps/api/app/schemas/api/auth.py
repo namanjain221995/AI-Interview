@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,6 +26,8 @@ class OrganizationBrief(BaseModel):
     id: uuid.UUID
     name: str
     slug: str
+    # Plan features of the organisation (G8), e.g. {"intake": true}; the console hides what is not included.
+    features: dict[str, Any] = Field(default_factory=dict)
 
 
 class MeResponse(BaseModel):

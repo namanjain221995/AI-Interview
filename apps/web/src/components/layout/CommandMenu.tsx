@@ -5,7 +5,7 @@ import { useNavigate } from "react-router";
 
 import { Kbd, modKeyLabel } from "@/components/ui/Kbd";
 import { overlayClass } from "@/components/ui/Dialog";
-import { usePermissions } from "@/lib/auth";
+import { hasFeature, useAuthStore, usePermissions } from "@/lib/auth";
 import { useEventListener } from "@/lib/hooks";
 import type { Permission } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -45,13 +45,15 @@ export interface CommandMenuProps {
 export function CommandMenu({ open, onOpenChange }: CommandMenuProps) {
   const navigate = useNavigate();
   const permissions = usePermissions();
+  const user = useAuthStore((st) => st.user);
+  const organization = useAuthStore((st) => st.organization);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listId = useId();
   const listRef = useRef<HTMLUListElement>(null);
 
   const items = useMemo<CommandItem[]>(() => {
-    const pages = visibleNav(permissions).flatMap((group) =>
+    const pages = visibleNav(permissions, (feature) => hasFeature({ user, organization }, feature)).flatMap((group) =>
       group.items.map((item) => {
         const Icon = item.icon;
         return { key: item.key, label: item.label, group: "Go to", to: item.to, icon: <Icon />, keywords: item.keywords };
@@ -66,7 +68,7 @@ export function CommandMenu({ open, onOpenChange }: CommandMenuProps) {
       keywords: a.keywords,
     }));
     return [...actions, ...pages];
-  }, [permissions]);
+  }, [permissions, user, organization]);
 
   const results = useMemo(
     () =>

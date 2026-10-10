@@ -3,7 +3,7 @@ import { Link, useMatch, useResolvedPath } from "react-router";
 
 import { Logo } from "@/components/brand/Logo";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { usePermissions } from "@/lib/auth";
+import { hasFeature, useAuthStore, usePermissions } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 import { visibleNav, type StaffNavItem } from "./staffNav";
@@ -58,7 +58,9 @@ function SidebarLink({ item, collapsed, onNavigate }: { item: StaffNavItem; coll
 
 export function StaffSidebar({ collapsed, onToggleCollapsed, onNavigate, className }: StaffSidebarProps) {
   const permissions = usePermissions();
-  const groups = visibleNav(permissions);
+  const user = useAuthStore((st) => st.user);
+  const organization = useAuthStore((st) => st.organization);
+  const groups = visibleNav(permissions, (feature) => hasFeature({ user, organization }, feature));
 
   return (
     <div className={cn("flex h-full flex-col", className)}>

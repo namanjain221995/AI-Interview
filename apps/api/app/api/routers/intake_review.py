@@ -35,7 +35,12 @@ from app.schemas.api.intake_review import (
 from app.schemas.intake import IntakeBucket, TargetRole
 from app.services.intake import analytics as analytics_service
 from app.services.intake import review_views as views
-from app.services.intake.access import IntakeRoute, get_intake, require_intake_enabled
+from app.services.intake.access import (
+    IntakeRoute,
+    get_intake,
+    require_intake_enabled,
+    require_intake_entitled,
+)
 from app.services.intake.decisions import create_decision
 from app.services.intake.pipeline import decision_out, decisions_out
 
@@ -44,7 +49,7 @@ router = APIRouter(
     tags=["intake"],
     responses=ERROR_RESPONSES,
     route_class=IntakeRoute,
-    dependencies=[Depends(require_intake_enabled)],
+    dependencies=[Depends(require_intake_enabled), Depends(require_intake_entitled)],
 )
 
 Reader = Annotated[Principal, Depends(permission(Permission.SESSIONS_READ))]

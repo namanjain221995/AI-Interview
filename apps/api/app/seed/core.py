@@ -118,11 +118,15 @@ async def seed_core(db: AsyncSession, *, reset_passwords: bool = False) -> dict[
             slug=DEMO_ORG_SLUG,
             is_active=True,
             settings=OrganizationSettings().model_dump(mode="json"),
+            features={"intake": True},  # the demo organisation runs the intake kit (G8)
         )
         db.add(org)
         await db.flush()
         created["organization"] = True
         log.info("seed.organization_created", organization_id=str(org.id))
+    elif not (org.features or {}).get("intake"):
+        org.features = {**(org.features or {}), "intake": True}  # demo data includes the intake kit (G8)
+        await db.flush()
 
     password: str | None = None
     users: dict[str, uuid.UUID] = {}

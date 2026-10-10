@@ -1115,6 +1115,8 @@ export interface OrganizationRef {
   id: string;
   name: string;
   slug: string;
+  /** Plan features managed by the platform (G8), e.g. `{ intake: true }`. */
+  features?: Record<string, unknown>;
 }
 
 export interface Organization extends OrganizationRef, Timestamps {

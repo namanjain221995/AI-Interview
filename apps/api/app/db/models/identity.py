@@ -22,6 +22,8 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # OrganizationSettings (app.schemas.settings): retention, integrity defaults,
     # avatar/voice, candidate report mode, branding.
     settings: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    # What the organisation's plan includes (``{"intake": true}``); platform-managed, never self-service (G8, 0008).
+    features: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
 
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):

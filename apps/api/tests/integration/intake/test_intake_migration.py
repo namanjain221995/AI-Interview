@@ -94,8 +94,8 @@ async def test_upgrade_downgrade_and_metadata_parity() -> None:
                 assert await _tables(conn) == INTAKE_TABLES
                 assert await conn.run_sync(_compare) == []
                 version = (await conn.exec_driver_sql("SELECT version_num FROM alembic_version")).scalar_one()
-                # The head moves with every additive migration (0006 nullable scores, 0007 users.must_change_password).
-                assert version == "0007"
+                # The head moves with every additive migration (0006 nullable scores, 0007 must_change_password, 0008 org features).
+                assert version == "0008"
                 nullable = (
                     await conn.exec_driver_sql(
                         "SELECT is_nullable FROM information_schema.columns "

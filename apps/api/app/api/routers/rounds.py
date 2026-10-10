@@ -12,6 +12,7 @@ from app.core.deps import DbSession, OrgScope, require_permission
 from app.core.rbac import Permission, Principal
 from app.schemas.api.catalog import RoundCreate, RoundOut, RoundReorder, RoundTypeDefault, RoundUpdate
 from app.schemas.api.common import ERROR_RESPONSES, Page
+from app.services.intake.access import intake_entitled
 from app.services.jobs.catalog import list_round_type_defaults
 from app.services.jobs.jobs import get_job
 from app.services.jobs.rounds import (
@@ -38,6 +39,8 @@ def _page(rounds: list[RoundOut]) -> Page[RoundOut]:
 )
 async def round_types(principal: Reader, db: DbSession) -> Page[RoundTypeDefault]:
     items = [RoundTypeDefault.model_validate(item) for item in await list_round_type_defaults(db)]
+    if not principal.is_super_admin and not await intake_entitled(db, principal.organization_id):
+        items = [item for item in items if str(item.round_type) != "intake"]  # G8: not part of this plan
     return Page[RoundTypeDefault](items=items, total=len(items), limit=len(items), offset=0)
 
 

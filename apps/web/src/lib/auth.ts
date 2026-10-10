@@ -109,7 +109,7 @@ export function normalizeMe(raw: unknown): MeResponse {
   const orgSource = isRecord(raw.organization) ? raw.organization : isRecord(userSource.organization) ? userSource.organization : null;
   const organization: OrganizationRef | null =
     orgSource && typeof orgSource.id === "string" && typeof orgSource.name === "string"
-      ? { id: orgSource.id, name: orgSource.name, slug: typeof orgSource.slug === "string" ? orgSource.slug : "" }
+      ? { id: orgSource.id, name: orgSource.name, slug: typeof orgSource.slug === "string" ? orgSource.slug : "", ...(isRecord(orgSource.features) ? { features: orgSource.features } : {}) }
       : null;
   const permissionSource = Array.isArray(raw.permissions) ? raw.permissions : Array.isArray(userSource.permissions) ? userSource.permissions : null;
   const permissions = permissionSource
@@ -267,6 +267,15 @@ export function useCan(required: readonly Permission[], mode: "any" | "all" = "a
   return useAuthStore((s) =>
     required.length === 0 ? true : mode === "all" ? required.every((p) => s.permissions.includes(p)) : required.some((p) => s.permissions.includes(p)),
   );
+}
+
+/** Whether the organisation's plan includes a feature (G8); platform staff see every feature. */
+export function hasFeature(state: Pick<AuthState, "organization" | "user">, feature: string): boolean {
+  return state.user?.role === "SUPER_ADMIN" || Boolean(state.organization?.features?.[feature]);
+}
+
+export function useFeature(feature: string): boolean {
+  return useAuthStore((s) => hasFeature(s, feature));
 }
 
 export function useHasRole(...roles: Role[]): boolean {

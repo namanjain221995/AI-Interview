@@ -8,7 +8,7 @@ import { NavigationProgress } from "./NavigationProgress";
 import { loadAvatarPlayground } from "./routes/AvatarPlaygroundRoute";
 import { NotFoundPage, NotFoundPanel } from "./routes/NotFound";
 import { RouteErrorBoundary } from "./routes/RouteErrorBoundary";
-import { PermissionGate, StaffArea } from "./routes/StaffArea";
+import { FeatureGate, PermissionGate, StaffArea } from "./routes/StaffArea";
 
 /** Code-split route: the page module's default export becomes the route component. */
 function page(loader: () => Promise<{ default: ComponentType }>) {
@@ -144,12 +144,18 @@ export const routes: RouteObject[] = [
                 ],
               },
               { path: "links/:linkId", lazy: links.detail },
-              { path: "intake", lazy: intake.list },
-              { element: <PermissionGate permission="interviews:invite" />, children: [{ path: "intake/new", lazy: intake.create }] },
-              { element: <PermissionGate permission="analytics:read" />, children: [{ path: "intake/analytics", lazy: intake.analytics }] },
-              { element: <PermissionGate permission="settings:manage" />, children: [{ path: "intake/settings", lazy: intake.settings }] },
-              { path: "intake/session/:sessionId", lazy: intake.bySession },
-              { path: "intake/:intakeId", lazy: intake.review },
+              {
+                // Intake is a plan feature (G8): other organisations get a 404 page.
+                element: <FeatureGate feature="intake" />,
+                children: [
+                  { path: "intake", lazy: intake.list },
+                  { element: <PermissionGate permission="interviews:invite" />, children: [{ path: "intake/new", lazy: intake.create }] },
+                  { element: <PermissionGate permission="analytics:read" />, children: [{ path: "intake/analytics", lazy: intake.analytics }] },
+                  { element: <PermissionGate permission="settings:manage" />, children: [{ path: "intake/settings", lazy: intake.settings }] },
+                  { path: "intake/session/:sessionId", lazy: intake.bySession },
+                  { path: "intake/:intakeId", lazy: intake.review },
+                ],
+              },
               { path: "*", element: <NotFoundPanel /> },
             ],
           },

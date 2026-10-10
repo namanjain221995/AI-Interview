@@ -375,7 +375,13 @@ class CandidateClient(httpx.AsyncClient):
 
 @pytest_asyncio.fixture
 async def org_factory(_db_cleanup: None) -> Callable[..., Awaitable[uuid.UUID]]:
-    async def make(*, name: str | None = None, slug: str | None = None, is_active: bool = True) -> uuid.UUID:
+    async def make(
+        *,
+        name: str | None = None,
+        slug: str | None = None,
+        is_active: bool = True,
+        features: dict[str, Any] | None = None,
+    ) -> uuid.UUID:
         suffix = secrets.token_hex(4)
         async with session_scope() as session:
             org = Organization(
@@ -383,6 +389,7 @@ async def org_factory(_db_cleanup: None) -> Callable[..., Awaitable[uuid.UUID]]:
                 slug=slug or f"test-{suffix}",
                 is_active=is_active,
                 settings=OrganizationSettings().model_dump(mode="json"),
+                features=features or {},
             )
             session.add(org)
             await session.flush()

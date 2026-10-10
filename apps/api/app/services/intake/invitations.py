@@ -55,6 +55,7 @@ from app.schemas.intake import (
 from app.services.candidates.service import create_candidate, ensure_active, get_candidate
 from app.services.intake.access import (
     intake_enabled,
+    intake_entitled,
     intake_for_interview,
     intake_round_of_interview,
     is_intake_round,
@@ -615,6 +616,8 @@ async def ensure_intake_for_interview(
     if not intake_enabled():
         return None
     existing = await intake_for_interview(db, interview.id)
+    if existing is None and not await intake_entitled(db, interview.organization_id):
+        return None  # G8: never start intake for an organisation whose plan does not include it
     if existing is not None:
         return existing
     round_ = round_ if is_intake_round(round_) else await intake_round_of_interview(db, interview)
