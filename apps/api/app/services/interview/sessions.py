@@ -617,7 +617,14 @@ async def mark_session_completed(db: AsyncSession, session_id: Any) -> bool:
             state.status = SessionStatus.COMPLETED
             return True
 
-        await store.save_with_retry(str(session_id), _complete)
+        # The column is authoritative for the lifecycle status; the hot-state copy is best effort.
+        # A missing or unreadable state snapshot must never keep the session in COMPLETING (S2).
+        try:
+            await store.save_with_retry(str(session_id), _complete)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "engine.state_complete_failed", session_id=str(session_id), error=f"{type(exc).__name__}: {exc}"[:200]
+            )
     return completed
 
 

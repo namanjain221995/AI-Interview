@@ -27,14 +27,16 @@ from sqlalchemy import func, select
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.core.metrics import SESSIONS_ABANDONED_PENDING, SESSIONS_ENDED_OFFLINE
+from app.core.metrics import SESSIONS_ABANDONED_PENDING, SESSIONS_COMPLETING_STALE, SESSIONS_ENDED_OFFLINE
+from app.core.queue import enqueue
 from app.core.redis import get_redis
-from app.db.models import InterviewSession
+from app.db.models import BackgroundJob, InterviewSession, Report
 from app.db.session import session_scope
-from app.domain.enums import SessionEndReason, SessionStatus
+from app.domain.enums import JobState, ReportStatus, SessionEndReason, SessionStatus
 from app.realtime.lock import SessionLock
 from app.services.interview.engine import SessionNotFound, get_engine
 from app.services.interview.records import log_event
+from app.services.interview.sessions import mark_session_completed
 from app.services.interview.state_store import ENDED_STATUSES
 
 log = get_logger(__name__)
@@ -207,4 +209,100 @@ async def sweep_abandoned_sessions(
     summary.pending = max(0, summary.candidates - summary.ended)
     SESSIONS_ABANDONED_PENDING.set(summary.pending)
     log.info("session.sweep", **summary.as_dict(), dry_run_mode=dry, window_s=window)
+    return summary
+
+
+# ------------------------------------------------------------- stuck in COMPLETING (S2)
+
+REPORT_JOB_TYPES: tuple[str, ...] = ("report.generate", "intake.report", "intake.evaluate", "scoring.finalize")
+_LIVE_JOB_STATES: frozenset[str] = frozenset({JobState.QUEUED.value, JobState.RUNNING.value})
+
+
+@dataclass
+class RecoverySummary:
+    stale: int = 0
+    completed: int = 0
+    re_enqueued: int = 0
+    skipped_busy: int = 0
+    errors: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+async def _live_report_jobs(db: Any, session_id: uuid.UUID) -> int:
+    return int(
+        await db.scalar(
+            select(func.count())
+            .select_from(BackgroundJob)
+            .where(
+                BackgroundJob.type.in_(REPORT_JOB_TYPES),
+                BackgroundJob.status.in_(_LIVE_JOB_STATES),
+                BackgroundJob.payload["session_id"].astext == str(session_id),
+            )
+        )
+        or 0
+    )
+
+
+async def recover_stuck_completing(
+    *, now: datetime | None = None, stale_after_s: float | None = None, limit: int | None = None
+) -> RecoverySummary:
+    """Sessions COMPLETING past the stale window with no report job alive.
+
+    A dead ``report.generate`` (non-model error on the last attempt, or a worker killed through
+    every attempt) used to leave the session in COMPLETING forever, outside the review queue.
+    When a READY report already exists the session is simply completed; otherwise one more
+    ``report.generate`` is enqueued (single attempt, so the deterministic fallback narrative is
+    used) and its ``on_exhausted`` hook completes the session if even that fails."""
+    settings = get_settings()
+    now = now or datetime.now(UTC)
+    window = float(stale_after_s if stale_after_s is not None else settings.session_completing_stale_seconds)
+    batch = int(limit if limit is not None else settings.session_sweep_batch)
+    cutoff = now - timedelta(seconds=window)
+    summary = RecoverySummary()
+    async with session_scope() as db:
+        rows = (
+            await db.execute(
+                select(InterviewSession.id)
+                .where(
+                    InterviewSession.status == SessionStatus.COMPLETING.value,
+                    func.coalesce(InterviewSession.ended_at, InterviewSession.updated_at) < cutoff,
+                )
+                .order_by(func.coalesce(InterviewSession.ended_at, InterviewSession.updated_at))
+                .limit(batch)
+            )
+        ).all()
+    candidates = [row[0] for row in rows]
+    summary.stale = len(candidates)
+    for sid in candidates:
+        try:
+            async with session_scope() as db:
+                if await _live_report_jobs(db, sid):
+                    summary.skipped_busy += 1
+                    continue
+                ready = await db.scalar(
+                    select(func.count())
+                    .select_from(Report)
+                    .where(Report.session_id == sid, Report.status == ReportStatus.READY.value)
+                )
+                if ready:
+                    if await mark_session_completed(db, sid):
+                        summary.completed += 1
+                        log.info("session.recovery_completed", session_id=str(sid), reason="report_ready")
+                    continue
+                await enqueue(
+                    "report.generate",
+                    {"session_id": str(sid), "reason": "recovery"},
+                    dedupe_key=f"report.generate:{sid}:recovery:{now:%Y%m%d%H}",
+                    max_attempts=1,
+                    db=db,
+                )
+            summary.re_enqueued += 1
+            log.warning("session.recovery_report_enqueued", session_id=str(sid))
+        except Exception as exc:  # noqa: BLE001 - one bad session must not stop the sweep
+            summary.errors += 1
+            log.error("session.recovery_failed", session_id=str(sid), error=f"{type(exc).__name__}: {exc}"[:200])
+    SESSIONS_COMPLETING_STALE.set(max(0, summary.stale - summary.completed))
+    log.info("session.recovery_sweep", **summary.as_dict(), window_s=window)
     return summary

@@ -202,6 +202,8 @@ class Settings(BaseSettings):
     session_sweep_batch: int = 25
     # First deploy on a long-running database: report what the sweep would end without ending it.
     session_sweep_dry_run: bool = False
+    # A session still COMPLETING this long after it ended, with no report job alive, is recovered (S2).
+    session_completing_stale_seconds: int = 900
 
     # ---------------------------------------------------- interview defaults
     interviewer_name: str = "Maya"

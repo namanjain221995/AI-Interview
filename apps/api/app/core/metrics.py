@@ -66,6 +66,10 @@ SESSIONS_ENDED_OFFLINE = Counter(
     "Sessions ended by the lifecycle service without a client (abandoned sweep, staff cancel, REST end)",
     ["reason", "actor"],
 )
+SESSIONS_COMPLETING_STALE = Gauge(
+    "interview_sessions_completing_stale",
+    "Sessions still COMPLETING past SESSION_COMPLETING_STALE_SECONDS with no report job alive (recovery sweep)",
+)
 SESSIONS_ABANDONED_PENDING = Gauge(
     "interview_sessions_abandoned_pending",
     "Started sessions idle past the abandonment window that the last sweep could not end yet",

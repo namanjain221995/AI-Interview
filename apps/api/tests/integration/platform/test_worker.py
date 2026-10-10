@@ -47,8 +47,23 @@ def test_handlers():
     async def kwargs_style(*, value: int) -> int:
         return value * 2
 
+    exhausted: list[tuple[str, int, str]] = []
+
+    async def on_exhausted(ctx: queue.JobContext, exc: BaseException) -> None:
+        exhausted.append((ctx.job_id, ctx.attempt, type(exc).__name__))
+        if ctx.payload.get("hook_raises"):
+            raise RuntimeError("hook exploded")
+
+    @queue.job_handler("test.exhausted", max_attempts=2, on_exhausted=on_exhausted)
+    async def always_fails(payload: dict[str, Any], ctx: queue.JobContext) -> None:
+        calls["exhausted"] = calls.get("exhausted", 0) + 1
+        if payload.get("permanent"):
+            raise queue.PermanentJobError("never retry")
+        raise RuntimeError("transient failure")
+
+    calls["_exhausted_hook"] = exhausted  # type: ignore[assignment]
     yield calls
-    for job_type in ("test.permanent", "test.slow", "test.kwargs"):
+    for job_type in ("test.permanent", "test.slow", "test.kwargs", "test.exhausted"):
         queue.unregister_handler(job_type)
 
 
@@ -308,3 +323,49 @@ async def test_worker_process_runtime(settings, redis, storage, _db_cleanup):
     async with session_scope() as session:
         rows = (await session.scalars(select(BackgroundJob.status).where(BackgroundJob.type == PING))).all()
     assert rows == ["succeeded"]
+
+
+# ------------------------------------------------------------- on_exhausted hook (S2)
+
+
+async def test_on_exhausted_runs_once_when_retries_are_exhausted(worker_factory, redis, test_handlers):
+    job_id = await queue.enqueue("test.exhausted", {})
+    await worker_factory(job_types=["test.exhausted"]).drain(timeout=10)
+    assert (await _job(job_id)).status == "dead" and test_handlers["exhausted"] == 2
+    assert test_handlers["_exhausted_hook"] == [(job_id, 2, "RuntimeError")]
+
+
+async def test_on_exhausted_runs_for_permanent_failures(worker_factory, test_handlers):
+    job_id = await queue.enqueue("test.exhausted", {"permanent": True})
+    await worker_factory(job_types=["test.exhausted"]).drain(timeout=10)
+    assert (await _job(job_id)).status == "failed"
+    assert test_handlers["_exhausted_hook"] == [(job_id, 1, "PermanentJobError")]
+
+
+async def test_on_exhausted_runs_when_a_crashed_consumer_used_every_attempt(worker_factory, redis, test_handlers):
+    job_id = await queue.enqueue("test.exhausted", {}, max_attempts=1)
+    crashed = worker_factory(job_types=["test.exhausted"], consumer_name="crashed-consumer")
+    await crashed.ensure_groups()
+    # Deliver, bump the attempt counter as a real claim would, never ack: the consumer "died" mid-job.
+    assert await redis.xreadgroup(queue.GROUP, "crashed-consumer", {queue.stream_key("test.exhausted"): ">"}, count=1)
+    # The handler is registered with max_attempts=2: two consumed attempts, so the reclaim is attempt 3.
+    async with session_scope() as session:
+        await session.execute(
+            update(BackgroundJob).where(BackgroundJob.id == uuid.UUID(job_id)).values(attempts=2, status="running")
+        )
+    rescuer = worker_factory(job_types=["test.exhausted"], visibility_timeout=0.3)
+    await asyncio.sleep(0.4)
+    assert await rescuer.reclaim_idle() == 1
+    await rescuer.drain(timeout=10)
+    job = await _job(job_id)
+    assert job.status == "dead" and "attempts exhausted" in (job.last_error or "")
+    assert test_handlers.get("exhausted") is None  # the handler itself never ran again
+    assert [(a, name) for _, a, name in test_handlers["_exhausted_hook"]] == [(3, "RuntimeError")]
+
+
+async def test_a_failing_hook_still_dead_letters_the_job(worker_factory, redis, test_handlers):
+    job_id = await queue.enqueue("test.exhausted", {"hook_raises": True})
+    await worker_factory(job_types=["test.exhausted"]).drain(timeout=10)
+    assert (await _job(job_id)).status == "dead"
+    assert len(test_handlers["_exhausted_hook"]) == 1
+    assert (await redis.xrange(queue.DEAD_STREAM))[0][1]["job_id"] == job_id

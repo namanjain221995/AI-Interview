@@ -1167,13 +1167,23 @@ def workers_infra() -> Dashboard:
         6, 6,
     )  # fmt: skip
     d.add(
+        stat(
+            "Stuck in COMPLETING",
+            "max(interview_sessions_completing_stale) or vector(0)",
+            decimals=0, thresholds=status_thresholds(1, 5),
+            description="Sessions whose report job died; the recovery sweep re-enqueues the report (fallback narrative) "
+            "or completes the session so it reaches the review queue.",
+        ),
+        6, 6,
+    )  # fmt: skip
+    d.add(
         timeseries(
             "Sessions ended offline per hour by reason",
             [("sum by (reason, actor) (increase(interview_sessions_ended_offline_total[1h]))", "{{reason}} ({{actor}})")],
             decimals=0,
             description="disconnect_timeout = the abandoned-session sweep; cancelled = staff cancel; candidate_ended = REST end.",
         ),
-        18, 6,
+        12, 6,
     )  # fmt: skip
 
     d.row("Intake interviews and open links")

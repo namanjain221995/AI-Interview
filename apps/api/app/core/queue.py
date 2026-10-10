@@ -168,6 +168,7 @@ class JobContext:
 
 
 CallStyle = Literal["payload", "payload_ctx", "ctx", "kwargs"]
+ExhaustedHook = Callable[["JobContext", BaseException], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +181,9 @@ class JobHandlerSpec:
     call_style: CallStyle
     accepts_var_kwargs: bool
     kwarg_names: frozenset[str]
+    # Runs once when the job will never run again (permanent failure, attempts exhausted, or a
+    # worker killed through every attempt): the owner leaves its domain state decidable (S2).
+    on_exhausted: ExhaustedHook | None = None
 
 
 _HANDLERS: dict[str, JobHandlerSpec] = {}
@@ -215,6 +219,7 @@ def job_handler(
     concurrency: int = 1,
     max_attempts: int | None = None,
     timeout_seconds: float | None = None,
+    on_exhausted: ExhaustedHook | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
     """Register an async handler for ``job_type`` (see module docstring)."""
     validate_job_type(job_type)
@@ -239,6 +244,7 @@ def job_handler(
             call_style=style,
             accepts_var_kwargs=var_kw,
             kwarg_names=names,
+            on_exhausted=on_exhausted,
         )
         return fn
 
@@ -889,6 +895,31 @@ class Worker:
         ERRORS.labels(component="worker").inc()
         log.error("job.failed", job_id=claimed.job_id, job_type=claimed.job_type, attempt=claimed.attempt,
                   status=status.value, exhausted=exhausted, error=error)
+        await self._run_exhausted_hook(claimed, exc)
+
+    async def _run_exhausted_hook(self, claimed: _ClaimedJob, exc: BaseException) -> None:
+        """The handler's ``on_exhausted`` runs after the row is dead/failed; its own failure is logged, never raised."""
+        spec = _HANDLERS.get(claimed.job_type)
+        hook = spec.on_exhausted if spec is not None else None
+        if hook is None:
+            return
+        ctx = JobContext(
+            job_id=claimed.job_id,
+            job_type=claimed.job_type,
+            attempt=claimed.attempt,
+            max_attempts=claimed.max_attempts,
+            payload=claimed.payload,
+            enqueued_at=claimed.created_at,
+        )
+        try:
+            async with asyncio.timeout(60):
+                await hook(ctx, exc)
+        except Exception as hook_exc:  # noqa: BLE001 - the job is already dead; keep the worker alive
+            ERRORS.labels(component="worker").inc()
+            log.error(
+                "job.exhausted_hook_failed", job_id=claimed.job_id, job_type=claimed.job_type,
+                error=_error_text(hook_exc),
+            )  # fmt: skip
 
     async def _requeue_cancelled(self, claimed: _ClaimedJob, job_type: str, message_id: str) -> None:
         """Shutdown interrupted the job: give the attempt back and dispatch it again."""

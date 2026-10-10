@@ -48,7 +48,17 @@ def _uuid(payload: dict[str, Any], key: str, *, required: bool = True) -> uuid.U
         raise PermanentJobError(f"payload needs a valid {key}") from exc
 
 
-@job_handler(EVALUATE_JOB, concurrency=2, timeout_seconds=900)
+async def on_intake_job_exhausted(ctx: JobContext, exc: BaseException) -> None:
+    """Reviewers still decide without AI fields: a dead evaluation or report job never leaves the
+    session in COMPLETING (S2; covers the worker-killed path the handlers' own except cannot see)."""
+    sid = _uuid(ctx.payload, "session_id", required=False)
+    if sid is None:
+        return
+    completed = await complete_intake_session(sid)
+    log.error("intake.job_exhausted", session_id=str(sid), job_type=ctx.job_type, job_id=ctx.job_id, completed=completed)
+
+
+@job_handler(EVALUATE_JOB, concurrency=2, timeout_seconds=900, on_exhausted=on_intake_job_exhausted)
 async def evaluate(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     sid = _uuid(payload, "session_id")
     assert sid is not None
@@ -79,7 +89,7 @@ async def evaluate(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     return result.as_dict()
 
 
-@job_handler(REPORT_JOB, concurrency=2, timeout_seconds=600)
+@job_handler(REPORT_JOB, concurrency=2, timeout_seconds=600, on_exhausted=on_intake_job_exhausted)
 async def report(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     sid = _uuid(payload, "session_id")
     assert sid is not None

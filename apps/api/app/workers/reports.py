@@ -18,11 +18,15 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from sqlalchemy import update
+
 from app.core.logging import get_logger
 from app.core.queue import JobContext, PermanentJobError, enqueue, job_handler, publish_session_event
-from app.db.models import InterviewSession
+from app.db.models import InterviewSession, Report
 from app.db.session import session_scope
-from app.domain.enums import SessionStatus
+from app.domain.enums import ReportStatus, SessionStatus
+from app.services.interview.records import log_event
+from app.services.interview.sessions import mark_session_completed
 from app.services.reports.service import generate_reports
 from app.services.scoring.persistence import pending_evaluation_jobs, recompute_session_scores
 
@@ -138,7 +142,31 @@ async def finalize_scores(payload: dict[str, Any], ctx: JobContext) -> dict[str,
     return summary
 
 
-@job_handler("report.generate", concurrency=2, timeout_seconds=600)
+async def on_report_exhausted(ctx: JobContext, exc: BaseException) -> None:
+    """The report job will not run again (non-model error on the last attempt, or a worker killed
+    through every attempt): never leave the session in COMPLETING, outside the review queue (S2)."""
+    try:
+        sid = _session_id(ctx.payload)
+    except PermanentJobError:
+        return
+    async with session_scope() as db:
+        await db.execute(
+            update(Report)
+            .where(
+                Report.session_id == sid,
+                Report.status.in_([ReportStatus.PENDING.value, ReportStatus.GENERATING.value]),
+            )
+            .values(status=ReportStatus.FAILED.value)
+        )
+        completed = await mark_session_completed(db, sid)
+        await log_event(
+            db, sid, "report.failed", {"job_id": ctx.job_id, "error": f"{type(exc).__name__}: {exc}"[:200]}
+        )
+    log.error("reports.job_exhausted", session_id=str(sid), job_id=ctx.job_id, completed=completed, error=type(exc).__name__)
+    await publish_session_event(sid, {"type": "report.failed", "session_id": str(sid)})
+
+
+@job_handler("report.generate", concurrency=2, timeout_seconds=600, on_exhausted=on_report_exhausted)
 async def generate_report(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     sid = _session_id(payload)
     skipped = await _intake_guard(sid, job_id=ctx.job_id, report=True)

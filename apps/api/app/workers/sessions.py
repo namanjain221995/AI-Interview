@@ -3,6 +3,9 @@
 ``session.lifecycle_sweep`` (every 300 s)
     Ends live/paused sessions idle past SESSION_ABANDON_AFTER_SECONDS as ``disconnect_timeout``
     (partial-coverage scoring and report), batch-limited; SESSION_SWEEP_DRY_RUN only reports.
+``session.recovery_sweep`` (every 300 s)
+    Sessions COMPLETING past SESSION_COMPLETING_STALE_SECONDS with no report job alive: complete them
+    when a report is READY, otherwise enqueue one last ``report.generate`` (fallback narrative).
 ``session.end`` {session_id, reason, actor}
     Ends one session offline (staff cancel, the candidate's REST end). A session another process is
     driving (lock held) is retried; the periodic sweep is the backstop.
@@ -15,15 +18,21 @@ from typing import Any
 from app.core.logging import bind_context, get_logger
 from app.core.queue import JobContext, PermanentJobError, job_handler, register_periodic_job
 from app.domain.enums import SessionEndReason
-from app.services.interview.lifecycle import end_session_offline, sweep_abandoned_sessions
+from app.services.interview.lifecycle import (
+    end_session_offline,
+    recover_stuck_completing,
+    sweep_abandoned_sessions,
+)
 
 log = get_logger(__name__)
 
 SWEEP_JOB = "session.lifecycle_sweep"
 END_JOB = "session.end"
+RECOVERY_JOB = "session.recovery_sweep"
 SWEEP_INTERVAL_SECONDS = 300
 
 register_periodic_job(SWEEP_JOB, SWEEP_INTERVAL_SECONDS)
+register_periodic_job(RECOVERY_JOB, SWEEP_INTERVAL_SECONDS)
 
 
 class SessionBusy(Exception):
@@ -53,3 +62,9 @@ async def end_session(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any
     if outcome.action == "skipped" and outcome.reason == "locked" and not ctx.is_last_attempt:
         raise SessionBusy(f"session {session_id} is held by {outcome.detail}")
     return outcome.as_dict()
+
+
+@job_handler(RECOVERY_JOB, concurrency=1, timeout_seconds=600)
+async def recovery_sweep(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
+    summary = await recover_stuck_completing()
+    return summary.as_dict()
