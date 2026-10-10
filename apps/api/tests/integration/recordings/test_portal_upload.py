@@ -42,7 +42,8 @@ async def test_parts_are_stored_separately_with_timing(app, org, storage) -> Non
     rec = await make_session(org)
     http = await candidate_client(app, rec)
     first, second = uuid.uuid4(), uuid.uuid4()
-    sent = int(datetime.now(UTC).timestamp() * 1000) - 2_000  # browser clock 2 s behind
+    before_ms = int(datetime.now(UTC).timestamp() * 1000)
+    sent = before_ms - 2_000  # browser clock 2 s behind
     r = await upload(
         http,
         rec,
@@ -55,6 +56,7 @@ async def test_parts_are_stored_separately_with_timing(app, org, storage) -> Non
         session_ms=8_000,
         client_sent_at=sent,
     )
+    request_ms = int(datetime.now(UTC).timestamp() * 1000) - before_ms  # how long the upload took to arrive
     assert r.status_code == 201, r.text
     assert r.json()["part_id"] == str(first) and r.json()["duplicate"] is False
     # Out of order: segment 2 before segment 1; a second part (page reload) starts at 0 again.
@@ -79,7 +81,9 @@ async def test_parts_are_stored_separately_with_timing(app, org, storage) -> Non
         parts = {p.key: p for p in await load_parts(db, rec.session_id)}
     assert [s.index for s in parts[str(first)].segments] == [0, 1, 2]
     timing = parts[str(first)].timing()
-    assert timing.clock_offset_ms is not None and 1_900 <= timing.clock_offset_ms <= 4_000
+    # Receive time minus the browser's send time: the 2 s skew plus however long the request took (a fixed
+    # upper bound flaked on a loaded machine).
+    assert timing.clock_offset_ms is not None and 1_900 <= timing.clock_offset_ms <= 2_000 + request_ms + 100
     assert timing.anchors == [(10_000, 8_000)]
     await http.aclose()
 
