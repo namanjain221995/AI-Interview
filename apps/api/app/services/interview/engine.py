@@ -1146,11 +1146,12 @@ class InterviewEngine:
         question_id = state.current_question_id
         evaluate = bool(question_id and text and (special.kind in (SpecialKind.NONE, SpecialKind.DONT_KNOW)))
         current = state.current_question()
-        if evaluate and (
-            (current is not None and current.action in FLOW_ONLY_ACTIONS) or state.candidate_questions_invited
-        ):
+        if evaluate and current is not None and current.action in FLOW_ONLY_ACTIONS:
             # A reply to "any questions for me?", the intro or the closing is conversation, not an answer:
-            # evaluating it produced synthetic negative evidence against the last competency (S9).
+            # evaluating it produced synthetic negative evidence against the last competency (S9). Answering
+            # the candidate's questions keeps the invitation row current, so those replies stay unevaluated;
+            # a real question asked after the interview reopened (a late evaluation lowered sufficiency) is
+            # its own row and its answer is evaluated.
             evaluate = False
         if state.intake is not None:
             evaluate = False  # intake answers are judged by intake.evaluate after the session (8.1)

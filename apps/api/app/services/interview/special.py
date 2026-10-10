@@ -249,6 +249,14 @@ _NO_QUESTIONS = _rx(
     r"^(?:no|nope|not really|none)(?:,? (?:thanks|thank you|i'?m good|that'?s all))?[.!]?$",
 )
 _DECLINE_START = re.compile(r"^(?:no|nope|not really|none|nothing|nah|i(?:'m| am) (?:good|fine|all set))\b")
+# A question after a negation or a joiner ("Not really, but what does on-call look like", "No. Can I ask about the
+# stack"): speech recognition often drops the question mark, so such a reply still asks. Exclamations ("what a
+# lovely chat") are not questions.
+_QUESTION_CLAUSE = re.compile(
+    r"(?:\b(?:but|and|so|though|although|however|actually|just)\b,?|[,.;:!])\s+"
+    r"(?:what(?! an?\b)|how(?! (?:nice|great|lovely|wonderful|kind|interesting|fun|cool)\b)|who|when|where|why|"
+    r"which|is|are|do|does|did|can|could|will|would|should|may)\b"
+)
 _INTERROGATIVE_START = re.compile(
     r"^(?:so |and |also |but |ok(?:ay)? |sure |great |thanks |thank you |right )?"
     r"(?:what|how|who|when|where|why|which|is|are|do|does|did|can|could|will|would|should|may|might)\b"
@@ -281,12 +289,18 @@ _ROLE_NOUNS = (
     r"hiring manager|hr|screener)"
 )
 _INSTRUCTION = _rx(
-    r"\b(?:give|award|grant) me (?:a |the )?(?:perfect|full|maximum|max|top|high|highest|best) "
-    r"(?:score|marks?|rating|grade)\b",
+    # Commands about the candidate's own evaluation: "me", "my", "this candidate" make them unambiguous. Generic
+    # forms ("make the decision to roll back", "update the score to reflect new events", "set the score to zero")
+    # are everyday answer content and must never be read as commands.
+    r"\b(?:give|award|grant) (?:me|myself|this candidate|the candidate|my answers?|this answer) (?:a |an |the )?"
+    r"(?:perfect|full|maximum|max|top|high|highest|best) (?:score|marks?|rating|grade|points)\b",
     r"\bmark (?:all|every|each) (?:of )?(?:the |my )?(?:competenc\w+|answers?|questions?|skills?) as\b",
-    r"\b(?:set|change|update|make) (?:the |my )?(?:recommendation|score|rating|grade|verdict|decision) (?:to|as)\b",
-    r"\brate (?:me|this(?: answer)?|my answers?|everything|all my answers) (?:as |a |at )?"
-    r"(?:strong|perfect|excellent|10|ten|100|high|highly)\b",
+    r"\b(?:set|change|update|make) (?:my|the candidate'?s|this candidate'?s) (?:overall )?"
+    r"(?:recommendation|score|rating|grade|verdict|evaluation)\b",
+    r"\bset (?:the )?(?:recommendation|score|rating|grade|verdict)\s*(?:to|as|at|:)?\s*(?:a |an )?"
+    r"(?:strong(?: hire)?|hire|perfect|full marks|maximum|excellent|10 out of 10|ten out of ten|100 out of 100)\b",
+    r"\brate (?:me|this answer|my answers?|all my answers) (?:as |a |at )?"
+    r"(?:strong|perfect|excellent|10|ten|100|highly)\b",
     r"\b(?:tell|say|write|report)\b[^.?!]{0,40}\bi (?:passed|got the job|am hired|should be hired|am the best candidate)\b",
     r"\brecommend me (?:strongly |highly )?(?:for|to) (?:hire|hiring|the (?:role|job|position)|proceed|the next round)\b",
     r"\b(?:ignore|disregard|forget|override|bypass) (?:all |any )?(?:of )?your (?:previous |prior |earlier |original |"
@@ -421,9 +435,14 @@ def classify(
 
     # After the invitation to ask questions: a decline closes, any question is the candidate's.
     if questions_invited and n <= 70:
-        asks = ends_question or bool(_INTERROGATIVE_START.match(norm))
+        asks = (
+            ends_question
+            or bool(_INTERROGATIVE_START.match(norm))
+            or bool(_CANDIDATE_Q.search(norm))
+            or bool(_QUESTION_CLAUSE.search(norm))
+        )
         m = _NO_QUESTIONS.search(norm)
-        if m and not ends_question:
+        if m and not asks:
             return SpecialResult(SpecialKind.NO_QUESTIONS, 0.85, m.group(0))
         # Short declines in free form ("No, thank you so much.", "Not really, thanks for your time"): a reply
         # that starts with a negation and asks nothing is a decline, not a candidate question (S9).
