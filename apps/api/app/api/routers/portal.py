@@ -241,14 +241,19 @@ async def _latest_session(db: AsyncSession, interview_id: uuid.UUID) -> Intervie
 
 
 async def _latest_resume(db: AsyncSession, interview: Interview) -> CandidateResume | None:
+    stmt = select(CandidateResume).where(CandidateResume.candidate_id == interview.candidate_id)
+    from app.services.open_links.hooks import registration_interview_ids
+
+    scope = await registration_interview_ids(db, interview.id)
+    if scope is not None:
+        # Open-link registrations are not verified identities (S4): only résumés uploaded within this
+        # registration, never the person's résumés from other applications.
+        stmt = stmt.where(CandidateResume.interview_id.in_(scope or [interview.id]))
     return await db.scalar(
-        select(CandidateResume)
-        .where(CandidateResume.candidate_id == interview.candidate_id)
-        .order_by(
+        stmt.order_by(
             case((CandidateResume.interview_id == interview.id, 0), else_=1),
             CandidateResume.created_at.desc(),
-        )
-        .limit(1)
+        ).limit(1)
     )
 
 

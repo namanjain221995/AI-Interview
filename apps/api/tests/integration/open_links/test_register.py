@@ -10,9 +10,24 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import func, select
 
-from app.db.models import AuditLog, Candidate, Interview, LinkRegistration, LinkRegistrationRound
+from app.db.models import (
+    AuditLog,
+    Candidate,
+    CandidateResume,
+    Interview,
+    LinkRegistration,
+    LinkRegistrationRound,
+)
 from app.db.session import session_scope
-from tests.integration.open_links.helpers import API, answers, create_link, register, token_of
+from tests.integration.open_links.helpers import (
+    API,
+    answers,
+    create_link,
+    make_job,
+    portal_headers,
+    register,
+    token_of,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -277,3 +292,88 @@ async def test_campus_preset_allows_many_from_one_network(link_env, public_clien
         )
     ).json()
     assert review["total"] == 0  # low flags never fill the "Needs review" queue
+
+
+# ------------------------------------------------------------------ identity stop-gap (S4, audit D1)
+
+
+async def _two_links(link_env) -> tuple[dict, dict]:
+    """Open links for two different jobs of the organisation (two applications by the same person)."""
+    first = (await create_link(link_env))["link"]
+    job_id, round_ids = await make_job(link_env.organization_id)
+    second = (
+        await create_link(
+            link_env, job_id=str(job_id), round_ids=[str(r) for r in round_ids], name="Second job"
+        )
+    )["link"]
+    return first, second
+
+
+async def test_existing_candidate_with_history_is_refused_from_another_browser(
+    link_env, public_client, db_session
+) -> None:
+    """Someone else's email must not sign the registrant in as that person (their résumé, their history)."""
+    first, second = await _two_links(link_env)
+    owner = public_client()
+    assert (await register(owner, token_of(first), answers(7))).status_code == 201
+    stranger = public_client(ip="10.9.9.9")
+    response = await register(stranger, token_of(second), answers(7, full_name="Someone Else"))
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "registration_unavailable"
+    assert "candidate7@example.com" not in response.text
+    blocked = await db_session.scalar(
+        select(LinkRegistration).where(LinkRegistration.status_reason == "identity_unverified")
+    )
+    assert blocked is not None and blocked.status == "blocked" and blocked.candidate_id is None
+    audit = await db_session.scalar(
+        select(AuditLog).where(AuditLog.action == "link.registration_identity_refused")
+    )
+    assert audit is not None and "candidate7@example.com" not in json.dumps(audit.details)
+    assert await _count(Candidate) == 1  # nothing attached to the existing record
+
+    # The hiring team can allow it after confirming it is the same person: the record is reused.
+    allowed = await link_env.recruiter.post(
+        f"{API}/open-links/{second['id']}/registrations/{blocked.id}/unblock",
+        json={"reason": "Confirmed by phone"},
+    )
+    assert allowed.status_code == 200, allowed.text
+    await db_session.refresh(blocked)
+    candidate = await db_session.scalar(select(Candidate).where(Candidate.email == "candidate7@example.com"))
+    assert blocked.status == "registered" and blocked.candidate_id == candidate.id
+
+
+async def test_returning_candidate_on_the_same_browser_is_reused_without_old_resumes(
+    link_env, public_client, db_session
+) -> None:
+    first, second = await _two_links(link_env)
+    browser = public_client()
+    one = await register(browser, token_of(first), answers(8))
+    assert one.status_code == 201
+    first_interview = uuid.UUID(one.json()["interview_id"])
+    candidate = await db_session.scalar(select(Candidate).where(Candidate.email == "candidate8@example.com"))
+    async with session_scope() as db:
+        db.add(
+            CandidateResume(
+                candidate_id=candidate.id,
+                organization_id=link_env.organization_id,
+                interview_id=first_interview,
+                storage_key="resumes/test/first.pdf",
+                original_filename="first.pdf",
+                content_type="application/pdf",
+                size_bytes=1000,
+                sha256="a" * 64,
+                status="ready",
+            )
+        )
+    two = await register(browser, token_of(second), answers(8))
+    assert two.status_code == 201, two.text  # the same browser: the returning applicant
+    second_interview = uuid.UUID(two.json()["interview_id"])
+    assert (await db_session.get(Interview, second_interview)).candidate_id == candidate.id
+    assert await _count(Candidate) == 1
+
+    # The résumé from the other application is never shown for (or counted towards) this one.
+    headers = portal_headers(two)
+    resume = await browser.get(f"{API}/portal/interviews/{second_interview}/resume", headers=headers)
+    assert resume.status_code == 200 and resume.json()["resume"] is None
+    portal = (await browser.get(f"{API}/portal/interviews/{second_interview}", headers=headers)).json()
+    assert "resume" not in portal["steps_completed"]

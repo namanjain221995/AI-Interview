@@ -144,16 +144,7 @@ async def create_invitation(
         round_id = rounds[0].id
 
     now = _now()
-    existing = await db.scalar(
-        select(Interview.id).where(
-            Interview.candidate_id == candidate.id,
-            Interview.job_id == job.id,
-            or_(
-                Interview.status == InterviewStatus.IN_PROGRESS.value,
-                and_(Interview.status == InterviewStatus.INVITED.value, Interview.invite_expires_at > now),
-            ),
-        )
-    )
+    existing = await open_invitation_id(db, candidate.id, job.id, now=now)
     if existing is not None:
         raise Conflict(
             "This candidate already has an open invitation for this job. Regenerate its link instead.",
@@ -297,6 +288,26 @@ async def regenerate_link(
     await revoke_candidate_sessions(db, interview.id, reason="invite_link_rotated")
     await db.flush()
     return IssuedInvite(interview, token, access_code)
+
+
+async def open_invitation_id(
+    db: AsyncSession, candidate_id: uuid.UUID, job_id: uuid.UUID, *, now: datetime | None = None
+) -> uuid.UUID | None:
+    """An interview of this candidate for this job that is in progress, or invited and not yet expired."""
+    now = now or _now()
+    found: uuid.UUID | None = await db.scalar(
+        select(Interview.id)
+        .where(
+            Interview.candidate_id == candidate_id,
+            Interview.job_id == job_id,
+            or_(
+                Interview.status == InterviewStatus.IN_PROGRESS.value,
+                and_(Interview.status == InterviewStatus.INVITED.value, Interview.invite_expires_at > now),
+            ),
+        )
+        .limit(1)
+    )
+    return found
 
 
 def interview_list_query(

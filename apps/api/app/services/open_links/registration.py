@@ -39,11 +39,12 @@ from app.core.ratelimit import enforce_rate_limit
 from app.core.rbac import Principal
 from app.core.redis import get_redis
 from app.core.security import constant_time_equals, verify_access_code_async
-from app.db.models import Candidate, Interview, InterviewLink, Job, LinkRegistration
+from app.db.models import Candidate, CandidateResume, Interview, InterviewLink, Job, LinkRegistration
 from app.domain.enums import InterviewStatus, Role, SubjectType
 from app.realtime.origin import origin_allowed
 from app.schemas.api.open_links import RegisterRequest
 from app.services.identity.sessions import IssuedTokens, start_candidate_session
+from app.services.jobs.invitations import open_invitation_id
 from app.services.open_links.constants import (
     ACTIVE_STATUSES,
     DEFAULT_DUPLICATE_POLICY,
@@ -345,6 +346,40 @@ async def _handle_match(
     )
 
 
+async def _may_reuse_candidate(
+    db: AsyncSession, link: InterviewLink, candidate: Candidate, signals: RequestSignals
+) -> bool:
+    """Whether an existing candidate record (matched by email only) may be attached to this registration.
+
+    A record without history (no interview, no résumé) holds nothing beyond what the registrant typed and is
+    reused as before. A record with history is only reused from a browser that already registered as this
+    person in this organisation (the device cookie of one of their registrations) - the returning applicant
+    on their own laptop; anyone else could be using somebody else's email address.
+    """
+    has_history = (
+        await db.scalar(select(Interview.id).where(Interview.candidate_id == candidate.id).limit(1))
+        is not None
+        or await db.scalar(
+            select(CandidateResume.id).where(CandidateResume.candidate_id == candidate.id).limit(1)
+        )
+        is not None
+    )
+    if not has_history:
+        return True
+    if signals.device_is_new:
+        return False
+    known = (
+        await db.scalars(
+            select(LinkRegistration.device_hash).where(
+                LinkRegistration.organization_id == link.organization_id,
+                LinkRegistration.candidate_id == candidate.id,
+                LinkRegistration.device_hash.is_not(None),
+            )
+        )
+    ).all()
+    return any(constant_time_equals(known_hash, signals.device_hash) for known_hash in known if known_hash)
+
+
 async def _recruiter_invitation_conflict(
     db: AsyncSession, link: InterviewLink, answers: ValidatedAnswers
 ) -> AppError | None:
@@ -539,6 +574,35 @@ async def register(db: AsyncSession, token: str, body: RegisterRequest, request:
     if candidate is not None and candidate.archived_at is not None:
         raise await _fail(
             db, Conflict(GENERIC_REFUSAL, code="registration_unavailable"), outcome="unavailable"
+        )
+    if candidate is not None and await open_invitation_id(db, candidate.id, link.job_id) is not None:
+        # The accurate answer for the person who already has an open invitation for this job (and nothing to
+        # gain for anyone else); checked before the identity rule so no dead-end blocked row is created.
+        raise await _fail(
+            db,
+            Conflict(
+                "You already have an invitation for this role. Please use the link in your invitation.",
+                code="already_invited",
+            ),
+            outcome="already_invited",
+        )
+    if candidate is not None and not await _may_reuse_candidate(db, link, candidate, signals):
+        # S4 stop-gap until the email is verified (G4): attaching a stranger to an existing person's record
+        # would sign them in as that person (their résumé and history). The attempt is kept as a blocked
+        # registration the hiring team can review and allow (unblock_registration reuses the record).
+        registration.status = RS.BLOCKED.value
+        registration.status_reason = "identity_unverified"
+        db.add(registration)
+        await db.flush()
+        raise await _fail(
+            db,
+            Conflict(GENERIC_REFUSAL, code="registration_unavailable"),
+            outcome="identity_unverified",
+            action="link.registration_identity_refused",
+            link=link,
+            details={"match": "email", "reason": "existing_candidate_unverified_device"},
+            request=request,
+            resource_id=registration.id,
         )
     if candidate is None:
         candidate = Candidate(
