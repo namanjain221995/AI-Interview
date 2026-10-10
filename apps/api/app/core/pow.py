@@ -53,6 +53,10 @@ class Challenge:
         return asdict(self)
 
 
+_SALT_END = "&"
+CLOCK_SKEW_S = 60
+
+
 def _key() -> bytes:
     settings = get_settings()
     base = (
@@ -81,7 +85,9 @@ def create_challenge(
         (now if now is not None else time.time())
         + (ttl_s if ttl_s is not None else settings.open_link_pow_ttl_seconds)
     )
-    salt = f"{secrets.token_hex(12)}?scope={scope}&expires={expires}"
+    # The trailing "&" ends the signed part: the hash covers salt + number, so without a fixed end a client could
+    # move leading digits of the number into the salt and stretch "expires" (verify() requires it).
+    salt = f"{secrets.token_hex(12)}?scope={scope}&expires={expires}{_SALT_END}"
     challenge = _digest(salt, secrets.randbelow(maxnumber + 1))
     return Challenge(ALGORITHM, challenge, salt, _sign(challenge), maxnumber)
 
@@ -113,6 +119,8 @@ def verify(payload: str | None, scope: str, *, now: float | None = None) -> tupl
         raise PowError("pow_invalid", "signature")
     if number < 0 or not hmac.compare_digest(_digest(salt, number), challenge):
         raise PowError("pow_invalid", "number")
+    if not salt.endswith(_SALT_END):
+        raise PowError("pow_invalid", "salt")
     params = parse_qs(salt.partition("?")[2])
     if params.get("scope", [""])[0] != scope:
         raise PowError("pow_invalid", "scope")
@@ -120,15 +128,24 @@ def verify(payload: str | None, scope: str, *, now: float | None = None) -> tupl
         expires = int(params.get("expires", ["0"])[0])
     except ValueError:
         raise PowError("pow_invalid", "expires") from None
-    if expires <= (now if now is not None else time.time()):
+    current = now if now is not None else time.time()
+    if expires <= current:
         raise PowError("pow_invalid", "expired")
+    if expires > current + get_settings().open_link_pow_ttl_seconds + CLOCK_SKEW_S:
+        raise PowError("pow_invalid", "expires")  # never issued that far ahead
     return challenge, expires
 
 
 async def consume(redis: Redis, challenge: str, expires: int, *, now: float | None = None) -> None:
     """Single use: a replayed solution raises ``pow_invalid``. A Redis failure lets the request through (the
     rate limits still apply) rather than locking real candidates out."""
-    ttl = max(1, expires - int(now if now is not None else time.time()))
+    ttl = max(
+        1,
+        min(
+            expires - int(now if now is not None else time.time()),
+            get_settings().open_link_pow_ttl_seconds + CLOCK_SKEW_S,
+        ),
+    )
     try:
         fresh = await redis.set(f"{_USED_PREFIX}{challenge}", "1", nx=True, ex=ttl)
     except (RedisError, OSError) as exc:

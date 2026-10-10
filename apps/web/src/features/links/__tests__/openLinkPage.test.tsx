@@ -184,6 +184,9 @@ describe("OpenLinkPage (/j/:token)", () => {
       const body = call[1] as { pow?: string };
       expect(JSON.parse(atob(body.pow!)).number).toBe(42);
     }
+    // One challenge on page load, one for the retry - never a prefetch after the successful submit (campus NAT).
+    const challenges = vi.mocked(api.get).mock.calls.filter(([path]) => path === "/link-access/tok123/challenge");
+    expect(challenges).toHaveLength(2);
     vi.unstubAllGlobals();
   });
 

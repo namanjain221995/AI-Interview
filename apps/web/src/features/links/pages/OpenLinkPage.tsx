@@ -158,12 +158,12 @@ function useProofOfWork(token: string, enabled: boolean) {
     return () => current.current?.cancel();
   }, [enabled, prepare]);
   return useCallback(async (): Promise<string | null> => {
+    // Solved in the background since the page loaded; a retry (or a second submit) fetches a fresh one on demand.
+    // Never prefetched after a submit: on a campus network every challenge counts against one shared address.
     if (!current.current) prepare();
     const solution = current.current!.solution;
     current.current = null;
-    const value = await solution;
-    prepare(); // the next attempt needs a fresh one
-    return value;
+    return solution;
   }, [prepare]);
 }
 

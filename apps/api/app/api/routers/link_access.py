@@ -42,7 +42,9 @@ async def _register_ip_dependency(request: Request) -> None:
     )
 
 
-CHALLENGE_IP_LIMIT = 30  # per minute: one per page load, a few retries
+# Per minute and IP: a campus drive sends a whole lab through one NAT address, so this must never be tighter than
+# the page itself (INFO_IP_LIMIT); a challenge is cheap to issue and each registration still needs its own solution.
+CHALLENGE_IP_LIMIT = 120
 
 
 @router.get(

@@ -52,6 +52,23 @@ def test_tampered_solutions_are_refused(change: dict[str, object], reason: str) 
     assert error.value.code == "pow_invalid" and error.value.reason == reason
 
 
+def test_digits_moved_from_the_number_into_the_salt_never_stretch_the_expiry(monkeypatch) -> None:
+    # Review of S15: sha256(salt + number) is unchanged when leading digits move into the salt.
+    monkeypatch.setattr(pow_mod.secrets, "randbelow", lambda _n: 92503)
+    challenge = pow_mod.create_challenge("link:a", max_number=100_000, ttl_s=600, now=NOW)
+    body = json.loads(base64.b64decode(pow_mod.solve(challenge)))
+    assert body["number"] == 92503
+    shifted = _payload(pow_mod.solve(challenge), salt=body["salt"] + "9", number=2503)
+    with pytest.raises(pow_mod.PowError) as error:
+        pow_mod.verify(shifted, "link:a", now=NOW + 10 * 365 * 86400)
+    assert error.value.reason == "salt"
+    monkeypatch.undo()
+    far = pow_mod.create_challenge("link:a", max_number=200, ttl_s=10 * 86400, now=NOW)
+    with pytest.raises(pow_mod.PowError) as stretched:
+        pow_mod.verify(pow_mod.solve(far), "link:a", now=NOW + 1)
+    assert stretched.value.reason == "expires"  # never issued that far ahead
+
+
 @pytest.mark.parametrize("payload", [None, "", "not base64!", base64.b64encode(b"{}").decode()])
 def test_missing_or_malformed_solutions(payload: str | None) -> None:
     with pytest.raises(pow_mod.PowError) as error:
@@ -77,6 +94,8 @@ async def test_a_solution_is_single_use() -> None:
     with pytest.raises(pow_mod.PowError) as replay:
         await pow_mod.consume(redis, "abc", int(NOW) + 300, now=NOW)  # type: ignore[arg-type]
     assert replay.value.reason == "replayed"
+    await pow_mod.consume(redis, "far", int(NOW) + 10**9, now=NOW)  # type: ignore[arg-type]
+    assert redis.keys["pow:used:far"][1] <= 600 + pow_mod.CLOCK_SKEW_S  # used keys always expire
 
 
 def test_ipv6_addresses_are_keyed_by_their_64() -> None:
