@@ -6,7 +6,9 @@
 Malformed and unknown tokens both answer 404 ``link_not_found``. The POST has
 no cookie principal (like ``candidate-access``): it relies on an
 Origin/Referer allowlist, JSON-only bodies, ``SameSite=Lax`` cookies and the
-fact that it only creates the caller's own session.
+fact that it only creates the caller's own session. Registrations never bind to an
+existing candidate with history from an unknown browser (S4; OPEN_LINKS.md section on
+candidate reuse): verified reuse arrives with email verification (G4).
 """
 
 from __future__ import annotations
