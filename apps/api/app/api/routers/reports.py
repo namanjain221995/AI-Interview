@@ -22,12 +22,14 @@ from app.core.rbac import Permission, Principal
 from app.domain.enums import ReportType, SessionStatus
 from app.schemas.api.common import ERROR_RESPONSES
 from app.schemas.api.reports import (
+    ReevaluateResponse,
     RegenerateResponse,
     ReleaseRequest,
     ReportListOut,
     ReportOut,
     ReportVersionOut,
 )
+from app.services.interview.reevaluation import REEVALUABLE_STATUSES, fallback_count, queue_reevaluation
 from app.services.reports.queries import (
     REPORTABLE_STATUSES,
     get_session_for_principal,
@@ -44,6 +46,7 @@ ReportReader = Annotated[Principal, Depends(require_permission(Permission.REPORT
 ReportRegenerator = Annotated[
     Principal, Depends(require_permission(Permission.REPORTS_READ, Permission.REVIEWS_WRITE))
 ]
+Reevaluator = Annotated[Principal, Depends(require_permission(Permission.REVIEWS_WRITE))]
 ReportReleaser = Annotated[
     Principal, Depends(require_permission(Permission.REPORTS_READ, Permission.REPORTS_RELEASE))
 ]
@@ -97,6 +100,39 @@ async def get_report(
         details={"session_id": str(session.id), "type": report_type.value, "version": report.version},
     )
     return await _report_out(db, report, versions=versions, mode=mode)
+
+
+@router.post(
+    "/sessions/{session_id}/reevaluate",
+    response_model=ReevaluateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Re-evaluate answers scored during an AI outage",
+)
+async def reevaluate_session(
+    session_id: uuid.UUID, principal: Reevaluator, db: DbSession, request: Request
+) -> ReevaluateResponse:
+    """S12: answers whose evaluation is a fallback (the model was down) are evaluated again; scores and reports
+    refresh when they are replaced. Ended sessions only."""
+    session = await get_session_for_principal(db, principal, session_id)
+    if session.status not in REEVALUABLE_STATUSES:
+        raise Conflict(
+            "Answers can be re-evaluated once the interview has ended.",
+            code="session_not_finished",
+            details={"status": session.status},
+        )
+    remaining = await fallback_count(db, session.id)
+    queued = await queue_reevaluation(db, session, actor=f"user:{principal.user_id}")
+    await audit(
+        db,
+        principal,
+        "session.reevaluate",
+        resource_type="session",
+        resource_id=str(session.id),
+        organization_id=session.organization_id,
+        request=request,
+        details={"fallbacks": remaining, "queued": queued},
+    )
+    return ReevaluateResponse(queued=queued, fallback_evaluations=remaining)
 
 
 @router.post(

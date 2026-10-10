@@ -394,14 +394,15 @@ EVALUATION_JOB_TYPES = ("answer.evaluate", "coding.evaluate")
 
 
 async def pending_evaluation_jobs(db: AsyncSession, session_id: uuid.UUID | str) -> int:
-    """Unfinished ``answer.evaluate`` / ``coding.evaluate`` jobs of a session."""
+    """Unfinished ``answer.evaluate`` / ``answer.reevaluate`` / ``coding.evaluate`` jobs of a session."""
     sid = _uuid(session_id)
     coding_ids = [
         str(c)
         for c in (await db.scalars(select(CodingSession.id).where(CodingSession.session_id == sid))).all()
     ]
     conditions = [
-        (BackgroundJob.type == "answer.evaluate") & (BackgroundJob.payload["session_id"].astext == str(sid)),
+        (BackgroundJob.type.in_(("answer.evaluate", "answer.reevaluate")))
+        & (BackgroundJob.payload["session_id"].astext == str(sid)),
     ]
     if coding_ids:
         conditions.append(
@@ -520,6 +521,8 @@ def _build_observations(inputs: SessionScoringInputs) -> None:
     evaluated: set[uuid.UUID] = set()
     for row in inputs.evaluations:
         evaluated.add(row.answer_id)
+        if row.is_fallback:
+            continue  # the model was down: unassessed, not "quality x 10 at weight 0.2" evidence (S12)
         answer = answers.get(row.answer_id)
         question_id = row.question_id or (answer.question_id if answer else None)
         question = questions.get(question_id) if question_id else None

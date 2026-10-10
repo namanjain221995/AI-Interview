@@ -362,6 +362,10 @@ async def build_observations(
     observations: list[Observation] = []
     expected: dict[str, list[str]] = {}
     for ev_row, question, answer in rows:
+        if ev_row.is_fallback:
+            continue  # nothing was assessed (the model was down): unassessed, never evidence (S12)
+        if question is not None and str(question.action) in FLOW_ONLY_ACTION_VALUES:
+            continue  # replies to the invitation / intro / closing are not evidence (S9)
         try:
             ev = AnswerEvaluation.model_validate(ev_row.evaluation)
         except ValueError:
@@ -566,8 +570,15 @@ class EvaluationService:
         return get_redis()
 
     async def evaluate(
-        self, session_id: str, answer_id: str, *, is_last_attempt: bool = True
+        self,
+        session_id: str,
+        answer_id: str,
+        *,
+        is_last_attempt: bool = True,
+        replace_fallback: bool = False,
     ) -> dict[str, Any]:
+        """Evaluate one answer (idempotent). ``replace_fallback``: an existing fallback evaluation (the model was
+        down through every attempt) is evaluated again and replaced in place when the model answers (S12)."""
         sid = uuid.UUID(str(session_id))
         aid = uuid.UUID(str(answer_id))
         # ---- gather context (short transaction) ----------------------------
@@ -596,7 +607,10 @@ class EvaluationService:
                 if k in round_config.competency_keys()
             ]
             primary = q_keys[0] if q_keys else None
-            if existing is not None:
+            replacing = (
+                existing.id if existing is not None and replace_fallback and existing.is_fallback else None
+            )
+            if existing is not None and replacing is None:
                 payload = await self._payload_from_existing(
                     db, session_row, answer, question, existing, round_config, state
                 )
@@ -718,6 +732,10 @@ class EvaluationService:
                 error=f"{type(exc).__name__}: {exc}"[:200],
             )
 
+        if replacing is not None and is_fallback:
+            # The model still could not evaluate it: keep the existing fallback (the sweep may try again later).
+            log.info("engine.reevaluation_still_fallback", session_id=session_id, answer_id=answer_id)
+            return {"answer_id": answer_id, "still_fallback": True}
         evaluation = clean_evaluation(
             evaluation,
             answer_text=answer_text,
@@ -782,14 +800,27 @@ class EvaluationService:
                 "evaluation": evaluation.model_dump(mode="json"),
                 **{k: v for k, v in evaluation.scores.model_dump().items()},
             }
-            inserted = (
-                await db.execute(
-                    pg_insert(AnswerEvaluationRow)
-                    .values(**values)
-                    .on_conflict_do_nothing(index_elements=[AnswerEvaluationRow.answer_id])
-                    .returning(AnswerEvaluationRow.id)
-                )
-            ).scalar_one_or_none()
+            if replacing is not None:
+                # In place (evidence and reviews keep pointing at the same row); only while it is still a fallback,
+                # so two re-evaluations of the same answer apply once.
+                replaced = {k: v for k, v in values.items() if k not in ("id", "answer_id", "session_id")}
+                inserted = (
+                    await db.execute(
+                        update(AnswerEvaluationRow)
+                        .where(AnswerEvaluationRow.id == replacing, AnswerEvaluationRow.is_fallback.is_(True))
+                        .values(**replaced)
+                        .returning(AnswerEvaluationRow.id)
+                    )
+                ).scalar_one_or_none()
+            else:
+                inserted = (
+                    await db.execute(
+                        pg_insert(AnswerEvaluationRow)
+                        .values(**values)
+                        .on_conflict_do_nothing(index_elements=[AnswerEvaluationRow.answer_id])
+                        .returning(AnswerEvaluationRow.id)
+                    )
+                ).scalar_one_or_none()
             if inserted is None:
                 log.info("engine.evaluation_duplicate", session_id=session_id, answer_id=answer_id)
                 return {"answer_id": answer_id, "idempotent": True}
@@ -909,12 +940,14 @@ class EvaluationService:
             quality=evaluation.overall_quality.value,
             evidence=len(items),
             fallback=is_fallback,
+            replaced_fallback=replacing is not None,
         )
         return {
             "answer_id": answer_id,
             "quality": evaluation.overall_quality.value,
             "evidence": len(items),
             "fallback": is_fallback,
+            "replaced_fallback": replacing is not None,
         }
 
     @staticmethod
