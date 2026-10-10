@@ -278,6 +278,16 @@ describe("Completion and report", () => {
     expect(vi.mocked(api.get)).not.toHaveBeenCalledWith("/portal/sessions/s1/report");
   });
 
+  it("never shows a feedback card for an intake interview, even when reports are immediate (S21)", async () => {
+    interviewState = { ...INTERVIEW, status: "completed", steps_completed: ["consent", "resume", "system_check"], intake: { intake_id: "in1", title: "Intake interview", estimated_minutes: 25, presence: "orb" } } as typeof interviewState;
+    sessionState = { id: "s1", interview_id: "i1", status: "completed", candidate_report_available: false, candidate_report_mode: "immediate" };
+    renderAt("/candidate/i1/complete?session=s1", [{ path: ":interviewId/complete", Component: CompletePage }]);
+    const page = await screen.findByTestId("complete-page");
+    await waitFor(() => expect(vi.mocked(api.get)).toHaveBeenCalledWith("/portal/sessions/s1"));
+    expect(screen.queryByTestId("feedback-card")).not.toBeInTheDocument();
+    expect(page).not.toHaveTextContent(/preparing/i);
+  });
+
   it("keeps the dashboard free of feedback promises when the invitation shares none", async () => {
     interviewState = { ...INTERVIEW, policy: { ...INTERVIEW.policy, candidate_report_mode: "never" }, status: "completed", latest_session: { id: "s1", status: "completed" } } as never;
     sessionState = { id: "s1", interview_id: "i1", status: "completed", candidate_report_available: false, candidate_report_mode: "never" };

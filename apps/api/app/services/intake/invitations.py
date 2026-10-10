@@ -266,7 +266,15 @@ def _patch_max_reconnects(interview: Interview, max_reconnects: int) -> None:
     integrity = dict(snapshot.get("integrity") or {})
     integrity["max_reconnects"] = int(max_reconnects)
     snapshot["integrity"] = integrity
+    snapshot["candidate_report_mode"] = "never"  # intake has no candidate report (S21)
     interview.policy_snapshot = snapshot  # new dict: JSONB change detection
+
+
+def _freeze_no_candidate_report(interview: Interview) -> None:
+    snapshot = dict(interview.policy_snapshot or {})
+    if snapshot.get("candidate_report_mode") != "never":
+        snapshot["candidate_report_mode"] = "never"
+        interview.policy_snapshot = snapshot
 
 
 async def send_intake(
@@ -625,6 +633,7 @@ async def ensure_intake_for_interview(
         return None
     org = await get_org_settings(db, interview.organization_id)
     kit = kit_info()
+    _freeze_no_candidate_report(interview)  # S21: generic invites / open-link rounds too
     snapshot = interview.policy_snapshot if isinstance(interview.policy_snapshot, dict) else {}
     raw_integrity = snapshot.get("integrity")
     integrity: dict[str, Any] = raw_integrity if isinstance(raw_integrity, dict) else {}

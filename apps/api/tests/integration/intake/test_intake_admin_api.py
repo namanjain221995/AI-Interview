@@ -611,3 +611,31 @@ async def test_job_round_api_accepts_and_validates_intake_rounds(auth_client) ->
     assert (await intake_row(created_intake["intake"]["id"])).settings[
         "duration_minutes"
     ] == 45  # org default
+
+
+async def test_intake_never_promises_a_candidate_report(auth_client) -> None:
+    """S21: whatever the organisation or job allows, intake has no candidate report (no endless spinner)."""
+    from app.db.models import InterviewSession, Organization
+    from app.domain.enums import CandidateReportMode
+    from app.services.reports.queries import resolve_candidate_report_mode
+
+    recruiter = await auth_client(Role.RECRUITER)
+    org_id = recruiter.user.organization_id
+    async with session_scope() as db:
+        org = await db.get(Organization, org_id)
+        org.settings = {**(org.settings or {}), "candidate_report_mode": "immediate"}
+    job_id, _round_id = await make_intake_job(org_id)
+    created = await create_intake(recruiter, job_id)
+    row = await intake_row(created["intake"]["id"])
+    async with session_scope() as db:
+        interview = await db.get(Interview, row.interview_id)
+        assert interview.policy_snapshot["candidate_report_mode"] == "never"
+        session = InterviewSession(
+            interview_id=interview.id,
+            organization_id=org_id,
+            candidate_id=interview.candidate_id,
+            job_id=job_id,
+            round_id=interview.round_id,
+            round_config={"round_type": "intake"},
+        )
+        assert await resolve_candidate_report_mode(db, session) is CandidateReportMode.NEVER

@@ -23,7 +23,7 @@ export default function CompletePage() {
   const wrappingUp = outcome === "wrapping_up";
   // No feedback is shared (the default): no report card, no polling, no promise. Nothing is promised either
   // while the interview is still being closed.
-  const sharesFeedback = Boolean(data) && !modePending && mode !== "never" && !wrappingUp;
+  const sharesFeedback = Boolean(data) && !modePending && mode !== "never" && !wrappingUp && !data?.intake; // intake: never a report (S21)
   const report = useCandidateReport(sharesFeedback ? sessionId : null, { poll: true, intervalMs: mode === "immediate" ? 5000 : 30_000 });
   const ready = isReportReady(report.data ?? undefined);
   const firstName = me.data?.firstName ?? (data?.candidateName ?? "").split(/\s+/)[0] ?? null;
