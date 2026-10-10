@@ -344,6 +344,9 @@ export function CodingWorkspace({ coding, remainingS, blockPaste, pasteThreshold
                   The code editor couldn't load. You can still write your code here; it is saved and run the same way.
                 </p>
                 <textarea
+                  // One textarea per session and language, like the editor's model path: a language switch shows
+                  // that language's buffer instead of keeping the previous code on screen.
+                  key={`${coding.sessionId}/${state.language}`}
                   aria-label="Your code"
                   className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-sm leading-6 text-fg outline-none"
                   defaultValue={state.buffers[state.language] ?? ""}
