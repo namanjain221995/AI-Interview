@@ -50,6 +50,7 @@ const recruiter = {
   analytics: page(() => import("@/features/recruiter/pages/AnalyticsPage")),
   settings: page(() => import("@/features/recruiter/pages/SettingsPage")),
   users: page(() => import("@/features/recruiter/pages/UsersPage")),
+  account: page(() => import("@/features/recruiter/pages/AccountPage")),
 };
 
 // Open interview links (docs/design/OPEN_LINKS.md): staff pages and the two public candidate pages.
@@ -133,6 +134,7 @@ export const routes: RouteObject[] = [
               { path: "analytics", lazy: recruiter.analytics },
               { element: <PermissionGate permission="settings:manage" />, children: [{ path: "settings", lazy: recruiter.settings }] },
               { element: <PermissionGate permission="users:manage" />, children: [{ path: "users", lazy: recruiter.users }] },
+              { path: "account", lazy: recruiter.account },
               { path: "links", lazy: links.list },
               {
                 element: <PermissionGate permission="interviews:invite" />,

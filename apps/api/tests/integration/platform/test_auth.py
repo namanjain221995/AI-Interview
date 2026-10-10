@@ -37,7 +37,10 @@ async def test_login_sets_hardened_cookies_and_returns_principal(client, user_fa
     body = response.json()
     assert body["principal"]["email"] == user.email
     assert body["principal"]["role"] == "RECRUITER"
-    assert "jobs:write" in body["principal"]["permissions"] and "users:manage" not in body["principal"]["permissions"]
+    assert (
+        "jobs:write" in body["principal"]["permissions"]
+        and "users:manage" not in body["principal"]["permissions"]
+    )
     assert body["principal"]["organization"]["id"] == str(user.organization_id)
     cookies = _cookie_headers(response)
     access, refresh, csrf = cookies["access_token"], cookies["refresh_token"], cookies["csrf_token"]
@@ -66,8 +69,12 @@ async def test_bearer_header_works_without_csrf(client, user_factory):
         created = await bare.post(
             "/api/v1/users",
             headers={"Authorization": f"Bearer {token}"},
-            json={"email": "bearer-made@example.test", "full_name": "Bearer Made", "role": "RECRUITER",
-                  "password": "lantern-Orbit-5591"},
+            json={
+                "email": "bearer-made@example.test",
+                "full_name": "Bearer Made",
+                "role": "RECRUITER",
+                "password": "lantern-Orbit-5591",
+            },
         )
         assert created.status_code == 201, created.text
         bad = await bare.get("/api/v1/auth/me", headers={"Authorization": "Basic abc"})
@@ -97,10 +104,16 @@ async def test_lockout_after_repeated_failures(client, user_factory, db_session,
     assert (await _login(client, user.email, user.password)).status_code == 423
     row = await db_session.scalar(select(User).where(User.id == user.id))
     assert row.locked_until is not None
-    actions = (await db_session.scalars(select(AuditLog.action).where(AuditLog.resource_id == str(user.id)))).all()
-    assert "auth.account_locked" in actions and actions.count("auth.login_failed") >= settings.login_max_attempts
+    actions = (
+        await db_session.scalars(select(AuditLog.action).where(AuditLog.resource_id == str(user.id)))
+    ).all()
+    assert (
+        "auth.account_locked" in actions and actions.count("auth.login_failed") >= settings.login_max_attempts
+    )
     # Lock expiry restores access.
-    await db_session.execute(update(User).where(User.id == user.id).values(locked_until=datetime.now(UTC) - timedelta(seconds=1)))
+    await db_session.execute(
+        update(User).where(User.id == user.id).values(locked_until=datetime.now(UTC) - timedelta(seconds=1))
+    )
     await db_session.commit()
     assert (await _login(client, user.email, user.password)).status_code == 200
 
@@ -164,7 +177,9 @@ async def test_refresh_rotates_tokens_and_detects_reuse(client, user_factory, db
 
     # Replay of the rotated token after the grace window revokes the family.
     await db_session.execute(
-        update(AuthSession).where(AuthSession.id == old_row.id).values(used_at=datetime.now(UTC) - timedelta(minutes=5))
+        update(AuthSession)
+        .where(AuthSession.id == old_row.id)
+        .values(used_at=datetime.now(UTC) - timedelta(minutes=5))
     )
     await db_session.commit()
     async with httpx.AsyncClient(transport=client._transport, base_url="http://testserver") as attacker:
@@ -247,8 +262,12 @@ async def test_logout_revokes_family_and_clears_cookies(client, user_factory, db
 
 async def test_csrf_enforced_for_cookie_sessions(auth_client):
     admin = await auth_client(Role.ADMIN)
-    payload = {"email": "csrf-check@example.test", "full_name": "Csrf Check", "role": "RECRUITER",
-               "password": "quartz-Meadow-2048"}
+    payload = {
+        "email": "csrf-check@example.test",
+        "full_name": "Csrf Check",
+        "role": "RECRUITER",
+        "password": "quartz-Meadow-2048",
+    }
     token = admin.headers.pop("X-CSRF-Token")
     missing = await admin.post("/api/v1/users", json=payload)
     assert missing.status_code == 403 and missing.json()["error"]["code"] == "csrf_failed"
@@ -265,7 +284,12 @@ async def test_csrf_can_be_disabled_by_settings(auth_client, settings):
     settings.csrf_enabled = False
     response = await admin.post(
         "/api/v1/users",
-        json={"email": "nocsrf@example.test", "full_name": "No Csrf", "role": "INTERVIEWER", "password": "copper-Kettle-7731"},
+        json={
+            "email": "nocsrf@example.test",
+            "full_name": "No Csrf",
+            "role": "INTERVIEWER",
+            "password": "copper-Kettle-7731",
+        },
     )
     assert response.status_code == 201
 
@@ -310,12 +334,18 @@ async def test_org_deactivation_blocks_existing_sessions(auth_client, user_facto
 async def test_change_own_password(auth_client, client, db_session):
     staff = await auth_client(Role.RECRUITER)
     other_session = await auth_client(user=staff.user)
-    bad = await staff.post("/api/v1/auth/password", json={"current_password": "nope-nope-nope", "new_password": "x"})
+    bad = await staff.post(
+        "/api/v1/auth/password", json={"current_password": "nope-nope-nope", "new_password": "x"}
+    )
     assert bad.status_code == 422 and bad.json()["error"]["code"] == "invalid_current_password"
-    weak = await staff.post("/api/v1/auth/password", json={"current_password": staff.user.password, "new_password": "password1234"})
+    weak = await staff.post(
+        "/api/v1/auth/password",
+        json={"current_password": staff.user.password, "new_password": "password1234"},
+    )
     assert weak.status_code == 422 and weak.json()["error"]["code"] == "weak_password"
     ok = await staff.post(
-        "/api/v1/auth/password", json={"current_password": staff.user.password, "new_password": "amber-Glacier-6612"}
+        "/api/v1/auth/password",
+        json={"current_password": staff.user.password, "new_password": "amber-Glacier-6612"},
     )
     assert ok.status_code == 204
     assert (await staff.get("/api/v1/auth/me")).status_code == 200  # current session kept
@@ -346,3 +376,62 @@ async def test_password_rehash_on_login(client, user_factory, db_session, settin
 
 async def test_reuse_grace_constant_is_short():
     assert 0 < session_service.REFRESH_REUSE_GRACE_SECONDS <= 30
+
+
+# ------------------------------------------------------------------ admin-issued passwords (S13, audit D5)
+
+
+async def _csrf_client(client: httpx.AsyncClient, login: httpx.Response) -> httpx.AsyncClient:
+    client.headers["X-CSRF-Token"] = login.json()["csrf_token"]
+    return client
+
+
+async def test_admin_issued_password_must_be_changed_before_anything_else(auth_client, client):
+    admin = await auth_client(Role.ADMIN)
+    issued = "sapphire-Lantern-4410"
+    created = await admin.post(
+        "/api/v1/users",
+        json={
+            "email": "first.login@example.test",
+            "full_name": "First Login",
+            "role": "RECRUITER",
+            "password": issued,
+        },
+    )
+    assert created.status_code == 201, created.text
+    login = await _login(client, "first.login@example.test", issued)
+    assert login.status_code == 200 and login.json()["principal"]["must_change_password"] is True
+    user = await _csrf_client(client, login)
+    blocked = await user.get("/api/v1/jobs")
+    assert blocked.status_code == 403 and blocked.json()["error"]["code"] == "password_change_required"
+    me = await user.get("/api/v1/auth/me")
+    assert me.status_code == 200 and me.json()["must_change_password"] is True
+    changed = await user.post(
+        "/api/v1/auth/password", json={"current_password": issued, "new_password": "amber-Glacier-6612"}
+    )
+    assert changed.status_code == 204
+    assert (await user.get("/api/v1/jobs")).status_code == 200  # immediately, not after the cache TTL
+    assert (await user.get("/api/v1/auth/me")).json()["must_change_password"] is False
+
+
+async def test_admin_reset_asks_for_a_new_password_again(auth_client, client, user_factory):
+    admin = await auth_client(Role.ADMIN)
+    target = await user_factory(role=Role.RECRUITER, organization_id=admin.user.organization_id)
+    reset = await admin.patch(f"/api/v1/users/{target.id}", json={"password": "copper-Meadow-7731"})
+    assert reset.status_code == 200, reset.text
+    login = await _login(client, target.email, "copper-Meadow-7731")
+    assert login.status_code == 200 and login.json()["principal"]["must_change_password"] is True
+    user = await _csrf_client(client, login)
+    assert (await user.get("/api/v1/jobs")).json()["error"]["code"] == "password_change_required"
+
+
+async def test_own_password_never_changes_through_the_admin_api(auth_client):
+    admin = await auth_client(Role.ADMIN)
+    response = await admin.patch(f"/api/v1/users/{admin.user.id}", json={"password": "copper-Meadow-7731"})
+    assert response.status_code == 403 and response.json()["error"]["code"] == "self_password_change"
+
+
+async def test_seeded_and_existing_accounts_are_not_forced(auth_client):
+    staff = await auth_client(Role.RECRUITER)  # inserted directly, like the seed and pre-0007 accounts
+    assert (await staff.get("/api/v1/auth/me")).json()["must_change_password"] is False
+    assert (await staff.get("/api/v1/jobs")).status_code == 200

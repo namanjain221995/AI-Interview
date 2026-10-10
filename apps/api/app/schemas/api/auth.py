@@ -37,6 +37,9 @@ class MeResponse(BaseModel):
     organization: OrganizationBrief | None = None
     interview_id: uuid.UUID | None = None
     permissions: list[str]
+    # Additive (S13): the account still has an administrator-issued password; the app shows only the
+    # change-password page until it is changed.
+    must_change_password: bool = False
 
 
 class SessionResponse(BaseModel):

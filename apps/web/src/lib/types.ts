@@ -1147,6 +1147,8 @@ export interface MeResponse {
   user: StaffUser;
   organization: OrganizationRef | null;
   permissions?: Permission[];
+  /** The account still has an administrator-issued password: only the account page is usable (S13). */
+  mustChangePassword?: boolean;
 }
 
 export interface UserCreate {

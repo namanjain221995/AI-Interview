@@ -11,7 +11,7 @@ import { createElement, Fragment, useEffect, type ReactNode } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
 import { create } from "zustand";
 
-import { api, isApiError, onUnauthorized, type ApiError } from "@/lib/api";
+import { api, isApiError, onPasswordChangeRequired, onUnauthorized, type ApiError } from "@/lib/api";
 import {
   PERMISSIONS,
   type LoginRequest,
@@ -115,7 +115,8 @@ export function normalizeMe(raw: unknown): MeResponse {
   const permissions = permissionSource
     ? (permissionSource.filter((p): p is Permission => typeof p === "string" && KNOWN_PERMISSIONS.has(p)) as Permission[])
     : permissionsForRole(role);
-  return { user, organization, permissions };
+  const mustChangePassword = raw.must_change_password === true || userSource.must_change_password === true;
+  return { user, organization, permissions, mustChangePassword };
 }
 
 // ------------------------------------------------------------------- store
@@ -128,6 +129,8 @@ export interface AuthState {
   user: StaffUser | null;
   organization: OrganizationRef | null;
   permissions: Permission[];
+  /** An administrator issued this password: the account page is the only page until it is changed (S13). */
+  mustChangePassword: boolean;
   /** Set when the session check failed for a reason other than "not signed in". */
   error: ApiError | null;
   signedOutReason: SignedOutReason;
@@ -144,6 +147,7 @@ const initialState = {
   user: null,
   organization: null,
   permissions: [] as Permission[],
+  mustChangePassword: false,
   error: null,
   signedOutReason: null as SignedOutReason,
 };
@@ -210,6 +214,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       user: me.user,
       organization: me.organization,
       permissions: me.permissions ?? permissionsForRole(me.user.role),
+      mustChangePassword: Boolean(me.mustChangePassword),
       error: null,
       signedOutReason: null,
     }),
@@ -228,6 +233,11 @@ onUnauthorized(() => {
   if (useAuthStore.getState().status === "authenticated") {
     useAuthStore.getState().clearSession("expired");
   }
+});
+
+// Any API call refused with password_change_required: send the user to the account page (S13).
+onPasswordChangeRequired(() => {
+  if (useAuthStore.getState().status === "authenticated") useAuthStore.setState({ mustChangePassword: true });
 });
 
 // ------------------------------------------------------------------- hooks
@@ -273,6 +283,8 @@ export interface RequireAuthProps {
   errorFallback?: (error: ApiError, retry: () => void) => ReactNode;
   /** Where anonymous visitors are sent (default /login). */
   loginPath?: string;
+  /** The only page while the account still has an administrator-issued password (default /app/account). */
+  passwordChangePath?: string;
 }
 
 /**
@@ -280,9 +292,10 @@ export interface RequireAuthProps {
  * Anonymous visitors are redirected to the login page with `?next=` set to
  * the page they asked for.
  */
-export function RequireAuth({ children, loadingFallback = null, errorFallback, loginPath = "/login" }: RequireAuthProps) {
+export function RequireAuth({ children, loadingFallback = null, errorFallback, loginPath = "/login", passwordChangePath = "/app/account" }: RequireAuthProps) {
   const status = useAuthStore((s) => s.status);
   const error = useAuthStore((s) => s.error);
+  const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
   const bootstrap = useAuthStore((s) => s.bootstrap);
   const location = useLocation();
 
@@ -290,6 +303,9 @@ export function RequireAuth({ children, loadingFallback = null, errorFallback, l
     if (status === "idle") void bootstrap();
   }, [status, bootstrap]);
 
+  if (status === "authenticated" && mustChangePassword && location.pathname !== passwordChangePath) {
+    return createElement(Navigate, { to: passwordChangePath, replace: true });
+  }
   if (status === "authenticated") return createElement(Fragment, null, children ?? createElement(Outlet));
   if (status === "anonymous") {
     const next = `${location.pathname}${location.search}${location.hash}`;

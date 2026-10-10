@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 
 from app.core.audit import audit
 from app.core.deps import CurrentPrincipal, DbSession, OptionalPrincipal, StaffPrincipal, verify_csrf
@@ -51,6 +52,11 @@ async def build_me(db: DbSession, principal: Principal) -> MeResponse:
     org = await db.get(Organization, principal.organization_id) if principal.organization_id else None
     subject_id = principal.id
     assert subject_id is not None
+    must_change = False
+    if principal.user_id is not None:
+        must_change = bool(
+            await db.scalar(select(User.must_change_password).where(User.id == principal.user_id))
+        )
     return MeResponse(
         subject_type=principal.subject_type,
         id=subject_id,
@@ -61,6 +67,7 @@ async def build_me(db: DbSession, principal: Principal) -> MeResponse:
         organization=OrganizationBrief.model_validate(org) if org is not None else None,
         interview_id=principal.interview_id,
         permissions=sorted(p.value for p in principal.permissions),
+        must_change_password=must_change,
     )
 
 
@@ -130,7 +137,8 @@ async def refresh(request: Request, response: Response, db: DbSession) -> Sessio
     row = await find_session_by_refresh_token(db, token)
     if row is None:
         return _error_clearing_cookies(
-            request, Unauthorized("Your session has expired. Please sign in again.", code="invalid_refresh_token")
+            request,
+            Unauthorized("Your session has expired. Please sign in again.", code="invalid_refresh_token"),
         )
     verify_csrf(request, row.id)
     try:
@@ -138,8 +146,14 @@ async def refresh(request: Request, response: Response, db: DbSession) -> Sessio
     except RefreshTokenReuse as exc:
         AUTH_EVENTS.labels(event="refresh_reuse_detected").inc()
         await audit(
-            db, None, "auth.refresh_reuse_detected", resource_type="auth_session", resource_id=str(row.family_id),
-            organization_id=None, details={"subject_type": row.subject_type}, request=request,
+            db,
+            None,
+            "auth.refresh_reuse_detected",
+            resource_type="auth_session",
+            resource_id=str(row.family_id),
+            organization_id=None,
+            details={"subject_type": row.subject_type},
+            request=request,
         )
         await db.commit()
         return _error_clearing_cookies(request, exc)
@@ -169,8 +183,12 @@ async def logout(request: Request, db: DbSession, principal: OptionalPrincipal) 
         revoked += await revoke_family(db, row.family_id, reason="logout")
     if principal is not None or row is not None:
         await audit(
-            db, principal, "auth.logout", resource_type="auth_session",
-            resource_id=str(principal.auth_session_id if principal else row.id if row else ""), request=request,
+            db,
+            principal,
+            "auth.logout",
+            resource_type="auth_session",
+            resource_id=str(principal.auth_session_id if principal else row.id if row else ""),
+            request=request,
             organization_id=principal.organization_id if principal else None,
         )
         AUTH_EVENTS.labels(event="logout").inc()
@@ -196,7 +214,13 @@ async def change_password(
         current = await db.get(AuthSession, principal.auth_session_id)
         family_id = current.family_id if current is not None else None
     await change_own_password(
-        db, user, current_password=body.current_password, new_password=body.new_password, keep_family_id=family_id
+        db,
+        user,
+        current_password=body.current_password,
+        new_password=body.new_password,
+        keep_family_id=family_id,
     )
-    await audit(db, principal, "user.password_change", resource_type="user", resource_id=str(user.id), request=request)
+    await audit(
+        db, principal, "user.password_change", resource_type="user", resource_id=str(user.id), request=request
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

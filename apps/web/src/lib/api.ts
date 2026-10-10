@@ -327,6 +327,33 @@ function emitUnauthorized(): void {
   }
 }
 
+// --------------------------------------------- password change required (S13)
+
+type PasswordChangeListener = () => void;
+const passwordChangeListeners = new Set<PasswordChangeListener>();
+
+/** Subscribe to "the server wants this account's password changed first" (403 password_change_required). */
+export function onPasswordChangeRequired(listener: PasswordChangeListener): () => void {
+  passwordChangeListeners.add(listener);
+  return () => {
+    passwordChangeListeners.delete(listener);
+  };
+}
+
+function failed(raw: RawResponse, body: unknown): ApiError {
+  const error = errorFromResponse(raw, body);
+  if (error.status === 403 && error.code === "password_change_required") {
+    for (const listener of [...passwordChangeListeners]) {
+      try {
+        listener();
+      } catch {
+        // A failing listener must not break the request pipeline.
+      }
+    }
+  }
+  return error;
+}
+
 // ----------------------------------------------------------------- refresh
 
 type RefreshOutcome = "refreshed" | "denied" | "unavailable";
@@ -478,7 +505,7 @@ async function request<T>(method: HttpMethod, path: string, options: RequestOpti
   const response = await executeRaw(method, path, options);
   const raw = await toRaw(response);
   const body = parseBody(raw);
-  if (response.status < 200 || response.status >= 300) throw errorFromResponse(raw, body);
+  if (response.status < 200 || response.status >= 300) throw failed(raw, body);
   return body as T;
 }
 
@@ -493,7 +520,7 @@ async function requestRaw(method: HttpMethod, path: string, options: RequestOpti
     } catch {
       body = undefined;
     }
-    throw errorFromResponse(raw, body);
+    throw failed(raw, body);
   }
   return response;
 }
@@ -589,7 +616,7 @@ async function upload<T>(path: string, data: FormData | Blob, options: UploadOpt
     if (raw.status === 401) emitUnauthorized();
   }
   const body = parseBody(raw);
-  if (raw.status < 200 || raw.status >= 300) throw errorFromResponse(raw, body);
+  if (raw.status < 200 || raw.status >= 300) throw failed(raw, body);
   return body as T;
 }
 

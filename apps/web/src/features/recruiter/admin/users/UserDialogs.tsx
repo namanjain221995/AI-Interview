@@ -133,7 +133,7 @@ export function CreateUserDialog({ open, onOpenChange, roles }: { open: boolean;
                 </RadioGroup>
               )}
             </FieldShell>
-            <FieldShell label="Temporary password" required error={errors.password} description={hints.length ? `Needs: ${hints.join(" ")}` : "Meets the password policy. Common passwords are refused by the server."}>
+            <FieldShell label="Temporary password" required error={errors.password} description={hints.length ? `Needs: ${hints.join(" ")}` : "Meets the password policy. They choose their own password when they first sign in."}>
               {(control) => <PasswordInput {...control} value={password} onChange={setPassword} />}
             </FieldShell>
             {formError ? <Callout tone="danger">{formError}</Callout> : null}
@@ -246,7 +246,7 @@ export function PasswordDialog({ user, onOpenChange }: { user: AdminUser | null;
       <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>{done ? "Password reset" : `Set a new password for ${user.full_name}`}</DialogTitle>
-          <DialogDescription>{done ? "Share it privately; it's shown once. Their lockout, if any, is cleared." : "Use this when someone is locked out or forgot their password."}</DialogDescription>
+          <DialogDescription>{done ? "Share it privately; it's shown once. Their lockout, if any, is cleared, and they choose their own password when they next sign in." : "Use this when someone is locked out or forgot their password."}</DialogDescription>
         </DialogHeader>
         <DialogBody className="grid gap-4">
           {done ? (

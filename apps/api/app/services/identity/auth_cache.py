@@ -42,6 +42,7 @@ class AuthState:
     interview_id: str | None = None
     email: str | None = None
     display_name: str | None = None
+    must_change_password: bool | None = None  # staff only (S13); missing in older cached entries
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))
@@ -66,6 +67,7 @@ async def _query_user_state(db: AsyncSession, claims: AccessTokenClaims) -> Auth
                 User.organization_id,
                 User.email,
                 User.full_name,
+                User.must_change_password,
                 Organization.is_active.label("org_active"),
             )
             .join(User, User.id == AuthSession.user_id)
@@ -88,6 +90,7 @@ async def _query_user_state(db: AsyncSession, claims: AccessTokenClaims) -> Auth
         organization_id=str(row.organization_id) if row.organization_id else None,
         email=row.email,
         display_name=row.full_name,
+        must_change_password=bool(row.must_change_password),
     )
 
 
