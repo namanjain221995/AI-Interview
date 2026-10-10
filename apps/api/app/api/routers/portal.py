@@ -520,7 +520,8 @@ async def portal_interview(
         rounds_offered=[_round_out(r) for r in rounds],
         selected_round_id=interview.round_id,
         allow_round_selection=interview.allow_round_selection,
-        policy=policy.candidate_safe(),
+        # Intake never produces a candidate report (S21), whatever an older snapshot froze.
+        policy={**policy.candidate_safe(), **({"candidate_report_mode": "never"} if intake is not None else {})},
         steps_completed=steps,  # type: ignore[arg-type]
         expires_at=interview.invite_expires_at,
         interviewer_name=policy.interviewer_name,

@@ -613,7 +613,7 @@ async def test_job_round_api_accepts_and_validates_intake_rounds(auth_client) ->
     ] == 45  # org default
 
 
-async def test_intake_never_promises_a_candidate_report(auth_client) -> None:
+async def test_intake_never_promises_a_candidate_report(auth_client, app) -> None:
     """S21: whatever the organisation or job allows, intake has no candidate report (no endless spinner)."""
     from app.db.models import InterviewSession, Organization
     from app.domain.enums import CandidateReportMode
@@ -639,3 +639,12 @@ async def test_intake_never_promises_a_candidate_report(auth_client) -> None:
             round_config={"round_type": "intake"},
         )
         assert await resolve_candidate_report_mode(db, session) is CandidateReportMode.NEVER
+        # An invitation frozen before S21 still says "immediate": the candidate is never promised feedback.
+        interview.policy_snapshot = {**interview.policy_snapshot, "candidate_report_mode": "immediate"}
+    candidate = await candidate_client(
+        app, created["invite_url"], created["intake"]["candidate"]["email"], created.get("access_code")
+    )
+    portal = await candidate.get(f"{API}/portal/interviews/{row.interview_id}")
+    await candidate.aclose()
+    assert portal.status_code == 200, portal.text
+    assert portal.json()["policy"]["candidate_report_mode"] == "never"
