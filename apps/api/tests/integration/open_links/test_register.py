@@ -313,6 +313,37 @@ async def _two_links(link_env) -> tuple[dict, dict]:
     return first, second
 
 
+async def test_an_open_link_interview_only_sees_its_own_registrations_resumes(link_env, public_client) -> None:
+    """Review of S4: the interview's profile (claims, greeting name) and the résumé wait come only from résumés
+    uploaded within the open-link registration, never from the same person's other applications."""
+    from app.db.models import Interview
+    from app.services.interview.sessions import latest_profile, profile_scope, resume_pending
+    from tests.integration.intake.admin_helpers import add_resume
+
+    first, second = await _two_links(link_env)
+    browser = public_client()
+    one = await register(browser, token_of(first), answers(8))
+    assert one.status_code == 201, one.text
+    first_interview = uuid.UUID(one.json()["interview_id"])
+    await add_resume(first_interview)  # a ready profile from the first application
+    two = await register(browser, token_of(second), answers(8))  # same browser: the record is reused (S4)
+    assert two.status_code == 201, two.text
+    second_interview = uuid.UUID(two.json()["interview_id"])
+    async with session_scope() as db:
+        interview = await db.get(Interview, second_interview)
+        assert interview is not None
+        scope = await profile_scope(db, second_interview)
+        assert scope is not None and first_interview not in scope
+        assert await latest_profile(db, interview.candidate_id, interview.job_id, interview_ids=scope) is None
+        assert await resume_pending(db, interview.candidate_id, interview_ids=scope) is False
+        # A recruiter invitation identifies the person: every résumé counts there (unchanged).
+        assert await latest_profile(db, interview.candidate_id, interview.job_id) is not None
+    await add_resume(second_interview)
+    async with session_scope() as db:
+        mine = await latest_profile(db, interview.candidate_id, interview.job_id, interview_ids=scope)
+        assert mine is not None and mine.job_id == interview.job_id
+
+
 async def test_existing_candidate_with_history_is_refused_from_another_browser(
     link_env, public_client, db_session
 ) -> None:

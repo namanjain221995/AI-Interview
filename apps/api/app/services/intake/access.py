@@ -259,10 +259,17 @@ async def latest_session(db: AsyncSession, interview_id: uuid.UUID) -> Interview
 
 
 async def latest_resume(db: AsyncSession, interview: Interview) -> CandidateResume | None:
-    """The candidate's current résumé (one uploaded for this interview first), as the portal shows it."""
+    """The candidate's current résumé (one uploaded for this interview first), as the portal shows it. An
+    open-link registration only sees the résumés uploaded within it (S4)."""
+    from app.services.interview.sessions import profile_scope  # noqa: PLC0415 - import cycle
+
+    scope = await profile_scope(db, interview.id)
     return await db.scalar(
         select(CandidateResume)
-        .where(CandidateResume.candidate_id == interview.candidate_id)
+        .where(
+            CandidateResume.candidate_id == interview.candidate_id,
+            *((CandidateResume.interview_id.in_(scope),) if scope is not None else ()),
+        )
         .order_by(
             case((CandidateResume.interview_id == interview.id, 0), else_=1),
             CandidateResume.created_at.desc(),

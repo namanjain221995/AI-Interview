@@ -126,11 +126,26 @@ USABLE_PROFILE_STATUSES = ("ready", "partial")  # partial = deterministic fallba
 PENDING_RESUME_STATUSES = ("uploaded", "validating", "extracting", "ocr", "analyzing", "ready")
 
 
+async def profile_scope(db: AsyncSession, interview_id: uuid.UUID | str) -> list[uuid.UUID] | None:
+    """Whose résumés count for this interview: an open-link registration is not a verified identity, so only the
+    résumés uploaded within it (its interviews, S4); ``None`` (every résumé of the candidate) for an invitation."""
+    from app.services.open_links.hooks import registration_interview_ids  # noqa: PLC0415 - import cycle
+
+    iid = uuid.UUID(str(interview_id))
+    scope = await registration_interview_ids(db, iid)
+    return None if scope is None else (scope or [iid])
+
+
 async def latest_profile(
-    db: AsyncSession, candidate_id: uuid.UUID, job_id: uuid.UUID | None
+    db: AsyncSession,
+    candidate_id: uuid.UUID,
+    job_id: uuid.UUID | None,
+    *,
+    interview_ids: list[uuid.UUID] | None = None,
 ) -> CandidateProfile | None:
-    """Latest usable (ready|partial) profile, preferring the job-specific one.
-    Uses the resume module's ``ResumeService.latest_profile`` when available."""
+    """Latest usable (ready|partial) profile, preferring the job-specific one; ``interview_ids`` limits it to the
+    résumés of those interviews (:func:`profile_scope`). Uses the resume module's ``ResumeService.latest_profile``
+    when available."""
     try:
         from app.services.resume.service import get_resume_service
 
@@ -139,14 +154,26 @@ async def latest_profile(
         service = None
     if service is not None:
         try:
-            return await service.latest_profile(db, candidate_id, job_id)
+            return await service.latest_profile(db, candidate_id, job_id, interview_ids=interview_ids)
         except Exception as exc:  # noqa: BLE001
             log.warning("engine.resume_service_profile_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+    from app.db.models import CandidateResume
+
+    scope = (
+        (
+            CandidateProfile.resume_id.in_(
+                select(CandidateResume.id).where(CandidateResume.interview_id.in_(interview_ids))
+            ),
+        )
+        if interview_ids is not None
+        else ()
+    )
     base = (
         select(CandidateProfile)
         .where(
             CandidateProfile.candidate_id == candidate_id,
             CandidateProfile.status.in_(USABLE_PROFILE_STATUSES),
+            *scope,
         )
         .order_by(CandidateProfile.version.desc(), CandidateProfile.created_at.desc())
         .limit(1)
@@ -158,7 +185,9 @@ async def latest_profile(
     return (await db.execute(base)).scalar_one_or_none()
 
 
-async def resume_pending(db: AsyncSession, candidate_id: uuid.UUID) -> bool:
+async def resume_pending(
+    db: AsyncSession, candidate_id: uuid.UUID, *, interview_ids: list[uuid.UUID] | None = None
+) -> bool:
     """True when a resume for the candidate is still being processed (or
     processed but its profile not generated yet), i.e. a profile is coming."""
     from app.db.models import CandidateResume
@@ -166,7 +195,10 @@ async def resume_pending(db: AsyncSession, candidate_id: uuid.UUID) -> bool:
     status = (
         await db.execute(
             select(CandidateResume.status)
-            .where(CandidateResume.candidate_id == candidate_id)
+            .where(
+                CandidateResume.candidate_id == candidate_id,
+                *((CandidateResume.interview_id.in_(interview_ids),) if interview_ids is not None else ()),
+            )
             .order_by(CandidateResume.created_at.desc())
             .limit(1)
         )
@@ -262,7 +294,9 @@ class SessionServiceImpl:
         organization = await db.get(Organization, interview.organization_id)
         if candidate is None or job is None:
             raise NotFound("Interview candidate or job no longer exists.")
-        profile_row = await self._latest_profile(db, interview.candidate_id, interview.job_id)
+        profile_row = await self._latest_profile(
+            db, interview.candidate_id, interview.job_id, interview_ids=await profile_scope(db, interview.id)
+        )
         profile = dict(profile_row.profile or {}) if profile_row is not None else {}
         consent = await self._latest_consent(db, iid)
 
@@ -366,9 +400,14 @@ class SessionServiceImpl:
         return row
 
     async def _latest_profile(
-        self, db: AsyncSession, candidate_id: uuid.UUID, job_id: uuid.UUID
+        self,
+        db: AsyncSession,
+        candidate_id: uuid.UUID,
+        job_id: uuid.UUID,
+        *,
+        interview_ids: list[uuid.UUID] | None = None,
     ) -> CandidateProfile | None:
-        return await latest_profile(db, candidate_id, job_id)
+        return await latest_profile(db, candidate_id, job_id, interview_ids=interview_ids)
 
     async def _latest_consent(self, db: AsyncSession, interview_id: uuid.UUID) -> Consent | None:
         return (

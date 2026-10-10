@@ -131,7 +131,7 @@ from app.services.interview.selection import (
     job_role_tags,
     load_asked_vectors,
 )
-from app.services.interview.sessions import attach_profile, latest_profile, resume_pending
+from app.services.interview.sessions import attach_profile, latest_profile, profile_scope, resume_pending
 from app.services.interview.special import SpecialKind, SpecialResult, classify
 from app.services.interview.speculative import (
     PrepEntry,
@@ -739,10 +739,13 @@ class InterviewEngine:
         if state.candidate_profile:
             return "ok", None
         async with session_scope() as db:
-            row = await latest_profile(db, uuid.UUID(state.candidate_id), uuid.UUID(state.job_id))
+            scope = await profile_scope(db, state.interview_id)  # open links: this registration's résumés only
+            row = await latest_profile(
+                db, uuid.UUID(state.candidate_id), uuid.UUID(state.job_id), interview_ids=scope
+            )
             if row is not None:
                 return "ok", row
-            pending = await resume_pending(db, uuid.UUID(state.candidate_id))
+            pending = await resume_pending(db, uuid.UUID(state.candidate_id), interview_ids=scope)
         if not pending:
             return "ok", None
         started = state.profile_wait_started_at or self.now()
@@ -750,7 +753,7 @@ class InterviewEngine:
             return "wait", None
         from app.services.resume.service import quick_profile_fallback
 
-        fallback = await quick_profile_fallback(state.candidate_id, state.job_id)
+        fallback = await quick_profile_fallback(state.candidate_id, state.job_id, interview_ids=scope)
         log.info(
             "engine.profile_wait_fallback",
             session_id=state.session_id,
