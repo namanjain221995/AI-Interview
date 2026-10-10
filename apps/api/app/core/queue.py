@@ -488,8 +488,11 @@ async def get_job(job_id: str | uuid.UUID) -> BackgroundJob | None:
 
 
 async def wait_for_job(
-    job_id: str | uuid.UUID, *, timeout: float = 10.0, poll_interval: float = 0.05
-) -> BackgroundJob:  # noqa: ASYNC109
+    job_id: str | uuid.UUID,
+    *,
+    timeout: float = 10.0,  # noqa: ASYNC109
+    poll_interval: float = 0.05,
+) -> BackgroundJob:
     """Poll until the job reaches a terminal state (tests, admin tooling)."""
     terminal = {JobState.SUCCEEDED.value, JobState.FAILED.value, JobState.DEAD.value}
     deadline = time.monotonic() + timeout
