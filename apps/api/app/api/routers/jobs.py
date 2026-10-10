@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy import func, select
@@ -20,6 +20,9 @@ from app.schemas.api.jobs import (
     JobDetail,
     JobOut,
     JobUpdate,
+    PipelineCounts,
+    PipelinePage,
+    PipelineRowOut,
     RequirementCreate,
     RequirementOut,
     RequirementUpdate,
@@ -38,6 +41,7 @@ from app.services.jobs.jobs import (
     update_job,
     update_requirement,
 )
+from app.services.jobs.pipeline import pipeline_page
 from app.services.jobs.policy import build_policy_snapshot
 from app.services.jobs.rounds import list_rounds
 from app.services.question_bank.embeddings import with_embedding_flag
@@ -108,6 +112,39 @@ async def get_job_endpoint(
     job_id: uuid.UUID, principal: Reader, org_id: OrgScope, db: DbSession
 ) -> JobDetail:
     return await _detail(db, await get_job(db, job_id, org_id))
+
+
+PipelineReader = Annotated[
+    Principal,
+    Depends(require_permission(Permission.JOBS_READ, Permission.CANDIDATES_READ, Permission.SESSIONS_READ)),
+]
+
+
+@router.get(
+    "/jobs/{job_id}/pipeline",
+    response_model=PipelinePage,
+    summary="The job's candidates by stage (server-paged, exact counts)",
+)
+async def job_pipeline_endpoint(
+    job_id: uuid.UUID,
+    principal: PipelineReader,
+    org_id: OrgScope,
+    db: DbSession,
+    page: PaginationParams,
+    stage: Annotated[Literal["all", "invited", "in_progress", "completed", "closed"], Query()] = "all",
+    q: Annotated[str | None, Query(max_length=200, description="Candidate name or email")] = None,
+) -> PipelinePage:
+    job = await get_job(db, job_id, org_id)  # another organisation's job: 404
+    rows, total, counts = await pipeline_page(
+        db, job.id, stage=stage, q=q, limit=page.limit, offset=page.offset
+    )
+    return PipelinePage(
+        items=[PipelineRowOut.model_validate(row) for row in rows],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
+        counts=PipelineCounts(**counts),
+    )
 
 
 @router.patch("/jobs/{job_id}", response_model=JobDetail, summary="Update a job")

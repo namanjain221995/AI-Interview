@@ -1666,6 +1666,8 @@ export interface Interview extends Timestamps {
   job?: JobRef;
   round?: RoundRef | null;
   latest_session?: { id: string; status: SessionStatus } | null;
+  /** Still "invited" but past its start deadline (the server never rewrites the status). */
+  is_expired?: boolean;
 }
 
 export interface InterviewCreate {
