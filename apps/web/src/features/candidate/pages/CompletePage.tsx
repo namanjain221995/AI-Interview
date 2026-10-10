@@ -7,6 +7,7 @@ import { useDocumentTitle } from "@/lib/hooks";
 
 import { NextRoundCard } from "@/features/links/components/NextRoundCard";
 
+import { useRetryEndRequest } from "../endRequest";
 import { JourneyBoundary, usePortalInterview, usePortalMe } from "../hooks";
 import { isReportReady, useCandidateReport, useReportMode, useSessionId, useSessionOutcome } from "../reportAccess";
 
@@ -20,6 +21,7 @@ export default function CompletePage() {
   const sessionId = useSessionId(interviewId, data);
   const { mode, pending: modePending } = useReportMode(data, sessionId);
   const { outcome } = useSessionOutcome(sessionId);
+  useRetryEndRequest(sessionId, outcome);
   const wrappingUp = outcome === "wrapping_up";
   const notStarted = outcome === "not_started";
   // No feedback is shared (the default): no report card, no polling, no promise. Nothing is promised either

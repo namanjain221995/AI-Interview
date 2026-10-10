@@ -435,12 +435,16 @@ describe("InterviewRuntime", () => {
 
   it("asks to end, and leaves even if the server never confirms", async () => {
     const onEnded = vi.fn();
-    const { socket, runtime } = await startRuntime({ onEnded });
+    const endSession = vi.fn(async () => ({ status: "ending" }));
+    const { socket, runtime } = await startRuntime({ onEnded, api: { endSession } });
     socket.push(stateMsg("live", "listening"));
     runtime.endInterview();
     expect(socket.json().find((m) => m.type === "control.end_interview")).toMatchObject({ reason: "candidate_ended" });
+    expect(endSession).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(13_000);
+    expect(endSession).toHaveBeenCalledWith("s1", "candidate_ended"); // a half-open socket may have swallowed it
     expect(onEnded).toHaveBeenCalled();
+    expect(sessionStorage.getItem("interview:end-requested:s1")).toBe("candidate_ended"); // the complete page re-sends it
   });
 });
 

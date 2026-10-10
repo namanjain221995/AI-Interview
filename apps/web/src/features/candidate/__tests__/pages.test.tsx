@@ -254,6 +254,16 @@ describe("Completion and report", () => {
     expect(screen.queryByTestId("feedback-card")).not.toBeInTheDocument(); // nothing promised before it is closed
   });
 
+  it("re-sends a remembered end request while the session is still open (End pressed offline)", async () => {
+    sessionStorage.setItem("interview:end-requested:s1", "candidate_ended");
+    const post = vi.spyOn(api, "post").mockResolvedValue({ status: "ending" } as never);
+    interviewState = { ...INTERVIEW, status: "in_progress", steps_completed: ["consent", "resume", "system_check"] };
+    sessionState = { id: "s1", interview_id: "i1", status: "paused", candidate_report_available: false, candidate_report_mode: "never" };
+    renderAt("/candidate/i1/complete?session=s1", [{ path: ":interviewId/complete", Component: CompletePage }]);
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/portal/sessions/s1/end", { reason: "candidate_ended" }, expect.anything()));
+    sessionStorage.removeItem("interview:end-requested:s1");
+  });
+
   it("tells a candidate who left before the start that nothing ended and offers the way back", async () => {
     interviewState = { ...INTERVIEW, status: "in_progress", steps_completed: ["consent", "resume", "system_check"] };
     sessionState = { id: "s1", interview_id: "i1", status: "ready", candidate_report_available: false, candidate_report_mode: "immediate" };

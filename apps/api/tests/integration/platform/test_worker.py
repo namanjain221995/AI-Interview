@@ -442,3 +442,16 @@ def test_model_backed_jobs_wait_out_an_outage():
     assert sum(queue.OUTAGE_RETRY_SCHEDULE) >= 30 * 60  # outlasts a ~30 min outage before falling back
     assert specs["profile.generate"].retry_schedule == (30.0, 120.0, 600.0, 1200.0)
     assert specs["session.prepare"].retry_schedule is None  # live latency matters there
+
+
+def test_an_end_request_outwaits_a_reconnecting_room():
+    import importlib
+
+    from app.core.config import get_settings
+
+    importlib.import_module("app.workers.sessions")
+    spec = queue._HANDLERS["session.end"]
+    settings = get_settings()
+    assert spec.retry_schedule and spec.max_attempts == len(spec.retry_schedule) + 1
+    # A runtime that never heard the request holds the lock through its grace plus the lock TTL (S6 review).
+    assert sum(spec.retry_schedule) > settings.ws_disconnect_grace_seconds + settings.session_lock_ttl_seconds

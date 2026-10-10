@@ -47,7 +47,19 @@ async def lifecycle_sweep(payload: dict[str, Any], ctx: JobContext) -> dict[str,
     return summary.as_dict()
 
 
-@job_handler(END_JOB, concurrency=4, timeout_seconds=120, max_attempts=5)
+# A runtime that never heard the end request (e.g. created by a reconnect right after it) holds the lock through
+# its disconnect grace (ws_disconnect_grace_seconds, 180 s) plus the lock TTL: wait that out (~8 min in all) instead
+# of giving up after ~30 s and leaving the end to the abandonment sweep (S6 review).
+END_RETRY_SCHEDULE: tuple[float, ...] = (10.0, 30.0, 60.0, 120.0, 240.0)
+
+
+@job_handler(
+    END_JOB,
+    concurrency=4,
+    timeout_seconds=120,
+    max_attempts=len(END_RETRY_SCHEDULE) + 1,
+    retry_schedule=END_RETRY_SCHEDULE,
+)
 async def end_session(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     session_id = str(payload.get("session_id") or "").strip()
     if not session_id:

@@ -7,6 +7,7 @@
 import type { AvatarController, AvatarStatus } from "@/features/avatar";
 import { estimateWordDurationMs } from "@/features/avatar";
 import { completeRecording, createOrResumeSession, endPortalSession, getDisclosure, getWsTicket, postIntegrityEvents, uploadFrame, uploadRecording } from "@/features/candidate/api";
+import { rememberEndRequest } from "@/features/candidate/endRequest";
 import { readLocal, writeLocal, type ClientPrefs } from "@/features/candidate/journey";
 import { IntegrityBatcher } from "@/features/integrity/batcher";
 import { RoomFaceCheck } from "@/features/integrity/face/roomFaceCheck";
@@ -1014,10 +1015,14 @@ export class InterviewRuntime {
     // has started there is nothing to end: REST answers not_started and the candidate simply leaves (the socket
     // would only refuse with not_started and keep them waiting).
     const started = this.serverStatus === "live" || this.serverStatus === "paused";
+    if (started) rememberEndRequest(this.sessionId, reason); // the complete page re-sends it until the session closes
     const overSocket = started && this.client?.status === "connected" && this.send({ type: "control.end_interview", reason });
     if (overSocket) {
-      // If the server never confirms (connection lost right after), still leave after a while.
-      this.endFallbackTimer = setTimeout(() => this.finish(), 12_000);
+      // Never confirmed (a half-open socket swallows the message): ask over REST as well, then leave.
+      this.endFallbackTimer = setTimeout(() => {
+        this.api.endSession(this.sessionId, reason).catch(() => undefined);
+        this.finish();
+      }, 12_000);
       return;
     }
     this.api.endSession(this.sessionId, reason).catch(() => undefined);
