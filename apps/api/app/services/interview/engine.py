@@ -352,20 +352,21 @@ class InterviewEngine:
         interview; their state writes are additionally guarded by the CAS versioning."""
         lock = self._locks.setdefault(session_id, asyncio.Lock())
         acquired = False
+        timeout_s = self.config.strict_lock_timeout_s if strict else self.config.lock_timeout_s
         try:
-            await asyncio.wait_for(lock.acquire(), timeout=self.config.lock_timeout_s)
+            await asyncio.wait_for(lock.acquire(), timeout=timeout_s)
             acquired = True
         except TimeoutError:
             ERRORS.labels(component="engine_lock").inc()
             log.error(
                 "engine.lock_timeout",
                 session_id=session_id,
-                timeout_s=self.config.lock_timeout_s,
+                timeout_s=timeout_s,
                 strict=strict,
                 lost_update_risk=not strict,
             )
             if strict:
-                raise EngineLockTimeout(session_id, self.config.lock_timeout_s) from None
+                raise EngineLockTimeout(session_id, timeout_s) from None
         try:
             yield
         finally:

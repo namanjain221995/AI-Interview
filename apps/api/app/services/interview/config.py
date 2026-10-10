@@ -69,6 +69,9 @@ class EngineConfig:
     utterances_max: int = 16
     # Concurrency / persistence
     lock_timeout_s: float = 20.0
+    # Terminal and administrative transitions (pause, resume, end) wait out a turn that legitimately holds the
+    # lock (bounded by turn_total_timeout_s) before giving up with EngineLockTimeout.
+    strict_lock_timeout_s: float = 45.0
     postgres_flush_interval_s: float = 15.0
     state_ttl_active_s: int = 48 * 3600
     state_ttl_ended_s: int = 24 * 3600

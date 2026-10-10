@@ -29,8 +29,18 @@ async def _concurrent_write(engine: Any, sid: str, marker: str) -> None:
     await engine.store.save(fresh)
 
 
+def test_strict_transitions_outwait_a_turn() -> None:
+    from app.services.interview.config import EngineConfig
+
+    config = EngineConfig()
+    # A pause or end must not give up while a turn may still legitimately hold the lock (G1 review).
+    assert config.strict_lock_timeout_s > config.turn_total_timeout_s > config.lock_timeout_s
+
+
 async def test_strict_lock_timeout_raises_only_for_terminal_transitions(interview_env) -> None:
-    _, sid, engine = await _setup(interview_env, prepare=False, lock_timeout_s=0.05)
+    _, sid, engine = await _setup(
+        interview_env, prepare=False, lock_timeout_s=0.05, strict_lock_timeout_s=0.05
+    )
     lock = engine._locks.setdefault(sid, asyncio.Lock())
     await lock.acquire()  # a wedged handler holds the session lock
     try:
