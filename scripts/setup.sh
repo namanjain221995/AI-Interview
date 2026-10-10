@@ -3,6 +3,7 @@
 # a fresh random secret and expanding ${VAR} references. Safe to re-run: an
 # existing .env is never overwritten unless --force is given.
 set -euo pipefail
+umask 077  # .env must never be world-readable, not even briefly
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EXAMPLE="$ROOT/.env.example"

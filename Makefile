@@ -34,15 +34,18 @@ help: ## List targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-18s %s\n", $$1, $$2 } /^##@/ { printf "\n%s\n", substr($$0, 5) }' $(MAKEFILE_LIST)
 
 ##@ Setup
-.PHONY: setup env deps download-assets optimize-avatar
+.PHONY: setup env deps download-assets optimize-avatar doctor
 setup: env download-assets deps optimize-avatar ## First-time setup: .env secrets, model/avatar assets, dependencies
-	@echo "Setup complete. Next: make sandbox-images && make up && make seed"
+	@echo "Setup complete. Next: make doctor && make sandbox-images && make up && make seed"
 
 env: ## Create .env with fresh secrets (never overwrites an existing one)
 	@bash $(ROOT)/scripts/setup.sh
 
+doctor: ## Preflight this node: tooling, .env, the configured AI endpoints, assets, runtime images, deep readiness
+	@$(ROOT)/scripts/doctor.sh
+
 deps: ## Install API (uv) and web/e2e (npm) dependencies when missing
-	cd $(API) && uv sync
+	cd $(API) && uv sync --frozen
 	@if [ ! -d $(WEB)/node_modules ]; then cd $(WEB) && npm ci; else echo "apps/web/node_modules present (run 'npm ci' there to reinstall)"; fi
 	@if [ -f $(E2E)/package.json ] && [ ! -d $(E2E)/node_modules ]; then cd $(E2E) && npm ci; fi
 
@@ -84,7 +87,7 @@ monitoring-up: ## Start only Prometheus, Grafana and the exporters
 	$(COMPOSE) up -d --no-deps $(MONITORING)
 
 ##@ Database
-.PHONY: migrate migrate-docker seed demo backup-db restore-db backup-storage restore-storage
+.PHONY: migrate migrate-docker seed demo seed-docker demo-docker backup-db restore-db backup-storage restore-storage
 migrate: ## Apply Alembic migrations from the host (postgres must be up)
 	cd $(API) && $(UV) alembic upgrade head
 
@@ -96,6 +99,12 @@ seed: ## Seed the organization and staff accounts (prints the logins)
 
 demo: ## Seed demo jobs + demo candidates and print their live interview invite links
 	cd $(API) && $(UV) python -m app.seed --demo --print-credentials
+
+seed-docker: ## Seed from inside the running api container (no host uv needed)
+	$(COMPOSE) exec -T api python -m app.seed --print-credentials
+
+demo-docker: ## Demo seed from inside the running api container (no host uv needed)
+	$(COMPOSE) exec -T api python -m app.seed --demo --print-credentials
 
 backup-db: ## pg_dump to data/backups/db/ (custom format + sha256)
 	@$(ROOT)/scripts/backup_db.sh
@@ -128,8 +137,21 @@ web-dev: ## Run the Vite dev server on :5173 (proxies /api and /ws to :8200)
 	cd $(WEB) && npm run dev
 
 ##@ Quality
-.PHONY: test test-api test-web test-integration test-live test-e2e test-infra lint typecheck smoke
+.PHONY: test test-api test-web test-integration test-live test-e2e test-infra lint typecheck smoke ci-api ci-web ci-infra ci
 test: test-api test-web ## Unit tests (API + web)
+
+ci: ci-api ci-web ci-infra ## Everything the CI workflow runs (.github/workflows/ci.yml), locally
+
+ci-api: ## CI: ruff, mypy, API unit tests, single Alembic head, integration tests
+	cd $(API) && $(UV) ruff check . $(ROOT)/infra && $(UV) mypy app
+	cd $(API) && $(UV) pytest -m "not live and not integration" -q
+	cd $(API) && test "$$($(UV) alembic heads | sed '/^\s*$$/d' | wc -l)" -eq 1 || { echo 'more than one Alembic head'; exit 1; }
+	cd $(API) && $(UV) pytest -m integration -q
+
+ci-web: ## CI: typecheck, vitest, production build
+	cd $(WEB) && npm run typecheck && npm test && npm run build
+
+ci-infra: test-infra ## CI: infra checks + edge behaviour tests
 
 test-api: ## API unit tests (live-model tests excluded)
 	cd $(API) && $(UV) pytest -m "not live and not integration" $(ARGS)
