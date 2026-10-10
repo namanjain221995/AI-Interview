@@ -132,6 +132,15 @@ async def test_sub_threshold_focus_blips_never_add_up_to_rapid_switching(service
     assert "rapid_focus_switching" not in data and data["focus_lost"].action == "log_only"
 
 
+async def test_repeated_short_glances_still_add_up_to_rapid_switching(service, make_session) -> None:
+    """Review of S22: 1.5 s looks are below the focus rule's own minimum (no warning each), yet six in half a
+    minute are the pattern rapid switching exists for."""
+    refs = await make_session()
+    glances = [ev(T.FOCUS_LOST, seconds_ago=30 - i * 5, duration_ms=1500) for i in range(6)]
+    outcomes = await service.record_client_events(refs.sid, glances)
+    assert [o for o in outcomes if o.event_type is T.RAPID_FOCUS_SWITCHING]
+
+
 async def test_large_paste_derived_from_paste_details_without_storing_content(service, make_session) -> None:
     refs = await make_session()
     outcomes = await service.record_client_events(

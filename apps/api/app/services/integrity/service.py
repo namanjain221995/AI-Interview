@@ -134,6 +134,8 @@ SIGNALS_PER_MINUTE = 120  # per session, all types (excess signals are dropped)
 WARNING_COOLDOWN_SECONDS = 60
 TRANSIENT_FRAME_TTL_SECONDS = 600
 MAX_FRAME_AGE_SECONDS = 180  # older frames are skipped so analysis keeps up with live sessions
+# Focus losses shorter than this never count toward rapid switching (blips); longer ones do (S22 and its review).
+RAPID_SWITCH_MIN_MS = 1000
 LATE_EVENT_GRACE = timedelta(minutes=10)
 VISION_MAX_TOKENS = 320
 TERMINAL_STATUSES = frozenset(
@@ -901,9 +903,10 @@ class DefaultIntegrityService:
         rule = ctx.rules.get(T.RAPID_FOCUS_SWITCHING)
         if rule is None or not rule.enabled:
             return None
-        own = ctx.rules.get(signal.event_type)
-        if own is not None and qualification(own, signal) is not None:
-            return None  # shorter than its own rule's minimum: a blip (notification, OS focus glitch), not a switch (S22)
+        if signal.duration_ms is not None and signal.duration_ms < RAPID_SWITCH_MIN_MS:
+            # A blip (a notification, an OS focus glitch, a permission prompt), not a switch (S22). Longer glances
+            # still add up even when each is below its own rule's minimum: five 1-2 s looks a minute is the signal.
+            return None
         count = await self.store.record_occurrence(
             ctx.session_id, "switches", signal.occurred_at.timestamp(), rule.window_seconds
         )
