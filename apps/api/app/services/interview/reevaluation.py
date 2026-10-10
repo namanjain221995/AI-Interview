@@ -6,8 +6,10 @@ not evidence). ``answer.reevaluate`` runs the evaluation again and replaces the 
 scores and reports are then refreshed (``report.generate`` reason ``reevaluation`` recomputes the scores).
 
 Two entry points queue it: staff (``POST /sessions/{id}/reevaluate``) and a periodic sweep that runs only while
-the main model is healthy. An answer is re-tried at most ``MAX_REEVALUATIONS_PER_ANSWER`` times, so one the model
-cannot evaluate (invalid output every time) never loops.
+the main model is healthy. An answer is re-tried at most ``MAX_REEVALUATIONS_PER_ANSWER`` times (counted on the
+evaluation row itself, ``evaluation.reevaluations_queued``), so one the model cannot evaluate never loops and the
+sweep only ever selects sessions that still have a retryable fallback. Cancelled (aborted) sessions have no report
+by design and are never re-evaluated.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import Integer, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -33,10 +35,13 @@ SWEEP_INTERVAL_SECONDS = 600
 SWEEP_LOOKBACK_DAYS = 14
 SWEEP_BATCH = 50
 MAX_REEVALUATIONS_PER_ANSWER = 3
-# Statuses in which a session's evaluations are final (no live runtime writes them any more).
-REEVALUABLE_STATUSES: frozenset[str] = frozenset(
-    {SessionStatus.COMPLETED.value, SessionStatus.ABORTED.value, SessionStatus.FAILED.value}
-)
+ATTEMPTS_FIELD = "reevaluations_queued"
+# Statuses in which a session's evaluations are final (no live runtime writes them any more) and its reports are
+# worth refreshing. ABORTED is a cancelled interview: deliberately no scoring and no report.
+REEVALUABLE_STATUSES: frozenset[str] = frozenset({SessionStatus.COMPLETED.value, SessionStatus.FAILED.value})
+
+_ATTEMPTS = func.coalesce(AnswerEvaluation.evaluation[ATTEMPTS_FIELD].astext.cast(Integer), 0)
+_RETRYABLE = (AnswerEvaluation.is_fallback.is_(True), _ATTEMPTS < MAX_REEVALUATIONS_PER_ANSWER)
 
 
 async def fallback_count(db: AsyncSession, session_id: uuid.UUID) -> int:
@@ -51,41 +56,38 @@ async def fallback_count(db: AsyncSession, session_id: uuid.UUID) -> int:
     )
 
 
-async def _previous_attempts(db: AsyncSession, answer_id: uuid.UUID) -> int:
-    return int(
-        await db.scalar(
-            select(func.count())
-            .select_from(BackgroundJob)
-            .where(
-                BackgroundJob.type == REEVALUATE_JOB,
-                BackgroundJob.payload["answer_id"].astext == str(answer_id),
-            )
-        )
-        or 0
-    )
-
-
 async def queue_reevaluation(db: AsyncSession, session: InterviewSession, *, actor: str) -> int:
-    """Queue ``answer.reevaluate`` for every fallback answer of an ended session; returns how many were queued."""
+    """Queue ``answer.reevaluate`` for every retryable fallback answer of an ended session; returns how many are
+    queued (including ones already waiting)."""
     if session.status not in REEVALUABLE_STATUSES:
         return 0
-    answer_ids = (
-        await db.scalars(
-            select(AnswerEvaluation.answer_id).where(
-                AnswerEvaluation.session_id == session.id, AnswerEvaluation.is_fallback.is_(True)
+    rows = (
+        await db.execute(
+            select(AnswerEvaluation.id, AnswerEvaluation.answer_id).where(
+                AnswerEvaluation.session_id == session.id, *_RETRYABLE
             )
         )
     ).all()
     queued = 0
-    for answer_id in answer_ids:
-        if await _previous_attempts(db, answer_id) >= MAX_REEVALUATIONS_PER_ANSWER:
-            continue
-        await enqueue(
-            REEVALUATE_JOB,
-            {"session_id": str(session.id), "answer_id": str(answer_id), "actor": actor[:40]},
-            dedupe_key=f"{REEVALUATE_JOB}:{answer_id}",
-            db=db,
-        )
+    for evaluation_id, answer_id in rows:
+        key = f"{REEVALUATE_JOB}:{answer_id}"
+        # A finished job releases its dedupe key: one holding it is still waiting or running.
+        if await db.scalar(select(BackgroundJob.id).where(BackgroundJob.dedupe_key == key)) is None:
+            await enqueue(
+                REEVALUATE_JOB,
+                {"session_id": str(session.id), "answer_id": str(answer_id), "actor": actor[:40]},
+                dedupe_key=key,
+                db=db,
+            )
+            await db.execute(
+                update(AnswerEvaluation)
+                .where(AnswerEvaluation.id == evaluation_id)
+                .values(
+                    evaluation=AnswerEvaluation.evaluation.op("||")(
+                        func.jsonb_build_object(ATTEMPTS_FIELD, _ATTEMPTS + 1)
+                    )
+                )
+            )
         queued += 1
     if queued:
         log.info("evaluation.reevaluation_queued", session_id=str(session.id), answers=queued, actor=actor)
@@ -109,9 +111,8 @@ async def sweep_fallbacks(*, limit: int = SWEEP_BATCH, now: datetime | None = No
                     InterviewSession.status.in_(tuple(REEVALUABLE_STATUSES)),
                     InterviewSession.ended_at.is_not(None),
                     InterviewSession.ended_at >= since,
-                    InterviewSession.id.in_(
-                        select(AnswerEvaluation.session_id).where(AnswerEvaluation.is_fallback.is_(True))
-                    ),
+                    # Only sessions that still have a retryable fallback: exhausted ones never hold the batch.
+                    InterviewSession.id.in_(select(AnswerEvaluation.session_id).where(*_RETRYABLE)),
                 )
                 .order_by(InterviewSession.ended_at.desc())
                 .limit(limit)
@@ -127,6 +128,7 @@ async def sweep_fallbacks(*, limit: int = SWEEP_BATCH, now: datetime | None = No
 
 
 __all__ = [
+    "ATTEMPTS_FIELD",
     "MAX_REEVALUATIONS_PER_ANSWER",
     "REEVALUABLE_STATUSES",
     "REEVALUATE_JOB",

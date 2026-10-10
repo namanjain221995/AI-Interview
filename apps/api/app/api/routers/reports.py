@@ -114,6 +114,12 @@ async def reevaluate_session(
     """S12: answers whose evaluation is a fallback (the model was down) are evaluated again; scores and reports
     refresh when they are replaced. Ended sessions only."""
     session = await get_session_for_principal(db, principal, session_id)
+    if session.status == SessionStatus.ABORTED.value:
+        raise Conflict(
+            "This interview was cancelled: it has no scores or report to refresh.",
+            code="session_cancelled",
+            details={"status": session.status},
+        )
     if session.status not in REEVALUABLE_STATUSES:
         raise Conflict(
             "Answers can be re-evaluated once the interview has ended.",

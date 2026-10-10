@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import delete, func, select, update
@@ -137,20 +138,70 @@ async def test_reevaluation_limits_live_sessions_retry_cap_and_sweep(
     monkeypatch.setattr(ai_health, "probe", healthy)
     assert (await reevaluation.sweep_fallbacks())["queued"] >= 1
 
+    assert (await _evaluation(fallback_id)).evaluation[reevaluation.ATTEMPTS_FIELD] == 1
     async with session_scope() as db:
         await db.execute(
             update(BackgroundJob)
             .where(BackgroundJob.type == "answer.reevaluate")
             .values(status="succeeded", dedupe_key=None)
         )
-        for _ in range(reevaluation.MAX_REEVALUATIONS_PER_ANSWER):
-            db.add(
-                BackgroundJob(
-                    type="answer.reevaluate",
-                    status="succeeded",
-                    payload={"session_id": str(fx.session_id), "answer_id": str(answer_id)},
-                )
-            )
+        row = await db.get(AnswerEvaluation, fallback_id)
+        row.evaluation = {
+            **row.evaluation,
+            reevaluation.ATTEMPTS_FIELD: reevaluation.MAX_REEVALUATIONS_PER_ANSWER,
+        }
     async with session_scope() as db:
         session = await db.get(InterviewSession, fx.session_id)
         assert await reevaluation.queue_reevaluation(db, session, actor="test") == 0  # retry cap reached
+    assert answer_id is not None
+
+
+async def test_the_sweep_skips_cancelled_sessions_and_exhausted_fallbacks(
+    auth_client, session_factory, monkeypatch
+) -> None:
+    from app.core import ai_health
+
+    async def healthy(**_kw):
+        return {"main": {"status": "ok"}}
+
+    monkeypatch.setattr(ai_health, "probe", healthy)
+    recruiter = await auth_client(Role.RECRUITER)
+    org = recruiter.user.organization_id
+    retryable = await session_factory(org)
+    await _make_fallback(retryable.session_id)
+    exhausted = await session_factory(org)  # newer: it would hold a batch of one before the fix
+    exhausted_id = await _make_fallback(exhausted.session_id)
+    cancelled = await session_factory(org)
+    await _make_fallback(cancelled.session_id)
+    async with session_scope() as db:
+        now = datetime.now(UTC)
+        await db.execute(
+            update(InterviewSession)
+            .where(InterviewSession.id == retryable.session_id)
+            .values(ended_at=now - timedelta(hours=3))
+        )
+        await db.execute(
+            update(InterviewSession).where(InterviewSession.id == exhausted.session_id).values(ended_at=now)
+        )
+        await db.execute(
+            update(InterviewSession)
+            .where(InterviewSession.id == cancelled.session_id)
+            .values(status="aborted", end_reason="cancelled", ended_at=now)
+        )
+        row = await db.get(AnswerEvaluation, exhausted_id)
+        row.evaluation = {
+            **row.evaluation,
+            reevaluation.ATTEMPTS_FIELD: reevaluation.MAX_REEVALUATIONS_PER_ANSWER,
+        }
+    result = await reevaluation.sweep_fallbacks(limit=1)
+    assert result["queued"] == 1
+    async with session_scope() as db:
+        sessions = {
+            job.payload["session_id"]
+            for job in (
+                await db.scalars(select(BackgroundJob).where(BackgroundJob.type == "answer.reevaluate"))
+            ).all()
+        }
+    assert sessions == {str(retryable.session_id)}
+    refused = await recruiter.post(f"/api/v1/sessions/{cancelled.session_id}/reevaluate")
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "session_cancelled"
