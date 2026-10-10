@@ -435,6 +435,8 @@ export interface CodingRunResultMsg extends ServerBase {
   passed: number;
   total: number;
   tests: Array<Record<string, unknown>>;
+  /** The code runner failed, not the candidate's code; never a final run (S20). */
+  platform_fault?: boolean;
 }
 
 export interface CodingHintMsg extends ServerBase {

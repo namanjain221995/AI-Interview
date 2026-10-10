@@ -810,6 +810,7 @@ class CodingServiceImpl:
                 passed=response.passed if kind != RunKind.RUN else 0,
                 total=response.total if kind != RunKind.RUN else 0,
                 tests=visible,
+                platform_fault=fault is not None,
             )
 
     @staticmethod
@@ -1045,7 +1046,12 @@ class CodingServiceImpl:
                 last_submit = (
                     await db.scalars(
                         select(CodeRun.id)
-                        .where(CodeRun.coding_session_id == cs.id, CodeRun.kind == RunKind.SUBMIT.value)
+                        .where(
+                            CodeRun.coding_session_id == cs.id,
+                            CodeRun.kind == RunKind.SUBMIT.value,
+                            # a submit the code runner failed is not the candidate's result (S20)
+                            ~CodeRun.sandbox_meta.contains({"platform_fault": True}),
+                        )
                         .order_by(CodeRun.created_at.desc())
                         .limit(1)
                     )

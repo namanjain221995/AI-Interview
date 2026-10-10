@@ -62,6 +62,8 @@ HEALTH_PATH = "/health"
 SANDBOX_BUSY_MESSAGE = "The code runner is busy, please try again"
 #: Metric status label for platform faults.
 SANDBOX_ERROR_STATUS = "sandbox_error"
+#: 503 codes that mean "busy right now", not "broken": they never open the shared breaker (S20).
+BACK_PRESSURE_CODES: frozenset[str] = frozenset({"queue_full", "queue_timeout"})
 
 QUEUE_WAIT_SECONDS = 15.0  # sandbox SANDBOX_QUEUE_TIMEOUT_SECONDS
 OVERHEAD_SECONDS = 10.0  # container lifecycle + transfer
@@ -329,7 +331,19 @@ class SandboxClient:
             code = _error_code(response)
             if status == 503:
                 retry_after = _parse_retry_after(response.headers.get("Retry-After"))
-                self.breaker.on_failure(code)
+                if code in BACK_PRESSURE_CODES or code == "runtime_unavailable":
+                    # A busy queue or a missing runtime image is not a sick sandbox: it must not open the breaker
+                    # every other candidate shares (S20).
+                    self.breaker.on_neutral()
+                else:
+                    self.breaker.on_failure(code)
+                if code == "runtime_unavailable":
+                    raise SandboxFault(
+                        "the runtime for this language is not installed",
+                        reason="runtime_unavailable",
+                        status_code=503,
+                        attempts=attempt,
+                    )  # an operator problem (make sandbox-images): retrying cannot help
                 if (
                     retry_after is not None
                     and attempt < self.max_attempts

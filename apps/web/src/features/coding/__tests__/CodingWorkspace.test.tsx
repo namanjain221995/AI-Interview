@@ -137,6 +137,19 @@ describe("CodingWorkspace", () => {
     expect(screen.getByText("A run is already in progress.")).toBeInTheDocument();
   });
 
+  it("says a platform fault is on our side, never the candidate's code", () => {
+    setup(
+      coding({
+        lastRun: { type: "coding.run_result", seq: 3, coding_session_id: "c1", run_id: "r3", kind: "submit", status: "error", stdout: "", stderr: "The code runner is busy, please try again", compile_output: "", passed: 0, total: 2, tests: [], platform_fault: true },
+      }),
+    );
+    expect(screen.getByTestId("coding-platform-fault")).toHaveTextContent("That's on our side, not your code, and nothing was submitted.");
+    expect(screen.getByText("Couldn't run")).toBeInTheDocument();
+    expect(screen.queryByText("Runtime error")).not.toBeInTheDocument();
+    expect(screen.queryByText("0/2 passed")).not.toBeInTheDocument(); // nothing ran
+    expect(screen.queryByText("The code runner is busy, please try again")).not.toBeInTheDocument();
+  });
+
   it("blocks paste when the policy says so and reports it", async () => {
     const { handlers } = setup(coding(), { blockPaste: true });
     const ed = await editor();

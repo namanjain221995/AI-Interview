@@ -182,7 +182,9 @@ class ClientErrorMsg(_Msg):
     """Non-fatal client failure, e.g. avatar renderer lost its WebGL context."""
 
     type: Literal["client.error"] = "client.error"
-    component: Literal["avatar", "audio_capture", "audio_playback", "editor", "screen_share", "camera", "other"]
+    component: Literal[
+        "avatar", "audio_capture", "audio_playback", "editor", "screen_share", "camera", "other"
+    ]
     message: str = Field(..., max_length=500)
     fatal: bool = False
 
@@ -337,7 +339,17 @@ class TranscriptMsg(_ServerMsg):
 class UtteranceStartMsg(_ServerMsg):
     type: Literal["ai.utterance.start"] = "ai.utterance.start"
     utterance_id: str
-    kind: Literal["intro", "question", "followup", "acknowledgment", "comment", "hint", "transition", "closing", "resume"]
+    kind: Literal[
+        "intro",
+        "question",
+        "followup",
+        "acknowledgment",
+        "comment",
+        "hint",
+        "transition",
+        "closing",
+        "resume",
+    ]
     question_id: str | None = None
     behavior: AvatarBehaviorMsg | None = None
 
@@ -410,6 +422,8 @@ class CodingRunResultMsg(_ServerMsg):
     passed: int = 0
     total: int = 0
     tests: list[dict[str, Any]] = Field(default_factory=list, description="Visible test details only")
+    # Additive (S20): the code runner failed, not the candidate's code; never a final run.
+    platform_fault: bool = False
 
 
 class CodingHintMsg(_ServerMsg):

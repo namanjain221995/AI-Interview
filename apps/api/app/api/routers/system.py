@@ -40,8 +40,16 @@ PROBE_TIMEOUT_SECONDS = 5.0
 WORKER_HEARTBEAT_PREFIX = "worker:heartbeat:"
 WORKER_IDS_SET = "worker:ids"
 _CRITICAL = frozenset({"database", "redis"})
-_STATUS_MAP = {"ok": "ok", "up": "ok", "healthy": "ok", "degraded": "degraded", "down": "down", "error": "down",
-               "disabled": "disabled", "unknown": "unknown"}
+_STATUS_MAP = {
+    "ok": "ok",
+    "up": "ok",
+    "healthy": "ok",
+    "degraded": "degraded",
+    "down": "down",
+    "error": "down",
+    "disabled": "disabled",
+    "unknown": "unknown",
+}
 
 
 async def _timed(name: str, probe: Any) -> HealthComponent:
@@ -51,7 +59,10 @@ async def _timed(name: str, probe: Any) -> HealthComponent:
             result = await probe()
     except Exception as exc:
         return HealthComponent(
-            name=name, status="down", latency_ms=round((time.perf_counter() - started) * 1000, 1), detail=type(exc).__name__
+            name=name,
+            status="down",
+            latency_ms=round((time.perf_counter() - started) * 1000, 1),
+            detail=type(exc).__name__,
         )
     if isinstance(result, HealthComponent):
         return result
@@ -114,10 +125,29 @@ async def _http_component(name: str, base_url: str) -> HealthComponent:
     started = time.perf_counter()
     async with httpx.AsyncClient(timeout=3.0) as client:
         response = await client.get(f"{base_url}/health")
+        ready: httpx.Response | None = None
+        if name == "sandbox" and response.status_code == 200:
+            try:
+                ready = await client.get(f"{base_url}/ready")
+            except httpx.HTTPError:
+                ready = None  # an older sandbox or a slow Docker: the /health answer stands
     latency = round((time.perf_counter() - started) * 1000, 1)
+    if ready is not None and ready.status_code == 503:
+        # The sandbox answers but some language runtimes are missing (S20): degraded, with the languages named.
+        try:
+            body = ready.json()
+        except ValueError:
+            body = None
+        missing = (
+            [str(m) for m in (body.get("missing_languages") or [])][:10] if isinstance(body, dict) else []
+        )
+        detail = f"missing runtimes: {', '.join(missing)} (make sandbox-images)" if missing else "not ready"
+        return HealthComponent(name=name, status="degraded", latency_ms=latency, detail=detail)
     if response.status_code == 200:
         return HealthComponent(name=name, status="ok", latency_ms=latency)
-    return HealthComponent(name=name, status="down", latency_ms=latency, detail=f"HTTP {response.status_code}")
+    return HealthComponent(
+        name=name, status="down", latency_ms=latency, detail=f"HTTP {response.status_code}"
+    )
 
 
 async def _ai_components() -> list[HealthComponent]:

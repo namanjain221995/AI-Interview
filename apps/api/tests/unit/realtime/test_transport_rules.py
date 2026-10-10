@@ -234,3 +234,7 @@ def test_only_real_executions_count_as_coding_results() -> None:
     )  # the candidate's error
     assert not is_execution_result(result(RunStatus.ERROR, SANDBOX_BUSY_MESSAGE))  # platform fault
     assert not is_execution_result(result(RunStatus.REJECTED, "A run is already in progress."))
+    flagged = result(RunStatus.ERROR, "The code runner is temporarily unavailable.").model_copy(
+        update={"platform_fault": True}
+    )
+    assert not is_execution_result(flagged)  # S20: the explicit flag, not the message text

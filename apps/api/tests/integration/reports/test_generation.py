@@ -12,7 +12,15 @@ from sqlalchemy import select
 
 from app.ai.base import AIUnavailable
 from app.core.queue import enqueue, subscribe_session_events
-from app.db.models import AuditLog, BackgroundJob, CompetencyEvidence, InterviewSession, MediaAsset, Report
+from app.db.models import (
+    AuditLog,
+    BackgroundJob,
+    CodeRun,
+    CompetencyEvidence,
+    InterviewSession,
+    MediaAsset,
+    Report,
+)
 from app.db.session import session_scope
 from app.domain.enums import ModelTask, Recommendation
 from app.schemas.ai import (
@@ -406,6 +414,30 @@ async def test_build_demo_report_without_writes(session_factory, mock_ai, storag
     assert await _reports(fx.session_id) == []
     persisted = await build_demo_report(fx.session_id, use_llm=False, persist=True)
     assert persisted["persisted"] and persisted["generation"]["versions"] == {"candidate": 1, "recruiter": 1}
+
+
+async def test_a_run_the_code_runner_failed_is_never_the_final_coding_result(
+    session_factory, mock_ai, storage, redis
+) -> None:
+    # S20: an infrastructure failure after the candidate's real submission must not read as their crash.
+    fx = await session_factory()
+    async with session_scope() as db:
+        db.add(
+            CodeRun(
+                coding_session_id=fx.coding_session_id,
+                kind="submit",
+                language="python",
+                status="error",
+                passed_count=0,
+                total_count=8,
+                elapsed_seconds=1200,
+                sandbox_meta={"platform_fault": True, "reason": "docker_error"},
+            )
+        )
+    report = await build_demo_report(fx.session_id, use_llm=False)
+    coding = report["recruiter"]["coding"][0]
+    assert coding["final_result"]["status"] == "passed" and coding["final_result"]["passed"] == 8
+    assert [r["platform_fault"] for r in coding["runs"]] == [False, True]
 
 
 async def test_legacy_judgemental_text_is_neutral_in_reports_but_never_rewritten_in_storage(

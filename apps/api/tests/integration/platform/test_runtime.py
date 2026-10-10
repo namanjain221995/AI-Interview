@@ -96,6 +96,31 @@ async def test_system_health_aggregates_components(auth_client, settings, redis)
     assert settings.tts_base_url not in response.text  # no internal URLs leak
 
 
+async def test_system_health_names_missing_sandbox_runtimes(auth_client, settings):
+    from app.ai.registry import set_ai
+
+    previous = set_ai(_StubAI())  # type: ignore[arg-type]
+    try:
+        staff = await auth_client(Role.ADMIN)
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(f"{settings.tts_base_url}/health").respond(200, json={"status": "ok"})
+            mock.get(f"{settings.sandbox_base_url}/health").respond(200, json={"status": "ok"})
+            mock.get(f"{settings.sandbox_base_url}/ready").mock(
+                side_effect=[
+                    httpx.Response(503, json={"ready": False, "docker": True, "missing_languages": ["go", "java"]}),
+                    httpx.Response(404),  # an older sandbox without /ready
+                ]
+            )
+            missing = await staff.get("/api/v1/system/health")
+            older = await staff.get("/api/v1/system/health")
+    finally:
+        set_ai(previous)
+    sandbox = {c["name"]: c for c in missing.json()["components"]}["sandbox"]
+    assert sandbox["status"] == "degraded"
+    assert sandbox["detail"] == "missing runtimes: go, java (make sandbox-images)"
+    assert {c["name"]: c for c in older.json()["components"]}["sandbox"]["status"] == "ok"
+
+
 async def test_system_health_requires_settings_manage(client, candidate_auth_client, auth_client):
     assert (await client.get("/api/v1/system/health")).status_code == 401
     candidate = await candidate_auth_client()

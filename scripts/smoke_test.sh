@@ -112,7 +112,11 @@ http "edge HTTPS listener (tls internal)" "$EDGE_TLS_URL/__edge/health" 200 --in
 
 info "== Speech and coding services"
 if skipped tts; then warn "tts skipped (SMOKE_SKIP)"; else http "tts /health" "$TTS_URL/health" 200 || true; fi
-if skipped sandbox; then warn "sandbox skipped (SMOKE_SKIP)"; else http "sandbox /health" "$SANDBOX_URL/health" 200 || true; fi
+if skipped sandbox; then warn "sandbox skipped (SMOKE_SKIP)"; else
+  http "sandbox /health" "$SANDBOX_URL/health" 200 || true
+  # Every language runtime image present (S20); FAIL hint: make sandbox-images
+  http "sandbox /ready (runtimes; else: make sandbox-images)" "$SANDBOX_URL/ready" 200 || true
+fi
 
 info "== Monitoring"
 http "prometheus /-/ready" "$PROM_URL/-/ready" 200 || true

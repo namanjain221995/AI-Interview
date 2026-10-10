@@ -85,6 +85,10 @@ def _duration_seconds(started: datetime | None, ended: datetime | None) -> float
     return max(0.0, (ended - started).total_seconds())
 
 
+def _platform_fault(run: Any) -> bool:
+    return bool((run.sandbox_meta or {}).get("platform_fault"))
+
+
 @dataclass(slots=True)
 class ReportData:
     """Assembled report document plus lookups used by the narrative step."""
@@ -360,10 +364,12 @@ async def _coding(db: AsyncSession, computation: ScoringComputation) -> list[dic
         cq = computation.inputs.coding_questions.get(cs.coding_question_id)
         doc = coding_evaluation(cs)
         cs_runs = [r for r in runs if r.coding_session_id == cs.id]
-        submit = next((r for r in reversed(cs_runs) if r.kind == "submit"), None)
+        # Runs the code runner failed say nothing about the candidate's code: never the final result (S20).
+        real_runs = [r for r in cs_runs if not _platform_fault(r)]
+        submit = next((r for r in reversed(real_runs) if r.kind == "submit"), None)
         final_run = next(
-            (r for r in cs_runs if cs.final_run_id and r.id == cs.final_run_id),
-            submit or (cs_runs[-1] if cs_runs else None),
+            (r for r in real_runs if cs.final_run_id and r.id == cs.final_run_id),
+            submit or (real_runs[-1] if real_runs else None),
         )
         out.append(
             {
@@ -405,6 +411,7 @@ async def _coding(db: AsyncSession, computation: ScoringComputation) -> list[dic
                         "total": r.total_count,
                         "runtime_ms": r.runtime_ms,
                         "elapsed_seconds": r.elapsed_seconds,
+                        "platform_fault": _platform_fault(r),
                     }
                     for r in cs_runs
                 ],
