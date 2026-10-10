@@ -131,11 +131,12 @@ describe("admin pages", () => {
     });
     signIn("RECRUITER");
     renderApp("/app/jobs/j1");
-    expect(await screen.findByText("Asha Rao")).toBeInTheDocument();
+    // The avatar's screen-reader name renders a tick later: query the row's candidate link.
+    expect(await screen.findByRole("link", { name: "Asha Rao" })).toBeInTheDocument();
     expect(screen.getAllByText("310")).toHaveLength(2); // stat card and stage filter: the server count, never capped at 200
     expect(screen.getByRole("tab", { name: /Pipeline\s*600/ })).toBeInTheDocument();
     expect(screen.getByRole("radiogroup", { name: "Filter by stage" })).toBeInTheDocument();
-    const row = screen.getByText("Asha Rao").closest("tr")!;
+    const row = screen.getByRole("link", { name: "Asha Rao" }).closest("tr")!;
     expect(within(row).getAllByText(/Expired/).length).toBeGreaterThanOrEqual(2); // badge and date: past its deadline
     const call = get.mock.calls.find(([path]) => path === "/jobs/j1/pipeline");
     expect(call?.[1]).toMatchObject({ params: { stage: "all", limit: 25, offset: 0 } });
