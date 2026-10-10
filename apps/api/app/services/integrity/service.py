@@ -901,6 +901,9 @@ class DefaultIntegrityService:
         rule = ctx.rules.get(T.RAPID_FOCUS_SWITCHING)
         if rule is None or not rule.enabled:
             return None
+        own = ctx.rules.get(signal.event_type)
+        if own is not None and qualification(own, signal) is not None:
+            return None  # shorter than its own rule's minimum: a blip (notification, OS focus glitch), not a switch (S22)
         count = await self.store.record_occurrence(
             ctx.session_id, "switches", signal.occurred_at.timestamp(), rule.window_seconds
         )
