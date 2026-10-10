@@ -740,3 +740,21 @@ def test_speech_issues(speech: str, action: TurnAction, issue: str) -> None:
 def test_speech_issues_allow_statements_for_flow_moves() -> None:
     assert speech_issues("Of course, take your time.", A.ACKNOWLEDGE_AND_WAIT) == []
     assert speech_issues("Thank you, Jane. The hiring team will follow up.", A.CLOSE_INTERVIEW) == []
+
+
+def test_check_decision_drops_competency_from_flow_only_actions() -> None:
+    """A reply to 'any questions for me?' must never be scored against the last competency (S9)."""
+    s = state()
+    ask(s, "kubernetes")
+    d = directive(s)
+    check = check_decision(d, decision(action="invite_candidate_questions", competency_key="kubernetes"), s)
+    assert check.decision.competency_key is None
+    assert any(x.startswith("flow_competency_dropped:kubernetes") for x in check.deviations)
+    # Closing inside the reserve: the only allowed action is close_interview, so the decision is kept and only
+    # its competency is dropped.
+    late = state(elapsed_s=30 * 60 - 60)
+    ask(late, "kubernetes")
+    closing = check_decision(
+        directive(late), decision(action="close_interview", competency_key="kubernetes"), late
+    )
+    assert closing.decision.action is A.CLOSE_INTERVIEW and closing.decision.competency_key is None

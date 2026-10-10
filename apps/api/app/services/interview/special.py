@@ -245,6 +245,7 @@ _NO_QUESTIONS = _rx(
     r"\bi think (?:that )?(?:covers|covered) (?:it|everything)\b",
     r"^(?:no|nope|not really|none)(?:,? (?:thanks|thank you|i'?m good|that'?s all))?[.!]?$",
 )
+_DECLINE_START = re.compile(r"^(?:no|nope|not really|none|nothing|nah|i(?:'m| am) (?:good|fine|all set))\b")
 _INTERROGATIVE_START = re.compile(
     r"^(?:so |and |also |but |ok(?:ay)? |sure |great |thanks |thank you |right )?"
     r"(?:what|how|who|when|where|why|which|is|are|do|does|did|can|could|will|would|should|may|might)\b"
@@ -366,10 +367,15 @@ def classify(
 
     # After the invitation to ask questions: a decline closes, any question is the candidate's.
     if questions_invited and n <= 70:
-        asks = ends_question or bool(_INTERROGATIVE_START.search(norm)) or bool(_CANDIDATE_Q.search(norm))
+        asks = ends_question or bool(_INTERROGATIVE_START.match(norm))
         m = _NO_QUESTIONS.search(norm)
         if m and not ends_question:
             return SpecialResult(SpecialKind.NO_QUESTIONS, 0.85, m.group(0))
+        # Short declines in free form ("No, thank you so much.", "Not really, thanks for your time"): a reply
+        # that starts with a negation and asks nothing is a decline, not a candidate question (S9).
+        decline = _DECLINE_START.match(norm) if not asks and n <= 12 else None
+        if decline:
+            return SpecialResult(SpecialKind.NO_QUESTIONS, 0.8, decline.group(0))
         if asks:
             return SpecialResult(SpecialKind.CANDIDATE_QUESTION, 0.85, "invited")
 

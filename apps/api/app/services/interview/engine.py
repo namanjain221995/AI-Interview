@@ -105,6 +105,7 @@ from app.services.interview.opening import SpokenText, generate_opening, templat
 from app.services.interview.planner import fallback_plan, generate_plan
 from app.services.interview.policy import (
     CODING_FLOW_ACTIONS,
+    FLOW_ONLY_ACTIONS,
     FOLLOWUP_ACTIONS,
     NON_QUESTION_ACTIONS,
     BankCandidate,
@@ -1134,6 +1135,13 @@ class InterviewEngine:
         )
         question_id = state.current_question_id
         evaluate = bool(question_id and text and (special.kind in (SpecialKind.NONE, SpecialKind.DONT_KNOW)))
+        current = state.current_question()
+        if evaluate and (
+            (current is not None and current.action in FLOW_ONLY_ACTIONS) or state.candidate_questions_invited
+        ):
+            # A reply to "any questions for me?", the intro or the closing is conversation, not an answer:
+            # evaluating it produced synthetic negative evidence against the last competency (S9).
+            evaluate = False
         if state.intake is not None:
             evaluate = False  # intake answers are judged by intake.evaluate after the session (8.1)
         record_answer(

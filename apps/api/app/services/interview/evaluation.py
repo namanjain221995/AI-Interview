@@ -70,7 +70,7 @@ from app.services.interview.adapters import ScoringPort, get_scoring
 from app.services.interview.config import EngineConfig, get_engine_config
 from app.services.interview.contradictions import neutral_description
 from app.services.interview.grounding import GroundingContext, inconsistency_issue
-from app.services.interview.policy import is_coding_competency
+from app.services.interview.policy import FLOW_ONLY_ACTION_VALUES, is_coding_competency
 from app.services.interview.prompts import EVALUATION_SYSTEM, EVALUATION_USER
 from app.services.interview.records import as_uuid, log_event
 from app.services.interview.scoring_fallback import assistance_factor, evidence_record_from_row
@@ -603,6 +603,8 @@ class EvaluationService:
                 await self._publish(session_id, payload)
                 return {"answer_id": answer_id, "idempotent": True}
             flow = self._flow_turn(state, answer_id)
+            if flow is None and question is not None and str(question.action) in FLOW_ONLY_ACTION_VALUES:
+                flow = "flow_question"  # a reply to the invitation / intro / closing is never scored (S9)
             if flow is not None:
                 # The turn model judged this turn a clarifying question, a question about the role or
                 # a request for time (a phrasing the fast heuristics missed): it is not an answer and

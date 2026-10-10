@@ -54,6 +54,12 @@ UNCOUNTED_ACTIONS: frozenset[TurnAction] = NON_QUESTION_ACTIONS | {
     TurnAction.START_CODING,
     TurnAction.GIVE_HINT,
 }
+#: Moves whose "question" is conversational scaffolding, never an assessment: replies to them are not
+#: evaluated, carry no competency and produce no observation (S9).
+FLOW_ONLY_ACTIONS: frozenset[TurnAction] = frozenset(
+    {TurnAction.INTRODUCE, TurnAction.INVITE_CANDIDATE_QUESTIONS, TurnAction.CLOSE_INTERVIEW}
+)
+FLOW_ONLY_ACTION_VALUES: frozenset[str] = frozenset(a.value for a in FLOW_ONLY_ACTIONS)
 #: Moves that stay on the current topic (increase the follow-up counter).
 FOLLOWUP_ACTIONS: frozenset[TurnAction] = frozenset(
     {
@@ -1582,7 +1588,16 @@ def check_decision(
         data["action"] = replacement
         action = replacement
     keys = set(state.round_config.competency_keys())
-    if decision.competency_key is not None and decision.competency_key not in keys:
+    if action in FLOW_ONLY_ACTIONS and data.get("competency_key") is not None:
+        # The invitation to ask questions (and intro/closing) must never carry a competency: a reply to it is
+        # not an answer and would otherwise be scored against that competency (S9).
+        deviations.append(f"flow_competency_dropped:{data['competency_key']}")
+        data["competency_key"] = None
+    if (
+        decision.competency_key is not None
+        and decision.competency_key not in keys
+        and action not in FLOW_ONLY_ACTIONS
+    ):
         deviations.append(f"unknown_competency:{decision.competency_key}")
         data["competency_key"] = directive.target_competency
     if (

@@ -58,6 +58,7 @@ from app.schemas.ai import CodingEvaluation, DimensionScores, InterviewPlan
 from app.schemas.rounds import RoundConfig, load_round_config
 from app.services.integrity.queries import count_unreviewed_flags
 from app.services.integrity.rules import REVIEWABLE_ACTIONS
+from app.services.interview.policy import FLOW_ONLY_ACTION_VALUES
 from app.services.interview.state import CompetencyState
 from app.services.scoring.compute import (
     CompetencyCalculation,
@@ -522,6 +523,8 @@ def _build_observations(inputs: SessionScoringInputs) -> None:
         answer = answers.get(row.answer_id)
         question_id = row.question_id or (answer.question_id if answer else None)
         question = questions.get(question_id) if question_id else None
+        if question is not None and str(question.action) in FLOW_ONLY_ACTION_VALUES:
+            continue  # replies to the invitation / intro / closing are not evidence (S9; cleans old sessions on recompute)
         keys = list(question.competency_keys or []) if question is not None else []
         difficulty = _difficulty(question.difficulty if question is not None else None)
         try:

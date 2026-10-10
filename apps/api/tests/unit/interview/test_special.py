@@ -187,3 +187,34 @@ def test_candidate_question_requires_question_form_when_awaiting() -> None:
 
 def test_normalize_unifies_apostrophes_and_dashes() -> None:
     assert normalize("I DON’T know — mm-hmm") == "i don't know   mm hmm".replace("   ", " ")
+
+
+# ---------------------------------------------------------------- S9: declines after the invitation
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "No, I think you covered everything, thanks!",
+        "No, thank you so much.",
+        "Not really, thanks for your time",
+        "No thanks, it was nice talking to you.",
+        "Nothing from my side, thank you.",
+        "I'm good, thanks.",
+    ],
+)
+def test_free_form_declines_after_the_invitation(text: str) -> None:
+    result = classify(text, awaiting_answer=True, questions_invited=True)
+    assert result.kind is SpecialKind.NO_QUESTIONS, (text, result)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "No, but what does the on-call rotation look like?",
+        "Not really, although how big is the team?",
+    ],
+)
+def test_a_negation_followed_by_a_question_is_still_a_candidate_question(text: str) -> None:
+    result = classify(text, awaiting_answer=True, questions_invited=True)
+    assert result.kind is SpecialKind.CANDIDATE_QUESTION, (text, result)

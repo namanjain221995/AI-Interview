@@ -143,6 +143,48 @@ async def test_declining_questions_after_the_invitation_closes_the_interview(int
     assert any(isinstance(e, SessionClosing) for e in events)
     actions = [e.decision.get("action") for e in events if isinstance(e, UtteranceMeta)]
     assert actions == ["close_interview"]  # no extra "answer" to a question nobody asked
+    # S9: the reply to the invitation is conversation, not an answer - it is never queued for evaluation
+    # and the stored invitation question carries no competency.
+    state = await d.state()
+    invite = next(q for q in state.questions if q.action.value == "invite_candidate_questions")
+    assert invite.competency_key is None
+    reply = state.answers[-1]
+    assert reply.question_id == invite.id
+    assert reply.id not in state.pending_evaluations and not await _evaluation_jobs_for(reply.id)
+
+
+async def test_pleasantries_after_the_invitation_are_never_evaluated(interview_env) -> None:
+    """'Okay great, thanks for the info' after the invitation used to be deep-evaluated against the last
+    competency and could lower its score (S9)."""
+    _, sid, engine = await _setup(interview_env)
+    d = Driver(interview_env, engine, sid)
+    await d.start()
+    await d.answer("[adequate] We ran EKS with managed node groups.", speculate=False)
+    interview_env["clock"].advance(1400)
+    events = await d.answer("[adequate] We also used spot instances for stateless services.", speculate=False)
+    assert any(
+        isinstance(e, UtteranceMeta) and e.decision.get("action") == "invite_candidate_questions"
+        for e in events
+    )
+    await d.answer("Okay great, thanks for the info, that was really helpful.", advance=5, speculate=False)
+    state = await d.state()
+    reply = state.answers[-1]
+    assert reply.id not in state.pending_evaluations and not await _evaluation_jobs_for(reply.id)
+
+
+async def _evaluation_jobs_for(answer_id: str) -> list[str]:
+    from sqlalchemy import select
+
+    from app.db.models import BackgroundJob
+
+    async with session_scope() as db:
+        rows = await db.scalars(
+            select(BackgroundJob.id).where(
+                BackgroundJob.type == "answer.evaluate",
+                BackgroundJob.payload["answer_id"].astext == str(answer_id),
+            )
+        )
+        return [str(r) for r in rows.all()]
 
 
 async def test_injection_turn_is_redirected_and_not_followed(interview_env) -> None:
