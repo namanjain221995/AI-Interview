@@ -137,10 +137,10 @@ web-dev: ## Run the Vite dev server on :5173 (proxies /api and /ws to :8200)
 	cd $(WEB) && npm run dev
 
 ##@ Quality
-.PHONY: test test-api test-web test-integration test-live test-e2e test-infra lint typecheck smoke ci-api ci-web ci-infra ci
+.PHONY: test test-api test-web test-integration test-live test-e2e test-infra lint typecheck smoke ci-api ci-web ci-sandbox ci-infra ci
 test: test-api test-web ## Unit tests (API + web)
 
-ci: ci-api ci-web ci-infra ## Everything the CI workflow runs (.github/workflows/ci.yml), locally
+ci: ci-api ci-web ci-sandbox ci-infra ## Everything the CI workflow runs (.github/workflows/ci.yml), locally
 
 ci-api: ## CI: ruff, mypy, API unit tests, single Alembic head, integration tests
 	cd $(API) && $(UV) ruff check . $(ROOT)/infra && $(UV) mypy app
@@ -150,6 +150,9 @@ ci-api: ## CI: ruff, mypy, API unit tests, single Alembic head, integration test
 
 ci-web: ## CI: typecheck, vitest, production build
 	cd $(WEB) && npm run typecheck && npm test && npm run build
+
+ci-sandbox: ## CI: sandbox service ruff, mypy, unit tests (no Docker needed)
+	cd $(ROOT)/services/sandbox && $(UV) ruff check . && $(UV) mypy sandbox_service && $(UV) pytest -q
 
 ci-infra: test-infra ## CI: infra checks + edge behaviour tests
 

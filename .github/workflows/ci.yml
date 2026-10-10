@@ -8,6 +8,7 @@
 # Jobs:  api-lint (ruff, mypy)        api-unit (mock AI, no services)
 #        api-integration (postgres + redis service containers, single-Alembic-head check)
 #        web (tsc, vitest, production build)      infra (caddy, promtool, compose, dashboards, shellcheck, edge tests)
+#        sandbox (ruff, mypy, unit tests incl. the runner copies being in sync)
 #        e2e-mock (nightly + on demand: the mock-AI browser e2e, no model calls)
 name: ci
 
@@ -152,6 +153,31 @@ jobs:
       - name: production build
         working-directory: apps/web
         run: npm run build
+
+  sandbox:
+    name: Sandbox service (ruff, mypy, unit tests)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04-arm' }}
+    if: github.event_name != 'schedule'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: services/sandbox/uv.lock
+      - name: Install (frozen lockfile)
+        working-directory: services/sandbox
+        run: uv sync --frozen
+      - name: ruff
+        working-directory: services/sandbox
+        run: uv run ruff check .
+      - name: mypy
+        working-directory: services/sandbox
+        run: uv run mypy sandbox_service
+      - name: unit tests (no Docker; the per-language runner copies must match runtimes/runner.py)
+        working-directory: services/sandbox
+        run: uv run pytest -q
 
   infra:
     name: Infra (caddy, promtool, compose, dashboards, shellcheck, edge tests)
