@@ -184,25 +184,50 @@ async def end_session_offline(
         await lock.release()
 
 
-def _cooldown_key(session_id: uuid.UUID) -> str:
-    return f"lifecycle:sweep_cooldown:{session_id}"
+_SWEEP_COOLDOWN = "lifecycle:sweep_cooldown:"
+_RECOVERY_COOLDOWN = "lifecycle:recovery_cooldown:"
 
 
-async def _without_cooldown(redis: Any, ids: list[uuid.UUID]) -> list[uuid.UUID]:
+async def _without_cooldown(
+    redis: Any, ids: list[uuid.UUID], *, prefix: str = _SWEEP_COOLDOWN
+) -> list[uuid.UUID]:
     if not ids:
         return ids
     try:
-        flags = await redis.mget([_cooldown_key(sid) for sid in ids])
+        flags = await redis.mget([f"{prefix}{sid}" for sid in ids])
     except Exception:  # noqa: BLE001 - best effort: without Redis every candidate is tried
         return ids
     return [sid for sid, flag in zip(ids, flags, strict=True) if flag is None]
 
 
-async def _cool_down(redis: Any, session_id: uuid.UUID) -> None:
+async def _cool_down(redis: Any, session_id: uuid.UUID, *, prefix: str = _SWEEP_COOLDOWN) -> None:
     try:
-        await redis.set(_cooldown_key(session_id), "1", ex=SWEEP_COOLDOWN_S)
+        await redis.set(f"{prefix}{session_id}", "1", ex=SWEEP_COOLDOWN_S)
     except Exception:  # noqa: BLE001 - best effort
         log.warning("session.sweep_cooldown_failed", session_id=str(session_id))
+
+
+async def _enqueue_intake_recovery(db: Any, session_id: uuid.UUID, now: datetime) -> str:
+    """The intake report when a ready evaluation exists, else the evaluation itself; both complete the session
+    when they finish or give up (their on_exhausted hook)."""
+    from app.services.intake.pipeline import EVALUATE_JOB, REPORT_JOB, latest_ready_evaluation
+
+    evaluation = await latest_ready_evaluation(db, session_id)
+    if evaluation is not None:
+        await enqueue(
+            REPORT_JOB,
+            {"session_id": str(session_id), "evaluation_id": str(evaluation.id), "reason": "recovery"},
+            dedupe_key=f"{REPORT_JOB}:{evaluation.id}:recovery:{now:%Y%m%d%H}",
+            db=db,
+        )
+        return REPORT_JOB
+    await enqueue(
+        EVALUATE_JOB,
+        {"session_id": str(session_id), "reason": "session_completed"},
+        dedupe_key=f"{EVALUATE_JOB}:{session_id}:recovery:{now:%Y%m%d%H}",
+        db=db,
+    )
+    return EVALUATE_JOB
 
 
 async def _row_status(session_id: str) -> str | None:
@@ -337,17 +362,21 @@ async def recover_stuck_completing(
     async with session_scope() as db:
         rows = (
             await db.execute(
-                select(InterviewSession.id)
+                select(InterviewSession.id, InterviewSession.round_config["round_type"].astext)
                 .where(
                     InterviewSession.status == SessionStatus.COMPLETING.value,
                     func.coalesce(InterviewSession.ended_at, InterviewSession.updated_at) < cutoff,
                 )
                 .order_by(func.coalesce(InterviewSession.ended_at, InterviewSession.updated_at))
-                .limit(batch)
+                .limit(batch * 4)
             )
         ).all()
-    candidates = [row[0] for row in rows]
-    summary.stale = len(candidates)
+    round_types = {row[0]: row[1] for row in rows}
+    cooling = get_redis()
+    # A session this sweep already acted on waits an hour for that job before being looked at again, so it is
+    # never re-queued every run and never holds the oldest-first batch.
+    candidates = (await _without_cooldown(cooling, list(round_types), prefix=_RECOVERY_COOLDOWN))[:batch]
+    summary.stale = len(rows)
     for sid in candidates:
         try:
             async with session_scope() as db:
@@ -364,15 +393,22 @@ async def recover_stuck_completing(
                         summary.completed += 1
                         log.info("session.recovery_completed", session_id=str(sid), reason="report_ready")
                     continue
-                await enqueue(
-                    "report.generate",
-                    {"session_id": str(sid), "reason": "recovery"},
-                    dedupe_key=f"report.generate:{sid}:recovery:{now:%Y%m%d%H}",
-                    max_attempts=1,
-                    db=db,
-                )
+                if round_types.get(sid) == "intake":
+                    # Intake sessions are reported by the intake pipeline: the generic report job only hands over
+                    # when a ready evaluation exists, and otherwise "succeeded" without completing anything.
+                    job = await _enqueue_intake_recovery(db, sid, now)
+                else:
+                    job = "report.generate"
+                    await enqueue(
+                        job,
+                        {"session_id": str(sid), "reason": "recovery"},
+                        dedupe_key=f"report.generate:{sid}:recovery:{now:%Y%m%d%H}",
+                        max_attempts=1,
+                        db=db,
+                    )
+            await _cool_down(cooling, sid, prefix=_RECOVERY_COOLDOWN)
             summary.re_enqueued += 1
-            log.warning("session.recovery_report_enqueued", session_id=str(sid))
+            log.warning("session.recovery_report_enqueued", session_id=str(sid), job_type=job)
         except Exception as exc:  # noqa: BLE001 - one bad session must not stop the sweep
             summary.errors += 1
             log.error(

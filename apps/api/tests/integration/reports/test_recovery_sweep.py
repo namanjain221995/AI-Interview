@@ -111,3 +111,44 @@ async def test_recovery_sweep_completes_or_reenqueues_stale_completing_sessions(
     ]
     assert len(recovery_jobs) == 1 and recovery_jobs[0].max_attempts == 1
     assert await _status(fresh.session_id) == "completing" and not await _report_jobs(fresh.session_id)
+
+
+async def test_recovery_hands_intake_sessions_to_the_intake_pipeline_once_an_hour(
+    session_factory, mock_ai, storage, redis
+) -> None:
+    import app.workers.intake  # noqa: F401  (registers intake.evaluate / intake.report)
+
+    fx = await session_factory()
+    sid = fx.session_id
+    async with session_scope() as db:
+        config = dict((await db.get(InterviewSession, sid)).round_config or {})
+    await _set_session(
+        sid,
+        status="completing",
+        ended_at=datetime.now(UTC) - timedelta(minutes=30),
+        round_config={**config, "round_type": "intake"},
+    )
+
+    async def jobs() -> list[BackgroundJob]:
+        async with session_scope() as db:
+            return list(
+                (
+                    await db.scalars(
+                        select(BackgroundJob).where(BackgroundJob.payload["session_id"].astext == str(sid))
+                    )
+                ).all()
+            )
+
+    first = await recover_stuck_completing(stale_after_s=900, limit=10)
+    assert first.re_enqueued == 1
+    queued = await jobs()
+    # Not the generic report job (it would "succeed" without completing an intake session, every run).
+    assert [j.type for j in queued] == ["intake.evaluate"] and queued[0].payload["reason"] == "session_completed"
+    async with session_scope() as db:  # the job finished without completing the session
+        await db.execute(
+            update(BackgroundJob)
+            .where(BackgroundJob.id == queued[0].id)
+            .values(status="succeeded", dedupe_key=None)
+        )
+    second = await recover_stuck_completing(stale_after_s=900, limit=10)
+    assert second.re_enqueued == 0 and len(await jobs()) == 1  # cooled down: not re-queued every run
