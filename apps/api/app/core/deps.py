@@ -45,7 +45,7 @@ from app.core.security import AccessTokenClaims, constant_time_equals, decode_ac
 from app.db.session import get_sessionmaker
 from app.domain.enums import Role, SubjectType
 from app.services.identity.auth_cache import load_auth_state
-from app.services.identity.cookies import ACCESS_COOKIE, CSRF_COOKIE, CSRF_HEADER
+from app.services.identity.cookies import CSRF_HEADER, access_cookie, csrf_cookie
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 CSRF_EXEMPT_PATHS = frozenset({"/api/v1/auth/login"})
@@ -92,18 +92,18 @@ RedisClient = Annotated[Redis, Depends(get_redis)]
 # ------------------------------------------------------------ authentication
 
 
-def _extract_token(request: Request) -> tuple[str | None, bool]:
-    """Return ``(token, from_cookie)``. An Authorization header wins over the cookie."""
+def _extract_token(request: Request) -> tuple[str | None, bool, bool]:
+    """Return ``(token, from_cookie, legacy_cookie)``. An Authorization header wins over the cookie."""
     header = request.headers.get("authorization")
     if header:
         scheme, _, value = header.partition(" ")
         if scheme.lower() != "bearer" or not value.strip():
             raise Unauthorized("Unsupported authorization scheme.", code="invalid_token")
-        return value.strip(), False
-    cookie = request.cookies.get(ACCESS_COOKIE)
+        return value.strip(), False, False
+    cookie, legacy = access_cookie(request)  # the staff or candidate cookie set, by the request's audience (G2)
     if cookie:
-        return cookie, True
-    return None, False
+        return cookie, True, legacy
+    return None, False, False
 
 
 def csrf_exempt(path: str) -> bool:
@@ -115,7 +115,7 @@ def verify_csrf(request: Request, auth_session_id: uuid.UUID | str) -> None:
     if not get_settings().csrf_enabled:
         return
     header = request.headers.get(CSRF_HEADER)
-    cookie = request.cookies.get(CSRF_COOKIE)
+    cookie = csrf_cookie(request)
     if (
         not header
         or not cookie
@@ -156,12 +156,18 @@ async def _authenticate(
     cached = getattr(request.state, "principal", None)
     if isinstance(cached, Principal):
         return cached
-    token, from_cookie = _extract_token(request)
+    token, from_cookie, legacy = _extract_token(request)
     if token is None:
         if required:
             raise Unauthorized()
         return None
     claims = decode_access_token(token)
+    if legacy and claims.typ is not SubjectType.CANDIDATE:
+        # Migration window (G2): the staff-named cookie stands in for a candidate session only when it is one;
+        # a recruiter's own session is never used on a candidate page.
+        if required:
+            raise Unauthorized()
+        return None
     state = await load_auth_state(db, redis, claims)
     if not state.ok:
         raise Unauthorized(

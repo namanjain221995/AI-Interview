@@ -28,7 +28,13 @@ from app.schemas.api.auth import (
     SessionResponse,
 )
 from app.schemas.api.common import ERROR_RESPONSES
-from app.services.identity.cookies import REFRESH_COOKIE, clear_auth_cookies, set_auth_cookies
+from app.services.identity.cookies import (
+    REFRESH_COOKIE,
+    clear_auth_cookies,
+    refresh_cookie,
+    request_audience,
+    set_auth_cookies,
+)
 from app.services.identity.sessions import (
     IssuedTokens,
     RefreshTokenReuse,
@@ -101,7 +107,7 @@ def _error_clearing_cookies(request: Request, exc: AppError) -> JSONResponse:
         status_code=exc.status_code,
         headers=exc.headers,
     )
-    clear_auth_cookies(response)
+    clear_auth_cookies(response, request_audience(request))
     return response
 
 
@@ -133,7 +139,7 @@ async def login(body: LoginRequest, request: Request, response: Response, db: Db
     summary="Rotate the refresh token and issue a new access token",
 )
 async def refresh(request: Request, response: Response, db: DbSession) -> SessionResponse | JSONResponse:
-    token = request.cookies.get(REFRESH_COOKIE)
+    token, legacy = refresh_cookie(request)  # staff or candidate set, by audience (G2)
     row = await find_session_by_refresh_token(db, token)
     if row is None:
         return _error_clearing_cookies(
@@ -166,6 +172,8 @@ async def refresh(request: Request, response: Response, db: DbSession) -> Sessio
         if user is not None:
             email, name = user.email, user.full_name
     principal = principal_from_tokens(tokens, email=email, display_name=name)
+    if legacy and tokens.subject_type is SubjectType.CANDIDATE:
+        clear_auth_cookies(response, "staff")  # a pre-G2 candidate session moves to the candidate names
     set_auth_cookies(response, tokens)
     AUTH_EVENTS.labels(event="refresh").inc()
     return _session_response(await build_me(db, principal), tokens)
@@ -174,7 +182,8 @@ async def refresh(request: Request, response: Response, db: DbSession) -> Sessio
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, summary="End the current session")
 async def logout(request: Request, db: DbSession, principal: OptionalPrincipal) -> Response:
     revoked: list[object] = []
-    row = await find_session_by_refresh_token(db, request.cookies.get(REFRESH_COOKIE))
+    audience = request_audience(request)
+    row = await find_session_by_refresh_token(db, refresh_cookie(request)[0])
     if principal is None and row is not None:
         verify_csrf(request, row.id)  # access token expired: bind CSRF to the refresh session
     if principal is not None and principal.auth_session_id is not None:
@@ -193,7 +202,9 @@ async def logout(request: Request, db: DbSession, principal: OptionalPrincipal) 
         )
         AUTH_EVENTS.labels(event="logout").inc()
     result = Response(status_code=status.HTTP_204_NO_CONTENT)
-    clear_auth_cookies(result)
+    clear_auth_cookies(
+        result, audience
+    )  # only this audience: a candidate signing out keeps the staff session
     return result
 
 

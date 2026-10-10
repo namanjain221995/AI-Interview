@@ -113,6 +113,12 @@ All list endpoints accept `?limit=&offset=` and return `{"items": [...], "total"
 Auth error codes: wrong credentials 401 `invalid_credentials`; lockout 423 `account_locked` + Retry-After;
 rate limit 429 `rate_limited`; deactivated 403 `account_disabled`. Cookies: `access_token` (HttpOnly,
 Path=/api), `refresh_token` (HttpOnly, Path=/api/v1/auth), `csrf_token` (JS-readable, Path=/).
+Candidate sessions use their own set (G2): `cand_access_token`, `cand_refresh_token`, `cand_csrf_token` (same
+paths and flags), so a recruiter who opens a candidate link in the same browser stays signed in. Candidate API
+areas (`/portal`, `/candidate-access`, `/link-access`, `/link-return`) always use the candidate set; the shared
+`/auth/refresh`, `/auth/logout` and `/media` use it when the request carries `X-Session-Audience: candidate`
+(the SPA sends it from candidate pages). Pre-G2 candidate sessions under the staff names are accepted on
+candidate routes until they expire (a refresh moves them).
 
 **Auth & users** (platform module): `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`,
 `GET /auth/me`, `POST /auth/password`, `POST /users/{id}/unlock`; `GET|POST /users`, `PATCH /users/{id}`, `POST /users/{id}/deactivate`;

@@ -109,7 +109,7 @@ async def test_verify_sets_cookies_and_marks_invite(app, org_factory) -> None:
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["interview_id"] == str(data["interview_id"]) and body["next_step"] == "welcome"
-        assert {"access_token", "csrf_token", "refresh_token"} <= set(r.cookies.keys())
+        assert {"cand_access_token", "cand_csrf_token", "cand_refresh_token"} <= set(r.cookies.keys())  # G2
         me = await http.get("/api/v1/portal/me")
         assert me.status_code == 200 and me.json()["candidate"]["first_name"] == "Jane"
     async with session_scope() as db:

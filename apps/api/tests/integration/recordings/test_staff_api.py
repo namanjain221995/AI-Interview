@@ -157,7 +157,8 @@ async def test_other_organizations_and_candidates_see_nothing(
         assert (await outsider.get(f"{API}/sessions/{rec.session_id}/{path}")).status_code == 404
     assert (await outsider.post(f"{API}/sessions/{rec.session_id}/recordings/finalize")).status_code == 404
     candidate = await candidate_client(app, rec)
-    assert (await candidate.get(f"{API}/sessions/{rec.session_id}/recordings")).status_code == 403
+    # G2: a candidate session is not a staff session on staff routes (separate cookie sets).
+    assert (await candidate.get(f"{API}/sessions/{rec.session_id}/recordings")).status_code == 401
     await candidate.aclose()
     interviewer = await auth_client(Role.INTERVIEWER, organization_id=org)
     missing = await interviewer.get(f"{API}/sessions/{rec.session_id}/recordings/{uuid.uuid4()}/url")

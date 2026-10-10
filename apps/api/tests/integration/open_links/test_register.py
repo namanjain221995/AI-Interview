@@ -78,7 +78,7 @@ async def test_register_creates_candidate_interview_and_session(
     assert body["outcome"] == "registered" and body["next_step"] == "welcome"
     assert body["personal_url"].startswith(f"{settings.public_base_url}/r/")
     set_cookies = response.headers.get_list("set-cookie")
-    assert any(c.startswith("access_token=") for c in set_cookies)
+    assert any(c.startswith("cand_access_token=") for c in set_cookies)  # candidate cookie set (G2)
     device = next(c for c in set_cookies if c.startswith("ol_device="))
     assert "HttpOnly" in device and "Path=/api/v1/link-access" in device and "samesite=lax" in device.lower()
 
