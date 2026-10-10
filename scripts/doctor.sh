@@ -5,7 +5,7 @@
 #   scripts/doctor.sh            # everything
 #   scripts/doctor.sh --no-stack # skip the running-stack checks (before `make up`)
 set -euo pipefail
-# shellcheck source=_common.sh
+# shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 CHECK_STACK=1
