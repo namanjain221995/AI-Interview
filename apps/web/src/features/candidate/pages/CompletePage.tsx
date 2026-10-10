@@ -111,7 +111,7 @@ export default function CompletePage() {
           </section>
 
           <p className="mt-10 border-t border-line pt-6 text-[13px] leading-5 text-fg-muted">
-            Your recordings, transcript and any images are kept only for the periods described when you gave consent, then deleted. Questions about your data? Contact {org}.
+            Your recordings and any images are deleted on the schedule described when you gave consent. Your transcript and the written assessment stay with {org} until they delete them; you can ask them to at any time. Questions about your data? Contact {org}.
           </p>
         </div>
       </JourneyBoundary>

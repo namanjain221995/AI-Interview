@@ -314,7 +314,7 @@ const ITEM_TITLES: Record<string, { title: string; description: string }> = {
   audio_recording: { title: "Audio recording", description: "Audio of your answers is kept for the hiring team to review." },
   video_recording: { title: "Video recording", description: "Video of the interview is kept for the hiring team to review." },
   ai_assessment: { title: "AI assessment", description: "An AI evaluates your answers; a person makes every hiring decision." },
-  retention: { title: "Data retention", description: "Your data is kept only for the periods stated." },
+  retention: { title: "Data retention", description: "Stored recordings are deleted on the schedule stated; your transcript stays with the hiring team until they delete it." },
 };
 
 export function normalizeDisclosure(raw: unknown): DisclosureView {

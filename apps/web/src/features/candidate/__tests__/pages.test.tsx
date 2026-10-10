@@ -271,6 +271,9 @@ describe("Completion and report", () => {
     const outcome = await screen.findByTestId("complete-outcome");
     await waitFor(() => expect(outcome).toHaveAttribute("data-outcome", "not_started"));
     expect(outcome).toHaveTextContent("hasn't started yet");
+    // G3: only stored files follow a deletion schedule; the transcript stays until the hiring team deletes it.
+    expect(screen.getByTestId("complete-page")).toHaveTextContent("Your transcript and the written assessment stay with");
+    expect(screen.getByTestId("complete-page")).not.toHaveTextContent(/transcript and any images are kept only/);
     expect(screen.getByTestId("return-to-interview")).toHaveAttribute("href", "/candidate/i1/interview");
     expect(screen.queryByTestId("feedback-card")).not.toBeInTheDocument();
   });
