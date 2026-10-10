@@ -226,5 +226,20 @@ _REPEAT = re.compile(
 )
 
 
+_REPEAT_COMPLAINT = re.compile(
+    r"\b(?:i(?:'ve| have)? (?:already|just) (?:told|said|answered|mentioned|explained|covered)"
+    r"|as i (?:already )?(?:said|told you|mentioned|explained)"
+    r"|i (?:told|answered) you (?:that|already|before)"
+    r"|(?:already|just) answered (?:that|this|it))\b",
+    re.IGNORECASE,
+)
+
+
+def is_repeat_complaint(text: str) -> bool:
+    """The candidate points out that they have already answered ("I already told you"): a sign the interviewer
+    asked the same thing again (counted in ``interview_candidate_repeat_complaints_total``)."""
+    return bool(_REPEAT_COMPLAINT.search(text or ""))
+
+
 def is_repeat_or_clarification(text: str) -> bool:
     return bool(_REPEAT.search(text or ""))

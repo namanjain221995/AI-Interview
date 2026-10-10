@@ -220,7 +220,10 @@ describe("dashboard and analytics", () => {
   it("loads every analytics breakdown for the chosen period", async () => {
     renderApp("/app/analytics?days=90");
     expect(await screen.findByRole("heading", { level: 1, name: "Analytics" })).toBeInTheDocument();
-    expect(await screen.findByText("Interviewer turns")).toBeInTheDocument();
+    // The model's whole decision time, not what the candidate waits (P0.4): labelled as such.
+    expect(await screen.findByText("Interviewer turns: full decision time")).toBeInTheDocument();
+    expect(screen.getByText(/Candidates hear the reply much sooner/)).toBeInTheDocument();
+    expect(screen.queryByText("Interviewer turns")).not.toBeInTheDocument();
     for (const name of ["overview", "funnel", "scores", "competencies", "completion", "integrity", "hints", "model-usage"]) {
       expect(calls.some((c) => c.path === `/analytics/${name}` && c.params?.days === 90)).toBe(true);
     }

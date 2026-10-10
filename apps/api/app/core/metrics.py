@@ -30,6 +30,45 @@ TIME_TO_FIRST_AUDIO = Histogram(
     buckets=_TURN_BUCKETS,
 )
 BARGE_INS = Counter("interview_barge_ins_total", "Candidate interruptions of interviewer speech")
+# What the candidate experiences (P0.4/C7): from their last voiced audio, not from the end-of-turn decision (which
+# only comes after the end-of-turn silence). Server side: the client adds its playback lead (~150 ms).
+# reply="question": the first audio of the interviewer's actual reply (the per-turn speed number);
+# reply="first_sound": the first audio of any kind - the "Okay." acknowledgement, the "One moment." filler or the
+# reply, whichever was sent first. Wider buckets than _TURN_BUCKETS (the total includes the endpoint silence);
+# 6 s is a bucket edge for the VoiceToVoiceSlow alert.
+_VOICE_TO_VOICE_BUCKETS = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.5, 15.0, 20.0, 30.0)
+VOICE_TO_VOICE = Histogram(
+    "interview_voice_to_voice_seconds",
+    "Candidate's last voiced audio to the first interviewer audio chunk sent (reply=question|first_sound)",
+    ["reply"],
+    buckets=_VOICE_TO_VOICE_BUCKETS,
+)
+TURN_STAGE_SECONDS = Histogram(
+    "interview_turn_stage_seconds",
+    "Critical-path stages of a spoken turn: endpoint_silence, stt_final, commit_wait, decision_to_text, "
+    "tts_first_chunk, send",
+    ["stage"],
+    buckets=(0.05, 0.1, *_TURN_BUCKETS),  # send and tts_first_chunk are often well under 250 ms
+)
+TURN_DECISIONS = Counter(
+    "interview_turn_decisions_total",
+    "Interviewer turn decisions by outcome: complete, tail_cut (metadata after the speech cut off), "
+    "synthesized, fallback",
+    ["outcome"],
+)
+TURN_RESUMED = Counter(
+    "interview_turn_resumed_total",
+    "Candidate kept speaking after the end of their turn was decided (premature end of turn)",
+)
+CANDIDATE_REPEAT_COMPLAINTS = Counter(
+    "interview_candidate_repeat_complaints_total",
+    "Candidate said the question had already been answered ('I already told you')",
+)
+CONTRADICTIONS = Counter(
+    "interview_contradictions_total",
+    "Inconsistencies proposed by the answer evaluator: kept or dropped by grounding",
+    ["result"],
+)
 
 LLM_REQUEST_SECONDS = Histogram(
     "interview_llm_request_seconds",

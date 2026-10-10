@@ -158,6 +158,11 @@ async def test_voice_turn_message_order_latency_and_answer_audio(realtime_env, w
         assert isinstance(record[key], int) and record[key] >= 0, (key, record)
     assert record["first_chunk_chars"] > 0 and isinstance(record["tts_first_ms"], int)
     assert record["engine_first_event_ms"] <= record["first_delta_ms"] <= record["first_audio_ms"]
+    # P0.4: the candidate's clock starts at their last voiced audio, before the end-of-turn decision.
+    assert record["endpoint_silence_ms"] > 0
+    assert record["voice_to_voice_ms"] == record["endpoint_silence_ms"] + record["first_audio_ms"]
+    assert record["first_sound_by"] == "ack"
+    assert record["first_sound_ms"] == record["endpoint_silence_ms"] + record["ack_ms"]
 
 
 async def test_barge_in_backchannel_resumes_interrupted_question(realtime_env, ws_connect, mock_ai) -> None:
@@ -773,13 +778,18 @@ async def test_mid_thought_pause_does_not_end_the_answer(realtime_env, ws_connec
         after=mark,
         timeout=15,
     )
-    await ws.wait_type("ai.utterance.start", kind="question", after=mark, timeout=15)
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark, timeout=15)
     assert [t.text for t in env.engine.turns] == [
         "We moved the batch jobs to spot instances and then rightsized the databases."
     ]
     assert final["text"] == env.engine.turns[0].text
     states = [m.get("reason") for m in ws.messages[mark:] if m.get("type") == "turn.state"]
     assert "speech_resumed" in states  # merged back instead of answering half an answer
+    # P0.4: the turn is measured from the end-of-turn decision that stood, not the reopened one.
+    await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"])
+    record = get_registry().get(env.session_id).latency[-1]
+    assert record["reopened"] >= 1
+    assert record["voice_to_voice_ms"] == record["endpoint_silence_ms"] + record["first_audio_ms"]
 
 
 async def test_done_answering_is_the_fast_path(realtime_env, ws_connect, mock_ai) -> None:
@@ -1010,3 +1020,84 @@ async def test_a_quick_reply_needs_no_filler(realtime_env, ws_connect, mock_ai) 
     assert not [
         m for m in ws.messages[mark:] if m["type"] == "ai.utterance.start" and m.get("kind") == "comment"
     ]
+
+
+async def _turn_latency_events(session_id, *, timeout: float = 5.0) -> list[dict]:  # noqa: ASYNC109
+    from sqlalchemy import select
+
+    from app.db.models import InterviewEvent
+
+    for _ in range(int(timeout / 0.05)):
+        async with session_scope() as db:
+            rows = (
+                (
+                    await db.execute(
+                        select(InterviewEvent.payload)
+                        .where(InterviewEvent.session_id == session_id, InterviewEvent.type == "turn.latency")
+                        .order_by(InterviewEvent.seq)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        if rows:
+            return list(rows)
+        await asyncio.sleep(0.05)
+    return []
+
+
+def _voice_to_voice_count() -> float:
+    labels = {"reply": "question"}
+    return metrics.REGISTRY.get_sample_value("interview_voice_to_voice_seconds_count", labels) or 0.0
+
+
+async def test_a_spoken_turn_persists_its_voice_to_voice_breakdown(
+    realtime_env, ws_connect, mock_ai, monkeypatch
+) -> None:
+    """P0.4: every spoken turn leaves a turn.latency interview event (it survives restarts, unlike log lines).
+    A slow reply hears "Okay." then "One moment." then the question: the first sound is the "Okay.", the
+    voice-to-voice number is the question's first audio, both counted from the candidate's last word."""
+    from app.realtime import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "FILLER_AFTER_S", 1.0)
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    env.engine.first_event_delay = 2.5  # the model is slow to start its reply
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("We reduced costs by forty percent,", "mostly by rightsizing.")
+    before = _voice_to_voice_count()
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"])
+
+    (event,) = await _turn_latency_events(env.session_id)
+    for key in (
+        "turn_id",
+        "end_reason",
+        "endpoint_silence_ms",
+        "required_silence_ms",
+        "voiced_ms",
+        "stt_wait_ms",
+        "ack_ms",
+        "ack",
+        "filler_ms",
+        "filler",
+        "engine_first_event_ms",
+        "first_delta_ms",
+        "first_audio_ms",
+        "first_chunk_ready_ms",
+        "tts_first_ms",
+        "voice_to_voice_ms",
+        "first_sound_ms",
+        "first_sound_by",
+    ):
+        assert event.get(key) is not None, (key, event)
+    assert event["typed"] is False and event["chars"] > 0
+    assert event["filler"] in runtime_module.FILLER_PHRASES
+    assert 0 <= event["ack_ms"] < event["filler_ms"] < event["first_audio_ms"]
+    assert event["filler_ms"] >= 1000  # FILLER_AFTER_S after the end-of-turn decision
+    assert event["voice_to_voice_ms"] == event["endpoint_silence_ms"] + event["first_audio_ms"]
+    assert event["first_sound_by"] == "ack"
+    assert event["first_sound_ms"] == event["endpoint_silence_ms"] + event["ack_ms"]
+    assert _voice_to_voice_count() == before + 1  # observed once for the turn

@@ -37,7 +37,7 @@ from app.ai.base import AIError, AIServices, CallContext
 from app.ai.prompts import prompt_version
 from app.ai.registry import get_ai
 from app.core.logging import bind_context, get_logger
-from app.core.metrics import ERRORS
+from app.core.metrics import ERRORS, TURN_DECISIONS
 from app.core.queue import enqueue, publish_session_event
 from app.db.models import CodingSession, Interview, InterviewSession, Question
 from app.db.session import session_scope
@@ -1720,6 +1720,15 @@ class InterviewEngine:
             state.turn_state = TurnState.AI_SPEAKING
             if deviations:
                 state.deviations += len([d for d in deviations if not d.startswith("speech:")])
+            TURN_DECISIONS.labels(
+                outcome="fallback"
+                if outcome.fallback
+                else "tail_cut"
+                if outcome.tail_cut
+                else "synthesized"
+                if decision_record["synthesized"]
+                else "complete"
+            ).inc()
             await log_event(
                 db,
                 state.session_id,

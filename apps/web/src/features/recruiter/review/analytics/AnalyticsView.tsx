@@ -53,7 +53,7 @@ const TASK_LABELS: Record<string, string> = {
   ocr: "Text recognition (OCR)",
   embedding: "Embeddings",
   rerank: "Reranking",
-  turn_decision: "Interviewer turns",
+  turn_decision: "Interviewer turns: full decision time",
   answer_assessment: "Quick answer check",
   answer_evaluation: "Answer evaluation",
   code_observation: "Coding comments",
@@ -72,6 +72,11 @@ const TASK_LABELS: Record<string, string> = {
   screen_analysis: "Screen checks",
   routing_classification: "Routing",
   document_classification: "Document checks",
+};
+
+/** What a task's response time measures, where it is easy to misread as the candidate's wait. */
+const TASK_HINTS: Record<string, string> = {
+  turn_decision: "Until the whole decision is written. Candidates hear the reply much sooner: speech starts while the model is still writing.",
 };
 
 const DECISION_COLORS: Record<string, string> = {
@@ -451,7 +456,10 @@ export function AnalyticsView() {
                   const rate = m.error_rate ?? (m.calls ? m.errors / m.calls : null);
                   return (
                     <TableRow key={`${m.task}-${m.endpoint}`}>
-                      <TableCell className="py-2.5 font-medium">{TASK_LABELS[m.task] ?? humanize(m.task)}</TableCell>
+                      <TableCell className="py-2.5 font-medium">
+                        <span className="block">{TASK_LABELS[m.task] ?? humanize(m.task)}</span>
+                        {TASK_HINTS[m.task] ? <span className="block max-w-[22rem] text-[11px] font-normal text-fg-subtle">{TASK_HINTS[m.task]}</span> : null}
+                      </TableCell>
                       <TableCell className="py-2.5 text-fg-muted max-sm:hidden">{m.endpoint}</TableCell>
                       <TableCell numeric className="py-2.5">
                         {formatNumber(m.calls)}

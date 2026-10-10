@@ -63,6 +63,10 @@ PG_STATE_COLORS = {
     "active": SLOT[0], "idle": SLOT[1], "idle in transaction": SLOT[3],
     "idle in transaction (aborted)": SLOT[7], "fastpath function call": SLOT[4], "disabled": MUTED,
 }  # fmt: skip
+# Critical path of a spoken turn, in order (interview_turn_stage_seconds{stage}).
+TURN_STAGES = ["endpoint_silence", "stt_final", "commit_wait", "decision_to_text", "tts_first_chunk", "send"]
+STAGE_COLORS = {stage: SLOT[i] for i, stage in enumerate(TURN_STAGES)}
+DECISION_OUTCOME_COLORS = {"complete": GOOD, "tail_cut": WARNING, "synthesized": SERIOUS, "fallback": CRITICAL}
 
 TURN_TASK_RE = "|".join(TURN_TASKS)
 APP_JOBS = 'job=~"interview-(api|worker|tts|sandbox|edge)"'
@@ -495,6 +499,110 @@ def status_class(metric: str, selector: str, status_label: str) -> str:
     ).strip()
 
 
+def _v2v_quantile(q: str, reply: str, window: str = "$__rate_interval") -> str:
+    return (
+        f"histogram_quantile({q}, sum by (le) "
+        f'(rate(interview_voice_to_voice_seconds_bucket{{reply="{reply}"}}[{window}])))'
+    )
+
+
+def voice_to_voice(d: Dashboard) -> None:
+    """P0.4: the candidate's side of a spoken turn, from their last voiced audio (not from the end-of-turn
+    decision like interview_turn_latency_seconds). p90 is emphasised here: it is what VoiceToVoiceSlow alerts on."""
+    d.row("Voice to voice: what the candidate hears")
+    d.add_stacked(
+        [
+            stat(
+                "Voice to voice p90 (15m)",
+                _v2v_quantile("0.90", "question", "15m"),
+                unit="s", thresholds=status_thresholds(4.5, 6), decimals=1,
+                description="Candidate's last word to the first audio of the interviewer's reply, last 15 minutes. "
+                "Alert VoiceToVoiceSlow above 6 s.",
+            ),
+            stat(
+                "First sound p90 (15m)",
+                _v2v_quantile("0.90", "first_sound", "15m"),
+                unit="s", thresholds=status_thresholds(3, 5), decimals=1,
+                description='Candidate\'s last word to the first thing they hear: "Okay.", "One moment." or the reply. '
+                'Above 5 s the "One moment." filler is not covering slow replies.',
+            ),
+        ],
+        4, 4,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Voice to voice: candidate's last word to the reply's first audio",
+            [(_v2v_quantile("0.90", "question"), "p90"), (_v2v_quantile("0.50", "question"), "p50")],
+            unit="s", colors={"p90": SLOT[0], "p50": MUTED}, threshold=6,
+            description="interview_voice_to_voice_seconds{reply=\"question\"}: endpoint silence + transcription + "
+            "decision + first speech chunk, server side (the browser adds ~150 ms). Dashed line: 6 s "
+            "(alert VoiceToVoiceSlow, p90 over 15 minutes). Typed answers are not counted.",
+        ),
+        10, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "First sound: \"Okay.\", \"One moment.\" or the reply, whichever comes first",
+            [(_v2v_quantile("0.90", "first_sound"), "p90"), (_v2v_quantile("0.50", "first_sound"), "p50")],
+            unit="s", colors={"p90": SLOT[0], "p50": MUTED},
+            description="interview_voice_to_voice_seconds{reply=\"first_sound\"}: how long the candidate hears "
+            "nothing after their last word. The turn.latency interview event says which sound came first.",
+        ),
+        10, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Turn stages (median): where a spoken turn's time goes",
+            [(
+                "histogram_quantile(0.50, sum by (le, stage) "
+                "(rate(interview_turn_stage_seconds_bucket[$__rate_interval])))",
+                "{{stage}}",
+            )],
+            unit="s", colors=STAGE_COLORS,
+            description="interview_turn_stage_seconds: endpoint_silence (last word to end-of-turn decision), "
+            "stt_final, commit_wait, decision_to_text (engine and model to the first speech chunk), "
+            "tts_first_chunk, send. Medians do not add up exactly to the voice-to-voice median.",
+        ),
+        12, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Interviewer turn decisions by outcome per minute",
+            [("sum by (outcome) (rate(interview_turn_decisions_total[$__rate_interval])) * 60", "{{outcome}}")],
+            colors=DECISION_OUTCOME_COLORS, stack=True, fill=20,
+            description="complete: the model's full decision; tail_cut: the reply was spoken but the decision "
+            "after it was cut off; synthesized: the platform filled in a missing decision; fallback: a "
+            "question-bank line because the model failed.",
+        ),
+        12, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Premature end of turn and \"I already told you\" per hour",
+            [
+                ("sum(rate(interview_turn_resumed_total[$__rate_interval])) * 3600", "turn resumed"),
+                ("sum(rate(interview_candidate_repeat_complaints_total[$__rate_interval])) * 3600",
+                 "repeat complaint"),
+            ],
+            colors={"turn resumed": SLOT[0], "repeat complaint": SLOT[1]},
+            description="turn resumed: the candidate kept speaking after the end of their turn was decided "
+            "(endpointing too eager). repeat complaint: the candidate said they had already answered "
+            "(the interviewer asked the same thing again).",
+        ),
+        12, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Answer-evaluator contradictions per hour: kept or dropped by grounding",
+            [("sum by (result) (rate(interview_contradictions_total[$__rate_interval])) * 3600", "{{result}}")],
+            colors={"kept": SLOT[0], "dropped": SLOT[1]},
+            description="Inconsistencies the answer evaluator proposed; dropped ones were not supported by the "
+            "candidate's own words.",
+        ),
+        12, 8,
+    )  # fmt: skip
+
+
 # =============================================================================
 # Dashboards
 # =============================================================================
@@ -582,6 +690,8 @@ def overview() -> Dashboard:
         ),
         12, 8,
     )  # fmt: skip
+
+    voice_to_voice(d)
 
     d.row("Sessions and speech")
     d.add(

@@ -38,7 +38,7 @@ from app.ai.base import AIError, AIOutputInvalid, AIServices, CallContext
 from app.ai.registry import get_ai
 from app.ai.structured import describe_schema
 from app.core.logging import get_logger
-from app.core.metrics import ERRORS
+from app.core.metrics import CONTRADICTIONS, ERRORS
 from app.core.queue import publish_session_event
 from app.db.models import (
     Answer,
@@ -236,6 +236,10 @@ def ground_contradictions(
             kept.append(c)
         else:
             dropped.append(issue)
+    if kept:
+        CONTRADICTIONS.labels(result="kept").inc(len(kept))
+    if dropped:
+        CONTRADICTIONS.labels(result="dropped").inc(len(dropped))
     if not dropped:
         return evaluation, []
     log.info("engine.evaluation_contradiction_dropped", session_id=state.session_id, count=len(dropped))

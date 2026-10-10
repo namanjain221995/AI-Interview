@@ -322,6 +322,46 @@ Defined once in `app/core/metrics.py` and imported elsewhere:
 `interview_intake_evaluation_seconds` (histogram), `interview_intake_decisions_total{outcome,overrides_ai}` (intake).
 The worker serves `/metrics` and `/healthz` on `WORKER_METRICS_PORT`; tts and sandbox expose `/metrics`.
 
+### 8.1 Voice to voice: what the candidate waits (P0.4)
+
+`interview_turn_latency_seconds` starts at the end-of-turn *decision*, which only comes after the end-of-turn
+silence; the candidate's wait starts at their last word. These metrics measure the candidate's side
+(`app/realtime/latency.py`, observed once per spoken turn when the first audio of the reply is sent; server side,
+the browser adds its ~150 ms playback lead and the network):
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `interview_voice_to_voice_seconds{reply="question"}` | histogram | Candidate's last voiced audio -> first audio chunk of the interviewer's reply sent. **The per-turn speed number**; alert `VoiceToVoiceSlow` (p90 over 15 min > 6 s, at least 10 turns). Typed answers are not counted. |
+| `interview_voice_to_voice_seconds{reply="first_sound"}` | histogram | Candidate's last voiced audio -> the first audio of any kind: the "Okay." acknowledgement, the "One moment." filler or the reply, whichever was sent first. |
+| `interview_turn_stage_seconds{stage}` | histogram | Critical path of a spoken turn: `endpoint_silence` (last word -> end-of-turn decision), `stt_final` (decision -> final transcript), `commit_wait` (stage-2 end of turn, only when it waited), `decision_to_text` (engine and model -> first speech chunk ready), `tts_first_chunk` (its synthesis), `send` (the remainder until it is sent). |
+| `interview_turn_decisions_total{outcome}` | counter | Interviewer turn decisions: `complete`, `tail_cut` (the reply was spoken, the decision after it cut off), `synthesized` (the platform filled in a missing decision), `fallback` (question-bank line, the model failed). |
+| `interview_turn_resumed_total` | counter | The candidate kept speaking after the end of their turn was decided (premature end of turn; the turn merges back). |
+| `interview_candidate_repeat_complaints_total` | counter | The candidate said they had already answered ("I already told you", `turns.is_repeat_complaint`). |
+| `interview_contradictions_total{result}` | counter | Inconsistencies proposed by the answer evaluator: `kept` or `dropped` by grounding. |
+
+Each spoken or typed turn whose reply produced audio is also persisted as an `interview_events` row of type
+`turn.latency` (so the numbers survive restarts and log rotation; the same record is logged as
+`realtime.turn_latency`). Payload, all times in integer ms counted from the end-of-turn decision unless noted;
+keys are absent when the step did not happen:
+
+| Key | Meaning |
+|---|---|
+| `turn_id` | the capture id of the candidate turn |
+| `end_reason` | why the turn ended (`short_complete`, `base`, `long_trailing`, `manual`, `max_utterance`, ...) |
+| `endpoint_silence_ms` | silence since the last voiced audio when the end of turn was decided (null for typed turns) |
+| `required_silence_ms`, `voiced_ms`, `segments`, `typed`, `chars`, `glossary` | the endpointing threshold used, voiced audio in the turn, STT segments, typed answer, transcript length, glossary corrections |
+| `stt_wait_ms`, `tail_audio_ms`, `tail_stt_ms`, `tail_lead_ms`, `stt_max_ms` | wait for the final transcript; the last segment's audio length, STT time and how long before the decision it was submitted; the slowest segment |
+| `commit_wait_ms` | stage-2 end-of-turn wait (only when it waited) |
+| `ack_ms`, `ack` | the "Okay." acknowledgement was sent, and the phrase |
+| `filler_ms`, `filler` | the "One moment." filler was sent (reply not started 3.5 s after the decision), and the phrase |
+| `engine_first_event_ms`, `first_delta_ms` | first engine event; first spoken text from the model |
+| `first_chunk_ready_ms`, `first_chunk_chars`, `tts_first_ms` | first speech chunk ready for synthesis, its length, its synthesis time |
+| `first_audio_ms` | first audio chunk of the reply sent (completes the record) |
+| `voice_to_voice_ms` | `endpoint_silence_ms + first_audio_ms`: last word -> reply (spoken turns only) |
+| `first_sound_ms`, `first_sound_by` | `endpoint_silence_ms` + the earliest of `ack_ms`, `filler_ms`, `first_audio_ms`; which one (`ack`, `filler`, `reply`) |
+| `reopened` | how often the end of turn was decided and then reopened because the candidate kept speaking (earlier timings are discarded; the record counts from the decision that stood) |
+| `activity` | intake activity kind, for activity captures (no endpointing, no voice-to-voice figure) |
+
 ## 9. Model routing (measured, see AI_PIPELINE.md)
 
 | Task | Endpoint | Notes |

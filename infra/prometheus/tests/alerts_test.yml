@@ -140,6 +140,72 @@ tests:
               summary: Time to first interviewer audio p95 above 2 s
               description: p95 from utterance start to the first TTS chunk sent is 2.48 s (target < 2 s).
 
+  - name: voice to voice p90 above 6 s with traffic fires after 5 minutes
+    interval: 1m
+    input_series:
+      - series: 'interview_voice_to_voice_seconds_bucket{job="interview-api", instance="a", reply="question", le="6.0"}'
+        values: "0+0x30"
+      - series: 'interview_voice_to_voice_seconds_bucket{job="interview-api", instance="a", reply="question", le="7.0"}'
+        values: "0+2x30"
+      - series: 'interview_voice_to_voice_seconds_bucket{job="interview-api", instance="a", reply="question", le="+Inf"}'
+        values: "0+2x30"
+      - series: 'interview_voice_to_voice_seconds_count{job="interview-api", instance="a", reply="question"}'
+        values: "0+2x30"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: VoiceToVoiceSlow
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: VoiceToVoiceSlow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: realtime
+            exp_annotations:
+              summary: Candidates wait more than 6 s for the interviewer's reply
+              description: p90 from the candidate's last word to the first audio of the interviewer's reply is 6.90 s over 15 minutes (target < 6 s). The Turn stages panel and the turn.latency interview events show the slow stage.
+
+  - name: healthy voice to voice does not fire, whatever the first sound
+    interval: 1m
+    input_series:
+      - series: 'interview_voice_to_voice_seconds_bucket{job="interview-api", reply="question", le="3.0"}'
+        values: "0+0x30"
+      - series: 'interview_voice_to_voice_seconds_bucket{job="interview-api", reply="question", le="4.0"}'
+        values: "0+3x30"
+      - series: 'interview_voice_to_voice_seconds_bucket{job="interview-api", reply="question", le="+Inf"}'
+        values: "0+3x30"
+      - series: 'interview_voice_to_voice_seconds_count{job="interview-api", reply="question"}'
+        values: "0+3x30"
+      # first_sound is never the alert's series (it can only be faster than the reply, but keep the label honest)
+      - series: 'interview_voice_to_voice_seconds_bucket{job="interview-api", reply="first_sound", le="7.0"}'
+        values: "0+0x30"
+      - series: 'interview_voice_to_voice_seconds_bucket{job="interview-api", reply="first_sound", le="8.0"}'
+        values: "0+3x30"
+      - series: 'interview_voice_to_voice_seconds_bucket{job="interview-api", reply="first_sound", le="+Inf"}'
+        values: "0+3x30"
+      - series: 'interview_voice_to_voice_seconds_count{job="interview-api", reply="first_sound"}'
+        values: "0+3x30"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: VoiceToVoiceSlow
+        exp_alerts: []
+
+  - name: a few slow replies in a quiet hour do not fire
+    interval: 1m
+    input_series:
+      - series: 'interview_voice_to_voice_seconds_bucket{job="interview-api", reply="question", le="8.0"}'
+        values: "0+0x30"
+      - series: 'interview_voice_to_voice_seconds_bucket{job="interview-api", reply="question", le="10.0"}'
+        values: "0+0.5x30"
+      - series: 'interview_voice_to_voice_seconds_bucket{job="interview-api", reply="question", le="+Inf"}'
+        values: "0+0.5x30"
+      - series: 'interview_voice_to_voice_seconds_count{job="interview-api", reply="question"}'
+        values: "0+0.5x30"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: VoiceToVoiceSlow
+        exp_alerts: []
+
   # ---------------------------------------------------------------------- AI
   - name: llm failure ratio above 5 percent fires per endpoint
     interval: 1m

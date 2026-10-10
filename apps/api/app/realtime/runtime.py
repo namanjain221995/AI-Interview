@@ -37,6 +37,7 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.queue import subscribe_session_events
 from app.core.redis import get_redis
+from app.db.session import session_scope
 from app.domain.enums import (
     AvatarExpression,
     AvatarGesture,
@@ -62,6 +63,7 @@ from app.realtime.bridges import CodingBridge, IntegrityBridge
 from app.realtime.context import SessionContext, record_connection, refresh_status, touch_heartbeat
 from app.realtime.endpointing import Endpointer, EndpointParams, commit_required_ms
 from app.realtime.glossary import Glossary, log_corrections
+from app.realtime.latency import observe_turn_latency
 from app.realtime.lock import SessionLock
 from app.realtime.outbox import Outbox
 from app.realtime.revision import is_material_revision, revise_answer_transcript, word_difference
@@ -78,6 +80,7 @@ from app.realtime.transport import Transport
 from app.realtime.turns import (
     TurnController,
     is_backchannel,
+    is_repeat_complaint,
     is_repeat_or_clarification,
     resume_after_backchannel,
     spoken_portion,
@@ -157,6 +160,7 @@ from app.services.interview.contracts import (
     UtteranceBegin,
     UtteranceMeta,
 )
+from app.services.interview.records import log_event
 from app.services.interview.understanding import understand as understand_turn
 
 log = get_logger(__name__)
@@ -395,6 +399,9 @@ class TurnCapture:
     required_ms: int | None = None
     acknowledged: str | None = None  # the acknowledgement phrase already played after this turn
     replied: bool = False  # the first audio of the interviewer's reply to this turn was sent
+    # Silence since the candidate's last voiced audio when the end of turn was decided (P0.4): the part of the
+    # wait the candidate experiences before any end-of-turn timer starts.
+    silence_at_end_ms: int | None = None
     interrupted_task: asyncio.Task[InterruptedUtterance | None] | None = None
     engine_called: bool = False
     silence_episode: int = 0
@@ -2205,6 +2212,8 @@ class SessionRuntime:
             capture.audio_until_ms = self.segmenter.received_ms
         self._capture = capture
         self.turns.to(TurnState.CANDIDATE_SPEAKING, "speech_resumed")
+        metrics.TURN_RESUMED.inc()  # the end of turn was decided too early
+        self._latency_reopen(capture)
         log.debug("realtime.turn_merged", session_id=self.session_id, capture=capture.capture_id)
 
     def _notify_silence(self, capture: TurnCapture) -> None:
@@ -2335,6 +2344,7 @@ class SessionRuntime:
         capture.ended_session_ms = self._session_ms()
         capture.end_at = time.monotonic()
         capture.end_reason = endpoint_reason or reason
+        capture.silence_at_end_ms = int(self.segmenter.silence_ms) if capture.typed_text is None else None
         self.turns.to(TurnState.PROCESSING, reason)
         self.avatar(AvatarState.THINKING, expression=AvatarExpression.THOUGHTFUL)
         self._enqueue(
@@ -2476,6 +2486,8 @@ class SessionRuntime:
         else:
             text = capture.typed_text
         stt_wait_ms = round((time.monotonic() - started) * 1000)
+        if is_repeat_complaint(text):
+            metrics.CANDIDATE_REPEAT_COMPLAINTS.inc()  # "I already told you": the interviewer asked again
         stt_fields: dict[str, Any] = {}
         jobs = capture.transcriber.segments
         if capture.typed_text is None and jobs:
@@ -2494,6 +2506,7 @@ class SessionRuntime:
             capture,
             turn_id=capture.capture_id,
             end_reason=capture.end_reason,
+            endpoint_silence_ms=capture.silence_at_end_ms,
             required_silence_ms=capture.required_ms,
             voiced_ms=capture.voiced_ms,
             stt_wait_ms=stt_wait_ms,
@@ -2801,15 +2814,42 @@ class SessionRuntime:
         )
 
     def _latency_note(self, capture: TurnCapture, **fields: Any) -> None:
+        """Add timings (ms since the end-of-turn decision) to this turn's record. The "Okay." (ack_ms) and the
+        "One moment." (filler_ms) are noted before the reply's first audio; that one completes the record: the
+        candidate-facing totals and the metrics are computed once, and the record is persisted (turn.latency)."""
         record = next((r for r in reversed(self.latency) if r.get("turn_id") == capture.capture_id), None)
         if record is None:
             record = {"turn_id": capture.capture_id}
             self.latency.append(record)
             if len(self.latency) > 100:
                 del self.latency[:50]
+        completes = "first_audio_ms" in fields and "first_audio_ms" not in record
         record.update(fields)
-        if "first_audio_ms" in fields:
+        if completes:
+            observe_turn_latency(record)
             log.info("realtime.turn_latency", session_id=self.session_id, **record)
+            self.spawn(self._persist_latency(dict(record)), "turn_latency_record")
+
+    def _latency_reopen(self, capture: TurnCapture) -> None:
+        """The candidate kept talking after the end of turn was decided: timings noted so far (an "Okay." already
+        played, the STT wait, a commit wait) count from a decision that no longer stands. Start the record again so
+        the turn is measured from the decision that does, keeping only how often it was reopened."""
+        record = next((r for r in reversed(self.latency) if r.get("turn_id") == capture.capture_id), None)
+        reopened = int(record.get("reopened", 0)) + 1 if record is not None else 1
+        if record is not None:
+            self.latency.remove(record)
+        self._latency_note(capture, reopened=reopened)
+
+    async def _persist_latency(self, record: dict[str, Any]) -> None:
+        """Keep the per-turn breakdown as an interview event: log lines vanish with the container."""
+        try:
+            async with session_scope() as db:
+                await log_event(db, self.session_id, "turn.latency", record)
+        except Exception as exc:  # noqa: BLE001 - telemetry must never disturb the interview
+            # Visible (not debug): a turn missing from the persisted record would bias the numbers unnoticed.
+            log.warning(
+                "realtime.turn_latency_persist_failed", session_id=self.session_id, error=type(exc).__name__
+            )
 
     # ========================================================= intake activities
     # INTAKE_INTERVIEW.md 7: the engine arms an activity (ActivityStarted after its instruction utterance); the
