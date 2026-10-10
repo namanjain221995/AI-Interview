@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.logging import bind_context, get_logger
-from app.core.queue import JobContext, PermanentJobError, job_handler
+from app.core.queue import OUTAGE_RETRY_SCHEDULE, JobContext, PermanentJobError, job_handler
 from app.services.interview.engine import SessionNotFound, get_engine
 from app.services.interview.evaluation import EvaluationService
 from app.services.interview.memory import summarize_session_memory
@@ -40,7 +40,14 @@ async def prepare_session(payload: dict[str, Any], ctx: JobContext) -> dict[str,
     return {"session_id": session_id}
 
 
-@job_handler("answer.evaluate", concurrency=4, timeout_seconds=240)
+# An LLM outage delays evaluations (up to ~34 min) instead of storing fallbacks; the last attempt falls back (S11).
+@job_handler(
+    "answer.evaluate",
+    concurrency=4,
+    timeout_seconds=240,
+    max_attempts=len(OUTAGE_RETRY_SCHEDULE) + 1,
+    retry_schedule=OUTAGE_RETRY_SCHEDULE,
+)
 async def evaluate_answer(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     session_id = _session_id(payload)
     answer_id = str(payload.get("answer_id") or "").strip()

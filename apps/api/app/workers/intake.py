@@ -21,7 +21,7 @@ import uuid
 from typing import Any
 
 from app.core.logging import get_logger
-from app.core.queue import JobContext, PermanentJobError, job_handler
+from app.core.queue import OUTAGE_RETRY_SCHEDULE, JobContext, PermanentJobError, job_handler
 from app.services.intake.pipeline import (
     EVALUATE_JOB,
     REPORT_JOB,
@@ -64,7 +64,16 @@ async def on_intake_job_exhausted(ctx: JobContext, exc: BaseException) -> None:
     )
 
 
-@job_handler(EVALUATE_JOB, concurrency=2, timeout_seconds=900, on_exhausted=on_intake_job_exhausted)
+# S11: an LLM outage delays the evaluation (its last attempt falls back deterministically) instead of giving up
+# after three quick tries.
+@job_handler(
+    EVALUATE_JOB,
+    concurrency=2,
+    timeout_seconds=900,
+    on_exhausted=on_intake_job_exhausted,
+    max_attempts=len(OUTAGE_RETRY_SCHEDULE) + 1,
+    retry_schedule=OUTAGE_RETRY_SCHEDULE,
+)
 async def evaluate(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     sid = _uuid(payload, "session_id")
     assert sid is not None
@@ -95,7 +104,14 @@ async def evaluate(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     return result.as_dict()
 
 
-@job_handler(REPORT_JOB, concurrency=2, timeout_seconds=600, on_exhausted=on_intake_job_exhausted)
+@job_handler(
+    REPORT_JOB,
+    concurrency=2,
+    timeout_seconds=600,
+    on_exhausted=on_intake_job_exhausted,
+    max_attempts=len(OUTAGE_RETRY_SCHEDULE) + 1,
+    retry_schedule=OUTAGE_RETRY_SCHEDULE,
+)
 async def report(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     sid = _uuid(payload, "session_id")
     assert sid is not None

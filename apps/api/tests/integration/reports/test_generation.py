@@ -319,7 +319,8 @@ async def test_report_job_defers_while_evaluations_pending(
 ) -> None:
     import app.workers.reports as reports_worker
 
-    monkeypatch.setattr(reports_worker, "DEFER_SECONDS", 0.05)
+    monkeypatch.setattr(reports_worker, "DEFER_FIRST_SECONDS", 0.05)
+    monkeypatch.setattr(reports_worker, "DEFER_MAX_SECONDS", 0.05)
     script_narratives(mock_ai)
     fx = await session_factory()
     async with session_scope() as db:
@@ -345,6 +346,40 @@ async def test_report_job_defers_while_evaluations_pending(
     async with session_scope() as db:
         job = await db.get(BackgroundJob, uuid.UUID(finalize))
     assert job.status == "succeeded" and job.result["recommendation"] == "human_review"
+
+
+async def test_report_waits_for_evaluations_up_to_the_time_cap(session_factory, redis) -> None:
+    """S11: during an LLM outage the report waits (growing delays) for up to 40 min, then proceeds."""
+    import time
+
+    import app.workers.reports as reports_worker
+
+    assert [round(reports_worker.defer_delay(n), 2) for n in range(4)] == [10.0, 15.0, 22.5, 33.75]
+    assert reports_worker.defer_delay(50) == reports_worker.DEFER_MAX_SECONDS
+    fx = await session_factory()
+    async with session_scope() as db:
+        db.add(
+            BackgroundJob(type="answer.evaluate", status="queued", payload={"session_id": str(fx.session_id)})
+        )
+    deferred = await reports_worker._maybe_defer(
+        "report.generate", fx.session_id, {"session_id": str(fx.session_id)}
+    )
+    assert deferred is not None and deferred["deferred"] is True and deferred["deferrals"] == 1
+    async with session_scope() as db:
+        follow_up = (
+            await db.scalars(
+                select(BackgroundJob).where(
+                    BackgroundJob.type == "report.generate", BackgroundJob.dedupe_key.like("%:defer:1")
+                )
+            )
+        ).one()
+    assert follow_up.payload["first_deferred_at"] <= time.time()
+    waited_long = {
+        "session_id": str(fx.session_id),
+        "deferrals": 30,
+        "first_deferred_at": time.time() - reports_worker.REPORT_MAX_WAIT_SECONDS - 1,
+    }
+    assert await reports_worker._maybe_defer("report.generate", fx.session_id, waited_long) is None
 
 
 async def test_report_job_rejects_live_session(

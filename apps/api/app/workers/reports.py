@@ -15,6 +15,7 @@ interview are part of the final scores. Both are idempotent.
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
@@ -32,8 +33,13 @@ from app.services.scoring.persistence import pending_evaluation_jobs, recompute_
 
 log = get_logger(__name__)
 
-MAX_DEFERRALS = 12
-DEFER_SECONDS = 10.0
+# A report waits for the session's evaluations (S11): first after 10 s, then 1.5x longer each time (at most 2 min
+# apart), for at most 40 min in total - longer than the evaluation retry schedule, so an LLM outage of up to
+# ~30 min still yields a report built on real evaluations.
+REPORT_MAX_WAIT_SECONDS = 2400.0
+DEFER_FIRST_SECONDS = 10.0
+DEFER_GROWTH = 1.5
+DEFER_MAX_SECONDS = 120.0
 REPORTABLE = frozenset(
     {
         SessionStatus.COMPLETING.value,
@@ -51,9 +57,19 @@ def _session_id(payload: dict[str, Any]) -> uuid.UUID:
         raise PermanentJobError("payload needs a valid session_id") from exc
 
 
+def defer_delay(deferrals: int) -> float:
+    return min(DEFER_MAX_SECONDS, DEFER_FIRST_SECONDS * DEFER_GROWTH ** max(0, deferrals))
+
+
 async def _maybe_defer(job_type: str, sid: uuid.UUID, payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Re-enqueue when evaluations of the session are still running."""
+    """Re-enqueue when evaluations of the session are still running (until REPORT_MAX_WAIT_SECONDS)."""
     deferrals = int(payload.get("deferrals", 0) or 0)
+    now = time.time()
+    try:
+        first_deferred = float(payload.get("first_deferred_at") or now)
+    except (TypeError, ValueError):
+        first_deferred = now
+    waited = max(0.0, now - first_deferred)
     async with session_scope() as db:
         session = await db.get(InterviewSession, sid)
         if session is None:
@@ -62,13 +78,14 @@ async def _maybe_defer(job_type: str, sid: uuid.UUID, payload: dict[str, Any]) -
         pending = await pending_evaluation_jobs(db, sid)
     if job_type == "report.generate" and status not in REPORTABLE:
         raise PermanentJobError(f"session {sid} is {status}; reports are generated once it has ended")
-    if pending and deferrals < MAX_DEFERRALS:
-        next_payload = {**payload, "deferrals": deferrals + 1}
+    if pending and waited < REPORT_MAX_WAIT_SECONDS:
+        delay = defer_delay(deferrals)
+        next_payload = {**payload, "deferrals": deferrals + 1, "first_deferred_at": first_deferred}
         await enqueue(
             job_type,
             next_payload,
             dedupe_key=f"{job_type}:{sid}:defer:{deferrals + 1}",
-            delay_seconds=DEFER_SECONDS,
+            delay_seconds=delay,
         )
         log.info(
             "reports.deferred",
@@ -76,11 +93,17 @@ async def _maybe_defer(job_type: str, sid: uuid.UUID, payload: dict[str, Any]) -
             session_id=str(sid),
             pending=pending,
             deferrals=deferrals + 1,
+            waited_s=round(waited, 1),
+            next_in_s=round(delay, 1),
         )
         return {"deferred": True, "pending_evaluations": pending, "deferrals": deferrals + 1}
     if pending:
         log.warning(
-            "reports.pending_evaluations_ignored", job_type=job_type, session_id=str(sid), pending=pending
+            "reports.pending_evaluations_ignored",
+            job_type=job_type,
+            session_id=str(sid),
+            pending=pending,
+            waited_s=round(waited, 1),
         )
     return None
 

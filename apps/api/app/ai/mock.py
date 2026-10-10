@@ -303,6 +303,11 @@ class MockLLM:
         self._queues[task].extend(responses)
         return self
 
+    def fail_next(self, task: ModelTask | None, *errors: BaseException) -> MockLLM:
+        """The next calls for ``task`` raise ``errors`` (in order), before anything already scripted."""
+        self._queues[task].extendleft(reversed(errors))
+        return self
+
     def set_default(self, task: ModelTask | None, response: Any) -> MockLLM:
         self._defaults[task] = response
         return self

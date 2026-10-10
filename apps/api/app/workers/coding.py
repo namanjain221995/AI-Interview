@@ -13,11 +13,17 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from app.core.queue import JobContext, PermanentJobError, job_handler
+from app.core.queue import OUTAGE_RETRY_SCHEDULE, JobContext, PermanentJobError, job_handler
 from app.services.coding.evaluation import evaluate_coding_session
 
 
-@job_handler("coding.evaluate", concurrency=2, max_attempts=3, timeout_seconds=420)
+@job_handler(
+    "coding.evaluate",
+    concurrency=2,
+    max_attempts=len(OUTAGE_RETRY_SCHEDULE) + 1,
+    timeout_seconds=420,
+    retry_schedule=OUTAGE_RETRY_SCHEDULE,  # S11: an outage delays, the last attempt falls back
+)
 async def evaluate(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     raw = payload.get("coding_session_id")
     try:

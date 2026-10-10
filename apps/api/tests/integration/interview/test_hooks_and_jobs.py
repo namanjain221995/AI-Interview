@@ -88,6 +88,43 @@ async def test_session_prepare_and_answer_evaluate_jobs_run_through_the_queue(
         set_engine(previous)
 
 
+async def test_an_llm_outage_delays_evaluation_instead_of_storing_a_fallback(
+    interview_env, worker_factory
+) -> None:
+    """S11 (audit B3): the model is down for the first two attempts; the answer still gets a real evaluation."""
+    from app.ai.base import AIUnavailable
+
+    mock_ai = interview_env["mock_ai"]
+    world = await build_world(mock_ai)
+    engine = interview_env["make_engine"]()
+    previous = set_engine(engine)
+    try:
+        sid = await create_session(interview_env, world)
+        worker = worker_factory(job_types=["session.prepare", "answer.evaluate"])
+        assert await worker.drain(timeout=20) >= 1
+        d = Driver(interview_env, engine, sid)
+        await d.start()
+        await d.answer(
+            "[strong] We ran forty nodes with Karpenter and HPA on custom metrics.", evaluate=False
+        )
+        queued = mock_ai.llm.pending(ModelTask.ANSWER_EVALUATION)
+        down = AIUnavailable("main LLM down", endpoint="main")
+        mock_ai.llm.fail_next(ModelTask.ANSWER_EVALUATION, down, down)
+        assert mock_ai.llm.pending(ModelTask.ANSWER_EVALUATION) == queued + 2
+        assert await worker.drain(timeout=20) >= 1
+        async with session_scope() as db:
+            evaluation = (await db.execute(select(AnswerEvaluation))).scalars().one()
+            job = (
+                (await db.execute(select(BackgroundJob).where(BackgroundJob.type == "answer.evaluate")))
+                .scalars()
+                .one()
+            )
+        assert evaluation.is_fallback is False
+        assert job.status == "succeeded" and job.attempts >= 3
+    finally:
+        set_engine(previous)
+
+
 async def test_memory_summary_job_and_application(interview_env, redis) -> None:
     world = await build_world(interview_env["mock_ai"])
     sid = await create_session(interview_env, world)

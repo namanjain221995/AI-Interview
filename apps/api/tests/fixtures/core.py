@@ -83,7 +83,9 @@ class _RedisLease:
         import redis as sync_redis
 
         try:
-            registry = sync_redis.Redis.from_url(_redis_url_for_db(self.base_url, _LEASE_DB), socket_timeout=3, decode_responses=True)
+            registry = sync_redis.Redis.from_url(
+                _redis_url_for_db(self.base_url, _LEASE_DB), socket_timeout=3, decode_responses=True
+            )
             for db in _LEASE_CANDIDATES:
                 key = f"interview:pytest:lease:{db}"
                 if registry.set(key, self.value, nx=True, ex=_LEASE_TTL_SECONDS):
@@ -107,7 +109,9 @@ class _RedisLease:
         import redis as sync_redis
 
         with contextlib.suppress(Exception):
-            registry = sync_redis.Redis.from_url(_redis_url_for_db(self.base_url, _LEASE_DB), socket_timeout=3)
+            registry = sync_redis.Redis.from_url(
+                _redis_url_for_db(self.base_url, _LEASE_DB), socket_timeout=3
+            )
             registry.eval(_CAD_LUA, 1, self.key, self.value)
             registry.close()
         self.key = None
@@ -132,7 +136,9 @@ def _configure_test_environment() -> tuple[str, str, str, _RedisLease, str]:
     return db_name, db_url, admin_url, lease, storage_root
 
 
-TEST_DB_NAME, TEST_DATABASE_URL, _ADMIN_DATABASE_URL, _LEASE, TEST_STORAGE_ROOT = _configure_test_environment()
+TEST_DB_NAME, TEST_DATABASE_URL, _ADMIN_DATABASE_URL, _LEASE, TEST_STORAGE_ROOT = (
+    _configure_test_environment()
+)
 
 
 def _cleanup_process_resources() -> None:
@@ -315,7 +321,9 @@ async def app(_db_cleanup: None, redis: Redis, storage: LocalStorage) -> AsyncIt
 
 
 def _transport(app: FastAPI, *, raise_app_exceptions: bool = True) -> httpx.ASGITransport:
-    return httpx.ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions, client=("127.0.0.1", 50000))
+    return httpx.ASGITransport(
+        app=app, raise_app_exceptions=raise_app_exceptions, client=("127.0.0.1", 50000)
+    )
 
 
 @pytest_asyncio.fixture
@@ -384,7 +392,9 @@ async def org_factory(_db_cleanup: None) -> Callable[..., Awaitable[uuid.UUID]]:
 
 
 @pytest_asyncio.fixture
-async def user_factory(org_factory: Callable[..., Awaitable[uuid.UUID]]) -> Callable[..., Awaitable[TestUser]]:
+async def user_factory(
+    org_factory: Callable[..., Awaitable[uuid.UUID]],
+) -> Callable[..., Awaitable[TestUser]]:
     """``await user_factory(Role.ADMIN, organization_id=None, email=None, password=None, is_active=True)``.
 
     Users without an explicit organization share one organization per test.
@@ -421,7 +431,14 @@ async def user_factory(org_factory: Callable[..., Awaitable[uuid.UUID]]) -> Call
             session.add(user)
             await session.flush()
             user_id = user.id
-        return TestUser(id=user_id, email=address, password=plain, role=role, organization_id=organization_id, full_name=name)
+        return TestUser(
+            id=user_id,
+            email=address,
+            password=plain,
+            role=role,
+            organization_id=organization_id,
+            full_name=name,
+        )
 
     return make
 
@@ -433,11 +450,15 @@ async def auth_client(
     """``client = await auth_client(Role.ADMIN)`` (or ``auth_client(user=existing)``)."""
     opened: list[AuthedClient] = []
 
-    async def make(role: Role | str = Role.ADMIN, *, user: TestUser | None = None, **user_kwargs: Any) -> AuthedClient:
+    async def make(
+        role: Role | str = Role.ADMIN, *, user: TestUser | None = None, **user_kwargs: Any
+    ) -> AuthedClient:
         account = user or await user_factory(role, **user_kwargs)
         http = AuthedClient(transport=_transport(app), base_url="http://testserver")
         opened.append(http)
-        response = await http.post("/api/v1/auth/login", json={"email": account.email, "password": account.password})
+        response = await http.post(
+            "/api/v1/auth/login", json={"email": account.email, "password": account.password}
+        )
         assert response.status_code == 200, response.text
         http.user = account
         http.csrf_token = response.json()["csrf_token"]
@@ -458,13 +479,17 @@ async def candidate_auth_client(
 
     opened: list[CandidateClient] = []
 
-    async def make(*, organization_id: uuid.UUID | None = None, interview_status: str = "invited") -> CandidateClient:
+    async def make(
+        *, organization_id: uuid.UUID | None = None, interview_status: str = "invited"
+    ) -> CandidateClient:
         org_id = organization_id or await org_factory()
         token, token_hash = generate_invite_token()
         async with session_scope() as session:
             job = Job(organization_id=org_id, title="Test Engineer", description="Test job", status="open")
             candidate = Candidate(
-                organization_id=org_id, full_name="Test Candidate", email=f"cand-{secrets.token_hex(4)}@example.test"
+                organization_id=org_id,
+                full_name="Test Candidate",
+                email=f"cand-{secrets.token_hex(4)}@example.test",
             )
             session.add_all([job, candidate])
             await session.flush()
@@ -518,7 +543,8 @@ class _WorkerTracker:
 async def worker_factory(_db_cleanup: None, redis: Redis) -> AsyncIterator[Callable[..., Any]]:
     """``worker = worker_factory(job_types=["system.ping"])`` -> ``await worker.drain()``.
 
-    Fast defaults for tests: 10 ms retry backoff, 2 s visibility timeout.
+    Fast defaults for tests: 10 ms retry backoff, retry schedules / retry-after hints scaled by 1/1000,
+    2 s visibility timeout.
     """
     from app.core.queue import Worker
 
@@ -528,6 +554,7 @@ async def worker_factory(_db_cleanup: None, redis: Redis) -> AsyncIterator[Calla
         kwargs.setdefault("consumer_name", f"pytest-{secrets.token_hex(3)}")
         kwargs.setdefault("backoff_base", 0.01)
         kwargs.setdefault("backoff_cap", 0.05)
+        kwargs.setdefault("retry_schedule_scale", 0.001)  # 15 s -> 15 ms
         kwargs.setdefault("visibility_timeout", 2.0)
         kwargs.setdefault("block_ms", 100)
         worker = Worker(redis=redis, **kwargs)

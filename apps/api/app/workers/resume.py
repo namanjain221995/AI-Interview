@@ -28,6 +28,8 @@ from app.services.resume.profile import ProfileInputError, generate_profile
 
 log = get_logger(__name__)
 
+PROFILE_RETRY_SCHEDULE: tuple[float, ...] = (30.0, 120.0, 600.0, 1200.0)
+
 # Worker timeouts are above the internal budgets so our own handler records
 # the failure (instead of a bare cancellation).
 PROCESS_TIMEOUT_SECONDS = 900
@@ -87,6 +89,9 @@ async def resume_process(payload: dict[str, Any], ctx: JobContext) -> dict[str, 
     concurrency=3,
     timeout_seconds=PROFILE_TIMEOUT_SECONDS,
     on_exhausted=on_resume_job_exhausted,
+    # S11: an outage delays the full profile (the interview already falls back to the quick one after 90 s).
+    max_attempts=len(PROFILE_RETRY_SCHEDULE) + 1,
+    retry_schedule=PROFILE_RETRY_SCHEDULE,
 )
 async def profile_generate(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     resume_id = _uuid(payload.get("resume_id"), "resume_id")
