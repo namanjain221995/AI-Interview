@@ -44,6 +44,37 @@ export function useReportMode(interview: PortalInterviewView | null | undefined,
   return { mode: fromSession ?? reportMode(interview), pending: Boolean(sessionId) && session.isPending };
 }
 
+/** Session statuses in which the interview is not over yet (the complete page says so instead of "saved"). */
+const WRAPPING_STATUSES = new Set(["created", "preparing", "ready", "live", "paused"]);
+const EARLY_END_REASONS = new Set(["disconnect_timeout", "technical_failure", "cancelled", "policy_termination"]);
+
+export type SessionOutcome = "unknown" | "wrapping_up" | "complete" | "ended_early" | "cancelled";
+
+export function sessionOutcome(status: string | null | undefined, endReason: string | null | undefined): SessionOutcome {
+  if (!status) return "unknown";
+  if (WRAPPING_STATUSES.has(status)) return "wrapping_up";
+  if (endReason === "cancelled") return "cancelled";
+  if (status === "aborted" || status === "failed" || (endReason && EARLY_END_REASONS.has(endReason))) return "ended_early";
+  return "complete";
+}
+
+/**
+ * What actually happened to the session, for honest copy on the complete page (S6): a candidate who pressed
+ * "End interview" while offline arrives here before the server has closed the session, so the page keeps
+ * polling until it has.
+ */
+export function useSessionOutcome(sessionId: string | null): { outcome: SessionOutcome; endReason: string | null } {
+  const session = useQuery({
+    queryKey: queryKeys.portal.session(sessionId ?? "none"),
+    queryFn: () => getPortalSession(sessionId!),
+    enabled: Boolean(sessionId),
+    refetchInterval: (q) => (q.state.data && WRAPPING_STATUSES.has(String(q.state.data.status)) ? 4000 : false),
+    meta: { errorToast: false },
+  });
+  const status = session.data ? String(session.data.status) : null;
+  return { outcome: sessionOutcome(status, session.data?.endReason), endReason: session.data?.endReason ?? null };
+}
+
 export function isReportReady(report: CandidateReportView | undefined): boolean {
   return Boolean(report && (report.status === "ready" || report.status === "released") && (report.overallScore !== null || Object.keys(report.narrative).length > 0));
 }

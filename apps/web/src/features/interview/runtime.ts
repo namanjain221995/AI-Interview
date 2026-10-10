@@ -6,15 +6,7 @@
  */
 import type { AvatarController, AvatarStatus } from "@/features/avatar";
 import { estimateWordDurationMs } from "@/features/avatar";
-import {
-  completeRecording,
-  createOrResumeSession,
-  getDisclosure,
-  getWsTicket,
-  postIntegrityEvents,
-  uploadFrame,
-  uploadRecording,
-} from "@/features/candidate/api";
+import { completeRecording, createOrResumeSession, endPortalSession, getDisclosure, getWsTicket, postIntegrityEvents, uploadFrame, uploadRecording } from "@/features/candidate/api";
 import { readLocal, writeLocal, type ClientPrefs } from "@/features/candidate/journey";
 import { IntegrityBatcher } from "@/features/integrity/batcher";
 import { RoomFaceCheck } from "@/features/integrity/face/roomFaceCheck";
@@ -49,9 +41,10 @@ export interface RuntimeApi {
   uploadFrame: typeof uploadFrame;
   uploadRecording: typeof uploadRecording;
   completeRecording: typeof completeRecording;
+  endSession: typeof endPortalSession;
 }
 
-const DEFAULT_API: RuntimeApi = { fetchTicket: getWsTicket, postIntegrityEvents, uploadFrame, uploadRecording, completeRecording };
+const DEFAULT_API: RuntimeApi = { fetchTicket: getWsTicket, postIntegrityEvents, uploadFrame, uploadRecording, completeRecording, endSession: endPortalSession };
 /** A recording part that failed for a transient reason is retried as a new part this many times. */
 const RECORDING_RESTARTS = 3;
 const RECORDING_RETRY_MS = 15_000;
@@ -981,9 +974,17 @@ export class InterviewRuntime {
   }
 
   endInterview(reason = "candidate_ended"): void {
-    this.send({ type: "control.end_interview", reason });
-    // If the server never confirms (connection lost), still leave after a while.
-    this.endFallbackTimer = setTimeout(() => this.finish(), 12_000);
+    if (this.ended) return;
+    // Over the socket while it is up; over REST (keepalive) while it is not. A press while offline used to be
+    // dropped, leaving the server session paused until the sweeper found it (S6, audit B6).
+    const overSocket = this.client?.status === "connected" && this.send({ type: "control.end_interview", reason });
+    if (overSocket) {
+      // If the server never confirms (connection lost right after), still leave after a while.
+      this.endFallbackTimer = setTimeout(() => this.finish(), 12_000);
+      return;
+    }
+    this.api.endSession(this.sessionId, reason).catch(() => undefined);
+    this.finish();
   }
 
   codeUpdate(codingSessionId: string, update: { code: string; language: CodeLanguage; version: number; cursorLine?: number }): void {

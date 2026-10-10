@@ -244,6 +244,16 @@ describe("Completion and report", () => {
     expect(screen.getByText("FinOps")).toBeInTheDocument();
   });
 
+  it("says the interview is still being closed while the session is open (End pressed while offline)", async () => {
+    interviewState = { ...INTERVIEW, status: "in_progress", steps_completed: ["consent", "resume", "system_check"] };
+    sessionState = { id: "s1", interview_id: "i1", status: "live", candidate_report_available: false, candidate_report_mode: "immediate" };
+    renderAt("/candidate/i1/complete?session=s1", [{ path: ":interviewId/complete", Component: CompletePage }]);
+    const outcome = await screen.findByTestId("complete-outcome");
+    await waitFor(() => expect(outcome).toHaveAttribute("data-outcome", "wrapping_up"));
+    expect(outcome).toHaveTextContent("closing your interview");
+    expect(screen.queryByTestId("feedback-card")).not.toBeInTheDocument(); // nothing promised before it is closed
+  });
+
   it("hides every feedback element when the session's report mode is never (the session wins over the invitation)", async () => {
     interviewState = { ...INTERVIEW, organization: { name: "TechSara Solutions" }, status: "completed", steps_completed: ["consent", "resume", "system_check"] };
     sessionState = { id: "s1", interview_id: "i1", status: "completed", candidate_report_available: false, candidate_report_mode: "never" };

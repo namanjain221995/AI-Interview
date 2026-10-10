@@ -11,7 +11,7 @@ import httpx
 import pytest
 from sqlalchemy import func, select
 
-from app.db.models import AuditLog, Consent, Interview, MediaAsset, Report
+from app.db.models import AuditLog, BackgroundJob, Consent, Interview, MediaAsset, Report
 from app.db.session import session_scope
 from app.domain.enums import IntegrityAction, IntegrityEventType, IntegritySeverity
 from app.services.integrity.contracts import IntegrityOutcome
@@ -714,4 +714,38 @@ async def test_system_check_accepts_the_avatar_probe_result(app, org_factory, po
     assert (await http.post(url, json={**base, "webgl": True})).status_code == 200  # still optional
     bad = await http.post(url, json={**base, "webgl": True, "avatar_mode": "vr"})
     assert bad.status_code == 422
+    await http.aclose()
+
+
+async def test_candidate_ends_over_rest_when_the_socket_is_down(app, org_factory, portal_fakes) -> None:
+    """S6: "End interview" while disconnected reaches the server over REST; the room or the lifecycle job ends it."""
+    org = await org_factory()
+    live = await create_interview(org, consent_items={"microphone": True}, session_status="live")
+    http = await verified_client(app, live)
+    r = await http.post(f"/api/v1/portal/sessions/{live['session_id']}/end", json={})
+    assert r.status_code == 200 and r.json()["status"] == "ending"
+    async with session_scope() as db:
+        jobs = (
+            await db.scalars(
+                select(BackgroundJob).where(
+                    BackgroundJob.type == "session.end",
+                    BackgroundJob.payload["session_id"].astext == str(live["session_id"]),
+                )
+            )
+        ).all()
+    assert (
+        len(jobs) == 1
+        and jobs[0].payload["reason"] == "candidate_ended"
+        and jobs[0].payload["actor"] == "candidate"
+    )
+    # Only the candidate's own reason is accepted; a repeat press is deduplicated, not an error.
+    r = await http.post(f"/api/v1/portal/sessions/{live['session_id']}/end", json={"reason": "cancelled"})
+    assert r.status_code == 422
+    r = await http.post(f"/api/v1/portal/sessions/{live['session_id']}/end", json={})
+    assert r.status_code == 200 and r.json()["status"] == "ending"
+    await http.aclose()
+    ended = await create_interview(org, consent_items={"microphone": True}, session_status="completed")
+    http = await verified_client(app, ended)
+    r = await http.post(f"/api/v1/portal/sessions/{ended['session_id']}/end", json={})
+    assert r.status_code == 200 and r.json()["status"] == "already_ended"
     await http.aclose()

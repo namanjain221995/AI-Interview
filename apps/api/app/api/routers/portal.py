@@ -85,6 +85,8 @@ from app.schemas.api.portal import (
     PortalSession,
     PortalSessionBrief,
     PortalSessionCreateResponse,
+    PortalSessionEndRequest,
+    PortalSessionEndResponse,
     RecordingChunkResponse,
     RoundSelectionRequest,
     SessionCreateRequest,
@@ -434,7 +436,9 @@ async def _open_link_resume_uploaded(db: AsyncSession, interview: Interview, res
         async with db.begin_nested():
             await on_resume_uploaded(db, interview, resume)
     except Exception as exc:  # noqa: BLE001 - the open-link layer must never break the portal
-        log.warning("portal.open_link_resume_hook_failed", interview_id=str(interview.id), error=type(exc).__name__)
+        log.warning(
+            "portal.open_link_resume_hook_failed", interview_id=str(interview.id), error=type(exc).__name__
+        )
 
 
 async def _read_limited(upload: UploadFile, limit: int, label: str) -> bytes:
@@ -952,6 +956,35 @@ async def portal_ws_ticket(
     )
 
 
+@router.post("/sessions/{session_id}/end", response_model=PortalSessionEndResponse)
+async def portal_end_session(
+    session_id: uuid.UUID, body: PortalSessionEndRequest, principal: CandidatePrincipal, db: DbSession
+) -> PortalSessionEndResponse:
+    """The candidate ends their interview while the WebSocket is down (S6, audit B6).
+
+    The room that holds the session (on any instance) hears ``session.end_requested`` on the session bus and
+    ends it exactly like a ``control.end_interview`` message; when no room is attached anywhere, the lifecycle
+    job ends it offline a few seconds later. Idempotent: an ended session answers ``already_ended``.
+    """
+    row, _interview_row = await _session(db, principal, session_id)
+    if _session_status(row) in TERMINAL_STATUSES or row.status == SessionStatus.COMPLETING.value:
+        return PortalSessionEndResponse(status="already_ended")
+    await enforce_rate_limit("portal_end_session", str(row.id), limit=10, window_s=60)
+    sid = str(row.id)
+    await publish_session_event(
+        sid, {"type": "session.end_requested", "reason": body.reason, "actor": "candidate"}
+    )
+    await enqueue(
+        "session.end",
+        {"session_id": sid, "reason": body.reason, "actor": "candidate"},
+        dedupe_key=f"session.end:{sid}:candidate",
+        delay_seconds=5,
+        db=db,
+    )
+    log.info("portal.end_requested", session_id=sid, reason=body.reason)
+    return PortalSessionEndResponse(status="ending")
+
+
 # ============================================================ integrity
 
 
@@ -1058,7 +1091,12 @@ async def portal_recording_chunk(
     response: Response,
     principal: CandidatePrincipal,
     db: DbSession,
-    file: Annotated[UploadFile, File(description="MediaRecorder chunk (video/webm, video/mp4; audio/webm, audio/mp4 without a camera)")],
+    file: Annotated[
+        UploadFile,
+        File(
+            description="MediaRecorder chunk (video/webm, video/mp4; audio/webm, audio/mp4 without a camera)"
+        ),
+    ],
     segment: Annotated[int, Form(ge=0, le=99_999)],
     kind: Annotated[Literal["camera", "screen"], Form()] = "camera",
     part_id: Annotated[uuid.UUID | None, Form(description="One id per browser recorder run")] = None,
@@ -1136,7 +1174,9 @@ async def portal_recording_complete(
         delay_seconds=2,
         db=db,
     )
-    log.info("portal.recording_complete", session_id=str(row.id), part=str(body.part_id), segments=body.segments)
+    log.info(
+        "portal.recording_complete", session_id=str(row.id), part=str(body.part_id), segments=body.segments
+    )
     return RecordingCompleteResponse(part_id=body.part_id, queued=True)
 
 

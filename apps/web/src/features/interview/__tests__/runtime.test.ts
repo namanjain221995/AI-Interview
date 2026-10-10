@@ -12,7 +12,7 @@ import { createInterviewStore } from "@/features/realtime/store";
 import { ApiError } from "@/lib/api";
 import { FRAME_TTS_AUDIO, FRAME_HEADER_BYTES } from "@/lib/realtime/protocol";
 
-import { frameUploadDecision, InterviewRuntime } from "../runtime";
+import { frameUploadDecision, InterviewRuntime, type RuntimeApi } from "../runtime";
 import { BackoffUploadsError, StopUploadsError } from "@/features/integrity/frames";
 
 // ------------------------------------------------------------------ fakes
@@ -152,6 +152,7 @@ async function startRuntime(
     policy?: ReturnType<typeof effectivePolicy>;
     screenShare?: ConstructorParameters<typeof InterviewRuntime>[0]["screenShare"];
     beforeBegin?: (runtime: InterviewRuntime) => void;
+    api?: Partial<RuntimeApi>;
   } = {},
 ) {
   const store = createInterviewStore();
@@ -178,7 +179,7 @@ async function startRuntime(
     screenShare: overrides.screenShare,
     prefs: { avatarMode: "3d", avatarFps: 60, ttsMode: "server" },
     avatar,
-    api: { fetchTicket: async () => ({ ticket: "tk", ws_url: "/ws/sessions/s1" }), postIntegrityEvents, uploadFrame: vi.fn(), uploadRecording: vi.fn() },
+    api: { fetchTicket: async () => ({ ticket: "tk", ws_url: "/ws/sessions/s1" }), postIntegrityEvents, uploadFrame: vi.fn(), uploadRecording: vi.fn(), ...overrides.api },
     onEnded: overrides.onEnded,
   });
   overrides.beforeBegin?.(runtime);
@@ -402,6 +403,19 @@ describe("InterviewRuntime", () => {
     expect(store.getState().ended?.reason).toBe("time_limit");
     await vi.advanceTimersByTimeAsync(1000);
     expect(onEnded).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends over REST when the socket is down, and leaves", async () => {
+    const onEnded = vi.fn();
+    const endSession = vi.fn(async () => ({ status: "ending" }));
+    const { socket, runtime } = await startRuntime({ onEnded, api: { endSession } });
+    socket.push(stateMsg("live", "listening"));
+    socket.onclose?.({ code: 1006, reason: "" }); // the network dropped; the client is reconnecting
+    runtime.endInterview();
+    expect(endSession).toHaveBeenCalledWith("s1", "candidate_ended");
+    expect(socket.json().some((m) => m.type === "control.end_interview")).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onEnded).toHaveBeenCalled();
   });
 
   it("asks to end, and leaves even if the server never confirms", async () => {

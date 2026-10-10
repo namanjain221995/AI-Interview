@@ -1693,6 +1693,19 @@ class SessionRuntime:
         if not self.ended:
             await self._run_end(SessionEndReason.TIME_LIMIT)
 
+    async def request_end(self, reason: str) -> bool:
+        """End the session the way a ``control.end_interview`` message would; False when already ending."""
+        if self.ended or self.ending is not None:
+            return False
+        try:
+            end_reason = SessionEndReason(reason)
+        except ValueError:
+            end_reason = SessionEndReason.CANDIDATE_ENDED
+        await self._interrupt_current("end_interview", notify_client=True)
+        await self._discard_capture()
+        self._enqueue("end", lambda: self._run_end(end_reason), PRIORITY_END, needs_idle=False)
+        return True
+
     async def _run_end(self, reason: SessionEndReason) -> None:
         if self.ended:
             return
@@ -3674,6 +3687,10 @@ class SessionRuntime:
                 self._enqueue(
                     "end", lambda: self._run_end(SessionEndReason.CANCELLED), PRIORITY_END, needs_idle=False
                 )
+        elif kind == "session.end_requested":
+            # The candidate asked to end over REST because the socket was down (S6): same path as the
+            # control.end_interview message, on whichever instance holds the runtime.
+            await self.request_end(str(event.get("reason") or SessionEndReason.CANDIDATE_ENDED.value))
         elif kind == "evaluation.ready":
             await self._refresh_state_cache()
         elif kind == "runtime.takeover":

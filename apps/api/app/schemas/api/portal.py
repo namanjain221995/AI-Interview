@@ -277,6 +277,15 @@ class PortalSession(_Out):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class PortalSessionEndRequest(_In):
+    # The candidate can only end their own interview as themselves; other reasons are the server's.
+    reason: Literal["candidate_ended"] = "candidate_ended"
+
+
+class PortalSessionEndResponse(_Out):
+    status: Literal["ending", "already_ended"]
+
+
 class WsTicketResponse(_Out):
     ticket: str
     ws_url: str

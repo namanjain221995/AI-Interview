@@ -720,6 +720,15 @@ export function getPortalSession(sessionId: string): Promise<PortalSessionView> 
   return api.get<unknown>(`/portal/sessions/${encodeURIComponent(sessionId)}`).then((raw) => normalizeSession(raw, sessionId));
 }
 
+/**
+ * Ends the interview over REST when the WebSocket is down (S6). The server finishes it on whichever
+ * instance holds the room, or offline a few seconds later when no room is attached anywhere.
+ */
+export async function endPortalSession(sessionId: string, reason = "candidate_ended"): Promise<{ status: string }> {
+  const raw = rec(await api.post<unknown>(`/portal/sessions/${encodeURIComponent(sessionId)}/end`, { reason }, { keepalive: true, timeoutMs: 8000 }));
+  return { status: str(raw.status) ?? "ending" };
+}
+
 export async function getWsTicket(sessionId: string): Promise<{ ticket: string; ws_url: string }> {
   const raw = rec(await api.post<unknown>(`/portal/sessions/${encodeURIComponent(sessionId)}/ws-ticket`, {}));
   const ticket = str(raw.ticket);

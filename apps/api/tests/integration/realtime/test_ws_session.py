@@ -9,6 +9,8 @@ import numpy as np
 import pytest
 
 from app.core import metrics
+from app.core.queue import publish_session_event
+from app.domain.enums import SessionEndReason
 from app.realtime.registry import get_registry
 from app.realtime.turns import ChunkRecord, spoken_portion
 from app.schemas.realtime import unpack_frame
@@ -901,3 +903,15 @@ async def test_second_pass_revises_the_stored_answer_only_before_evaluation(real
     assert not await revise_answer_transcript(
         sid, started_ms=20000, ended_ms=25000, live_text="old", revised_text="new words here"
     )
+
+
+async def test_rest_end_request_reaches_the_room_over_the_bus(realtime_env, ws_connect) -> None:
+    """S6: POST /portal/sessions/{id}/end publishes session.end_requested; the room ends like control.end_interview."""
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    await publish_session_event(
+        env.session_id, {"type": "session.end_requested", "reason": "candidate_ended", "actor": "candidate"}
+    )
+    call = await wait_call(env.engine, "end_session")
+    assert call[1] == SessionEndReason.CANDIDATE_ENDED
+    await ws.wait_type("session.ended")
