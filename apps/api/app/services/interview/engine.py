@@ -245,6 +245,15 @@ class SessionNotFound(LookupError):
     pass
 
 
+class EngineLockTimeout(RuntimeError):
+    """A terminal or administrative transition could not take the session lock in time (G1)."""
+
+    def __init__(self, session_id: str, timeout_s: float) -> None:
+        super().__init__(f"engine lock timeout for session {session_id} after {timeout_s:.1f}s")
+        self.session_id = session_id
+        self.timeout_s = timeout_s
+
+
 class InterviewEngine:
     """Implements ``app.services.interview.contracts.TurnEngine``."""
 
@@ -332,7 +341,14 @@ class InterviewEngine:
         await self.store.drain()
 
     @asynccontextmanager
-    async def _session_lock(self, session_id: str) -> AsyncIterator[None]:
+    async def _session_lock(self, session_id: str, *, strict: bool = False) -> AsyncIterator[None]:
+        """Per-process session lock.
+
+        ``strict`` (terminal and administrative transitions: pause, resume, end, test hooks)
+        raises :class:`EngineLockTimeout` when the lock cannot be taken, because running those
+        unlocked would race a turn handler and lose its writes (G1). Turn-level handlers keep the
+        historical behaviour (proceed with a loud log) so a wedged handler cannot silence an
+        interview; their state writes are additionally guarded by the CAS versioning."""
         lock = self._locks.setdefault(session_id, asyncio.Lock())
         acquired = False
         try:
@@ -340,7 +356,15 @@ class InterviewEngine:
             acquired = True
         except TimeoutError:
             ERRORS.labels(component="engine_lock").inc()
-            log.error("engine.lock_timeout", session_id=session_id, timeout_s=self.config.lock_timeout_s)
+            log.error(
+                "engine.lock_timeout",
+                session_id=session_id,
+                timeout_s=self.config.lock_timeout_s,
+                strict=strict,
+                lost_update_risk=not strict,
+            )
+            if strict:
+                raise EngineLockTimeout(session_id, self.config.lock_timeout_s) from None
         try:
             yield
         finally:
@@ -426,18 +450,52 @@ class InterviewEngine:
         durable: bool = False,
         db: AsyncSession | None = None,
         extra_columns: dict[str, Any] | None = None,
-    ) -> None:
+        reapply: Callable[[InterviewState], bool] | None = None,
+    ) -> InterviewState:
+        """Persist ``state`` (CAS on the version).
+
+        On a version conflict (another writer saved meanwhile): with ``reapply``, reload the
+        stored state and apply the mutation to it so nothing the other writer saved is lost
+        (``reapply`` returns False to skip the write, e.g. the session already ended); without
+        it the historical last-writer-wins overwrite remains, logged as a lost-update risk.
+        Returns the state object that was saved (callers that keep using the state must rebind)."""
         try:
             await self.store.save(state, durable=durable, db=db, extra_columns=extra_columns)
+            return state
         except StateConflict as exc:
-            # Another process wrote meanwhile; the session lock makes this rare. Last writer wins
-            # but the version stays monotonic.
             ERRORS.labels(component="engine_state").inc()
-            log.warning(
-                "engine.state_conflict", session_id=state.session_id, expected=exc.expected, stored=exc.stored
-            )
-            state.version = max(exc.stored, state.version)
-            await self.store.save(state, durable=durable, db=db, force=True, extra_columns=extra_columns)
+            if reapply is None:
+                log.warning(
+                    "engine.state_conflict",
+                    session_id=state.session_id,
+                    expected=exc.expected,
+                    stored=exc.stored,
+                    resolution="force_overwrite",
+                )
+                state.version = max(exc.stored, state.version)
+                await self.store.save(state, durable=durable, db=db, force=True, extra_columns=extra_columns)
+                return state
+        for attempt in range(3):
+            fresh = await self.store.load(state.session_id)
+            if fresh is None:
+                break
+            if reapply(fresh) is False:
+                log.info("engine.state_conflict", session_id=state.session_id, resolution="skipped")
+                state.__dict__.update(fresh.__dict__)
+                return state
+            try:
+                await self.store.save(fresh, durable=durable, db=db, extra_columns=extra_columns)
+                log.info("engine.state_conflict", session_id=state.session_id, resolution="reapplied", attempt=attempt)
+                # Callers keep using their own object: make it the saved state.
+                state.__dict__.update(fresh.__dict__)
+                return state
+            except StateConflict:
+                continue
+        log.warning("engine.state_conflict", session_id=state.session_id, resolution="force_overwrite_after_retries")
+        current = await self.store.load(state.session_id)
+        state.version = max(state.version, current.version if current is not None else 0)
+        await self.store.save(state, durable=durable, db=db, force=True, extra_columns=extra_columns)
+        return state
 
     def _elapsed(self, state: InterviewState) -> float:
         return state.elapsed_seconds(self.now())
@@ -2350,7 +2408,7 @@ class InterviewEngine:
 
     # ============================================================ pause/resume
     async def pause(self, session_id: str, *, reason: str = "disconnect") -> None:
-        async with self._session_lock(session_id):
+        async with self._session_lock(session_id, strict=True):
             state = await self._load(session_id)
             if state.status != SessionStatus.LIVE:
                 return
@@ -2361,19 +2419,31 @@ class InterviewEngine:
             last = state.utterances[-1] if state.utterances else None
             if last is not None and not last.delivered:
                 last.interrupted = True  # will be re-spoken on resume
+            def reapply_pause(fresh: InterviewState) -> bool:
+                # A turn handler saved meanwhile: pause its state, never resurrect ours (G1).
+                if fresh.status != SessionStatus.LIVE:
+                    return False
+                fresh.pause(now)
+                fresh.status = SessionStatus.PAUSED
+                fresh.turn_state = TurnState.PAUSED
+                tail = fresh.utterances[-1] if fresh.utterances else None
+                if tail is not None and not tail.delivered:
+                    tail.interrupted = True
+                return True
+
             async with session_scope() as db:
                 if state.intake is not None:
                     await self.intake.on_pause(state, db)
                 await log_event(
                     db, session_id, "session.paused", {"reason": reason}, elapsed_s=state.elapsed_seconds(now)
                 )
-                await self._save(state, durable=True, db=db)
+                await self._save(state, durable=True, db=db, reapply=reapply_pause)
 
     def resume(self, session_id: str, *, reconnect: bool) -> EventStream:
         return EventStream(self._resume(session_id, reconnect=reconnect))
 
     async def _resume(self, session_id: str, *, reconnect: bool) -> AsyncGenerator[TurnEvent, None]:
-        async with self._session_lock(session_id):
+        async with self._session_lock(session_id, strict=True):
             state = await self._load(session_id)
             if state.status in ENDED_STATUSES:
                 return
@@ -2518,7 +2588,7 @@ class InterviewEngine:
     async def _end_session(
         self, session_id: str, reason: SessionEndReason
     ) -> AsyncGenerator[TurnEvent, None]:
-        async with self._session_lock(session_id):
+        async with self._session_lock(session_id, strict=True):
             state = await self._load(session_id)
             if state.status in ENDED_STATUSES:
                 return
@@ -2660,6 +2730,42 @@ class InterviewEngine:
                     dedupe_key=f"report.generate:{state.session_id}",
                     db=db,
                 )
+            closing_status = state.status
+            transcript_id = state.utterances[-1].transcript_id if text and state.utterances else None
+
+            def reapply_closing(fresh: InterviewState) -> bool:
+                # Another writer saved while we were closing: end *its* state rather than
+                # overwrite it; if it already ended the session there is nothing to do (G1).
+                if fresh.status in ENDED_STATUSES:
+                    return False
+                if fresh.coding.active and fresh.coding.coding_session_id:
+                    fresh.coding.active = False
+                    fresh.coding.ended_reason = "session_ended"
+                    fresh.coding.problems_done += 1
+                    fresh.coding.completed = True
+                fresh.closing_started = True
+                fresh.end_reason = reason
+                fresh.pause(now)
+                fresh.status = closing_status
+                fresh.turn_state = TurnState.ENDED
+                fresh.awaiting_answer = False
+                if text:
+                    add_utterance(
+                        fresh,
+                        UtteranceRecord(
+                            id=utterance_id,
+                            kind="closing",
+                            action=TurnAction.CLOSE_INTERVIEW,
+                            text=text,
+                            at_s=elapsed,
+                            transcript_id=transcript_id,
+                        ),
+                    )
+                    record_interviewer_text(fresh, text=text, at_s=elapsed, question_id=None)
+                    fresh.closing_utterance_id = utterance_id
+                    fresh.avatar_state = spec.state
+                return True
+
             await self._save(
                 state,
                 durable=True,
@@ -2669,6 +2775,7 @@ class InterviewEngine:
                     "end_reason": reason.value,
                     "elapsed_seconds": round(elapsed, 3),
                 },
+                reapply=reapply_closing,
             )
         # Double-check: an evaluation finishing while we were closing found the
         # session still live and only queued its result; apply it now.
@@ -3363,7 +3470,7 @@ class InterviewEngine:
 
     async def intake_jump(self, session_id: str, stage: str) -> InterviewState:
         """Test hook: move an intake session to the start of ``stage``."""
-        async with self._session_lock(session_id):
+        async with self._session_lock(session_id, strict=True):
             state = await self._load(session_id)
             if state.intake is None:
                 raise SessionNotFound(f"session {session_id} is not an intake session")
@@ -3372,7 +3479,7 @@ class InterviewEngine:
 
     # ============================================================ test hooks
     async def advance_clock(self, session_id: str, seconds: float) -> InterviewState:
-        async with self._session_lock(session_id):
+        async with self._session_lock(session_id, strict=True):
             state = await self._load(session_id)
             state.elapsed_before_pause_s = max(0.0, state.elapsed_before_pause_s + float(seconds))
             async with session_scope() as db:
@@ -3390,7 +3497,7 @@ class InterviewEngine:
         return state
 
     async def force_coding(self, session_id: str) -> InterviewState:
-        async with self._session_lock(session_id):
+        async with self._session_lock(session_id, strict=True):
             state = await self._load(session_id)
             state.force_coding = True
             state.coding.unavailable = False

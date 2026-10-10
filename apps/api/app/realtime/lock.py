@@ -6,7 +6,8 @@ respected until it expires (stale locks expire on their own because only a
 live owner refreshes them). Takeover is allowed when the holder is this same
 instance (a runtime rebuilt in-process) or when the key has no TTL (left by
 a buggy writer). Redis being unreachable fails *open* for acquisition (a
-single-instance deployment must keep interviewing) but is logged loudly.
+single-instance deployment must keep interviewing) but is logged loudly; writers that
+must not act without the lock (background sweepers) pass ``fail_open=False``.
 """
 
 from __future__ import annotations
@@ -63,10 +64,14 @@ class SessionLock:
         instance_id: str,
         ttl_seconds: int = 30,
         refresh_seconds: float | None = None,
+        fail_open: bool = True,
     ) -> None:
         self.session_id = session_id
         self._redis = redis
         self.instance_id = instance_id
+        # fail_open=False (worker-side writers such as the session sweeper): a Redis error means
+        # "not acquired" - they must never touch a session they could not lock (G1).
+        self.fail_open = fail_open
         self.ttl_ms = max(1000, int(ttl_seconds * 1000))
         self.refresh_seconds = refresh_seconds if refresh_seconds is not None else max(1.0, ttl_seconds / 3)
         self.value = f"{instance_id}:{secrets.token_hex(8)}"
@@ -108,9 +113,14 @@ class SessionLock:
             return False
         except (RedisError, OSError) as exc:
             ERRORS.labels(component="realtime_lock").inc()
-            log.error("realtime.lock.redis_unavailable", session_id=self.session_id, error=type(exc).__name__)
-            self.held = True
-            return True
+            log.error(
+                "realtime.lock.redis_unavailable",
+                session_id=self.session_id,
+                error=type(exc).__name__,
+                fail_open=self.fail_open,
+            )
+            self.held = self.fail_open
+            return self.fail_open
 
     async def refresh(self) -> bool:
         if self._redis is None:
