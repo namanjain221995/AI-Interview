@@ -331,8 +331,8 @@ Network and edge:
   loopback (compose already does); firewall :3200 to the load balancer if one is used.
 * Keep `/metrics`, `/api/v1/test/*` and `/__edge/metrics` loopback-only (Caddyfile); reach Grafana and Prometheus
   through an SSH tunnel.
-* The SPA bundle includes the developer pages `/dev/ui` and `/dev/avatar` (no data, no API calls beyond static
-  assets); block them at the edge if they must not be reachable.
+* The developer pages `/dev/ui` and `/dev/avatar` are only in the Vite dev server or builds made with
+  `VITE_ENABLE_DEV_ROUTES=true`; production builds leave them out.
 
 Sandbox hardening (the sandbox service mounts the Docker socket, which is root-equivalent on the host; candidate
 code never reaches it, but the service itself is a high-value target):

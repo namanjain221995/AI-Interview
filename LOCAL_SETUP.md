@@ -99,9 +99,9 @@ own transaction:
 | Step | Runs with | Creates |
 |---|---|---|
 | `core` | always | organisation "TechSara Solutions" and four staff accounts (`superadmin@`, `admin@`, `recruiter@`, `interviewer@demo.local`, password `SEED_PASSWORD`) |
-| `catalog` | default and `--demo` | global catalog from `samples/`: 43 competencies, 12 round templates, 181 questions, 16 coding problems (13 function problems in 6 languages + 3 SQL) |
+| `catalog` | default and `--demo` | global catalog from `samples/`: 68 competencies, 13 round templates (incl. intake), 25 roles, 9,780 questions, 1,039 coding problems (932 function problems + 107 SQL); counts: `uv run python -m app.seed.validate --stats` |
 | `catalog_embeddings` | default and `--demo` | enqueues `question_bank.embed` jobs; the worker computes the vectors (and re-checks on start and hourly) |
-| `demo_jobs` | `--demo` only | 4 demo jobs with requirements and rounds; "Senior DevOps Engineer" (combined round, 30 minutes, with a coding problem) is the main demo |
+| `demo_jobs` | `--demo` only | 5 demo jobs with requirements and rounds (incl. "AI/ML Training Program — Intake") plus 2 demo candidates with invite links (Jane Doe, Marcus Okafor); "Senior DevOps Engineer" (combined round, 30 minutes, with a coding problem) is the main demo |
 
 `--core-only` runs only the first step. `--reset-passwords` resets the seeded accounts to `SEED_PASSWORD` and
 clears lockouts. The seed does not create candidates, interviews or reports.
