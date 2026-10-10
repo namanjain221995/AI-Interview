@@ -39,6 +39,7 @@ from app.schemas.api.common import ERROR_RESPONSES
 from app.schemas.api.portal import CandidateVerifyRequest, CandidateVerifyResponse, InviteInfo
 from app.services.identity.cookies import set_auth_cookies
 from app.services.identity.sessions import start_candidate_session
+from app.services.jobs import access_window
 
 log = get_logger(__name__)
 
@@ -68,21 +69,26 @@ def lock_key(interview_id: uuid.UUID) -> str:
     return f"invite:lock:{interview_id}"
 
 
-def invite_expired(interview: Interview, now: datetime | None = None) -> bool:
-    expires = interview.invite_expires_at
-    if expires.tzinfo is None:
-        expires = expires.replace(tzinfo=UTC)
-    return interview.status == InterviewStatus.EXPIRED.value or (
-        expires <= (now or datetime.now(UTC)) and interview.status not in (InterviewStatus.COMPLETED.value,)
-    )
+_REFUSALS = {
+    access_window.REFUSAL_CANCELLED: "This interview invitation was cancelled.",
+    access_window.REFUSAL_EXPIRED: "This interview invitation has expired.",
+}
+
+
+def _raise_refusal(code: str | None) -> None:
+    if code is not None:
+        raise InviteGone(_REFUSALS.get(code, "This interview invitation is no longer available."), code=code)
 
 
 def ensure_invite_usable(interview: Interview) -> None:
-    """Raise 410 for cancelled / expired invitations (completed ones stay usable for the report)."""
-    if interview.status == InterviewStatus.CANCELLED.value:
-        raise InviteGone("This interview invitation was cancelled.", code="invite_cancelled")
-    if invite_expired(interview):
-        raise InviteGone("This interview invitation has expired.", code="invite_expired")
+    """Start gate: raise 410 for cancelled / expired invitations (completed ones stay usable for the report)."""
+    _raise_refusal(access_window.start_refusal(interview))
+
+
+async def ensure_access(db: AsyncSession, interview: Interview) -> None:
+    """Continue gate (S7): like ``ensure_invite_usable`` but an expired invitation stays usable while a started
+    session is live or paused - expiry is the deadline to start, never a cut-off mid-interview."""
+    _raise_refusal(await access_window.access_refusal(db, interview))
 
 
 async def find_invite(db: AsyncSession, token: str) -> Interview | None:
@@ -105,7 +111,8 @@ async def invite_info(token: str, db: DbSession) -> InviteInfo:
     candidate = await db.get(Candidate, interview.candidate_id)
     round_ = await db.get(Round, interview.round_id) if interview.round_id else None
     policy = parse_policy_snapshot(interview.policy_snapshot)
-    expired = invite_expired(interview)
+    # "expired" is what the candidate can act on: a lapsed deadline no longer matters once they are mid-interview.
+    expired = (await access_window.access_refusal(db, interview)) == access_window.REFUSAL_EXPIRED
     status = (
         InterviewStatus(interview.status)
         if interview.status in InterviewStatus._value2member_map_
@@ -210,7 +217,9 @@ async def verify_invite(
     interview = await find_invite(db, token)
     if interview is None:
         raise NotFound("This invitation link is not valid.", code="invite_not_found")
-    ensure_invite_usable(interview)
+    await ensure_access(
+        db, interview
+    )  # re-verifying mid-interview (new device, cleared cookies) stays possible
     await enforce_rate_limit(
         "candidate_access_invite", str(interview.id), limit=VERIFY_INVITE_LIMIT, window_s=300
     )

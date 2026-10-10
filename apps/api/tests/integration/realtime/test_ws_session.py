@@ -4,12 +4,16 @@ candidate audio (tests/e2e/fixtures/audio) and mocked STT/TTS."""
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
+from sqlalchemy import update
 
 from app.core import metrics
 from app.core.queue import publish_session_event
+from app.db.models import Interview, InterviewSession
+from app.db.session import session_scope
 from app.domain.enums import SessionEndReason
 from app.realtime.registry import get_registry
 from app.realtime.turns import ChunkRecord, spoken_portion
@@ -915,3 +919,43 @@ async def test_rest_end_request_reaches_the_room_over_the_bus(realtime_env, ws_c
     call = await wait_call(env.engine, "end_session")
     assert call[1] == SessionEndReason.CANDIDATE_ENDED
     await ws.wait_type("session.ended")
+
+
+async def _expire_invite(env, *, session_status: str, started: bool) -> None:
+    async with session_scope() as db:
+        await db.execute(
+            update(Interview)
+            .where(Interview.id == env.interview_id)
+            .values(invite_expires_at=datetime.now(UTC) - timedelta(minutes=5), status="in_progress")
+        )
+        await db.execute(
+            update(InterviewSession)
+            .where(InterviewSession.id == env.session_id)
+            .values(
+                status=session_status,
+                started_at=datetime.now(UTC) - timedelta(minutes=15) if started else None,
+            )
+        )
+
+
+async def test_reconnect_after_the_invite_deadline_is_accepted_mid_interview(
+    realtime_env, ws_connect
+) -> None:
+    """S7: a paused, started session reconnects although its invitation's start deadline has passed."""
+    env = await realtime_env()
+    await _expire_invite(env, session_status="paused", started=True)
+    ws = await ws_connect(env.session_id, await env.ticket())
+    assert ws.accepted
+    await ws.hello()
+    await ws.wait_type("session.state")  # admitted: the room syncs instead of refusing with 4011
+    assert not [m for m in ws.messages if m.get("type") == "error" and m.get("code") == "interview_unavailable"]
+
+
+async def test_expired_invite_without_a_started_session_is_refused(realtime_env, ws_connect) -> None:
+    env = await realtime_env()
+    await _expire_invite(env, session_status="ready", started=False)
+    ws = await ws_connect(env.session_id, await env.ticket())
+    assert ws.accepted
+    error = await ws.wait_type("error")
+    assert error["code"] == "interview_unavailable"
+    assert await ws.wait_closed() == 4011

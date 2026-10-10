@@ -96,15 +96,18 @@ async def _context(db: AsyncSession, principal: Principal, interview_id: uuid.UU
 
 
 def _ensure_editable(state: PortalState) -> None:
-    ensure_invite_usable(state.interview)
+    if state.interview.status == InterviewStatus.CANCELLED.value:
+        ensure_invite_usable(state.interview)  # 410 invite_cancelled
     if state.interview.status == InterviewStatus.COMPLETED.value:
         raise Conflict("This interview has already been completed.", code="interview_completed")
-    if not state.consent:
-        raise Conflict("Please review and accept the interview information first.", code="consent_required")
     if state.locked:
+        # Started: the lock is the accurate answer, also after the invitation's start deadline (S7).
         raise Conflict(
             "Your details can no longer change because the interview has started.", code="onboarding_locked"
         )
+    ensure_invite_usable(state.interview)
+    if not state.consent:
+        raise Conflict("Please review and accept the interview information first.", code="consent_required")
 
 
 async def _portal_out(db: AsyncSession, state: PortalState) -> PortalIntakeOut:

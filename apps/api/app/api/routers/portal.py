@@ -19,7 +19,7 @@ from fastapi import APIRouter, File, Form, Request, Response, UploadFile, status
 from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routers.candidate_access import InviteGone, ensure_invite_usable
+from app.api.routers.candidate_access import InviteGone, ensure_access, ensure_invite_usable
 from app.core.audit import audit
 from app.core.config import get_settings
 from app.core.deps import CandidatePrincipal, DbSession
@@ -96,6 +96,7 @@ from app.schemas.api.portal import (
 )
 from app.schemas.api.recordings import RecordingCompleteRequest, RecordingCompleteResponse
 from app.services.integrity.contracts import Disclosure
+from app.services.jobs import access_window
 from app.services.recordings.constants import FINALIZE_JOB
 from app.services.recordings.segments import SegmentTiming, accept_segment, base_type, uploads_open
 from app.services.recordings.sweep import finalize_dedupe_key
@@ -153,6 +154,13 @@ async def _session(
     if interview is None:
         raise NotFound(code="session_not_found")
     return row, interview
+
+
+def _raise_if_refused(code: str | None) -> None:
+    if code == access_window.REFUSAL_CANCELLED:
+        raise InviteGone("This interview invitation was cancelled.", code=code)
+    if code is not None:
+        raise InviteGone("This interview invitation has expired.", code=code)
 
 
 def _ensure_not_completed(interview: Interview) -> None:
@@ -810,7 +818,10 @@ async def portal_system_check(
     interview_id: uuid.UUID, body: SystemCheckRequest, principal: CandidatePrincipal, db: DbSession
 ) -> SystemCheckResponse:
     interview = await _interview(db, principal, interview_id)
-    _ensure_not_completed(interview)
+    # The lobby's "check your camera and microphone again" works mid-interview, also after the start deadline (S7).
+    await ensure_access(db, interview)
+    if interview.status == InterviewStatus.COMPLETED.value:
+        raise Conflict("This interview has already been completed.", code="interview_completed")
     policy = (await _policy(db, interview)).snapshot.integrity
     issues: list[str] = []
     if not body.microphone:
@@ -857,7 +868,10 @@ async def portal_create_session(
     body: SessionCreateRequest | None = None,
 ) -> PortalSessionCreateResponse:
     interview = await _interview(db, principal, interview_id)
-    _ensure_not_completed(interview)
+    # Resuming an in-progress session must work after the invitation's start deadline (S7).
+    await ensure_access(db, interview)
+    if interview.status == InterviewStatus.COMPLETED.value:
+        raise Conflict("This interview has already been completed.", code="interview_completed")
     if await latest_consent(db, interview.id) is None:
         raise Conflict("Please review and accept the interview information first.", code="consent_required")
     await enforce_rate_limit("portal_session_create", str(interview.id), limit=20, window_s=60)
@@ -937,7 +951,9 @@ async def portal_ws_ticket(
 ) -> WsTicketResponse:
     row, interview = await _session(db, principal, session_id)
     _ensure_session_open(row)
-    ensure_invite_usable(interview)
+    _raise_if_refused(
+        access_window.continue_refusal(interview, row)
+    )  # reconnects outlive the start deadline (S7)
     if await latest_consent(db, interview.id) is None:
         raise Conflict("Please review and accept the interview information first.", code="consent_required")
     await enforce_rate_limit("portal_ws_ticket", str(row.id), limit=30, window_s=60)

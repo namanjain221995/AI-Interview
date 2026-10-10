@@ -9,9 +9,9 @@ from pathlib import Path
 
 import httpx
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
-from app.db.models import AuditLog, BackgroundJob, Consent, Interview, MediaAsset, Report
+from app.db.models import AuditLog, BackgroundJob, Consent, Interview, InterviewSession, MediaAsset, Report
 from app.db.session import session_scope
 from app.domain.enums import IntegrityAction, IntegrityEventType, IntegritySeverity
 from app.services.integrity.contracts import IntegrityOutcome
@@ -749,3 +749,65 @@ async def test_candidate_ends_over_rest_when_the_socket_is_down(app, org_factory
     r = await http.post(f"/api/v1/portal/sessions/{ended['session_id']}/end", json={})
     assert r.status_code == 200 and r.json()["status"] == "already_ended"
     await http.aclose()
+
+
+async def _start_session(session_id) -> None:
+    async with session_scope() as db:
+        await db.execute(
+            update(InterviewSession)
+            .where(InterviewSession.id == session_id)
+            .values(started_at=datetime.now(UTC) - timedelta(minutes=20))
+        )
+
+
+async def test_in_progress_interview_outlives_the_invite_deadline(
+    app, client, org_factory, portal_fakes
+) -> None:
+    """S7 (audit B4): expiry is the deadline to start; a started, paused interview can still reconnect."""
+    org = await org_factory()
+    data = await create_interview(
+        org,
+        consent_items={"microphone": True},
+        session_status="paused",
+        interview_status="in_progress",
+        expires_in=timedelta(minutes=-5),
+    )
+    await _start_session(data["session_id"])
+    info = (await client.get(f"/api/v1/candidate-access/{data['invite_token']}")).json()
+    assert info["expired"] is False and info["status"] == "in_progress"
+    http = await verified_client(app, data)  # re-verifying (new device, cleared cookies) works
+    sid = data["session_id"]
+    r = await http.post(f"/api/v1/portal/sessions/{sid}/ws-ticket")
+    assert r.status_code == 200 and r.json()["ticket"]
+    r = await http.post(f"/api/v1/portal/interviews/{data['interview_id']}/session", json={})
+    assert r.status_code in (200, 201), r.text
+    r = await http.post(
+        f"/api/v1/portal/interviews/{data['interview_id']}/system-check",
+        json={"microphone": True, "speakers": True, "camera": True, "webgl": True},
+    )
+    assert r.status_code == 200, r.text
+    await http.aclose()
+
+
+async def test_expired_invitation_cannot_start_a_new_interview(
+    app, client, org_factory, portal_fakes
+) -> None:
+    org = await org_factory()
+    ready = await create_interview(
+        org, consent_items={"microphone": True}, session_status="ready", expires_in=timedelta(minutes=-5)
+    )
+    info = (await client.get(f"/api/v1/candidate-access/{ready['invite_token']}")).json()
+    assert info["expired"] is True and info["status"] == "expired"
+    r = await client.post(
+        f"/api/v1/candidate-access/{ready['invite_token']}/verify", json={"email": ready["candidate_email"]}
+    )
+    assert r.status_code == 410 and r.json()["error"]["code"] == "invite_expired"
+    # A live row that never started (a stale probe) does not count as "in progress".
+    unstarted = await create_interview(
+        org, consent_items={"microphone": True}, session_status="live", expires_in=timedelta(minutes=-5)
+    )
+    r = await client.post(
+        f"/api/v1/candidate-access/{unstarted['invite_token']}/verify",
+        json={"email": unstarted["candidate_email"]},
+    )
+    assert r.status_code == 410 and r.json()["error"]["code"] == "invite_expired"
