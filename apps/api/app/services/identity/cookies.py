@@ -11,8 +11,11 @@ Which set a request uses (``request_audience``): the candidate-only API areas (p
 link-access, link-return) always mean the candidate; the shared endpoints (``/auth/refresh``, ``/auth/logout``,
 ``/media``) mean the candidate when the SPA sends ``X-Session-Audience: candidate`` from a candidate page;
 everything else is staff. Migration window: candidate sessions started before G2 still carry the staff names;
-for the candidate audience those are accepted as a fallback (a refresh moves them to the new names). The
-fallback can go once every pre-G2 candidate session has expired (CANDIDATE_SESSION_TTL_SECONDS).
+for the candidate audience those are accepted as a fallback (a refresh from the current SPA moves them to the
+new names; a refresh from a tab still running the pre-G2 bundle, which sends no audience header, keeps them where
+that bundle reads them). The fallback only ever yields a candidate's session: refresh and logout ignore a staff
+session found that way. It can go once every pre-G2 candidate session has expired
+(CANDIDATE_SESSION_TTL_SECONDS).
 """
 
 from __future__ import annotations
@@ -103,10 +106,11 @@ def _max_age(expires_at: datetime) -> int:
     return max(0, int((expires_at - datetime.now(UTC)).total_seconds()))
 
 
-def set_auth_cookies(response: Response, tokens: IssuedTokens) -> None:
-    """Sets the cookie set of the session's audience (staff or candidate)."""
+def set_auth_cookies(response: Response, tokens: IssuedTokens, names: CookieNames | None = None) -> None:
+    """Sets the cookie set of the session's audience (staff or candidate). ``names`` overrides it: a tab still
+    running the pre-G2 bundle keeps a candidate session under the staff names, which is where it reads them."""
     settings = get_settings()
-    names = cookie_names("candidate" if tokens.subject_type is SubjectType.CANDIDATE else "staff")
+    names = names or cookie_names("candidate" if tokens.subject_type is SubjectType.CANDIDATE else "staff")
     common = {
         "domain": settings.cookie_domain or None,
         "secure": settings.cookie_secure,

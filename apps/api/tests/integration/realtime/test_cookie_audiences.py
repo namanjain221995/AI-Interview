@@ -102,3 +102,77 @@ async def test_a_candidate_session_from_before_the_split_keeps_working_and_migra
         for c in cookies
     )
     await legacy.aclose()
+
+
+_PRE_SPLIT_NAMES = {
+    "cand_access_token": "access_token",
+    "cand_refresh_token": "refresh_token",
+    "cand_csrf_token": "csrf_token",
+}
+
+
+async def _pre_split_browser(app, invite) -> httpx.AsyncClient:
+    """A browser whose candidate session was issued before G2: the same cookies under the staff names."""
+    fresh = _browser(app)
+    verified = await fresh.post(
+        f"/api/v1/candidate-access/{invite['invite_token']}/verify", json={"email": invite["candidate_email"]}
+    )
+    assert verified.status_code == 200, verified.text
+    legacy = _browser(app)
+    for cookie in fresh.cookies.jar:
+        if cookie.name in _PRE_SPLIT_NAMES and cookie.value:
+            legacy.cookies.set(
+                _PRE_SPLIT_NAMES[cookie.name], cookie.value, domain=cookie.domain, path=cookie.path
+            )
+    await fresh.aclose()
+    return legacy
+
+
+async def test_a_tab_running_the_pre_split_bundle_keeps_its_session_across_refreshes(
+    app, org_factory, portal_fakes
+) -> None:
+    org = await org_factory()
+    invite = await create_interview(org, consent_items={"microphone": True}, session_status="ready")
+    legacy = await _pre_split_browser(app, invite)
+    for _ in range(2):  # the second refresh presents the rotated token: never a false "reuse"
+        # The pre-G2 bundle sends no audience header and reads its CSRF token from the staff name.
+        refreshed = await legacy.post(
+            "/api/v1/auth/refresh", headers={"X-CSRF-Token": legacy.cookies.get("csrf_token") or ""}
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        names = set(_set_cookie_names(refreshed))
+        assert {"access_token", "refresh_token", "csrf_token"} <= names
+        assert not {"cand_access_token", "cand_refresh_token", "cand_csrf_token"} & names
+    assert (await legacy.get("/api/v1/portal/me")).status_code == 200
+    # Unsafe candidate calls (ws-ticket, uploads, end) still pass CSRF with the token that bundle sends.
+    unknown = "00000000-0000-4000-8000-000000000000"
+    ended = await legacy.post(
+        f"/api/v1/portal/sessions/{unknown}/end",
+        json={"reason": "candidate_ended"},
+        headers={"X-CSRF-Token": legacy.cookies.get("csrf_token") or ""},
+    )
+    assert ended.status_code == 404, ended.text
+    await legacy.aclose()
+
+
+async def test_a_candidate_page_never_refreshes_or_ends_the_staff_session(
+    app, org_factory, user_factory
+) -> None:
+    org = await org_factory()
+    staff = await user_factory(Role.RECRUITER, organization_id=org)
+    browser = _browser(app)
+    login = await browser.post("/api/v1/auth/login", json={"email": staff.email, "password": staff.password})
+    assert login.status_code == 200
+    csrf = login.json()["csrf_token"]
+    # A candidate page without a candidate session: the SPA falls back to the staff CSRF cookie.
+    candidate_page = {"X-Session-Audience": "candidate", "X-CSRF-Token": csrf}
+    refreshed = await browser.post("/api/v1/auth/refresh", headers=candidate_page)
+    assert refreshed.status_code == 401, refreshed.text
+    assert not {"access_token", "refresh_token", "csrf_token"} & set(_set_cookie_names(refreshed))
+    out = await browser.post("/api/v1/auth/logout", headers=candidate_page)
+    assert out.status_code == 204
+    assert not {"access_token", "refresh_token", "csrf_token"} & set(_set_cookie_names(out))
+    assert (await browser.get("/api/v1/jobs")).status_code == 200  # still the recruiter
+    staff_refresh = await browser.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": csrf})
+    assert staff_refresh.status_code == 200, staff_refresh.text  # the family was never revoked
+    await browser.aclose()

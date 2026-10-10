@@ -30,6 +30,7 @@ from app.schemas.api.auth import (
 from app.schemas.api.common import ERROR_RESPONSES
 from app.services.identity.cookies import (
     REFRESH_COOKIE,
+    STAFF_COOKIES,
     clear_auth_cookies,
     refresh_cookie,
     request_audience,
@@ -139,8 +140,11 @@ async def login(body: LoginRequest, request: Request, response: Response, db: Db
     summary="Rotate the refresh token and issue a new access token",
 )
 async def refresh(request: Request, response: Response, db: DbSession) -> SessionResponse | JSONResponse:
+    audience = request_audience(request)
     token, legacy = refresh_cookie(request)  # staff or candidate set, by audience (G2)
     row = await find_session_by_refresh_token(db, token)
+    if row is not None and audience == "candidate" and row.subject_type != SubjectType.CANDIDATE:
+        row = None  # the legacy fallback reached the staff session: a candidate page never rotates it
     if row is None:
         return _error_clearing_cookies(
             request,
@@ -174,7 +178,13 @@ async def refresh(request: Request, response: Response, db: DbSession) -> Sessio
     principal = principal_from_tokens(tokens, email=email, display_name=name)
     if legacy and tokens.subject_type is SubjectType.CANDIDATE:
         clear_auth_cookies(response, "staff")  # a pre-G2 candidate session moves to the candidate names
-    set_auth_cookies(response, tokens)
+        set_auth_cookies(response, tokens)
+    elif audience == "staff" and tokens.subject_type is SubjectType.CANDIDATE:
+        # A tab still running the pre-G2 bundle (no audience header) holds its candidate session under the staff
+        # names and sends the CSRF token it reads there: keep them in place until that tab reloads.
+        set_auth_cookies(response, tokens, names=STAFF_COOKIES)
+    else:
+        set_auth_cookies(response, tokens)
     AUTH_EVENTS.labels(event="refresh").inc()
     return _session_response(await build_me(db, principal), tokens)
 
@@ -183,7 +193,10 @@ async def refresh(request: Request, response: Response, db: DbSession) -> Sessio
 async def logout(request: Request, db: DbSession, principal: OptionalPrincipal) -> Response:
     revoked: list[object] = []
     audience = request_audience(request)
-    row = await find_session_by_refresh_token(db, refresh_cookie(request)[0])
+    token, legacy = refresh_cookie(request)
+    row = await find_session_by_refresh_token(db, token)
+    if row is not None and audience == "candidate" and row.subject_type != SubjectType.CANDIDATE:
+        row = None  # the legacy fallback reached the staff session: a candidate sign-out never ends it
     if principal is None and row is not None:
         verify_csrf(request, row.id)  # access token expired: bind CSRF to the refresh session
     if principal is not None and principal.auth_session_id is not None:
@@ -205,6 +218,8 @@ async def logout(request: Request, db: DbSession, principal: OptionalPrincipal) 
     clear_auth_cookies(
         result, audience
     )  # only this audience: a candidate signing out keeps the staff session
+    if legacy and row is not None:
+        clear_auth_cookies(result, "staff")  # a pre-G2 candidate session lived under the staff names
     return result
 
 
