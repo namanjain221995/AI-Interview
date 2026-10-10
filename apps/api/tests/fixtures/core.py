@@ -190,7 +190,7 @@ async def _reap_stale_databases(conn: Any) -> None:
             await conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
 
 
-def _alembic_upgrade(sync_connection: Any) -> None:
+def _alembic_upgrade(sync_connection: Any, revision: str = "head") -> None:
     from alembic.config import Config
 
     from alembic import command
@@ -198,17 +198,17 @@ def _alembic_upgrade(sync_connection: Any) -> None:
     cfg = Config(str(_API_ROOT / "alembic.ini"))
     cfg.attributes["connection"] = sync_connection
     cfg.attributes["skip_logging_config"] = True
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, revision)
 
 
-async def run_migrations(url: str) -> None:
+async def run_migrations(url: str, revision: str = "head") -> None:
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import NullPool
 
     engine = create_async_engine(url, poolclass=NullPool)
     try:
         async with engine.connect() as conn:
-            await conn.run_sync(_alembic_upgrade)
+            await conn.run_sync(_alembic_upgrade, revision)
             await conn.commit()
     finally:
         await engine.dispose()

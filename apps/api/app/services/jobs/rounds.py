@@ -116,6 +116,8 @@ async def update_round(db: AsyncSession, row: Round, job: Job, body: RoundUpdate
     if not data.get("name"):
         data["name"] = row.name
     config = parse_round_config(data)
+    if config.round_type is RoundType.INTAKE and row.round_type != RoundType.INTAKE.value:
+        await _ensure_intake_entitled(db, job.organization_id)  # G8: same rule as creating one
     await validate_config_references(db, config, job.organization_id)
     sync_round_columns(row, config)
     if "is_active" in fields and body.is_active is not None:
