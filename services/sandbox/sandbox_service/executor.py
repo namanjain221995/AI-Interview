@@ -158,6 +158,7 @@ class DockerSandbox:
         except (APIError, DockerException, RequestException, OSError) as exc:
             metrics.CONTAINER_FAILURES.labels("docker_error").inc()
             outcome.error = f"docker error: {str(exc)[:200]}"
+            outcome.infra_error = True
             log.error("sandbox.container_error", language=language, container=outcome.container, error=str(exc)[:300])
         finally:
             self._cleanup.submit(self._remove, cid)
@@ -181,6 +182,7 @@ class DockerSandbox:
                 raw.shutdown(socket.SHUT_WR)
             except OSError as exc:
                 outcome.error = f"job delivery failed: {exc}"
+                outcome.infra_error = True
             demux = StreamDemux(stdout_cap=s.container_output_cap_bytes)
             hard_cap = 2 * s.container_output_cap_bytes
             while True:
@@ -372,6 +374,11 @@ class Executor:
             self.inflight -= 1
             metrics.INFLIGHT.set(self.inflight)
         exec_s = time.monotonic() - exec_started
+        if outcome.infra_error:
+            # Never the candidate's crash (and never a scored final run): the caller retries or shows a neutral
+            # "we couldn't run your code" (S19).
+            metrics.EXECUTIONS.labels(req.language.value, req.mode, "infra_error").inc()
+            raise SandboxUnavailable("docker_error", "the sandbox could not run the program", retry_after=2)
         response = driver.interpret(req, plan, outcome)
         timings = response.meta.setdefault("timings_ms", {})
         timings["queue"] = round(queue_s * 1000, 3)

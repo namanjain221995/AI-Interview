@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import struct
 
+import pytest
+
 from sandbox_service.protocol import StreamDemux, encode_job, extract_result, new_nonce, sanitize
 
 
@@ -85,3 +87,26 @@ def test_demux_is_linear_on_floods():
     assert time.perf_counter() - started < 2.0
     assert demux.stdout_total == 96 * 1024 * 1024
     assert len(demux.stdout) == 32 * 1024 * 1024
+
+
+def test_absurdly_nested_records_are_invalid_results_not_errors():
+    """S19: a candidate-forged deeply nested record never raises (no HTTP 500 tripping the shared breaker)."""
+    nonce = new_nonce()
+    deep = {"protocol": 1, "ok": True, "steps": [{"actual": None}]}
+    raw = json.dumps(deep).replace("null", "[" * 995 + "]" * 995)
+    frame = f"\n<<SANDBOX-RESULT {nonce}>>\n{raw}\n<<SANDBOX-END {nonce}>>\n".encode()
+    assert extract_result(frame, nonce) is None
+
+
+def test_sanitize_is_iterative_with_a_depth_cap():
+    value = {"a": ["x", {"b": "\ud800"}]}
+    assert sanitize(value) == {"a": ["x", {"b": "?"}]}
+    nested: list = []
+    current = nested
+    for _ in range(70):
+        child: list = []
+        current.append(child)
+        current = child
+    with pytest.raises(ValueError):
+        sanitize(nested)
+    assert sanitize([[1]], max_depth=2) == [[1]]

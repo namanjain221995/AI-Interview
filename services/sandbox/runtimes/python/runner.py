@@ -42,6 +42,7 @@ PROTOCOL = 1
 MAGIC = b"SANDBOX-JOB"
 MAX_JOB_BYTES = 64 * 1024 * 1024
 MAX_RECORDS = 5000
+MAX_ACTUAL_DEPTH = 64  # nesting of a returned value (S19: deeper values are refused, never forwarded)
 MAX_ERROR_CHARS = 4000
 POLL_INTERVAL = 0.02
 POST_EXIT_DRAIN = 0.1
@@ -251,6 +252,19 @@ def _reject_constant(name: str):
     raise ValueError(f"non-finite number {name} is not valid JSON")
 
 
+def _too_deep(value: object, limit: int) -> bool:
+    """Iterative nesting check (lists and dicts) without recursion."""
+    stack = [(value, 1)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, (list, dict)):
+            if depth > limit:
+                return True
+            children = item if isinstance(item, list) else list(item.values())
+            stack.extend((child, depth + 1) for child in children)
+    return False
+
+
 class RecordReader:
     """Parses newline-delimited JSON records from a harness result channel.
 
@@ -330,7 +344,13 @@ class RecordReader:
             if isinstance(ms, (int, float)) and not isinstance(ms, bool) and ms >= 0:
                 clean["ms"] = float(min(ms, 1e9))
             if clean["ok"]:
-                clean["actual"] = record.get("actual")
+                actual = record.get("actual")
+                if _too_deep(actual, MAX_ACTUAL_DEPTH):
+                    clean["ok"] = False
+                    clean["error"] = "the returned value nests too deeply to compare"
+                    clean["error_type"] = "runtime"
+                else:
+                    clean["actual"] = actual
             else:
                 clean["error"] = str(record.get("error") or "error")[:MAX_ERROR_CHARS]
                 clean["error_type"] = str(record.get("error_type") or "runtime")[:32]

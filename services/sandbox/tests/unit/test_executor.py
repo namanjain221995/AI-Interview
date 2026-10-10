@@ -217,3 +217,32 @@ def test_janitor_removes_only_stale_containers():
     assert sandbox.sweep() == 2
     sandbox.close()
     assert sorted(api.removed) == ["old-exited", "old-running"]
+
+
+# ------------------------------------------------------------------ platform faults are not the candidate's (S19)
+
+
+class StartFailsAPI(FakeAPI):
+    def start(self, cid: str) -> None:
+        self.calls.append("start")
+        raise docker.errors.APIError("daemon restarted")
+
+
+def test_docker_failure_after_create_is_an_infra_error_not_a_crash():
+    sandbox = make_sandbox(StartFailsAPI())
+    outcome = sandbox.run(plan_for(), "python")
+    sandbox.close()
+    assert outcome.infra_error is True and "docker error" in (outcome.error or "")
+
+
+def test_executor_turns_infra_errors_into_retryable_unavailability():
+    import asyncio
+
+    from sandbox_service.executor import Executor
+
+    executor = Executor(SETTINGS, make_sandbox(StartFailsAPI()), build_drivers(SETTINGS))
+    req = ExecuteRequest.model_validate({"request_id": "r", "language": "python", "code": "print(1)", "mode": "run"})
+    with pytest.raises(SandboxUnavailable) as exc:
+        asyncio.run(executor.execute(req))
+    executor.close()
+    assert exc.value.code == "docker_error" and exc.value.retry_after

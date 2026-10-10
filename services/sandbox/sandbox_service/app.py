@@ -223,6 +223,29 @@ def create_app(
         }
         return JSONResponse(body, status_code=200 if status.get("docker") else 503)
 
+    @app.get("/ready")
+    async def ready() -> Response:
+        """Readiness for operators and the API (S19): 503 while Docker is down or any configured runtime image is
+        missing or stale, naming the languages affected (fix: ``make sandbox-images``). /health keeps answering 200
+        whenever Docker does (compose semantics)."""
+        ex: Executor | None = state.get("executor")
+        if ex is None:
+            return _error(503, "starting", "sandbox is starting")
+        try:
+            status = await asyncio.get_running_loop().run_in_executor(None, ex.sandbox.runtime_status)
+        except Exception as exc:
+            return JSONResponse({"ready": False, "docker": False, "error": str(exc)[:200]}, status_code=503)
+        runtimes = status.get("runtimes", {})
+        missing = sorted(
+            lang
+            for runtime, langs in RUNTIME_LANGUAGES.items()
+            if not runtimes.get(runtime, {}).get("available")
+            for lang in langs
+        )
+        is_ready = bool(status.get("docker")) and not missing
+        body = {"ready": is_ready, "docker": bool(status.get("docker")), "missing_languages": missing}
+        return JSONResponse(body, status_code=200 if is_ready else 503)
+
     @app.get("/metrics")
     async def prometheus_metrics() -> Response:
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
