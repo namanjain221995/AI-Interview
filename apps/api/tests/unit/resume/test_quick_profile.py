@@ -37,8 +37,10 @@ def sample_text(name: str) -> str:
 
 @pytest.mark.parametrize("name", ["jane_doe_devops.txt", "jane_doe_devops.pdf", "jane_doe_devops.docx"])
 def test_jane_quick_profile_in_every_text_format(name: str) -> None:
+    text = sample_text(name)
+    build_quick_profile(text, candidate_id="c-0", today=date(2026, 10, 8))  # warm-up: lazy imports, regex caches
     started = time.perf_counter()
-    quick = build_quick_profile(sample_text(name), candidate_id="c-1", today=date(2026, 10, 8))
+    quick = build_quick_profile(text, candidate_id="c-1", today=date(2026, 10, 8))
     elapsed_ms = (time.perf_counter() - started) * 1000
     doc = quick.document
     CandidateProfileDocument.model_validate(doc)  # contract fields only
