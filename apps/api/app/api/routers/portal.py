@@ -101,6 +101,7 @@ from app.services.recordings.constants import FINALIZE_JOB
 from app.services.recordings.segments import SegmentTiming, accept_segment, base_type, uploads_open
 from app.services.recordings.sweep import finalize_dedupe_key
 from app.services.reports.queries import resolve_candidate_report_mode
+from app.services.storage import ensure_storage_headroom
 from app.services.storage.signing import signed_url_with_expiry
 
 log = get_logger(__name__)
@@ -1024,6 +1025,7 @@ async def portal_frame(
 ) -> FrameUploadAccepted:
     row, _interview_row = await _session(db, principal, session_id)
     _ensure_session_open(row)
+    ensure_storage_headroom()  # S3: never fill the disk that also holds the database
     # Policy, consent (explicit declines block), size/type validation and frame
     # rate are enforced by IntegrityService.submit_frame; its errors (400, 403
     # frames_not_enabled / consent_required, 409, 413, 415, 422, 429) pass
@@ -1131,7 +1133,9 @@ async def portal_recording_chunk(
     row, interview = await _session(db, principal, session_id)
     _ensure_recording_open(row)
     policy = await _recording_policy(db, interview, kind)
-    await enforce_rate_limit("portal_recording", str(row.id), limit=120, window_s=60)
+    # Normal load is ~6 chunks a minute per kind (10 s timeslices); 30 leaves room for retries (S3).
+    await enforce_rate_limit("portal_recording", str(row.id), limit=30, window_s=60)
+    ensure_storage_headroom()  # before reading the body
     settings = get_settings()
     content_type = base_type(file.content_type, kind=kind)
     if content_type is None:

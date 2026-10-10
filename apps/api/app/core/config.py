@@ -85,6 +85,14 @@ class Settings(BaseSettings):
     max_resume_bytes: int = 10 * 1024 * 1024
     max_frame_bytes: int = 2 * 1024 * 1024
     max_recording_chunk_bytes: int = 16 * 1024 * 1024
+    # Recording upload budget per session and kind (S3, audit D2): (round max duration + 15 min) at this
+    # bitrate - about 3x the browser recorder's ~650 kbps - and at most this many recorder parts. A session that
+    # has not started yet only gets the small pre-start budget. Uploads (recordings, frames) stop with 503
+    # storage_full while the storage disk has less than storage_min_free_ratio free.
+    recording_max_bitrate_bps: int = Field(2_000_000, ge=100_000)
+    recording_max_parts_per_session: int = Field(40, ge=1)
+    recording_prestart_budget_bytes: int = Field(48 * 1024 * 1024, ge=1024 * 1024)
+    storage_min_free_ratio: float = Field(0.10, ge=0.0, lt=1.0)
     # Interview recordings: `recording.finalize` joins a part's MediaRecorder
     # segments and remuxes them (stream copy) into one seekable file with
     # ffmpeg; without ffmpeg the joined segments are served as they are.

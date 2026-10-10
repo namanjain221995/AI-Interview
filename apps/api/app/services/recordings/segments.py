@@ -19,9 +19,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.errors import Conflict, UnsupportedMediaType
 from app.core.logging import get_logger
 from app.db.models import InterviewSession, MediaAsset
@@ -146,6 +147,81 @@ async def _closed_part(db: AsyncSession, session_id: uuid.UUID, part_key: str) -
     return any(bool((row.details or {}).get("closed")) for row in rows)
 
 
+# Extra recording time on top of the round's maximum duration: the lobby, reconnects and the closing words.
+RECORDING_BUDGET_GRACE_S = 15 * 60
+
+
+def budget_lock_key(session_id: uuid.UUID | str, kind: str) -> int:
+    """Signed 64-bit ``pg_advisory_xact_lock`` key for one session's uploads of one kind."""
+    digest = hashlib.sha256(f"recording-budget:{session_id}:{kind}".encode()).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
+
+
+def recording_budget_bytes(row: InterviewSession) -> int:
+    """Upload budget of one recording kind for this session (S3, audit D2).
+
+    ``(max duration + 15 min) x recording_max_bitrate_bps``: about 825 MB for a round with a 40-minute maximum,
+    roughly 3x what the browser recorder produces. A session that has not started only gets the pre-start
+    budget (the recorder starts in the lobby).
+    """
+    settings = get_settings()
+    config = row.round_config if isinstance(row.round_config, dict) else {}
+    minutes = config.get("max_duration_minutes") or config.get("duration_minutes") or 60
+    try:
+        seconds = float(minutes) * 60.0 + RECORDING_BUDGET_GRACE_S
+    except (TypeError, ValueError):
+        seconds = 60 * 60.0 + RECORDING_BUDGET_GRACE_S
+    budget = int(seconds * settings.recording_max_bitrate_bps / 8)
+    if row.started_at is None:
+        return min(budget, settings.recording_prestart_budget_bytes)
+    return budget
+
+
+async def _enforce_budget(
+    db: AsyncSession, row: InterviewSession, kind: RecordingKind, part_id: uuid.UUID | None, *, incoming: int
+) -> None:
+    """409 ``recording_quota_exceeded`` past the byte budget or the part cap; the browser stops recording.
+
+    Every segment ever stored counts, also those already removed after finalisation (their rows keep the
+    size), so finishing a part never resets the budget.
+    """
+    media_kind = (MediaKind.VIDEO_SEGMENT if kind == "camera" else MediaKind.SCREEN_SEGMENT).value
+    scope = (MediaAsset.session_id == row.id, MediaAsset.kind == media_kind)
+    used = int(await db.scalar(select(func.coalesce(func.sum(MediaAsset.size_bytes), 0)).where(*scope)) or 0)
+    budget = recording_budget_bytes(row)
+    if used + incoming > budget:
+        log.warning(
+            "recording.quota_exceeded",
+            session_id=str(row.id),
+            kind=kind,
+            used_bytes=used,
+            incoming_bytes=incoming,
+            budget_bytes=budget,
+            started=row.started_at is not None,
+        )
+        raise Conflict(
+            "This interview's recording has reached its size limit; the interview itself continues.",
+            code="recording_quota_exceeded",
+            details={"limit": "bytes"},
+        )
+    if part_id is None:
+        return
+    part = MediaAsset.details["part_id"].astext
+    if await db.scalar(select(MediaAsset.id).where(*scope, part == str(part_id)).limit(1)) is not None:
+        return  # a known part
+    parts = int(
+        await db.scalar(select(func.count(func.distinct(part))).where(*scope, part.is_not(None))) or 0
+    )
+    cap = get_settings().recording_max_parts_per_session
+    if parts >= cap:
+        log.warning("recording.parts_exceeded", session_id=str(row.id), kind=kind, parts=parts, cap=cap)
+        raise Conflict(
+            "This interview's recording has been restarted too many times; the interview itself continues.",
+            code="recording_quota_exceeded",
+            details={"limit": "parts"},
+        )
+
+
 async def accept_segment(
     db: AsyncSession,
     *,
@@ -169,6 +245,9 @@ async def accept_segment(
     key = segment_key(
         row.organization_id, row.id, kind=kind, segment=segment, content_type=content_type, part_id=part_id
     )
+    # Session-and-kind lock first (the budget below is exact under concurrent parts), then the part lock
+    # (upload vs finalize). Finalize only takes part locks, so the order cannot deadlock.
+    await db.execute(select(func.pg_advisory_xact_lock(budget_lock_key(row.id, kind))))
     await lock_part(db, row.id, part_key)
     existing = await db.scalar(select(MediaAsset).where(MediaAsset.storage_key == key))
     if existing is not None and existing.deleted_at is None:
@@ -177,6 +256,7 @@ async def accept_segment(
         raise Conflict("That recording segment was already uploaded.", code="segment_exists")
     if part_id is not None and await _closed_part(db, row.id, part_key):
         raise Conflict("This recording part is already closed.", code="recording_part_closed")
+    await _enforce_budget(db, row, kind, part_id, incoming=len(data))
     received = datetime.now(UTC)
     details: dict[str, object] = {"segment": segment, "kind": kind, **timing.details(received_at=received)}
     if part_id is not None:
@@ -209,6 +289,7 @@ __all__ = [
     "SegmentResult",
     "SegmentTiming",
     "accept_segment",
+    "recording_budget_bytes",
     "base_type",
     "container_ok",
     "extension",
