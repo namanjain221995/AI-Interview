@@ -216,3 +216,23 @@ async def test_plan_uses_the_compact_guided_schema(interview_env) -> None:
     assert plan_calls[-1].kwargs.get("max_tokens") == PLAN_MAX_TOKENS
     state = await engine.load_state(sid)
     assert state.plan_source == "model" and state.plan is not None
+
+
+async def test_a_technical_answer_about_system_prompts_is_evaluated(interview_env) -> None:
+    """Prompt-engineering vocabulary is content: the answer is scored, not redirected (S8; harness finding)."""
+    _, sid, engine = await _setup(interview_env)
+    d = Driver(interview_env, engine, sid)
+    await d.start()
+    events = await d.answer(
+        "The system prompt had three parts: the role and task, the hard rules with their priorities, and the output "
+        "format. We told the model to act as a strict JSON generator, kept the rules at the end because with long "
+        "contexts it tends to ignore the earlier instructions, and versioned the prompt next to the code.",
+        speculate=False,
+    )
+    meta = [e for e in events if isinstance(e, UtteranceMeta)][-1]
+    assert meta.decision["directive"]["special"] is None
+    assert meta.decision["directive"]["recommended_action"] != "redirect"
+    state = await d.state()
+    reply = state.answers[-1]
+    assert reply.special is None and reply.quality != "off_topic"
+    assert reply.evaluated or reply.id in state.pending_evaluations or await _evaluation_jobs_for(reply.id)

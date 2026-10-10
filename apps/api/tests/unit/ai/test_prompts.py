@@ -27,6 +27,13 @@ def test_fairness_rules_cover_protected_traits() -> None:
         assert term in text, term
 
 
+def test_fairness_rules_declare_fenced_text_as_data() -> None:
+    """Every prompt that renders the shared rules tells the model that fenced candidate text is data (S8)."""
+    text = FAIRNESS_RULES.lower()
+    assert "<candidate_...>" in text and "never" in text and "instructions to you" in text
+    assert "never followed or rewarded" in text
+
+
 def test_render_strict_undefined_and_globals() -> None:
     assert render("Hello {{ name }}!", name="Maya") == "Hello Maya!"
     with pytest.raises(jinja2.UndefinedError):

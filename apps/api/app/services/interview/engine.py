@@ -1177,6 +1177,8 @@ class InterviewEngine:
         async def _write(session: AsyncSession) -> None:
             turn = pending.turn
             quick_meta: dict[str, Any] = {"special": pending.special.kind.value}
+            if pending.special.suspect:
+                quick_meta["suspect_instruction"] = pending.special.suspect  # audit trail (S8); still evaluated
             if pending.quick:
                 quick_meta["assessment"] = pending.quick
             await add_answer(

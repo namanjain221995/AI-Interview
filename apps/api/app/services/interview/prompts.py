@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from app.ai.prompts import PromptTemplate, render
 
-PROMPT_SET_VERSION = "engine-2026-10-10a"
+PROMPT_SET_VERSION = "engine-2026-10-10b"
 
 ASR_NOTE = """\
 The candidate's words reach you through live speech recognition and may contain misrecognized words, especially \

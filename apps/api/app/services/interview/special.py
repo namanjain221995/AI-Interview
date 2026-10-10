@@ -72,6 +72,9 @@ class SpecialResult:
     kind: SpecialKind
     confidence: float = 0.0
     matched: str | None = None
+    # An answer that contains a phrase addressed to the system without being one (kept for the turn model and
+    # the audit trail; the answer is still evaluated).
+    suspect: str | None = None
 
     @property
     def quality(self) -> AnswerQuality | None:
@@ -263,16 +266,60 @@ _WANTS_TIME_FILLER = re.compile(
     r"\b(?:about (?:that|it|this|the question)|for (?:a|one) (?:second|sec|moment|minute|bit)|real quick|"
     r"quickly|here|please|ok(?:ay)?|so|um+|uh+|hmm+|well|just|actually|for a little)\b"
 )
-# Text that tries to instruct the interviewer or the scoring (prompt injection): ignored, redirected.
-_INSTRUCTION = _rx(
-    r"\bignore (?:all |any )?(?:the )?(?:previous|prior|above|earlier|your) (?:instructions|rules|prompts?)\b",
-    r"\bsystem (?:override|prompt|message|instruction)\b",
-    r"\b(?:give|award) me (?:a )?(?:perfect|full|maximum|top|high) (?:score|marks|rating)\b",
-    r"\bmark (?:all|every) (?:competenc\w+|answers?) as\b",
-    r"\bset (?:the|my) (?:recommendation|score|rating)\b",
-    r"\byou are now\b|\bact as (?:a|an|the)\b|\bnew instructions\b",
-    r"\b(?:tell me|say) (?:that )?i (?:passed|got the job)\b",
+# Text addressed to the system rather than to the question (prompt injection). Two tiers:
+# * ``_INSTRUCTION``: unambiguous commands about the scoring, the outcome or the interviewer's own rules; an
+#   instruction wherever it occurs in the turn.
+# * ``_INSTRUCTION_IMPERATIVE``: the generic jailbreak openers ("ignore all previous instructions", "act as
+#   a ...", "you are now a ...", "from now on ..."). They are also everyday technical vocabulary ("the model
+#   would ignore the earlier instructions", "we had it act as an assistant"), so they only count when they open
+#   a sentence of a short turn whose substance is the command itself; anywhere else the turn stays an answer
+#   (evaluated as usual) and the match is kept as ``SpecialResult.suspect`` for the turn model and the audit
+#   trail. Bare mentions of "system prompt", "instructions" or "prompt" never count: they are the content of
+#   every LLM-engineering answer (harness finding: a question about structuring system prompts was unanswerable).
+_ROLE_NOUNS = (
+    r"(?:interviewer|assistant|recruiter|coach|evaluator|grader|judge|ai|bot|chatbot|model|helper|friend|"
+    r"hiring manager|hr|screener)"
 )
+_INSTRUCTION = _rx(
+    r"\b(?:give|award|grant) me (?:a |the )?(?:perfect|full|maximum|max|top|high|highest|best) "
+    r"(?:score|marks?|rating|grade)\b",
+    r"\bmark (?:all|every|each) (?:of )?(?:the |my )?(?:competenc\w+|answers?|questions?|skills?) as\b",
+    r"\b(?:set|change|update|make) (?:the |my )?(?:recommendation|score|rating|grade|verdict|decision) (?:to|as)\b",
+    r"\brate (?:me|this(?: answer)?|my answers?|everything|all my answers) (?:as |a |at )?"
+    r"(?:strong|perfect|excellent|10|ten|100|high|highly)\b",
+    r"\b(?:tell|say|write|report)\b[^.?!]{0,40}\bi (?:passed|got the job|am hired|should be hired|am the best candidate)\b",
+    r"\brecommend me (?:strongly |highly )?(?:for|to) (?:hire|hiring|the (?:role|job|position)|proceed|the next round)\b",
+    r"\b(?:ignore|disregard|forget|override|bypass) (?:all |any )?(?:of )?your (?:previous |prior |earlier |original |"
+    r"system |own )?(?:instructions?|rules|prompt|guidelines|programming|directives|training)\b",
+    r"\bsystem override\b",
+    r"\b(?:enter|enable|activate|switch to) (?:developer|dan|god|unrestricted|jailbreak) mode\b",
+    r"\bthis is (?:a |an )?(?:system|admin|administrator|developer|operator) (?:message|instruction|override|command|notice)\b",
+)
+_INSTRUCTION_IMPERATIVE = _rx(
+    r"\b(?:ignore|disregard|forget|override|bypass|skip) (?:all |any )?(?:of )?(?:the )?"
+    r"(?:previous|prior|above|earlier|original|initial|preceding) (?:instructions?|rules|prompts?|guidelines|directives|context)\b",
+    rf"\b(?:act|behave|respond|answer|speak|reply) as (?:a|an|my|the) (?:\w+ ){{0,3}}{_ROLE_NOUNS}\b",
+    rf"\byou are now (?:a|an|my|the|in) (?:\w+ ){{0,3}}(?:{_ROLE_NOUNS}|mode)\b",
+    rf"\b(?:pretend|imagine) (?:that )?you(?:'re| are) (?:a|an|my|the|not) (?:\w+ ){{0,3}}(?:{_ROLE_NOUNS}|interview)\b",
+    r"\bfrom now on,? (?:you (?:are|will|must|should)|ignore|mark|rate|give|score|treat)\b",
+    r"\b(?:here are|these are|follow|obey) (?:your |the |my )?new instructions\b|\bnew instructions:",
+    r"\b(?:reveal|print|show|repeat|output|display) (?:me )?(?:your|the) (?:system |hidden |initial )?(?:prompt|instructions)\b",
+)
+# Discourse lead-ins that may precede an imperative at the start of a sentence ("okay, so ignore ...").
+_SENTENCE_LEAD_IN = re.compile(
+    r"(?:(?:ok(?:ay)?|so|now|please|right|alright|also|and|but|well|um|uh|hey|listen|actually|basically)[, ]*)*"
+)
+# A turn with at most this many substance words that opens with a jailbreak phrase is the instruction itself.
+INSTRUCTION_SHORT_TURN_WORDS = 12
+
+
+def _opens_sentence(norm: str, pos: int) -> bool:
+    """True when ``pos`` starts a sentence of ``norm`` (optionally after a lead-in such as "okay, so")."""
+    prefix = norm[:pos]
+    start = max(prefix.rfind("."), prefix.rfind("!"), prefix.rfind("?")) + 1
+    return _SENTENCE_LEAD_IN.fullmatch(prefix[start:].strip()) is not None
+
+
 _SUBSTANCE_STOP = frozenset(
     "the a an and or but so of to in on for with that this it its was were is are be been i we you they he she "
     "me my our us them their there then when where what which who how if as at by from into about like just "
@@ -330,10 +377,17 @@ def classify(
         if m:
             return SpecialResult(SpecialKind.REPEAT, 0.95, m.group(0))
 
-    # Attempts to instruct the interviewer (prompt injection): never followed; the turn is redirected.
+    # Attempts to instruct the interviewer (prompt injection): never followed; the turn is redirected. The
+    # generic openers only count when they are the turn (see the tiers above); otherwise they mark the answer
+    # as suspect and it is evaluated like any other.
     m = _INSTRUCTION.search(norm)
     if m:
         return SpecialResult(SpecialKind.INSTRUCTION, 0.9, m.group(0))
+    suspect: str | None = None
+    for m in _INSTRUCTION_IMPERATIVE.finditer(norm):
+        if _opens_sentence(norm, m.start()) and len(substance_words(norm)) <= INSTRUCTION_SHORT_TURN_WORDS:
+            return SpecialResult(SpecialKind.INSTRUCTION, 0.75, m.group(0))
+        suspect = suspect or m.group(0)
 
     # Clarification requests: short, about the question itself.
     if n <= 30:
@@ -392,7 +446,7 @@ def classify(
             kind = SpecialKind.BRIEF if n <= 4 else SpecialKind.GARBLED
             return SpecialResult(kind, 0.7, stripped)
 
-    return NONE_RESULT
+    return SpecialResult(SpecialKind.NONE, suspect=suspect) if suspect else NONE_RESULT
 
 
 # Hedged / partial answers: the candidate says someone else did it, they were not involved, did not go into

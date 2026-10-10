@@ -25,7 +25,7 @@ from app.ai.prompts import PromptTemplate
 from app.services.intake.kit import IntakeKit, LanguageCheck
 from app.services.intake.stages import CANDIDATE_TITLES, STAGE_NUMBERS, item_spec
 
-PROMPT_SET_VERSION = "intake-2026-10-10a"
+PROMPT_SET_VERSION = "intake-2026-10-10b"
 
 # ===================================================================================== fixed phrases
 
