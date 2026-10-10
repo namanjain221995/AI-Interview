@@ -235,6 +235,52 @@ def test_docker_failure_after_create_is_an_infra_error_not_a_crash():
     assert outcome.infra_error is True and "docker error" in (outcome.error or "")
 
 
+class StreamBreaksAPI(FakeAPI):
+    """dockerd restarts while the program runs: the attach stream errors, then the daemon is unreachable."""
+
+    def attach_socket(self, cid: str, params: dict[str, int]) -> FakeSocket:
+        sock = super().attach_socket(cid, params)
+
+        def recv(size: int) -> bytes:
+            raise ConnectionResetError("daemon gone")
+
+        sock.recv = recv  # type: ignore[method-assign]
+        return sock
+
+    def wait(self, cid: str, timeout: int) -> dict[str, int]:
+        import requests
+
+        raise requests.exceptions.ConnectionError("connection refused")
+
+
+class ProgramClosedStdoutAPI(FakeAPI):
+    """The candidate's program closed its output and kept running: an empty stream and a wait that times out."""
+
+    def __init__(self) -> None:
+        super().__init__(respond=lambda sent: [])
+
+    def wait(self, cid: str, timeout: int) -> dict[str, int]:
+        import requests
+
+        raise requests.exceptions.ReadTimeout("still running")
+
+
+def test_a_daemon_lost_mid_run_is_an_infra_error_not_the_candidates_crash():
+    sandbox = make_sandbox(StreamBreaksAPI())
+    outcome = sandbox.run(plan_for(), "python")
+    sandbox.close()
+    assert outcome.runner is None and outcome.infra_error is True
+    assert "daemon connection lost" in (outcome.error or "")
+
+
+def test_a_program_that_hides_its_output_stays_the_candidates_result():
+    sandbox = make_sandbox(ProgramClosedStdoutAPI())
+    outcome = sandbox.run(plan_for(), "python")
+    sandbox.close()
+    assert outcome.runner is None and outcome.infra_error is False
+    assert "runner produced no result" in (outcome.error or "")
+
+
 def test_executor_turns_infra_errors_into_retryable_unavailability():
     import asyncio
 

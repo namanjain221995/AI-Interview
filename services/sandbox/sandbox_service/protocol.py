@@ -56,7 +56,10 @@ def extract_result(stdout: bytes, nonce: str) -> dict[str, Any] | None:
     return clean
 
 
-MAX_DEPTH = 64
+# The runner refuses a returned value nested deeper than its MAX_ACTUAL_DEPTH (64) per test; the result frame wraps
+# that value a few levels deep (result -> steps -> step -> tests -> test -> actual). The frame cap must leave room
+# for both, or a value the runner accepted would turn the whole run into an unreadable "crash".
+MAX_DEPTH = 96
 
 
 def _clean_str(value: str) -> str:

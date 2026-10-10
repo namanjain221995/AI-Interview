@@ -27,6 +27,7 @@ from typing import Any
 import docker
 from docker.errors import APIError, DockerException, ImageNotFound, NotFound
 from docker.types import LogConfig, Ulimit
+from requests.exceptions import ConnectionError as DaemonConnectionError
 from requests.exceptions import RequestException
 
 from . import metrics
@@ -185,6 +186,7 @@ class DockerSandbox:
                 outcome.infra_error = True
             demux = StreamDemux(stdout_cap=s.container_output_cap_bytes)
             hard_cap = 2 * s.container_output_cap_bytes
+            stream_broken = False
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -196,6 +198,9 @@ class DockerSandbox:
                 except TimeoutError:
                     continue
                 except OSError:
+                    # The connection to the daemon broke (a program ending its output is an empty read, never an
+                    # error here): a platform fault, not the candidate's crash.
+                    stream_broken = True
                     break
                 if not data:
                     break
@@ -222,15 +227,28 @@ class DockerSandbox:
             outcome.runner = extract_result(demux.stdout, nonce)
         if outcome.runner is not None:
             return  # the runner reported everything; exit code / OOM flag are only needed as a fallback
+        daemon_lost = stream_broken
         try:
             outcome.exit_code = api.wait(cid, timeout=10).get("StatusCode")
-        except (APIError, DockerException, RequestException):
+        except DaemonConnectionError:
             outcome.exit_code = None
+            daemon_lost = True
+        except (APIError, DockerException, RequestException):
+            outcome.exit_code = None  # e.g. a read timeout: the program is still running (not the daemon's fault)
         try:
             state = api.inspect_container(cid).get("State", {})
             outcome.oom_killed = bool(state.get("OOMKilled"))
+        except DaemonConnectionError:
+            daemon_lost = True
         except (APIError, DockerException, RequestException):
             pass
+        if daemon_lost and not outcome.deadline_exceeded and not outcome.output_overflow:
+            # dockerd died or restarted mid-run (S19 review): the API retries it as docker_error.
+            metrics.CONTAINER_FAILURES.labels("docker_error").inc()
+            outcome.infra_error = True
+            outcome.error = outcome.error or "docker daemon connection lost during the run"
+            log.error("sandbox.daemon_lost", container=outcome.container)
+            return
         if not outcome.deadline_exceeded and not outcome.output_overflow:
             metrics.CONTAINER_FAILURES.labels("no_result").inc()
             diag = demux.stderr.decode("utf-8", "replace").strip()[-300:]

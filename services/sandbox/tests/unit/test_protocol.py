@@ -103,10 +103,32 @@ def test_sanitize_is_iterative_with_a_depth_cap():
     assert sanitize(value) == {"a": ["x", {"b": "?"}]}
     nested: list = []
     current = nested
-    for _ in range(70):
+    for _ in range(110):
         child: list = []
         current.append(child)
         current = child
     with pytest.raises(ValueError):
         sanitize(nested)
     assert sanitize([[1]], max_depth=2) == [[1]]
+
+
+def _nested(depth: int) -> list:
+    root: list = []
+    current = root
+    for _ in range(depth - 1):
+        child: list = []
+        current.append(child)
+        current = child
+    return root
+
+
+def test_a_value_the_runner_accepts_is_never_rejected_by_the_service():
+    """Review of S19: the frame cap must exceed the runner's per-value cap plus the frame's own wrapping."""
+    from tests.unit.test_runner_unit import load_runner
+
+    depth = load_runner().MAX_ACTUAL_DEPTH
+    nonce = new_nonce()
+    record = {"protocol": 1, "ok": True, "steps": [{"tests": [{"id": "t1", "actual": _nested(depth)}]}]}
+    raw = json.dumps(record)
+    framed = f"\n<<SANDBOX-RESULT {nonce}>>\n{raw}\n<<SANDBOX-END {nonce}>>\n".encode()
+    assert extract_result(framed, nonce) == record
