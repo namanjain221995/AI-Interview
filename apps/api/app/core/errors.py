@@ -123,6 +123,16 @@ class Conflict(AppError):
     message = "The request conflicts with the current state of the resource."
 
 
+class UnsupportedRoundType(Conflict):
+    """A stored round type this build does not know (a newer release wrote it, e.g. before a rollback).
+
+    Readers raise it instead of crashing with a 500; background jobs do not retry it."""
+
+    code = "unsupported_round_type"
+    message = "This round type is not supported by this version of the platform."
+    retryable = False
+
+
 class PayloadTooLarge(AppError):
     status_code = 413
     code = "payload_too_large"

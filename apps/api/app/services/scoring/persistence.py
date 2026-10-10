@@ -55,7 +55,7 @@ from app.domain.enums import (
 )
 from app.schemas.ai import AnswerEvaluation as AnswerEvaluationDoc
 from app.schemas.ai import CodingEvaluation, DimensionScores, InterviewPlan
-from app.schemas.rounds import RoundConfig
+from app.schemas.rounds import RoundConfig, load_round_config
 from app.services.integrity.queries import count_unreviewed_flags
 from app.services.integrity.rules import REVIEWABLE_ACTIONS
 from app.services.interview.state import CompetencyState
@@ -176,7 +176,7 @@ class SessionScoringInputs:
 
 
 def parse_round_config(raw: dict[str, Any] | None) -> RoundConfig:
-    return RoundConfig.model_validate(raw or {})
+    return load_round_config(raw)
 
 
 def parse_plan(raw: dict[str, Any] | None) -> InterviewPlan | None:

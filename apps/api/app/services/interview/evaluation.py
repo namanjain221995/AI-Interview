@@ -65,7 +65,7 @@ from app.domain.enums import (
     SessionStatus,
 )
 from app.schemas.ai import AnswerEvaluation, CodingEvaluation, DimensionScores, EvidenceItem
-from app.schemas.rounds import RoundConfig
+from app.schemas.rounds import RoundConfig, load_round_config
 from app.services.interview.adapters import ScoringPort, get_scoring
 from app.services.interview.config import EngineConfig, get_engine_config
 from app.services.interview.contradictions import neutral_description
@@ -581,7 +581,7 @@ class EvaluationService:
             existing = (
                 await db.execute(select(AnswerEvaluationRow).where(AnswerEvaluationRow.answer_id == aid))
             ).scalar_one_or_none()
-            round_config = RoundConfig.model_validate(session_row.round_config)
+            round_config = load_round_config(session_row.round_config)
             state = _state_from_row(session_row)
             question = await db.get(Question, answer.question_id) if answer.question_id else None
             bank = (

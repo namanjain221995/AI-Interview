@@ -18,13 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.db.models import Interview, InterviewSession, Job, Round
-from app.domain.enums import InterviewStatus, RoundType
+from app.domain.enums import InterviewStatus
 from app.schemas.api.catalog import RoundCreate, RoundUpdate
 from app.services.jobs.catalog import (
     deep_merge,
     get_template,
     overlay_columns,
     parse_round_config,
+    parse_round_type,
     round_type_default,
     round_type_label,
     sync_round_columns,
@@ -55,7 +56,7 @@ async def create_round(db: AsyncSession, job: Job, body: RoundCreate) -> Round:
     template_id: uuid.UUID | None = None
     if body.template_id is not None:
         template = await get_template(db, body.template_id, job.organization_id)
-        round_type = body.round_type or RoundType(template.round_type)
+        round_type = body.round_type or parse_round_type(template.round_type)
         base = dict(template.config)
         template_id = template.id
     elif body.round_type is not None:

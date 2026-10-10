@@ -47,7 +47,7 @@ from app.domain.enums import (
 )
 from app.schemas.ai import ClaimToVerify
 from app.schemas.policies import PolicySnapshot
-from app.schemas.rounds import RoundConfig
+from app.schemas.rounds import RoundConfig, load_round_config
 from app.services.interview.config import EngineConfig, get_engine_config
 from app.services.interview.records import log_event
 from app.services.interview.state import ClaimState, CodingState, CompetencyState, InterviewState
@@ -517,7 +517,7 @@ class SessionServiceImpl:
                 state = InterviewState.model_validate(row.state)
             except ValueError:
                 state = None
-        round_config = RoundConfig.model_validate(row.round_config) if row.round_config else None
+        round_config = load_round_config(row.round_config) if row.round_config else None
         interview = await db.get(Interview, row.interview_id)
         policy = load_policy_snapshot(interview.policy_snapshot if interview else None)
         report = (
