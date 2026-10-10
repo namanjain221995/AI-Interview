@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import httpx
+import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 
@@ -37,3 +38,9 @@ async def public_client(app: FastAPI) -> AsyncIterator[Callable[..., httpx.Async
     yield make
     for http in opened:
         await http.aclose()
+
+
+@pytest.fixture(autouse=True)
+def _fast_proof_of_work(settings: Any) -> None:
+    """Every registration solves a real challenge (the helper does it); a small one keeps tests fast."""
+    settings.open_link_pow_max_number = 500

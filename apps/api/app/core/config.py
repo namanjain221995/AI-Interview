@@ -231,6 +231,11 @@ class Settings(BaseSettings):
     open_link_signal_retention_days: int = 90
     open_link_blocked_retention_days: int = 30
     open_link_register_ip_limit_per_hour: int = 600
+    # Proof-of-work on public registration (S15): a signed, single-use puzzle the browser solves while the
+    # form is being filled (about a second on a mid-range phone at 100k).
+    open_link_pow_enabled: bool = True
+    open_link_pow_max_number: int = Field(100_000, ge=10, le=10_000_000)
+    open_link_pow_ttl_seconds: int = Field(600, ge=60, le=3600)
     open_link_default_round_window_hours: int = 72
 
     # ---------------------------------------------------- intake interviews

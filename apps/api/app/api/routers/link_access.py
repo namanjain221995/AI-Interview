@@ -18,9 +18,10 @@ from fastapi import APIRouter, Depends, Request, Response, status
 from app.core.config import get_settings
 from app.core.deps import DbSession
 from app.core.errors import NotFound
-from app.core.ratelimit import client_ip, enforce_rate_limit, rate_limit
+from app.core.pow import create_challenge
+from app.core.ratelimit import client_ip_key, enforce_rate_limit, rate_limit
 from app.schemas.api.common import ERROR_RESPONSES
-from app.schemas.api.open_links import LinkInfo, RegisterRequest, RegisterResponse
+from app.schemas.api.open_links import LinkInfo, PowChallengeOut, RegisterRequest, RegisterResponse
 from app.services.identity.cookies import set_auth_cookies
 from app.services.open_links.links import find_link_by_token, public_info
 from app.services.open_links.registration import register
@@ -37,14 +38,31 @@ def _register_ip_limit() -> int:
 
 async def _register_ip_dependency(request: Request) -> None:
     await enforce_rate_limit(
-        "link_register_ip", client_ip(request), limit=_register_ip_limit(), window_s=3600
+        "link_register_ip", client_ip_key(request), limit=_register_ip_limit(), window_s=3600
     )
+
+
+CHALLENGE_IP_LIMIT = 30  # per minute: one per page load, a few retries
+
+
+@router.get(
+    "/{token}/challenge",
+    response_model=PowChallengeOut,
+    dependencies=[Depends(rate_limit("link_access_challenge", CHALLENGE_IP_LIMIT, 60, client_ip_key))],
+    summary="Proof-of-work challenge for registering through this link",
+)
+async def link_challenge(token: str, response: Response, db: DbSession) -> PowChallengeOut:
+    link = await find_link_by_token(db, token)
+    if link is None:
+        raise NotFound("This link isn't valid. Check you copied the whole link.", code="link_not_found")
+    response.headers["Cache-Control"] = "no-store"
+    return PowChallengeOut(**create_challenge(f"link:{link.id}").as_dict())
 
 
 @router.get(
     "/{token}",
     response_model=LinkInfo,
-    dependencies=[Depends(rate_limit("link_access_info", INFO_IP_LIMIT, 60))],
+    dependencies=[Depends(rate_limit("link_access_info", INFO_IP_LIMIT, 60, client_ip_key))],
     summary="Open link landing information",
 )
 async def link_info(token: str, response: Response, db: DbSession) -> LinkInfo:

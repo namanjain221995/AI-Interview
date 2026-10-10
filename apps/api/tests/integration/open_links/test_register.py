@@ -26,6 +26,7 @@ from tests.integration.open_links.helpers import (
     make_job,
     portal_headers,
     register,
+    solved_pow,
     token_of,
 )
 
@@ -137,8 +138,10 @@ async def test_validation_errors(link_env, public_client) -> None:
     assert bad.status_code == 422
     fields = bad.json()["error"]["details"]["fields"]
     assert set(fields) == {"full_name", "email", "phone", "c_extra"}
-    no_ack = await public_client().post(
-        f"{API}/link-access/{token}/register", json={"answers": answers(3), "privacy_ack": False}
+    browser = public_client()
+    no_ack = await browser.post(
+        f"{API}/link-access/{token}/register",
+        json={"answers": answers(3), "privacy_ack": False, "pow": await solved_pow(browser, token)},
     )
     assert no_ack.status_code == 422 and no_ack.json()["error"]["code"] == "privacy_ack_required"
     assert await _count(LinkRegistration) == 0 and await _count(Candidate) == 0
@@ -246,9 +249,10 @@ async def test_origin_check(link_env, public_client) -> None:
         headers={"Referer": "https://evil.example/page"},
     )
     assert referer.status_code == 403
-    same_host = await public_client().post(
+    browser = public_client()
+    same_host = await browser.post(
         f"{API}/link-access/{token}/register",
-        json={"answers": answers(1), "privacy_ack": True},
+        json={"answers": answers(1), "privacy_ack": True, "pow": await solved_pow(browser, token)},
         headers={"Origin": "http://testserver"},
     )
     assert same_host.status_code == 201, same_host.text
@@ -377,3 +381,37 @@ async def test_returning_candidate_on_the_same_browser_is_reused_without_old_res
     assert resume.status_code == 200 and resume.json()["resume"] is None
     portal = (await browser.get(f"{API}/portal/interviews/{second_interview}", headers=headers)).json()
     assert "resume" not in portal["steps_completed"]
+
+
+# ------------------------------------------------------------------ proof-of-work (S15)
+
+
+async def test_registration_needs_a_fresh_proof_of_work_for_this_link(link_env, public_client) -> None:
+    link = (await create_link(link_env))["link"]
+    other = (await create_link(link_env, name="Other drive"))["link"]
+    token = token_of(link)
+    challenge = await public_client().get(f"{API}/link-access/{token}/challenge")
+    assert challenge.status_code == 200 and challenge.headers["cache-control"] == "no-store"
+    assert set(challenge.json()) == {"algorithm", "challenge", "salt", "signature", "maxnumber"}
+    unknown = await public_client().get(f"{API}/link-access/{'x' * 32}/challenge")
+    assert unknown.status_code == 404
+
+    missing = await register(public_client(), token, answers(41), pow=None)
+    assert missing.status_code == 422 and missing.json()["error"]["code"] == "pow_required"
+    browser = public_client()
+    for_other_link = await solved_pow(browser, token_of(other))
+    wrong_link = await register(browser, token, answers(42), pow=for_other_link)
+    assert wrong_link.status_code == 422 and wrong_link.json()["error"]["code"] == "pow_invalid"
+
+    solution = await solved_pow(browser, token)
+    assert (await register(browser, token, answers(43), pow=solution)).status_code == 201
+    replay = await register(public_client(), token, answers(44), pow=solution)
+    assert replay.status_code == 422 and replay.json()["error"]["code"] == "pow_invalid"
+    assert await _count(LinkRegistration) == 1
+
+
+async def test_proof_of_work_can_be_switched_off(link_env, public_client, settings) -> None:
+    settings.open_link_pow_enabled = False
+    link = (await create_link(link_env))["link"]
+    response = await register(public_client(), token_of(link), answers(45), pow=None)
+    assert response.status_code == 201, response.text

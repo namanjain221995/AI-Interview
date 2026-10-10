@@ -161,6 +161,32 @@ describe("OpenLinkPage (/j/:token)", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/candidate/i1/welcome"));
   });
 
+  it("solves the link's proof of work in the background and retries once with a fresh one (S15)", async () => {
+    const { webcrypto } = await import("node:crypto");
+    vi.stubGlobal("crypto", webcrypto);
+    const salt = "s1?scope=link:l1&expires=9999999999";
+    const digest = await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(`${salt}42`));
+    const challenge = { algorithm: "SHA-256", challenge: Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join(""), salt, signature: "a".repeat(64), maxnumber: 300 };
+    const get = vi.mocked(api.get).getMockImplementation()!;
+    vi.mocked(api.get).mockImplementation(async (path: string, options?: unknown) => (path === "/link-access/tok123/challenge" ? (challenge as never) : get(path, options as never)));
+    const post = vi
+      .spyOn(api, "post")
+      .mockRejectedValueOnce(new ApiError({ status: 422, code: "pow_invalid", message: "expired" }))
+      .mockResolvedValue({ outcome: "resumed", interview_id: "i1", next_step: "welcome", csrf_token: "c", personal_url: null } as never);
+    const { router } = renderAt("/j/tok123");
+    const page = await screen.findByTestId("open-link-page");
+    await waitFor(() => expect(page).toHaveAttribute("data-state", "open"));
+    fillValid();
+    fireEvent.click(screen.getByTestId("open-link-submit"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/candidate/i1/welcome"));
+    expect(post).toHaveBeenCalledTimes(2);
+    for (const call of post.mock.calls) {
+      const body = call[1] as { pow?: string };
+      expect(JSON.parse(atob(body.pow!)).number).toBe(42);
+    }
+    vi.unstubAllGlobals();
+  });
+
   it("sends the same browser straight back into the journey when the registration resumes", async () => {
     vi.spyOn(api, "post").mockResolvedValue({ outcome: "resumed", interview_id: "i1", next_step: "resume", csrf_token: "c", personal_url: null } as never);
     const { router } = renderAt("/j/tok123");

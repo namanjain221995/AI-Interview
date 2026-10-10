@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import Request, Response
 
 from app.core.config import get_settings
-from app.core.ratelimit import client_ip
+from app.core.ratelimit import client_ip_key
 from app.services.open_links.constants import (
     DEVICE_COOKIE,
     DEVICE_COOKIE_MAX_AGE,
@@ -94,7 +94,7 @@ class RequestSignals:
     """Hashes for one registration request (computed once)."""
 
     def __init__(self, request: Request) -> None:
-        ip = client_ip(request)
+        ip = client_ip_key(request)  # IPv6 by /64: one network, however its addresses rotate (S15)
         user_agent = (request.headers.get("user-agent") or "")[:512]
         existing = read_device_cookie(request)
         self.device_value = existing or new_device_value()

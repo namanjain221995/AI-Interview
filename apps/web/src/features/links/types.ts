@@ -298,6 +298,8 @@ export interface RegisterRequest {
   privacy_ack: boolean;
   access_code?: string | null;
   website?: string;
+  /** Proof-of-work solution (S15). */
+  pow?: string;
 }
 
 export interface RegisterResponse {

@@ -35,6 +35,9 @@ from app.core.errors import (
 )
 from app.core.logging import get_logger
 from app.core.metrics import OPEN_LINK_REGISTRATIONS
+from app.core.pow import PowError
+from app.core.pow import consume as pow_consume
+from app.core.pow import verify as pow_verify
 from app.core.ratelimit import enforce_rate_limit
 from app.core.rbac import Principal
 from app.core.redis import get_redis
@@ -492,6 +495,18 @@ async def register(db: AsyncSession, token: str, body: RegisterRequest, request:
             details={"reason": "honeypot"},
             request=request,
         )
+    if get_settings().open_link_pow_enabled:
+        try:
+            solved, expires = pow_verify(body.pow, f"link:{link.id}")
+            await pow_consume(get_redis(), solved, expires)
+        except PowError as exc:
+            log.info("open_link.pow_failed", link_id=str(link.id), reason=exc.reason)
+            message = (
+                "Your browser didn't finish a quick security check. Reload the page and try again."
+                if exc.code == "pow_required"
+                else "The security check expired. Please submit the form again."
+            )
+            raise await _fail(db, ValidationFailed(message, code=exc.code), outcome="pow_failed") from None
     if not body.privacy_ack:
         raise ValidationFailed(
             "Please confirm you have read how your data will be used.", code="privacy_ack_required"
