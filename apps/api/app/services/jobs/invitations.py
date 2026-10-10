@@ -25,7 +25,7 @@ from app.core.config import get_settings
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.lifecycle import run_after_commit
 from app.core.logging import get_logger
-from app.core.queue import publish_session_event
+from app.core.queue import enqueue, publish_session_event
 from app.core.security import generate_access_code, generate_invite_token, hash_access_code_async
 from app.db.models import AuthSession, Candidate, Interview, InterviewSession, Job, Round
 from app.domain.enums import InterviewStatus, JobStatus, SessionStatus
@@ -257,6 +257,15 @@ async def cancel_invitation(db: AsyncSession, interview: Interview, *, reason: s
     ).all()
     for session_id in open_sessions:
         run_after_commit(db, functools.partial(_announce_cancelled, session_id))
+        # Sessions without a live runtime (candidate gone, API restarted) never hear the bus event:
+        # the lifecycle job ends them offline (aborted, no scoring) a few seconds later (S1).
+        await enqueue(
+            "session.end",
+            {"session_id": str(session_id), "reason": "cancelled", "actor": "staff_cancel"},
+            dedupe_key=f"session.end:{session_id}:cancelled",
+            delay_seconds=15,
+            db=db,
+        )
     return revoked
 
 

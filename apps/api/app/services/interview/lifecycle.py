@@ -1,0 +1,210 @@
+"""Offline session lifecycle (plan package S1).
+
+A started session whose candidate never comes back used to stay ``paused`` forever: no scoring,
+no report, "in progress" on every recruiter screen, and a reconnect weeks later with the clock
+stopped. :func:`end_session_offline` ends such a session from a worker, through the engine's
+own ``end_session`` (partial-coverage scoring and report, intake evaluation), after proving that
+nobody is driving it:
+
+* the realtime ownership lock must be free - taken here *fail-closed* with a distinct instance
+  id so a live runtime (which refreshes its lock every few seconds) is never taken over;
+* optionally the session must have been idle (no state write, no heartbeat) for ``require_idle_s``.
+
+:func:`sweep_abandoned_sessions` applies it to every ``live``/``paused`` session idle past
+``SESSION_ABANDON_AFTER_SECONDS`` (batch-limited, dry-run capable). Staff cancellation and the
+candidate's REST "end" use the same path through the ``session.end`` job.
+"""
+
+from __future__ import annotations
+
+import uuid
+from contextlib import aclosing
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
+
+from sqlalchemy import func, select
+
+from app.core.config import get_settings
+from app.core.logging import get_logger
+from app.core.metrics import SESSIONS_ABANDONED_PENDING, SESSIONS_ENDED_OFFLINE
+from app.core.redis import get_redis
+from app.db.models import InterviewSession
+from app.db.session import session_scope
+from app.domain.enums import SessionEndReason, SessionStatus
+from app.realtime.lock import SessionLock
+from app.services.interview.engine import SessionNotFound, get_engine
+from app.services.interview.records import log_event
+from app.services.interview.state_store import ENDED_STATUSES
+
+log = get_logger(__name__)
+
+SWEEPABLE_STATUSES: frozenset[str] = frozenset({SessionStatus.LIVE.value, SessionStatus.PAUSED.value})
+_ENDED_VALUES: frozenset[str] = frozenset(status.value for status in ENDED_STATUSES)
+
+
+@dataclass(frozen=True)
+class OfflineEndOutcome:
+    session_id: str
+    action: Literal["ended", "skipped", "dry_run"]
+    reason: str  # ended/dry_run: the end reason; skipped: not_found | already_ended | active | locked
+    status_before: str | None = None
+    detail: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class SweepSummary:
+    candidates: int = 0
+    ended: int = 0
+    dry_run: int = 0
+    skipped: dict[str, int] | None = None
+    pending: int = 0
+    errors: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "candidates": self.candidates,
+            "ended": self.ended,
+            "dry_run": self.dry_run,
+            "skipped": dict(self.skipped or {}),
+            "pending": self.pending,
+            "errors": self.errors,
+        }
+
+
+def _last_activity(row: InterviewSession) -> datetime | None:
+    stamps = [t for t in (row.updated_at, row.last_heartbeat_at, row.started_at) if t is not None]
+    if not stamps:
+        return None
+    latest = max(stamps)
+    return latest if latest.tzinfo is not None else latest.replace(tzinfo=UTC)
+
+
+async def end_session_offline(
+    session_id: str,
+    reason: SessionEndReason,
+    *,
+    actor: str,
+    require_idle_s: float | None = None,
+    dry_run: bool = False,
+    engine: Any | None = None,
+    redis: Any | None = None,
+    now: datetime | None = None,
+) -> OfflineEndOutcome:
+    """End ``session_id`` from outside the realtime runtime; see the module docstring."""
+    settings = get_settings()
+    now = now or datetime.now(UTC)
+    async with session_scope() as db:
+        row = await db.get(InterviewSession, uuid.UUID(session_id))
+        if row is None:
+            return OfflineEndOutcome(session_id, "skipped", "not_found")
+        status_before = str(row.status)
+        if status_before in _ENDED_VALUES:
+            return OfflineEndOutcome(session_id, "skipped", "already_ended", status_before)
+        if require_idle_s is not None:
+            last = _last_activity(row)
+            idle = (now - last).total_seconds() if last is not None else float("inf")
+            if idle < require_idle_s:
+                return OfflineEndOutcome(session_id, "skipped", "active", status_before, f"idle {idle:.0f}s")
+
+    # A live runtime refreshes its lock every few seconds: if we cannot take it, somebody is driving
+    # the session (or Redis is unreachable, in which case we must not act either).
+    lock = SessionLock(
+        session_id,
+        redis if redis is not None else get_redis(),
+        instance_id=f"offline-{settings.instance_id}",
+        ttl_seconds=settings.session_lock_ttl_seconds,
+        fail_open=False,
+    )
+    if not await lock.acquire():
+        return OfflineEndOutcome(session_id, "skipped", "locked", status_before, lock.holder)
+    try:
+        if dry_run:
+            log.info(
+                "session.offline_end_dry_run", session_id=session_id, reason=reason.value, actor=actor,
+                status_before=status_before,
+            )  # fmt: skip
+            return OfflineEndOutcome(session_id, "dry_run", reason.value, status_before)
+        active_engine = engine or get_engine()
+        try:
+            async with aclosing(active_engine.end_session(session_id, reason)) as stream:
+                async for _event in stream:
+                    pass
+        except SessionNotFound:
+            return OfflineEndOutcome(session_id, "skipped", "not_found", status_before)
+        async with session_scope() as db:
+            await log_event(
+                db,
+                session_id,
+                "session.ended_offline",
+                {"reason": reason.value, "actor": actor, "status_before": status_before},
+            )
+        SESSIONS_ENDED_OFFLINE.labels(reason=reason.value, actor=actor).inc()
+        log.info(
+            "session.ended_offline", session_id=session_id, reason=reason.value, actor=actor,
+            status_before=status_before,
+        )  # fmt: skip
+        return OfflineEndOutcome(session_id, "ended", reason.value, status_before)
+    finally:
+        await lock.release()
+
+
+async def sweep_abandoned_sessions(
+    *,
+    now: datetime | None = None,
+    abandon_after_s: float | None = None,
+    limit: int | None = None,
+    dry_run: bool | None = None,
+    engine: Any | None = None,
+    redis: Any | None = None,
+) -> SweepSummary:
+    """End every live/paused session idle past the abandonment window (oldest first, batch-limited)."""
+    settings = get_settings()
+    now = now or datetime.now(UTC)
+    window = float(abandon_after_s if abandon_after_s is not None else settings.session_abandon_after_seconds)
+    batch = int(limit if limit is not None else settings.session_sweep_batch)
+    dry = settings.session_sweep_dry_run if dry_run is None else dry_run
+    cutoff = now - timedelta(seconds=window)
+    last_activity = func.greatest(
+        func.coalesce(InterviewSession.last_heartbeat_at, InterviewSession.updated_at),
+        InterviewSession.updated_at,
+    )
+    condition = (InterviewSession.status.in_(SWEEPABLE_STATUSES), last_activity < cutoff)
+    summary = SweepSummary(skipped={})
+    async with session_scope() as db:
+        summary.candidates = int(
+            await db.scalar(select(func.count()).select_from(InterviewSession).where(*condition)) or 0
+        )
+        ids = list(
+            (await db.scalars(select(InterviewSession.id).where(*condition).order_by(last_activity).limit(batch))).all()
+        )
+    for sid in ids:
+        try:
+            outcome = await end_session_offline(
+                str(sid),
+                SessionEndReason.DISCONNECT_TIMEOUT,
+                actor="sweeper",
+                require_idle_s=window,
+                dry_run=dry,
+                engine=engine,
+                redis=redis,
+                now=now,
+            )
+        except Exception as exc:  # noqa: BLE001 - one bad session must not stop the sweep
+            summary.errors += 1
+            log.error("session.sweep_failed", session_id=str(sid), error=f"{type(exc).__name__}: {exc}"[:200])
+            continue
+        if outcome.action == "ended":
+            summary.ended += 1
+        elif outcome.action == "dry_run":
+            summary.dry_run += 1
+        else:
+            assert summary.skipped is not None
+            summary.skipped[outcome.reason] = summary.skipped.get(outcome.reason, 0) + 1
+    summary.pending = max(0, summary.candidates - summary.ended)
+    SESSIONS_ABANDONED_PENDING.set(summary.pending)
+    log.info("session.sweep", **summary.as_dict(), dry_run_mode=dry, window_s=window)
+    return summary

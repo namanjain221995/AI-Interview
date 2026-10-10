@@ -218,6 +218,7 @@ All settings are environment variables declared in `apps/api/app/core/config.py`
 | `WHISPER_EXTRA_BASE_URLS` | empty | comma-separated extra Whisper replicas; each replica transcribes one request at a time, so a second replica cuts end-of-turn waits |
 | `STT_PARTIAL_INTERVAL_MS` | `1500` in code, `2000` in `.env.example` | interim transcript interval; raise it when Whisper is busy |
 | `TTS_THREADS`, `TTS_CPUS` | `TTS_THREADS=4` in `.env.example` (compose falls back to 8 when unset); `TTS_CPUS` 8 | keep `TTS_THREADS x TTS_WORKERS (2) <= TTS_CPUS` (the service logs `tts.cpu_oversubscribed` otherwise) |
+| `SESSION_ABANDON_AFTER_SECONDS`, `SESSION_SWEEP_DRY_RUN` | `1200`, `false` | abandoned live/paused sessions are ended as `disconnect_timeout` after this idle window (every 5 min, batches of `SESSION_SWEEP_BATCH`=25); on the first deploy to a long-running database set the dry run to `true` for a day and read the `session.offline_end_dry_run` log lines before enabling |
 | `AI_DISABLED_ENDPOINTS` | empty | nodes without a vision, embedding, reranker or OCR server (comma separated): calls fail fast, health shows `disabled`, camera-frame AI analysis / question-bank semantic search / scanned-resume OCR degrade cleanly; `main`, `whisper` and `tts` can never be disabled |
 | `MODEL_ROUTING_OVERRIDES` | `{}` | move an LLM task to another endpoint, e.g. `{"answer_assessment":"vision"}` |
 | `MALWARE_SCAN_MODE` | `optional` | `required` with `docker compose --profile security up -d clamav` and `CLAMAV_HOST=127.0.0.1` |

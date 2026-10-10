@@ -108,7 +108,7 @@ DEVICE_COOKIE_MAX_AGE = 180 * 24 * 3600
 # Registration statuses that mean "has a live attempt" (resumable on the same device).
 ACTIVE_STATUSES = frozenset({RegistrationStatus.REGISTERED.value, RegistrationStatus.IN_PROGRESS.value})
 # Session end reasons that route an immediate-progression registration to a person.
-REVIEW_END_REASONS = frozenset({"policy_termination", "technical_failure"})
+REVIEW_END_REASONS = frozenset({"policy_termination", "technical_failure", "disconnect_timeout"})
 
 DEFAULT_DUPLICATE_POLICY: dict[str, str] = {"scope": "job", "device": "flag", "network": "flag"}
 

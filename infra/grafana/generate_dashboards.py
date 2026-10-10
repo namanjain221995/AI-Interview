@@ -1155,6 +1155,27 @@ def workers_infra() -> Dashboard:
     )  # fmt: skip
     d.add(timeseries("Host memory available", [('max(node_memory_MemAvailable_bytes{job="host"})', "available")],
                      unit="bytes"), 12, 7)  # fmt: skip
+    d.row("Session lifecycle (abandoned sessions)")
+    d.add(
+        stat(
+            "Abandoned sessions pending",
+            "max(interview_sessions_abandoned_pending) or vector(0)",
+            decimals=0, thresholds=status_thresholds(1, 10),
+            description="Started sessions idle past SESSION_ABANDON_AFTER_SECONDS that the last sweep could not end "
+            "(lock held, Redis unreachable or SESSION_SWEEP_DRY_RUN).",
+        ),
+        6, 6,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Sessions ended offline per hour by reason",
+            [("sum by (reason, actor) (increase(interview_sessions_ended_offline_total[1h]))", "{{reason}} ({{actor}})")],
+            decimals=0,
+            description="disconnect_timeout = the abandoned-session sweep; cancelled = staff cancel; candidate_ended = REST end.",
+        ),
+        18, 6,
+    )  # fmt: skip
+
     d.row("Intake interviews and open links")
     d.add(
         timeseries(

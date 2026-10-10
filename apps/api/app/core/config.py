@@ -195,6 +195,13 @@ class Settings(BaseSettings):
     ws_disconnect_grace_seconds: int = 180
     session_resume_buffer_messages: int = 300
     session_lock_ttl_seconds: int = 30
+    # Session lifecycle (S1): a started session that nobody drives (no runtime holds its lock and
+    # nothing wrote to it) for this long is ended offline as disconnect_timeout, so scoring and the
+    # report run and recruiters stop seeing it as "in progress". Must exceed the reconnect grace.
+    session_abandon_after_seconds: int = 1200
+    session_sweep_batch: int = 25
+    # First deploy on a long-running database: report what the sweep would end without ending it.
+    session_sweep_dry_run: bool = False
 
     # ---------------------------------------------------- interview defaults
     interviewer_name: str = "Maya"
@@ -328,6 +335,17 @@ class Settings(BaseSettings):
     @property
     def is_test(self) -> bool:
         return self.app_env == "test"
+
+    @model_validator(mode="after")
+    def _abandon_window_exceeds_grace(self) -> Settings:
+        minimum = self.ws_disconnect_grace_seconds + 60
+        if self.session_abandon_after_seconds < minimum:
+            raise ValueError(
+                f"SESSION_ABANDON_AFTER_SECONDS must be at least WS_DISCONNECT_GRACE_SECONDS + 60 ({minimum})"
+            )
+        if self.session_sweep_batch < 1:
+            raise ValueError("SESSION_SWEEP_BATCH must be >= 1")
+        return self
 
     @field_validator("ai_disabled_endpoints", mode="after")
     @classmethod

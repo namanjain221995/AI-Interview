@@ -61,6 +61,15 @@ AI_ENDPOINT_UP = Gauge(
     "AI endpoint reachable at the last health probe (1 up, 0 down, -1 unknown or disabled)",
     ["endpoint"],
 )
+SESSIONS_ENDED_OFFLINE = Counter(
+    "interview_sessions_ended_offline_total",
+    "Sessions ended by the lifecycle service without a client (abandoned sweep, staff cancel, REST end)",
+    ["reason", "actor"],
+)
+SESSIONS_ABANDONED_PENDING = Gauge(
+    "interview_sessions_abandoned_pending",
+    "Started sessions idle past the abandonment window that the last sweep could not end yet",
+)
 VAD_ENGINE = Gauge(
     "interview_vad_engine_info", "Voice-activity-detection engine in use by this process (1 = active)", ["engine"]
 )
