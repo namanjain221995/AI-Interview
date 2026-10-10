@@ -58,7 +58,7 @@ optimize-avatar: ## Build the optimized interviewer avatar from the MPFB source 
 
 ##@ Stack (docker compose, project "interview")
 .PHONY: up down ps logs build build-edge sandbox-images restart monitoring-up
-up: ## Build missing images, start the whole stack and wait until healthy
+up: prom-targets ## Build missing images, start the whole stack and wait until healthy
 	$(COMPOSE) up -d
 	@$(ROOT)/scripts/wait_for_healthy.sh --timeout 600
 
@@ -187,7 +187,7 @@ smoke: ## Smoke-test a running stack (health, edge headers, targets)
 	@$(ROOT)/scripts/smoke_test.sh
 
 ##@ Edge, monitoring, infra
-.PHONY: edge-validate edge-reload edge-ca prom-check prom-reload dashboards dashboards-check compose-check shellcheck
+.PHONY: edge-validate edge-reload edge-ca prom-targets prom-check prom-reload dashboards dashboards-check compose-check shellcheck
 edge-validate: ## caddy validate + fmt check of infra/caddy/Caddyfile
 	docker run --rm -v $(ROOT)/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro $(CADDY_IMAGE) \
 		sh -c 'caddy fmt --diff /etc/caddy/Caddyfile >/dev/null && caddy validate --config /etc/caddy/Caddyfile 2>&1 | tail -n 1'
@@ -202,7 +202,10 @@ prom-check: ## promtool: config, rules and alert unit tests
 	docker run --rm --entrypoint promtool -v $(ROOT)/infra/prometheus:/etc/prometheus:ro $(PROM_IMAGE) check config /etc/prometheus/prometheus.yml
 	docker run --rm --entrypoint promtool -v $(ROOT)/infra/prometheus:/etc/prometheus:ro $(PROM_IMAGE) test rules /etc/prometheus/tests/alerts_test.yml
 
-prom-reload: prom-check ## Reload Prometheus configuration and rules
+prom-targets: ## Write Prometheus targets for the AI endpoints from .env (infra/prometheus/targets/)
+	@python3 -I $(ROOT)/scripts/prom_targets.py
+
+prom-reload: prom-targets prom-check ## Reload Prometheus configuration and rules
 	curl -fsS -X POST http://127.0.0.1:9191/-/reload && echo "prometheus reloaded"
 
 dashboards: ## Regenerate Grafana dashboards from infra/grafana/generate_dashboards.py

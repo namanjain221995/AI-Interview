@@ -57,6 +57,11 @@ else
   app_env="$(env_get APP_ENV)"
   [[ "$app_env" == "production" || "$app_env" == "staging" ]] && [[ "$(env_get ENABLE_API_DOCS)" == "true" ]] && warn "ENABLE_API_DOCS=true in $app_env"
   [[ "$(env_get ENABLE_TEST_HOOKS)" == "true" ]] && warn "ENABLE_TEST_HOOKS=true (test-only endpoints enabled)"
+  if python3 -I "$ROOT/scripts/prom_targets.py" --check 2>/dev/null; then
+    ok "prometheus AI scrape targets match .env"
+  else
+    warn "prometheus AI scrape targets missing or stale (make prom-targets)"
+  fi
 fi
 
 probe() { # probe name url required(1/0)
