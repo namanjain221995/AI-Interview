@@ -270,11 +270,14 @@ def _patch_max_reconnects(interview: Interview, max_reconnects: int) -> None:
     interview.policy_snapshot = snapshot  # new dict: JSONB change detection
 
 
-def _freeze_no_candidate_report(interview: Interview) -> None:
+def _freeze_no_candidate_report(interview: Interview) -> bool:
+    """True when the snapshot changed (the row's ``updated_at`` then needs reloading after the flush)."""
     snapshot = dict(interview.policy_snapshot or {})
-    if snapshot.get("candidate_report_mode") != "never":
-        snapshot["candidate_report_mode"] = "never"
-        interview.policy_snapshot = snapshot
+    if snapshot.get("candidate_report_mode") == "never":
+        return False
+    snapshot["candidate_report_mode"] = "never"
+    interview.policy_snapshot = snapshot
+    return True
 
 
 async def send_intake(
@@ -633,7 +636,7 @@ async def ensure_intake_for_interview(
         return None
     org = await get_org_settings(db, interview.organization_id)
     kit = kit_info()
-    _freeze_no_candidate_report(interview)  # S21: generic invites / open-link rounds too
+    frozen_report_mode = _freeze_no_candidate_report(interview)  # S21: generic invites / open-link rounds too
     snapshot = interview.policy_snapshot if isinstance(interview.policy_snapshot, dict) else {}
     raw_integrity = snapshot.get("integrity")
     integrity: dict[str, Any] = raw_integrity if isinstance(raw_integrity, dict) else {}
@@ -661,6 +664,10 @@ async def ensure_intake_for_interview(
         kit_sha256=kit.sha256,
     )
     await db.flush()
+    if frozen_report_mode:
+        # The UPDATE expired the server-maintained updated_at; callers serialise the interview right after
+        # (a lazy load would fail in an async session).
+        await db.refresh(interview, attribute_names=["updated_at"])
     await db.execute(
         pg_insert(IntakeInterview)
         .values(
