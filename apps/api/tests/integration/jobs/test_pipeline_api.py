@@ -6,10 +6,14 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app.db.models import Candidate, Interview, InterviewSession, Job, Round
 from app.db.session import session_scope
 from app.domain.enums import Role, RoundType
 from app.schemas.rounds import RoundConfig
+
+pytestmark = pytest.mark.integration
 
 API = "/api/v1"
 

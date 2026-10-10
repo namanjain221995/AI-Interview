@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 
 from app.db.models import AuditLog, BackgroundJob
@@ -13,6 +14,8 @@ from app.domain.enums import Role
 from app.services.recordings.finalize import finalize_session
 
 from .conftest import WEBM_HEADER, candidate_client, make_session, policy_snapshot, upload
+
+pytestmark = pytest.mark.integration
 
 API = "/api/v1"
 

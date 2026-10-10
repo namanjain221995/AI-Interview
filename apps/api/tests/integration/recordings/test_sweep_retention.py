@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select, update
 
 from app.db.models import BackgroundJob, Candidate, Interview, MediaAsset
@@ -15,6 +16,8 @@ from app.services.recordings.finalize import finalize_session
 from app.services.recordings.sweep import sweep_recordings
 
 from .conftest import WEBM_HEADER, candidate_client, make_session, set_session, upload
+
+pytestmark = pytest.mark.integration
 
 
 async def _upload_part(app, rec, chunks: list[bytes]) -> uuid.UUID:

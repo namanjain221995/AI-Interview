@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 
 from app.db.models import BackgroundJob, MediaAsset
@@ -20,6 +21,8 @@ from .conftest import (
     set_session,
     upload,
 )
+
+pytestmark = pytest.mark.integration
 
 
 async def _segments(session_id: uuid.UUID) -> list[MediaAsset]:

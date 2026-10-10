@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from sqlalchemy import delete, func, select, update
 
 import app.workers.interview  # noqa: F401  (registers answer.reevaluate)
@@ -16,6 +17,8 @@ from app.domain.enums import ModelTask, Role
 from app.services.interview import reevaluation
 from app.services.interview.adapters import get_scoring
 from app.services.interview.evaluation import build_observations
+
+pytestmark = pytest.mark.integration
 
 
 async def _make_fallback(session_id: uuid.UUID) -> uuid.UUID:

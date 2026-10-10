@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.domain.enums import Role
+
+pytestmark = pytest.mark.integration
 
 API = "/api/v1"
 
@@ -19,7 +23,9 @@ async def test_intake_is_hidden_until_the_platform_grants_it(auth_client, org_fa
 
     job = await recruiter.post(f"{API}/jobs", json={"title": "Data analyst trainee", "status": "open"})
     assert job.status_code == 201, job.text
-    intake_round = await recruiter.post(f"{API}/jobs/{job.json()['id']}/rounds", json={"round_type": "intake"})
+    intake_round = await recruiter.post(
+        f"{API}/jobs/{job.json()['id']}/rounds", json={"round_type": "intake"}
+    )
     assert intake_round.status_code == 404 and intake_round.json()["error"]["code"] == "intake_disabled"
 
     platform = await auth_client(Role.SUPER_ADMIN)

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from app.domain.enums import Role
 
 from .conftest import create_interview
+
+pytestmark = pytest.mark.integration
 
 BASE = "https://192.168.1.50:3443"
 
