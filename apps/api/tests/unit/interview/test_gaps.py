@@ -117,3 +117,18 @@ def test_the_instruction_only_appears_when_the_move_can_stay_on_the_answer() -> 
         is None
     )
     assert gap_instruction([], recommended=TurnAction.ASK_FOLLOWUP) is None
+
+
+def test_a_follow_up_that_asked_for_the_reason_is_not_asked_a_third_time() -> None:
+    """Live run: "what trade-off did you make?" was asked, not answered, and the gap probe asked it again."""
+    question = "What specific trade-off did you make between cluster complexity and operational overhead?"
+    answer = (
+        "Sure. We ran Amazon EKS with three managed node groups across three availability zones. Karpenter handled "
+        "node autoscaling, and the horizontal pod autoscaler scaled deployments on CPU and request rate."
+    )
+    assert "reasoning" in kinds(answer, question=question)  # first time: one follow-up may ask for it
+    assert "reasoning" not in kinds(answer, question=question, followup=True)
+    numbers = "How many nodes did the cluster run at peak, roughly?"
+    vague = "It was a fairly large cluster with a lot of nodes across the zones, and we scaled it up during the sales."
+    assert "number" in kinds(vague, question=numbers)
+    assert "number" not in kinds(vague, question=numbers, followup=True)

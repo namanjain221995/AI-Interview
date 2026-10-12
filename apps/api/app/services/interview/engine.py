@@ -842,6 +842,7 @@ class InterviewEngine:
             question=current.text if current is not None else None,
             expected_evidence=current.expected_evidence if current is not None else (),
             technical=not (current is not None and current.competency_key in NON_TECHNICAL_KEYS),
+            followup=current is not None and current.parent_id is not None,
         )
         probe = gap_instruction(
             gaps,

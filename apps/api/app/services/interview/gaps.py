@@ -44,6 +44,8 @@ _REASONING = re.compile(
     r"picked|prefer\w*|versus|vs|compared|alternative\w*|pros?|cons?|downside\w*|upside\w*|benefit\w*|cost of|"
     r"which meant|that meant|otherwise|risk\w*)\b"
 )
+#: Questions that explicitly ask for the reason or the trade-off (not merely "how did you design").
+_REASON_ASK = re.compile(r"\b(?:why|trade-?off\w*|reason\w*|instead of|rather than|alternative\w*)\b")
 #: Questions that ask for a decision (a "how did you measure / what happened" question does not need a why).
 _DESIGN_ASK = re.compile(
     r"\b(?:design\w*|architect\w*|approach|choose|chose|choice|decide|decision|why|trade-?off\w*|structur\w*)\b"
@@ -97,8 +99,13 @@ def answer_gaps(
     question: str | None,
     expected_evidence: Sequence[str] = (),
     technical: bool = True,
+    followup: bool = False,
 ) -> list[Gap]:
-    """What the answer left out, most important first (empty for short or off-topic answers)."""
+    """What the answer left out, most important first (empty for short or off-topic answers).
+
+    ``followup``: the question answered was itself a follow-up. A gap that question asked for in so many words
+    (a reason / trade-off, a number) and still did not get is not asked for a third time - live run: "what
+    trade-off did you make?" twice in a row."""
     text = (answer or "").strip()
     words = _words(text)
     if len(words) < MIN_WORDS:
@@ -118,11 +125,17 @@ def answer_gaps(
 
     # Stories (non-technical competencies) need an outcome, not a figure, unless the question asked for one.
     wants_number = _METRIC_ASK.search(asked) or (technical and _OUTCOME_CLAIM.search(lowered))
-    if wants_number and not _NUMBER.search(lowered):
+    if wants_number and not _NUMBER.search(lowered) and not (followup and _METRIC_ASK.search(asked)):
         gaps.append(Gap("number", "a concrete number for the outcome or the scale they described"))
 
     if technical:
-        if len(words) >= 25 and _DESIGN_ASK.search(asked) and not _REASONING.search(lowered):
+        reason_asked = _REASON_ASK.search(asked)
+        if (
+            len(words) >= 25
+            and _DESIGN_ASK.search(asked)
+            and not _REASONING.search(lowered)
+            and not (followup and reason_asked)
+        ):
             gaps.append(Gap("reasoning", "why they chose that approach and what they gave up for it"))
     elif not _RESULT.search(lowered):
         gaps.append(Gap("outcome", "the outcome: what happened as a result and how they knew"))
