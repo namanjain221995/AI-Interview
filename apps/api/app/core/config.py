@@ -211,6 +211,9 @@ class Settings(BaseSettings):
     # Tier 2: a deterministic check of each substantive answer names what it left out (services/interview/gaps.py)
     # and the turn prompt asks the interviewer to follow up on exactly that.
     interview_gap_probes: bool = True
+    # Tier 2 evaluator v2 (AnswerEvaluationV2): evidence and verbatim quotes before the verdict, scores against the
+    # competency's level 1/3/5 reference levels, shorter output; contradictions only from substantive answers.
+    evaluator_v2: bool = True
     ws_heartbeat_interval_seconds: int = 10
     ws_disconnect_grace_seconds: int = 180
     session_resume_buffer_messages: int = 300

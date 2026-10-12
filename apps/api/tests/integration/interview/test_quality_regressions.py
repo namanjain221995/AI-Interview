@@ -236,3 +236,43 @@ async def test_a_technical_answer_about_system_prompts_is_evaluated(interview_en
     reply = state.answers[-1]
     assert reply.special is None and reply.quality != "off_topic"
     assert reply.evaluated or reply.id in state.pending_evaluations or await _evaluation_jobs_for(reply.id)
+
+
+async def test_evaluator_v2_gets_the_reference_levels_and_writes_evidence_first(interview_env) -> None:
+    """Tier 2 evaluator v2: the competency's level 1/3/5 anchors reach the prompt; the requested schema starts
+    with the evidence and its quotes, and names the overall quality only after the scores."""
+    from app.db.models import Competency
+
+    world, sid, engine = await _setup(interview_env)
+    async with session_scope() as db:
+        db.add(
+            Competency(
+                organization_id=world.organization_id,
+                key="kubernetes",
+                name="Kubernetes",
+                category="technical",
+                rubric={
+                    "levels": {
+                        "1": "Names basic objects only.",
+                        "3": "Operates production workloads and debugs common failures.",
+                        "5": "Designs multi-AZ clusters with explicit trade-offs.",
+                    }
+                },
+            )
+        )
+    d = Driver(interview_env, engine, sid)
+    await d.start()
+    await d.answer("[adequate] We ran three EKS clusters across three zones.", speculate=False, evaluate=False)
+    await d.run_evaluations()
+    call = interview_env["mock_ai"].llm.calls_for(ModelTask.ANSWER_EVALUATION)[-1]
+    user = str(call.messages[-1]["content"])
+    assert "REFERENCE LEVELS for kubernetes" in user and "level 5 = Designs multi-AZ clusters" in user
+    assert call.schema is not None and call.schema.__name__ == "AnswerEvaluationV2"
+    assert "collect the evidence first" in " ".join(str(call.messages[0]["content"]).split())
+    async with session_scope() as db:
+        row = (
+            (await db.execute(select(AnswerEvaluationRow).order_by(AnswerEvaluationRow.created_at.desc())))
+            .scalars()
+            .first()
+        )
+    assert row is not None and not row.is_fallback

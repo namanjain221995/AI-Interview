@@ -25,12 +25,12 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 from rapidfuzz import fuzz
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +45,7 @@ from app.db.models import (
     BankQuestion,
     CodingQuestion,
     CodingSession,
+    Competency,
     CompetencyEvidence,
     InterviewSession,
     Question,
@@ -64,14 +65,20 @@ from app.domain.enums import (
     ModelTask,
     SessionStatus,
 )
-from app.schemas.ai import AnswerEvaluation, CodingEvaluation, DimensionScores, EvidenceItem
+from app.schemas.ai import (
+    AnswerEvaluation,
+    AnswerEvaluationV2,
+    CodingEvaluation,
+    DimensionScores,
+    EvidenceItem,
+)
 from app.schemas.rounds import RoundConfig, load_round_config
 from app.services.interview.adapters import ScoringPort, get_scoring
 from app.services.interview.config import EngineConfig, get_engine_config
 from app.services.interview.contradictions import neutral_description
 from app.services.interview.grounding import GroundingContext, inconsistency_issue
 from app.services.interview.policy import FLOW_ONLY_ACTION_VALUES, is_coding_competency
-from app.services.interview.prompts import EVALUATION_SYSTEM, EVALUATION_USER
+from app.services.interview.prompts import EVALUATION_SYSTEM, EVALUATION_SYSTEM_V2, EVALUATION_USER
 from app.services.interview.records import as_uuid, log_event
 from app.services.interview.scoring_fallback import assistance_factor, evidence_record_from_row
 from app.services.interview.state import CompetencyState, InterviewState
@@ -262,6 +269,55 @@ def synthetic_evidence(evaluation: AnswerEvaluation, competency_key: str | None)
         )
     ]
 
+
+
+#: Evaluator v2: contradictions are only taken from answers with content (a generic answer turned into a
+#: high-severity resume contradiction in a staging session). Length is no criterion: "only 3 nodes in production"
+#: is short and can genuinely conflict with a resume claim.
+_NO_CONTRADICTION_QUALITIES = frozenset({AnswerQuality.VAGUE, AnswerQuality.NO_ANSWER, AnswerQuality.OFF_TOPIC})
+
+
+def gate_contradictions(evaluation: AnswerEvaluation) -> tuple[AnswerEvaluation, int]:
+    """Drop contradictions reported for a vague, empty or off-topic answer (v2)."""
+    if not evaluation.contradictions or evaluation.overall_quality not in _NO_CONTRADICTION_QUALITIES:
+        return evaluation, 0
+    return evaluation.model_copy(update={"contradictions": []}), len(evaluation.contradictions)
+
+
+def unquoted_confidence(evaluation: AnswerEvaluation, *, cap: float = 0.4) -> AnswerEvaluation:
+    """v2 asks for a verbatim quote on every observation that is not an absence: credit for a skill whose quote is
+    not in the answer (missing, or invented - ``clean_evaluation`` cleared it) keeps a capped confidence (shown in
+    the report; scores use the evaluation's own confidence). Absences (negative, no quote by design) are kept."""
+    items = [
+        item.model_copy(update={"confidence": min(item.confidence, cap)})
+        if item.quote is None and item.signal == EvidenceSignal.POSITIVE
+        else item
+        for item in evaluation.evidence
+    ]
+    return evaluation.model_copy(update={"evidence": items})
+
+
+async def reference_levels(db: AsyncSession, organization_id: str, key: str | None) -> str:
+    """The competency's level 1/3/5 anchors (competencies.rubric.levels; the organisation's own definition first)."""
+    if not key:
+        return ""
+    rows = sorted(
+        (
+            await db.execute(
+                select(Competency.organization_id, Competency.rubric).where(
+                    Competency.key == key,
+                    or_(Competency.organization_id == as_uuid(organization_id), Competency.organization_id.is_(None)),
+                )
+            )
+        ).all(),
+        key=lambda r: r.organization_id is None,
+    )
+    levels = ((rows[0].rubric or {}).get("levels") or {}) if rows else {}
+    if not isinstance(levels, dict):
+        return ""
+    return "; ".join(
+        f"level {level} = {str(text)[:260]}" for level, text in sorted(levels.items()) if str(level) in ("1", "3", "5")
+    )
 
 async def _conversation_before(
     db: AsyncSession, session_id: uuid.UUID, answer_id: uuid.UUID, limit: int = 12
@@ -649,6 +705,8 @@ class EvaluationService:
             prior = await _prior_evidence(db, sid, primary)
             answer_text = answer.transcript_text
             answer_ended_s = (answer.ended_ms or 0) / 1000.0
+            v2 = self._config.evaluator_v2
+            levels = await reference_levels(db, organization_id, primary) if v2 else ""
             question_action = question.action if question else None
 
         claims_view: list[str] = []
@@ -677,7 +735,8 @@ class EvaluationService:
                 f"{k}: {str(v)[:200]}" for k, v in r.items() if k in ("excellent", "good", "weak")
             )
         competencies = ", ".join(f"{c.key}: {c.name or c.key}" for c in round_config.competencies)
-        system = EVALUATION_SYSTEM.render(schema=describe_schema(AnswerEvaluation))
+        system_template = EVALUATION_SYSTEM_V2 if v2 else EVALUATION_SYSTEM
+        system = system_template.render(schema=describe_schema(AnswerEvaluationV2 if v2 else AnswerEvaluation))
         user = EVALUATION_USER.render(
             round_name=round_config.name,
             competencies=competencies,
@@ -686,6 +745,7 @@ class EvaluationService:
             question=(question.text if question else "(no question recorded)")[:900],
             expected=", ".join(expected),
             rubric=rubric,
+            levels=levels,
             claims=claims_view,
             known_inconsistencies=known_inconsistencies,
             earlier=earlier,
@@ -697,20 +757,21 @@ class EvaluationService:
         model_call_id: str | None = None
         try:
             result = await self.ai.llm.structured(
-                AnswerEvaluation,
+                AnswerEvaluationV2 if v2 else AnswerEvaluation,
                 [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 context=CallContext(
                     task=ModelTask.ANSWER_EVALUATION,
                     session_id=session_id,
                     organization_id=organization_id,
-                    prompt_version=EVALUATION_SYSTEM.version,
+                    prompt_version=system_template.version,
                 ),
                 temperature=0.1,
-                max_tokens=2200,
+                max_tokens=1400 if v2 else 2200,
                 timeout=self._config.evaluation_timeout_s,
                 max_attempts=2,
             )
-            evaluation = result.value
+            value = result.value
+            evaluation = value.to_v1() if isinstance(value, AnswerEvaluationV2) else cast(AnswerEvaluation, value)
             model_call_id = result.model_call_id
         except AIOutputInvalid as exc:
             ERRORS.labels(component="engine_evaluation").inc()
@@ -747,6 +808,11 @@ class EvaluationService:
             question_keys=q_keys,
             known_claims=known_claims or (list(state.claims) if state else []),
         )
+        if v2 and not is_fallback:
+            evaluation = unquoted_confidence(evaluation)
+            evaluation, gated = gate_contradictions(evaluation)
+            if gated:
+                log.info("engine.evaluation_contradiction_gated", session_id=session_id, count=gated)
         evaluation, dropped_contradictions = ground_contradictions(
             evaluation, state, answer_text=answer_text, conversation=conversation
         )
@@ -1134,7 +1200,10 @@ __all__ = [
     "evals_key",
     "neutral_evaluation",
     "pop_ready_evaluations",
+    "gate_contradictions",
     "quote_in_answer",
+    "reference_levels",
+    "unquoted_confidence",
     "rebuild_hook",
     "recompute_competencies",
     "synthetic_evidence",

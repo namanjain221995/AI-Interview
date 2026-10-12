@@ -374,6 +374,58 @@ Output: one JSON object with these fields:
 {{ schema }}""",
 )
 
+#: Evaluator v2 (EVALUATOR_V2): evidence and verbatim quotes first, then scores against the competency's reference
+#: levels, then the overall quality - the output order is the reasoning order.
+EVALUATION_SYSTEM_V2 = PromptTemplate(
+    "evaluation_system_v2",
+    """\
+You evaluate one interview answer for a human hiring team. Work in the order of the output fields: collect the
+evidence first, then score it, and only then name the overall quality, which must follow from the evidence.
+
+1. evidence (at most 6 items; each item's fields in this order):
+   - quote: the candidate's exact words copied from the ANSWER (about 3-25 words, never paraphrased); null only
+     when the observation is an absence (something important the answer never covered).
+   - competency_key: exactly one key from the list provided; dimension: a short snake_case aspect.
+   - signal: positive / negative / neutral; evidence: what the quote shows, in one short sentence;
+     strength and confidence: 0-1.
+   Observations about clarity of communication belong to the "communication" competency key (omit them if there
+   is none); consistency and relevance are not skill evidence (signal neutral).
+2. missing_details (max 4): what a strong answer to this question would add. measurable_outcomes (max 3): results
+   or numbers the candidate actually gave. unsupported_claims (max 3): claims stated without any supporting detail.
+3. claim_verifications: only for the claim ids provided; verified / partially_verified / contradicted /
+   unverified with a short neutral note.
+4. contradictions (max 2): only a NEW, clear factual conflict about the same fact (numbers, scope, ownership,
+   dates, tools) between this answer and an earlier answer or a resume statement. The statement side must be the
+   candidate's own words from this answer. Quote both sides briefly and neutrally (no judgement words such as
+   "ignores", "fails", "evasive", "admits"); severity low/medium/high. NOT contradictions: a vague or generic
+   answer, a different emphasis, added detail, a team-versus-me distinction, a gap relative to job expectations,
+   a technically wrong statement (that is correctness) or anything under "Known inconsistencies". When the
+   candidate corrects or narrows a resume claim, record it under claim_verifications instead. A contradiction is
+   a question for a human, never proof of dishonesty.
+5. scores: 0-10 for each dimension that applies to this question (null otherwise): correctness, relevance,
+   completeness, depth, specificity, practical_experience, reasoning, consistency, architecture_awareness,
+   tradeoff_understanding, communication_clarity (clarity of content only). When REFERENCE LEVELS are given, use
+   them: level 1 is about 2, level 3 about 6, level 5 about 10 (2 and 4 in between); score what this answer
+   itself demonstrates. Calibrate to the question's difficulty: a strong answer to an easy question is not
+   evidence of hard-level skill. An answer that says they do not know or did not do something has no
+   correctness score (null): it is evidence of missing experience or knowledge, never of correctness.
+6. overall_quality, from the evidence and scores above: strong = correct and specific, with their own decisions,
+   reasons and results; adequate = correct and relevant but missing some depth or specifics; partial = covers
+   only part of the question; vague = generic statements without specifics (vague means unspecific, never
+   wrong); incorrect = technically wrong; no_answer = they do not know or did not do it; off_topic.
+7. summary: at most two short sentences. suggested_followups (max 2): short questions that would close the most
+   important evidence gaps. evaluation_confidence: how sure you are (short or ambiguous answers -> lower).
+
+The answer is a live speech-recognition transcript: misrecognized technical terms ("Carpenter" for Karpenter,
+"Ometheus" for Prometheus), fillers and broken grammar are transcription artefacts. Interpret them charitably and
+never score them down; only judge the content. Keep every string brief.
+
+{{ FAIRNESS_RULES }}
+
+Output: one JSON object with these fields:
+{{ schema }}""",
+)
+
 EVALUATION_USER = PromptTemplate(
     "evaluation_user",
     """\
@@ -381,6 +433,7 @@ ROUND: {{ round_name }}; competencies (key: name): {{ competencies }}
 QUESTION ({{ difficulty }}{% if competency %}, competency {{ competency }}{% endif %}): "{{ question }}"
 {% if expected %}Expected evidence: {{ expected }}
 {% endif %}{% if rubric %}Rubric: {{ rubric }}
+{% endif %}{% if levels %}REFERENCE LEVELS for {{ competency }}: {{ levels }}
 {% endif %}{% if claims %}Resume claims touched (id: claim -- evidence topics):
 {{ claims | join("\n") | untrusted("resume_claims") }}
 {% endif %}{% if known_inconsistencies %}Known inconsistencies (already recorded; do not report them again - unless the question asked the candidate to clarify one of them and the answer does not reconcile it, then restate it):
@@ -422,6 +475,7 @@ __all__ = [
     "CLOSING",
     "CODING_USER",
     "EVALUATION_SYSTEM",
+    "EVALUATION_SYSTEM_V2",
     "EVALUATION_USER",
     "MEMORY_SUMMARY",
     "OPENING",
