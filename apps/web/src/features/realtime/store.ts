@@ -335,6 +335,21 @@ export function currentUtterance(list: readonly UtteranceView[]): UtteranceView 
   return list.find((u) => !finished(u)) ?? list[list.length - 1] ?? null;
 }
 
+/**
+ * Insert a started utterance where the candidate will hear it. Normally that is last (speech plays in order),
+ * but an acknowledgement ("Okay.", "One moment.") is played at once from a cache: when it starts while the reply
+ * was already announced but has no audio yet (the model is still writing it), it is heard first. Placed after
+ * that silent reply it took over the caption, marked the reply as heard when it played, and stayed on screen
+ * instead of the question.
+ */
+function placeUtterance(list: readonly UtteranceView[], utterance: UtteranceView): UtteranceView[] {
+  const rest = list.filter((u) => u.id !== utterance.id);
+  if (utterance.kind !== "acknowledgment") return [...rest, utterance];
+  let at = rest.length;
+  while (at > 0 && !finished(rest[at - 1]) && rest[at - 1].mode === "pending" && rest[at - 1].spokenWords === 0) at--;
+  return [...rest.slice(0, at), utterance, ...rest.slice(at)];
+}
+
 function withUtterances(state: InterviewViewState, utterances: UtteranceView[]): InterviewViewState {
   const list = utterances.slice(-MAX_UTTERANCES);
   return { ...state, utterances: list, utterance: currentUtterance(list) };
@@ -429,7 +444,7 @@ function reduceServer(state: InterviewViewState, msg: ServerMessage, at: number)
         interrupted: false,
         delivered: false,
       };
-      const next = withUtterances(state, [...state.utterances.filter((u) => u.id !== utterance.id), utterance]);
+      const next = withUtterances(state, placeUtterance(state.utterances, utterance));
       return {
         ...next,
         ...(state.session ? { session: { ...state.session, ...liveOnceStarted(state.session, true, at) } } : {}),

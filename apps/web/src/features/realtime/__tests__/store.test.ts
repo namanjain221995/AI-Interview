@@ -122,6 +122,60 @@ describe("interview reducer", () => {
     expect(s.utterance?.spokenWords).toBe(5);
   });
 
+  it("keeps the question's caption when a filler plays while the reply is still being written", () => {
+    // Owner report: "One moment." started after the reply was announced (no audio yet), played first, marked the
+    // question as heard, and its caption stayed on screen while the question was spoken.
+    const chunk = (id: string, text: string) =>
+      server({ type: "tts.chunk", utterance_id: id, chunk_id: 1, index: 0, text, sample_rate: 24000, duration_ms: 600, visemes: [], word_timings: [] });
+    let s = apply([
+      sessionState({ turn_state: "processing" }),
+      server({ type: "ai.utterance.start", utterance_id: "ack", kind: "acknowledgment" }),
+      chunk("ack", "Okay."),
+      server({ type: "ai.utterance.end", utterance_id: "ack", text: "Okay." }),
+      { type: "playback.chunk_started", utteranceId: "ack", text: "Okay." },
+      { type: "playback.done", utteranceId: "ack", interrupted: false },
+      server({ type: "ai.utterance.start", utterance_id: "q", kind: "question" }),
+      server({ type: "ai.utterance.start", utterance_id: "filler", kind: "acknowledgment" }),
+      chunk("filler", "One moment."),
+      server({ type: "ai.utterance.end", utterance_id: "filler", text: "One moment." }),
+      { type: "playback.chunk_started", utteranceId: "filler", text: "One moment." },
+    ]);
+    expect(s.utterances.map((u) => u.id)).toEqual(["ack", "filler", "q"]);
+    expect(s.utterance?.id).toBe("filler");
+    expect(s.utterances.find((u) => u.id === "q")?.delivered).toBe(false);
+    s = apply(
+      [
+        { type: "playback.done", utteranceId: "filler", interrupted: false },
+        server({ type: "ai.text.delta", utterance_id: "q", text: "Which metric told you the rollout was safe?" }),
+        chunk("q", "Which metric told you"),
+        { type: "playback.chunk_started", utteranceId: "q", text: "Which metric told you" },
+      ],
+      s,
+    );
+    expect(s.utterance?.id).toBe("q");
+    expect(s.utterance?.spokenWords).toBe(4);
+    s = apply(
+      [
+        server({ type: "ai.utterance.end", utterance_id: "q", text: "Which metric told you the rollout was safe?" }),
+        { type: "playback.done", utteranceId: "q", interrupted: false },
+        server({ type: "turn.state", state: "listening", reason: "reply_done" }),
+      ],
+      s,
+    );
+    expect(s.utterance?.id).toBe("q");
+    expect(s.lastInterviewerText).toBe("Which metric told you the rollout was safe?");
+  });
+
+  it("puts an acknowledgement after a reply whose audio already started", () => {
+    const s = apply([
+      sessionState({ turn_state: "ai_speaking" }),
+      server({ type: "ai.utterance.start", utterance_id: "q", kind: "question" }),
+      server({ type: "tts.chunk", utterance_id: "q", chunk_id: 1, index: 0, text: "How", sample_rate: 24000, duration_ms: 300, visemes: [], word_timings: [] }),
+      server({ type: "ai.utterance.start", utterance_id: "ack", kind: "acknowledgment" }),
+    ]);
+    expect(s.utterances.map((u) => u.id)).toEqual(["q", "ack"]);
+  });
+
   it("shows the whole question once the floor is the candidate's, even if a playback report was lost", () => {
     const s = apply([
       sessionState({ turn_state: "ai_speaking" }),

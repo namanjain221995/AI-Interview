@@ -399,6 +399,7 @@ class TurnCapture:
     required_ms: int | None = None
     acknowledged: str | None = None  # the acknowledgement phrase already played after this turn
     replied: bool = False  # the first audio of the interviewer's reply to this turn was sent
+    reply_text: bool = False  # the reply's first words arrived (its audio is under a second away)
     # Silence since the candidate's last voiced audio when the end of turn was decided (P0.4): the part of the
     # wait the candidate experiences before any end-of-turn timer starts.
     silence_at_end_ms: int | None = None
@@ -1410,6 +1411,7 @@ class SessionRuntime:
                         and event.text
                     ):
                         first_text_logged = True  # model time to first spoken text
+                        capture.reply_text = True
                         self._latency_note(
                             capture, first_delta_ms=round((time.monotonic() - capture.end_at) * 1000)
                         )
@@ -2363,6 +2365,9 @@ class SessionRuntime:
         await asyncio.sleep(max(0.0, end_at + FILLER_AFTER_S - time.monotonic()))
         if (
             capture.replied
+            # The reply's words are already here: its audio follows within a second, and a filler would land on
+            # top of the question (and, played after the question was announced, used to take over its caption).
+            or capture.reply_text
             or capture.end_at != end_at  # the candidate kept talking: the turn was reopened
             or self.ended
             or self.closed
@@ -2376,7 +2381,7 @@ class SessionRuntime:
         if self.ack_cache.prompt(get_ai().tts, self.voice, phrase) is None:
             return  # not synthesized yet: silence rather than the browser's robotic voice
         self._fillers += 1
-        self._play_prompt(phrase)
+        self._play_prompt(phrase, kind="acknowledgment")
         self.avatar(AvatarState.THINKING, expression=AvatarExpression.THOUGHTFUL)
         self._latency_note(capture, filler_ms=round((time.monotonic() - end_at) * 1000), filler=phrase)
 
@@ -2643,12 +2648,13 @@ class SessionRuntime:
         self._go_idle("not_understood")
         return True
 
-    def _play_prompt(self, phrase: str) -> None:
+    def _play_prompt(self, phrase: str, *, kind: str = "comment") -> None:
         """Speak a runtime prompt (never reported to the engine): pre-synthesized
-        audio when available, otherwise the browser's voice/captions."""
+        audio when available, otherwise the browser's voice/captions. A filler is sent as an "acknowledgment"
+        (a quiet caption that never stands in for the last question); "Sorry, I didn't catch that" as a comment."""
         utt = ActiveUtterance(
             utterance_id=_new_id("prompt"),
-            kind="comment",
+            kind=kind,
             behavior=BehaviorSpec(state=AvatarState.SPEAKING, expression=AvatarExpression.WARM),
             is_ack=True,
             full_text=phrase,
@@ -2657,7 +2663,7 @@ class SessionRuntime:
         self.post(
             UtteranceStartMsg(
                 utterance_id=utt.utterance_id,
-                kind="comment",
+                kind=kind,  # type: ignore[arg-type]
                 behavior=_behavior_msg(utt.behavior, utt.utterance_id),
             )
         )

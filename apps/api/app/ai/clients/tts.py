@@ -25,6 +25,7 @@ utterance".
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import io
@@ -412,9 +413,12 @@ class MockTtsProvider:
         self.calls: list[str] = []
         self.fail_with: BaseException | None = None
         self.healthy = True
+        self.delay_s = 0.0  # tests: a slow synthesis
 
     async def synthesize(self, text: str, *, voice: str | None = None, speed: float = 1.0) -> TtsResult:
         self.calls.append(text)
+        if self.delay_s:
+            await asyncio.sleep(self.delay_s)
         if self.fail_with is not None:
             raise self.fail_with
         text = " ".join(text.split())

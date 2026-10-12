@@ -973,6 +973,18 @@ async def test_expired_invite_without_a_started_session_is_refused(realtime_env,
     assert await ws.wait_closed() == 4011
 
 
+
+def _fillers(ws, mark: int) -> list[dict]:
+    """Filler utterance starts after ``mark`` (sent as quiet acknowledgements; identified by their text)."""
+    from app.realtime.acknowledgements import FILLER_PHRASES
+
+    ids = {
+        m["utterance_id"]
+        for m in ws.messages[mark:]
+        if m["type"] == "ai.utterance.end" and m.get("text") in FILLER_PHRASES
+    }
+    return [m for m in ws.messages[mark:] if m["type"] == "ai.utterance.start" and m["utterance_id"] in ids]
+
 async def test_a_slow_reply_is_bridged_by_one_moment_and_the_answer_is_marked_acknowledged(
     realtime_env, ws_connect, mock_ai, monkeypatch
 ) -> None:
@@ -989,19 +1001,16 @@ async def test_a_slow_reply_is_bridged_by_one_moment_and_the_answer_is_marked_ac
     mark = len(ws.messages)
     await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
     ack = await ws.wait_type("ai.utterance.start", kind="acknowledgment", after=mark)
-    filler = await ws.wait_type("ai.utterance.start", kind="comment", after=mark)
-    filler_end = await ws.wait_type("ai.utterance.end", utterance_id=filler["utterance_id"])
-    assert filler_end["text"] in runtime_module.FILLER_PHRASES
     reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"])
+    fillers = _fillers(ws, mark)
+    assert len(fillers) == 1 and fillers[0]["kind"] == "acknowledgment"  # a quiet caption, never the question's
+    filler = fillers[0]
     order = [m.get("utterance_id") for m in ws.messages[mark:] if m["type"] == "ai.utterance.start"]
     assert (
         order.index(ack["utterance_id"])
         < order.index(filler["utterance_id"])
         < order.index(reply["utterance_id"])
-    )
-    assert (
-        sum(1 for m in ws.messages[mark:] if m["type"] == "ai.utterance.start" and m.get("kind") == "comment")
-        == 1
     )
     turn = env.engine.turns[0]
     assert turn.acknowledged  # the phrase the candidate already heard
@@ -1024,12 +1033,33 @@ async def test_a_reply_announced_but_slow_to_speak_is_bridged_too(
     mark = len(ws.messages)
     await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
     reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark)
-    filler = await ws.wait_type("ai.utterance.start", kind="comment", after=mark)
-    filler_end = await ws.wait_type("ai.utterance.end", utterance_id=filler["utterance_id"])
-    assert filler_end["text"] in runtime_module.FILLER_PHRASES
     reply_end = await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"])
+    fillers = _fillers(ws, mark)
+    assert len(fillers) == 1 and fillers[0]["kind"] == "acknowledgment"
+    filler = fillers[0]
     # The filler went out while the reply was announced but still silent, and the reply was then spoken in full.
     assert ws.messages.index(filler) < ws.messages.index(reply_end) and reply_end["text"]
+
+
+async def test_no_filler_once_the_replys_words_are_arriving(realtime_env, ws_connect, mock_ai, monkeypatch) -> None:
+    """Owner report: "One moment." played while the question was already on its way (its words had arrived, its
+    audio was being synthesized), landing on top of it and taking over its caption. Once the reply's text has
+    started, the filler stays quiet even if the audio is still a moment away."""
+    from app.realtime import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "FILLER_AFTER_S", 1.0)
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    mock_ai.tts.delay_s = 2.0  # the reply's text is immediate, its first audio ~2 s later
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("We reduced costs by forty percent,", "mostly by rightsizing.")
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"], timeout=15)
+    # The question was really synthesized (late), not degraded to a fallback.
+    assert any(m["type"] == "tts.chunk" and m.get("utterance_id") == reply["utterance_id"] for m in ws.messages[mark:])
+    assert _fillers(ws, mark) == []
 
 async def test_a_quick_reply_needs_no_filler(realtime_env, ws_connect, mock_ai) -> None:
     env = await realtime_env()
