@@ -56,6 +56,7 @@ class TtsService:
         self.warm = False
         self.last_latency_ms: float | None = None
         self.started_at = time.monotonic()
+        self.last_used = time.monotonic()
         self._voices: dict[str, VoiceInfo] = {}
         self.cache: LruCache[Synthesis] = LruCache(
             max_entries=settings.cache_max_entries,
@@ -100,6 +101,24 @@ class TtsService:
     def shutdown(self) -> None:
         self.scheduler.shutdown()
 
+    async def keep_warm(self) -> None:
+        """While idle, synthesize a short phrase on every session every ``keepwarm_seconds`` so the model's pages and
+        ONNX arenas stay resident; never while real work is running or queued."""
+        interval = self.settings.keepwarm_seconds
+        if interval <= 0:
+            return
+        while True:
+            await asyncio.sleep(interval)
+            if self.state != "ok" or time.monotonic() - self.last_used < interval:
+                continue
+            if self.scheduler.running or self.scheduler.queued:
+                continue
+            try:
+                await asyncio.to_thread(self.engine.warm_up, self.settings.keepwarm_text, self.settings.default_voice)
+                metrics.KEEPWARM.inc()
+            except Exception as exc:  # noqa: BLE001 - a failed warm-up must never take the service down
+                log.warning("tts.keepwarm_failed", error=f"{type(exc).__name__}: {exc}"[:200])
+
     # ------------------------------------------------------------ voices
 
     def voices(self) -> list[VoiceInfo]:
@@ -122,6 +141,7 @@ class TtsService:
     # ------------------------------------------------------------ synthesis
 
     async def speak(self, text: str, voice: str | None, speed: float, sample_rate: int) -> SpeakResult:
+        self.last_used = time.monotonic()
         if self.state != "ok":
             metrics.ERRORS.labels("not_ready").inc()
             raise NotReady(self.state, self.detail)

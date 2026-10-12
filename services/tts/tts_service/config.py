@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     cache_max_item_bytes: int = Field(default=4 * 1024 * 1024, ge=0)
 
     warmup_text: str = "Hello, and welcome. Thanks for joining the interview today."
+    # After this many idle seconds every session synthesizes a short phrase, so the first question after a pause is
+    # as fast as the rest (a session left idle was paged out: 4.1 s for 47 characters instead of ~0.5 s). 0 = off.
+    keepwarm_seconds: float = Field(default=60.0, ge=0)
+    keepwarm_text: str = "Okay, thank you."
     # Optional bearer token for /v1/*; unset means no authentication (the
     # service is published on 127.0.0.1 only).
     api_key: SecretStr | None = None
