@@ -156,6 +156,9 @@ class SegmentJob:
         )
 
 
+#: No interim transcript once the candidate has been silent this long (see ``PartialScheduler.due``).
+PARTIAL_PAUSE_MS = 300
+
 class PartialScheduler:
     """Throttle for interim transcripts (adaptive interval)."""
 
@@ -176,8 +179,12 @@ class PartialScheduler:
     def reset_segment(self) -> None:
         self.last_audio_ms = 0
 
-    def due(self, *, now: float, open_audio_ms: int, finals_pending: int) -> bool:
+    def due(self, *, now: float, open_audio_ms: int, finals_pending: int, silence_ms: int = 0) -> bool:
         if not self.enabled or self.inflight or finals_pending > 0:
+            return False
+        if silence_ms >= PARTIAL_PAUSE_MS:
+            # The candidate paused: there are no new words to show, and if they finished, the segment's final is
+            # about to need the (single) Whisper slot - a preview started now would hold it for ~1 s.
             return False
         if open_audio_ms - self.last_audio_ms < self.min_audio_ms:
             return False

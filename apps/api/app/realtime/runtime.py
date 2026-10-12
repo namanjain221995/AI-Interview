@@ -2268,7 +2268,12 @@ class SessionRuntime:
         start = self.segmenter.open_segment_start_ms or 0
         open_ms = self.segmenter.now_ms - start
         now = time.monotonic()
-        if not self.partials.due(now=now, open_audio_ms=open_ms, finals_pending=capture.transcriber.pending):
+        if not self.partials.due(
+            now=now,
+            open_audio_ms=open_ms,
+            finals_pending=capture.transcriber.pending,
+            silence_ms=self.segmenter.silence_ms,
+        ):
             return
         if not stt_has_spare_capacity(get_ai().stt):
             return  # never let a caption delay a segment final; try again on a later frame
