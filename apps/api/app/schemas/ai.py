@@ -15,6 +15,8 @@ of what was said.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.enums import (
@@ -301,6 +303,40 @@ class TurnDecision(AIModel):
             tone=SpeechTone.SUPPORTIVE if self.action in _SUPPORTIVE_ACTIONS else SpeechTone.PROFESSIONAL,
         )
 
+
+
+class TurnDecisionCompact(AIModel):
+    """What the model writes for a turn when ``TURN_DECISION_COMPACT`` is on (Tier 2).
+
+    Same contract as ``TurnDecision`` (speech first, every field required), with the fields the next turn needs
+    straight after the speech (the metadata tail is cut when it outlasts the speech: ~70% of voice turns lost
+    their missing_specifics / new_claims / possible_contradiction), shorter lists, and no avatar fields (derived
+    from the action). ``turns.expand_compact`` turns it into a full ``TurnDecision``."""
+
+    SPEECH_FIRST_TURN: ClassVar[bool] = True
+
+    speech: str = Field(
+        ...,
+        min_length=1,
+        max_length=700,
+        description="Exactly what the interviewer says: conversational, 1-3 short sentences, ONE question, no markdown",
+    )
+    action: TurnAction
+    answer_quality: AnswerQuality | None = Field(
+        ..., description="Assessment of the candidate's last answer (null for the opening question)"
+    )
+    missing_specifics: list[str] = Field(..., max_length=3, description="What the last answer lacked")
+    new_claims: list[str] = Field(..., max_length=2, description="Interesting claims made in the last answer")
+    possible_contradiction: str | None = Field(..., max_length=300)
+    competency_key: str | None = Field(..., max_length=80)
+    question_focus: str | None = Field(..., max_length=200, description="Canonical short form of the question asked")
+    expected_evidence: list[str] = Field(..., max_length=4)
+    difficulty: Difficulty
+    kind: QuestionKind
+    topic: str | None = Field(..., max_length=120)
+    claim_id: str | None = Field(..., max_length=24)
+    bank_question_id: str | None = Field(..., max_length=40)
+    reason: str = Field(..., max_length=200, description="Why this move, in one short sentence")
 
 ACTION_AVATAR_STATE: dict[TurnAction, AvatarState] = {
     TurnAction.INTRODUCE: AvatarState.SPEAKING,

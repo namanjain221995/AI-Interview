@@ -14,6 +14,7 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
+from app.core.config import get_settings
 from app.domain.enums import ClaimStatus, Difficulty
 from app.schemas.ai import InterviewPlan
 from app.services.interview.memory import recent_window
@@ -23,6 +24,7 @@ from app.services.interview.prompts import (
     CODING_USER,
     SPEECH_RULES,
     TURN_FIELDS,
+    TURN_FIELDS_COMPACT,
     TURN_SYSTEM,
     TURN_USER,
 )
@@ -318,7 +320,7 @@ def static_variables(state: InterviewState) -> dict[str, Any]:
         "plan": plan_text(state.plan, round_focus={c.key: c.focus_areas for c in rc.competencies}),
         "speech_rules": SPEECH_RULES,
         "asr_note": ASR_NOTE,
-        "schema": TURN_FIELDS,
+        "schema": TURN_FIELDS_COMPACT if get_settings().turn_decision_compact else TURN_FIELDS,
     }
 
 
@@ -331,6 +333,7 @@ def system_prompt(state: InterviewState) -> str:
             str(len(state.claims)),
             state.candidate_name or "",
             TURN_SYSTEM.version,
+            str(get_settings().turn_decision_compact),
         ]
     )
     fingerprint = hashlib.sha1(fingerprint_src.encode("utf-8")).hexdigest()  # noqa: S324 - cache key only

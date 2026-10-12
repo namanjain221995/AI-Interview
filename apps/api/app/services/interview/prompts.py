@@ -81,6 +81,20 @@ in their words, neutrally; never for a technically wrong answer or a conflict wi
 reason = one short sentence. Keep every field brief."""
 
 
+#: Field order of TurnDecisionCompact (TURN_DECISION_COMPACT): what the next turn needs comes right after the speech.
+TURN_FIELDS_COMPACT = """\
+Output: one JSON object with the fields in this order: speech, action, answer_quality, missing_specifics, \
+new_claims, possible_contradiction, competency_key, question_focus, expected_evidence, difficulty, kind, topic, \
+claim_id, bank_question_id, reason. speech = what you say; action = the move you made; answer_quality = your read \
+of the last answer (null if none); missing_specifics (max 3) = what the last answer left out that a strong answer \
+would include; new_claims (max 2) = notable new claims in the last answer; possible_contradiction = only a clear \
+factual conflict between two of the candidate's own statements (an earlier answer, or the resume - say "resume"), \
+in their words, neutrally; never for a technically wrong answer or a conflict with documentation (else null); \
+competency_key = a round competency key (null only for flow moves); question_focus = your question in a few words; \
+expected_evidence = 2-4 short phrases a strong answer to your question covers; difficulty = of your question; \
+kind = any fitting value; claim_id, bank_question_id = only ids given to you, else null; reason = a few words. \
+Keep every field brief."""
+
 def fence(value: object, label: str) -> str:
     """Fence a data string with the shared ``untrusted`` filter (for text built
     outside a template, e.g. policy instructions that quote derived content)."""
@@ -417,6 +431,7 @@ __all__ = [
     "QUICK_ASSESSMENT",
     "SPEECH_RULES",
     "TURN_FIELDS",
+    "TURN_FIELDS_COMPACT",
     "TURN_SYSTEM",
     "TURN_USER",
     "fence",

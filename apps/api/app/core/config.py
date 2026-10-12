@@ -205,6 +205,9 @@ class Settings(BaseSettings):
     require_camera_for_all_interviews: bool = True
     # New camera-frame analyses wait (<= 6 s) while an interviewer reply is starting (app.services.integrity.reply_window).
     integrity_frames_yield_to_replies: bool = True
+    # Tier 2: the model writes the compact turn decision (TurnDecisionCompact: judgement fields right after the
+    # speech, no avatar fields, shorter lists) so the metadata arrives before the next turn instead of being cut.
+    turn_decision_compact: bool = True
     ws_heartbeat_interval_seconds: int = 10
     ws_disconnect_grace_seconds: int = 180
     session_resume_buffer_messages: int = 300

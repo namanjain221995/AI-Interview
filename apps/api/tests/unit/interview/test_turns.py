@@ -6,17 +6,19 @@ import pytest
 
 from app.ai.base import AIUnavailable
 from app.domain.enums import AnswerQuality, Difficulty, ModelTask, TurnAction
-from app.schemas.ai import TurnDecision
+from app.schemas.ai import TurnDecision, TurnDecisionCompact
 from app.services.interview.config import EngineConfig
 from app.services.interview.contracts import SpeechDelta
 from app.services.interview.policy import BankCandidate, compute_directive
 from app.services.interview.special import classify
 from app.services.interview.turns import (
+    COMPACT_TURN_SCHEMA,
     TURN_SCHEMA,
     TurnOutcome,
     fallback_utterance,
     question_core,
     question_kind,
+    recover_decision,
     sanitize_delta,
     stream_speech_object,
     synthesize_decision,
@@ -36,13 +38,13 @@ def cfg(**kw) -> EngineConfig:
     return EngineConfig(**base)
 
 
-async def _collect(ai, messages, outcome, config, retry=None):
+async def _collect(ai, messages, outcome, config, retry=None, *, compact=False):
     out = []
     async for d in stream_speech_object(
         ai,
         messages,
-        schema=TurnDecision,
-        json_schema=TURN_SCHEMA,
+        schema=TurnDecisionCompact if compact else TurnDecision,
+        json_schema=COMPACT_TURN_SCHEMA if compact else TURN_SCHEMA,
         context=__import__("app.ai.base", fromlist=["CallContext"]).CallContext(task=ModelTask.TURN_DECISION),
         utterance_id="u1",
         outcome=outcome,
@@ -66,6 +68,50 @@ async def test_speech_streams_first_and_decision_validates(mock_ai) -> None:
     assert outcome.decision is not None and outcome.decision.action is TurnAction.ASK_FOLLOWUP
     assert outcome.first_speech_ms is not None and not outcome.fallback and not outcome.synthesized
 
+
+
+async def test_compact_decision_streams_judgement_first_and_derives_the_avatar(mock_ai) -> None:
+    """Tier 2: the model writes the compact decision (judgement fields straight after the speech, no avatar
+    fields); the engine still gets a full TurnDecision whose avatar fields follow the action."""
+    mock_ai.llm.chunk_size = 7
+    full = decision(
+        speech="Which metric told you the rollout was safe to continue?",
+        action=TurnAction.ASK_FOLLOWUP,
+        missing_specifics=["the rollback trigger"],
+        new_claims=["ran canaries at 5%"],
+    )
+    mock_ai.llm.script(ModelTask.TURN_DECISION, full)
+    outcome = TurnOutcome()
+    deltas = await _collect(mock_ai, [{"role": "user", "content": "x"}], outcome, cfg(), compact=True)
+    assert "".join(d.text for d in deltas) == "Which metric told you the rollout was safe to continue?"
+    got = outcome.decision
+    assert got is not None and not outcome.synthesized and not outcome.fallback
+    assert got.missing_specifics == ["the rollback trigger"] and got.new_claims == ["ran canaries at 5%"]
+    assert got.expression.value == "curious" and got.gesture.value == "head_tilt"  # behavior.provisional(ask_followup)
+    sent = mock_ai.llm.calls_for(ModelTask.TURN_DECISION)[0].json_schema
+    keys = list(sent["schema"]["properties"])
+    assert keys[:4] == ["speech", "action", "answer_quality", "missing_specifics"]
+    assert "expression" not in keys and "gesture" not in keys
+
+
+def test_compact_fields_come_before_the_bookkeeping() -> None:
+    keys = list(TurnDecisionCompact.model_fields)
+    assert keys.index("possible_contradiction") < keys.index("competency_key") < keys.index("reason")
+    assert set(keys) < set(TurnDecision.model_fields)
+
+
+def test_a_cut_compact_tail_keeps_the_judgement_and_matches_the_avatar_to_the_action() -> None:
+    s = state()
+    ask(s, "kubernetes")
+    d = _d(s)
+    raw = (
+        '{"speech": "What did the canary check?", "action": "request_specificity", "answer_quality": "vague", '
+        '"missing_specifics": ["the metric"], "new_claims": [], "possible_contradiction": null, "competency_ke'
+    )
+    got = recover_decision(raw, "What did the canary check?", d, s, reason="tail cut")
+    assert got.action is TurnAction.REQUEST_SPECIFICITY and got.answer_quality is AnswerQuality.VAGUE
+    assert got.missing_specifics == ["the metric"]
+    assert got.gesture.value == "one_hand_explain"  # follows request_specificity, not the directive's move
 
 async def test_failure_before_speech_retries_once_then_falls_back(mock_ai) -> None:
     mock_ai.llm.script(ModelTask.TURN_DECISION, AIUnavailable("down"), AIUnavailable("still down"))

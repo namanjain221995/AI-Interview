@@ -43,7 +43,7 @@ from app.domain.enums import (
     SegmentKind,
     TurnAction,
 )
-from app.schemas.ai import TurnDecision
+from app.schemas.ai import TurnDecision, TurnDecisionCompact
 from app.services.interview.behavior import provisional
 from app.services.interview.config import EngineConfig
 from app.services.interview.contracts import SpeechDelta
@@ -64,6 +64,7 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 TURN_SCHEMA: dict[str, Any] = {"name": "TurnDecision", "schema": schema_for(TurnDecision)}
+COMPACT_TURN_SCHEMA: dict[str, Any] = {"name": "TurnDecision", "schema": schema_for(TurnDecisionCompact)}
 
 _MARKDOWN = re.compile(r"[*`#]+")
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
@@ -563,6 +564,8 @@ async def stream_speech_object(
                     outcome.synthesized = True
                     return
                 continue
+            if isinstance(parsed, TurnDecisionCompact):
+                parsed = expand_compact(parsed)
             if isinstance(parsed, TurnDecision):
                 if not spoken and guard is not None and guard.dropped:
                     # Everything the model said was a dropped attribution: nothing was spoken, so the turn
@@ -608,6 +611,19 @@ async def stream_speech_object(
     outcome.fallback = True
 
 
+def expand_compact(compact: TurnDecisionCompact) -> TurnDecision:
+    """The full decision for a compact one: the avatar fields follow the action (behavior.provisional)."""
+    spec = provisional(compact.action)
+    return TurnDecision.model_validate(
+        {
+            **compact.model_dump(),
+            "expression": spec.expression,
+            "gesture": spec.gesture,
+            "gesture_intensity": spec.gesture_intensity,
+        }
+    )
+
+
 def recover_decision(
     raw: str | None, speech: str, directive: PolicyDirective, state: InterviewState, *, reason: str
 ) -> TurnDecision:
@@ -637,6 +653,10 @@ def recover_decision(
             except ValidationError:
                 continue
             base = trial
+    if isinstance(obj, dict) and "action" in obj and "expression" not in obj:
+        # Compact decisions carry no avatar fields: they follow the recovered action.
+        spec = provisional(TurnAction(base["action"]))
+        base.update(expression=spec.expression, gesture=spec.gesture, gesture_intensity=spec.gesture_intensity)
     return TurnDecision.model_validate(base)
 
 
@@ -660,7 +680,9 @@ def default_difficulty(value: Any) -> Difficulty:
 
 __all__ = [
     "ACKNOWLEDGEMENTS",
+    "COMPACT_TURN_SCHEMA",
     "TURN_SCHEMA",
+    "expand_compact",
     "GuardFactory",
     "correction_messages",
     "TurnOutcome",

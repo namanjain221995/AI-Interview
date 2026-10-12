@@ -52,7 +52,7 @@ from app.domain.enums import (
     TurnAction,
     TurnState,
 )
-from app.schemas.ai import InterviewPlan, TurnDecision
+from app.schemas.ai import InterviewPlan, TurnDecision, TurnDecisionCompact
 from app.services.interview import behavior as beh
 from app.services.interview import understanding as U
 from app.services.interview.adapters import CodingPort, ScoringPort, get_scoring
@@ -119,7 +119,7 @@ from app.services.interview.policy import (
     check_decision,
     compute_directive,
 )
-from app.services.interview.prompts import TURN_SYSTEM, TURN_USER
+from app.services.interview.prompts import TURN_FIELDS, TURN_FIELDS_COMPACT, TURN_SYSTEM, TURN_USER
 from app.services.interview.records import (
     add_answer,
     add_question,
@@ -163,8 +163,10 @@ from app.services.interview.transitions import (
     record_interviewer_text,
 )
 from app.services.interview.turns import (
+    COMPACT_TURN_SCHEMA,
     TURN_SCHEMA,
     TurnOutcome,
+    expand_compact,
     fallback_utterance,
     pick,
     question_core,
@@ -178,7 +180,13 @@ from app.services.retrieval import cosine_similarity
 
 log = get_logger(__name__)
 
-PROMPT_VERSION = prompt_version("turn", TURN_SYSTEM.template + "\x00" + TURN_USER.template)
+PROMPT_VERSION = prompt_version(
+    "turn", TURN_SYSTEM.template + "\x00" + TURN_USER.template + "\x00" + TURN_FIELDS
+)
+#: TURN_DECISION_COMPACT: the system prompt lists the compact fields (a different prompt, stamped as such).
+PROMPT_VERSION_COMPACT = prompt_version(
+    "turn-compact", TURN_SYSTEM.template + "\x00" + TURN_USER.template + "\x00" + TURN_FIELDS_COMPACT
+)
 QUESTION_KINDS_FOR_UTTERANCE = {
     TurnAction.ASK_FOLLOWUP: "followup",
     TurnAction.REQUEST_SPECIFICITY: "followup",
@@ -819,6 +827,9 @@ class InterviewEngine:
         except AIError as exc:
             log.info("engine.prefix_warmup_skipped", session_id=state.session_id, reason=type(exc).__name__)
 
+    def _turn_prompt_version(self) -> str:
+        return PROMPT_VERSION_COMPACT if self.config.turn_decision_compact else PROMPT_VERSION
+
     async def _prepare_first_question(self, state: InterviewState) -> dict[str, Any] | None:
         directive = compute_directive(
             state, now=self.now(), closing_reserve_s=self.config.closing_reserve_s, first_question=True
@@ -827,9 +838,9 @@ class InterviewEngine:
         messages = turn_messages(system_prompt(state), user_prompt(state, directive, last_answer=None))
         try:
             result = await self.ai.llm.structured(
-                TurnDecision,
+                TurnDecisionCompact if self.config.turn_decision_compact else TurnDecision,
                 messages,
-                context=turn_context(state, PROMPT_VERSION),
+                context=turn_context(state, self._turn_prompt_version()),
                 temperature=self.config.turn_temperature,
                 max_tokens=self.config.turn_max_tokens,
                 timeout=self.config.first_question_timeout_s,
@@ -838,8 +849,10 @@ class InterviewEngine:
         except AIError as exc:
             log.info("engine.first_question_live", session_id=state.session_id, reason=type(exc).__name__)
             return None
+        value = result.value
+        first = expand_compact(value) if isinstance(value, TurnDecisionCompact) else cast(TurnDecision, value)
         check = check_decision(
-            directive, result.value, state, valid_bank_ids=[b.id for b in directive.candidate_bank_questions]
+            directive, first, state, valid_bank_ids=[b.id for b in directive.candidate_bank_questions]
         )
         decision = check.decision
         if decision.action in NON_QUESTION_ACTIONS or "?" not in decision.speech:
@@ -1411,9 +1424,9 @@ class InterviewEngine:
                 stream_speech_object(
                     self.ai,
                     messages,
-                    schema=TurnDecision,
-                    json_schema=TURN_SCHEMA,
-                    context=turn_context(state, PROMPT_VERSION),
+                    schema=TurnDecisionCompact if self.config.turn_decision_compact else TurnDecision,
+                    json_schema=COMPACT_TURN_SCHEMA if self.config.turn_decision_compact else TURN_SCHEMA,
+                    context=turn_context(state, self._turn_prompt_version()),
                     utterance_id=utterance_id,
                     outcome=outcome,
                     config=self.config,
