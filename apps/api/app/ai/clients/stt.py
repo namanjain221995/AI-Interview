@@ -299,6 +299,7 @@ class WhisperSttClient:
         response_format: ResponseFormat = "json",
         no_speech_check: bool = True,
         hedge: bool = True,
+        send_prompt: bool = False,
     ) -> None:
         if not replicas:
             raise ValueError("at least one Whisper endpoint is required")
@@ -323,6 +324,11 @@ class WhisperSttClient:
         self.response_format: ResponseFormat = response_format
         self.no_speech_check = no_speech_check
         self.hedge = hedge
+        # Off by default (WHISPER_SEND_PROMPT): the shared large-v3 server ignores prompts, and Whisper
+        # large-v3-turbo on vLLM honours them badly - measured 2026-10-13 on the e2e clips: an empty transcript
+        # when the prompt ended with the interviewer's question (every answer of a live run lost), the term list
+        # echoed back ("Karpenter, Prometheus, Rho, ...") and a repetition loop ("Rhoh, Rhoh, ...").
+        self.send_prompt = send_prompt
         self._ledger: LedgerSink = ledger or NullLedger()
         self._partials_inflight = 0
         self._waiters: deque[_Waiter] = deque()
@@ -499,7 +505,7 @@ class WhisperSttClient:
         }
         if lang:
             data["language"] = lang
-        clipped = truncate_prompt(prompt)
+        clipped = truncate_prompt(prompt) if self.send_prompt else None
         if clipped:
             data["prompt"] = clipped
         audio_seconds = wav_seconds(audio) if is_wav else None

@@ -171,6 +171,7 @@ class RealAIServices:
             timeout=settings.whisper_timeout_seconds,
             ledger=self.ledger,
             replica_slots=[settings.whisper_base_url_parallelism],
+            send_prompt=settings.whisper_send_prompt,
         )
         self.ocr = UnlimitedOcrClient(
             self.endpoints["ocr"], model=settings.ocr_model, prompt=settings.ocr_prompt, ledger=self.ledger

@@ -137,6 +137,8 @@ class Settings(BaseSettings):
     # Requests WHISPER_BASE_URL serves at once (1 = the shared transformers server; the optional "stt" compose
     # profile runs Whisper large-v3-turbo on vLLM, which batches). WHISPER_EXTRA_BASE_URLS replicas always take 1.
     whisper_base_url_parallelism: int = Field(1, ge=1, le=16)
+    # Send the vocabulary/question prompt to Whisper (see WhisperSttClient.send_prompt: harmful with large-v3-turbo).
+    whisper_send_prompt: bool = False
     whisper_language: str = "en"
     whisper_timeout_seconds: float = 30.0
 

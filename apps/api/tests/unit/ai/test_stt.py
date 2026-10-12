@@ -67,6 +67,7 @@ def make_stt(endpoint_factory, ledger):
         **options,
     ) -> WhisperSttClient:
         replicas = [endpoint_factory(f"whisper-{i}", url, retries=1) for i, url in enumerate(urls)]
+        options.setdefault("send_prompt", True)  # these tests cover the prompt mechanics
         return WhisperSttClient(
             replicas,
             model="whisper-large",
@@ -449,3 +450,14 @@ async def test_a_batching_replica_takes_previews_and_finals_next_to_a_slow_fallb
 def test_replica_slots_default_to_one_for_the_shared_server(make_stt) -> None:
     stt = make_stt(urls=(A, B))
     assert [r.slots for r in stt._replicas] == [1, 1]
+
+
+
+async def test_no_prompt_is_sent_by_default(make_stt) -> None:
+    """Whisper large-v3-turbo on vLLM returned an empty transcript when the prompt ended with the interviewer's
+    question (a whole live e2e run lost every answer) and echoed or looped on the term list."""
+    stt = make_stt(send_prompt=False)
+    with respx.mock(base_url=A) as mock:
+        route = mock.post("/audio/transcriptions").respond(200, json=ok())
+        await stt.transcribe(wav_bytes(), prompt="Technical terms: Karpenter. How did you scale the nodes?")
+    assert field(route.calls[0].request.content, "prompt") is None
