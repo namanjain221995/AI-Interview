@@ -96,7 +96,15 @@ describe("interview reducer", () => {
       server({ type: "ai.utterance.end", utterance_id: "a", text: "Got it." }),
     ]);
     expect(s.lastInterviewerText).toBe("How do you size a Kubernetes cluster?");
-    s = apply([server({ type: "ai.utterance.start", utterance_id: "q", kind: "question" }), server({ type: "barge_in", utterance_id: "q" })], s);
+    s = apply(
+      [
+        server({ type: "ai.utterance.start", utterance_id: "q", kind: "question" }),
+        server({ type: "tts.chunk", utterance_id: "q", chunk_id: 1, index: 0, text: "How", sample_rate: 24000, duration_ms: 300, visemes: [], word_timings: [] }),
+        { type: "playback.chunk_started", utteranceId: "q", text: "How" },
+        server({ type: "barge_in", utterance_id: "q" }),
+      ],
+      s,
+    );
     expect(s.utterance?.interrupted).toBe(true);
   });
 
@@ -164,6 +172,25 @@ describe("interview reducer", () => {
     );
     expect(s.utterance?.id).toBe("q");
     expect(s.lastInterviewerText).toBe("Which metric told you the rollout was safe?");
+  });
+
+  it("drops a reply that was cancelled before it was heard and keeps the question's caption", () => {
+    // Fast transcription ends a turn at a short pause; the candidate goes on and the reply is cancelled unheard.
+    let s = apply([
+      sessionState({ turn_state: "ai_speaking" }),
+      server({ type: "ai.utterance.start", utterance_id: "q1", kind: "question" }),
+      server({ type: "ai.text.delta", utterance_id: "q1", text: "How did you size the node groups?" }),
+      server({ type: "tts.chunk", utterance_id: "q1", chunk_id: 1, index: 0, text: "How did you", sample_rate: 24000, duration_ms: 600, visemes: [], word_timings: [] }),
+      { type: "playback.chunk_started", utteranceId: "q1", text: "How did you size the node groups?" },
+      server({ type: "ai.utterance.end", utterance_id: "q1", text: "How did you size the node groups?" }),
+      { type: "playback.done", utteranceId: "q1", interrupted: false },
+      server({ type: "ai.utterance.start", utterance_id: "q2", kind: "question" }),
+      server({ type: "ai.text.delta", utterance_id: "q2", text: "You mentioned spot instances." }),
+    ]);
+    s = apply([server({ type: "barge_in", utterance_id: "q2" }), server({ type: "ai.utterance.end", utterance_id: "q2", text: "You mentioned spot instances.", interrupted: true })], s);
+    expect(s.utterances.map((u) => u.id)).toEqual(["q1"]);
+    expect(s.utterance?.id).toBe("q1");
+    expect(s.lastInterviewerText).toBe("How did you size the node groups?");
   });
 
   it("puts an acknowledgement after a reply whose audio already started", () => {

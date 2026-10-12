@@ -400,6 +400,9 @@ class TurnCapture:
     acknowledged: str | None = None  # the acknowledgement phrase already played after this turn
     replied: bool = False  # the first audio of the interviewer's reply to this turn was sent
     reply_text: bool = False  # the reply's first words arrived (its audio is under a second away)
+    # The candidate's speech cut off a reply that had not started playing: nothing was heard, so this is the
+    # same answer going on (fast transcription ends turns at short pauses), not an interruption of the interviewer.
+    interrupted_unheard: bool = False
     # Silence since the candidate's last voiced audio when the end of turn was decided (P0.4): the part of the
     # wait the candidate experiences before any end-of-turn timer starts.
     silence_at_end_ms: int | None = None
@@ -2412,7 +2415,7 @@ class SessionRuntime:
     def _ack_eligible(self, capture: TurnCapture, text_so_far: str) -> bool:
         if not self.settings.acknowledgment_enabled or capture.typed_text is not None:
             return False
-        if capture.interrupted_task is not None or self.coding_bridge.active:
+        if capture.interrupted_task is not None and not capture.interrupted_unheard or self.coding_bridge.active:
             return False
         if self.speech.initial_fallback_reason() is not None:
             return False
@@ -3641,6 +3644,7 @@ class SessionRuntime:
             start = max(0, self.segmenter.now_ms - (event.sustained_ms if event else 300) - 300)
         capture = self._open_capture(start, reason="barge_in")
         if utt is not None:
+            capture.interrupted_unheard = utt.playback_started_at is None and utt.played_ms == 0
             capture.interrupted_task = self.track(
                 asyncio.create_task(
                     self._report_interruption(utt, wait_report=True),

@@ -475,9 +475,13 @@ function reduceServer(state: InterviewViewState, msg: ServerMessage, at: number)
       // already been heard, since speech plays in order.
       const index = state.utterances.findIndex((u) => u.id === msg.utterance_id);
       if (index === -1) return state;
+      const target = state.utterances[index];
+      // A reply cancelled before any of it played (the candidate simply kept talking after a short pause) was
+      // never heard: drop it, so the caption keeps the question they are still answering.
+      const unheard = !target.delivered && target.mode === "pending" && target.spokenWords === 0;
       return withUtterances(
         state,
-        state.utterances.slice(0, index + 1).map((u, i) =>
+        state.utterances.slice(0, unheard ? index : index + 1).map((u, i) =>
           i === index ? (u.delivered ? u : { ...u, interrupted: true }) : finished(u) ? u : { ...u, delivered: true, spokenWords: Number.MAX_SAFE_INTEGER },
         ),
       );

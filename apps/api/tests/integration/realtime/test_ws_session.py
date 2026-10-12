@@ -1061,6 +1061,32 @@ async def test_no_filler_once_the_replys_words_are_arriving(realtime_env, ws_con
     assert any(m["type"] == "tts.chunk" and m.get("utterance_id") == reply["utterance_id"] for m in ws.messages[mark:])
     assert _fillers(ws, mark) == []
 
+
+async def test_a_continuation_that_cut_off_an_unheard_reply_is_still_acknowledged(
+    realtime_env, ws_connect, mock_ai
+) -> None:
+    """Live run after the fast-STT switch: the turn ended at a short pause, the reply was announced, the candidate
+    went on talking and the reply was cancelled before any audio. Nothing was heard, so the rest of the answer is
+    the same answer going on: it gets its "Okay." like any other (it used to count as an interruption: silence)."""
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    env.engine.speech_start_delay = 4.0  # the reply is announced, its words are slow
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script(
+        "We reduced costs by forty percent,", "mostly by rightsizing.",
+        "Then we moved batch jobs to spot instances,", "which saved the most.",
+    )  # fmt: skip
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
+    await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    again = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1500))))
+    barge = await ws.wait_type("barge_in", after=again)
+    after = ws.messages.index(barge)
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=after + 1, timeout=15)
+    starts = [m.get("kind") for m in ws.messages[after : ws.messages.index(reply)] if m["type"] == "ai.utterance.start"]
+    assert starts == ["acknowledgment"], starts  # "Okay." first, then the reply to the whole answer
+
 async def test_a_quick_reply_needs_no_filler(realtime_env, ws_connect, mock_ai) -> None:
     env = await realtime_env()
     ws, _, _ = await live(env, ws_connect)
