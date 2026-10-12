@@ -2367,7 +2367,9 @@ class SessionRuntime:
             or self.ended
             or self.closed
             or self.transport is None
-            or self.turns.state is not TurnState.PROCESSING
+            # PROCESSING: still transcribing / deciding; AI_SPEAKING before any reply audio: the model is writing
+            # (the engine announces the utterance before its first words) - both are silence for the candidate.
+            or self.turns.state not in (TurnState.PROCESSING, TurnState.AI_SPEAKING)
         ):
             return
         phrase = FILLER_PHRASES[self._fillers % len(FILLER_PHRASES)]

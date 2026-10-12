@@ -1007,6 +1007,30 @@ async def test_a_slow_reply_is_bridged_by_one_moment_and_the_answer_is_marked_ac
     assert turn.acknowledged  # the phrase the candidate already heard
 
 
+
+async def test_a_reply_announced_but_slow_to_speak_is_bridged_too(
+    realtime_env, ws_connect, mock_ai, monkeypatch
+) -> None:
+    """Live run: the engine announced the reply at once, its first words came 5 s later (the model was writing
+    under load), and the filler - which only covered the transcription wait - never played: ~6 s of silence."""
+    from app.realtime import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "FILLER_AFTER_S", 1.0)
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    env.engine.speech_start_delay = 2.5
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("We reduced costs by forty percent,", "mostly by rightsizing.")
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    filler = await ws.wait_type("ai.utterance.start", kind="comment", after=mark)
+    filler_end = await ws.wait_type("ai.utterance.end", utterance_id=filler["utterance_id"])
+    assert filler_end["text"] in runtime_module.FILLER_PHRASES
+    reply_end = await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"])
+    # The filler went out while the reply was announced but still silent, and the reply was then spoken in full.
+    assert ws.messages.index(filler) < ws.messages.index(reply_end) and reply_end["text"]
+
 async def test_a_quick_reply_needs_no_filler(realtime_env, ws_connect, mock_ai) -> None:
     env = await realtime_env()
     ws, _, _ = await live(env, ws_connect)

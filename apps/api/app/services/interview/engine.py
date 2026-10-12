@@ -1443,7 +1443,11 @@ class InterviewEngine:
 
         def guard_factory(allow_regenerate: bool, released_before: bool) -> Any:
             return guard_for_turn(
-                state, probe=probe, allow_regenerate=allow_regenerate, released_before=released_before
+                state,
+                probe=probe,
+                allow_regenerate=allow_regenerate,
+                released_before=released_before,
+                after_ack=acknowledged,
             )
 
         spoken: list[str] = []

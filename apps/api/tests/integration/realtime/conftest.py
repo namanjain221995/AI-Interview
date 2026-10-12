@@ -259,6 +259,7 @@ class FakeEngine:
         self.default_reply = "Thanks. What was the approximate monthly spend before and after, and which change contributed most?"
         self.delta_delay = 0.002
         self.first_event_delay = 0.0
+        self.speech_start_delay = 0.0  # the utterance is announced, its first words are slow (the model is writing)
         self.start_delay = 0.0  # the engine is still deciding (e.g. waiting for preparation)
         self.turns: list[CandidateTurn] = []
         self.interruptions: list[InterruptedUtterance] = []
@@ -290,6 +291,9 @@ class FakeEngine:
         uid = self._uid()
         behavior = BehaviorSpec(state=AvatarState.QUESTIONING if kind == "question" else AvatarState.SPEAKING)
         yield UtteranceBegin(utterance_id=uid, kind=kind, behavior=behavior, question_id=question_id)  # type: ignore[arg-type]
+        if self.speech_start_delay:
+            delay, self.speech_start_delay = self.speech_start_delay, 0.0
+            await asyncio.sleep(delay)
         words = text.split(" ")
         for i, word in enumerate(words):
             yield SpeechDelta(utterance_id=uid, text=word if i == 0 else " " + word)
