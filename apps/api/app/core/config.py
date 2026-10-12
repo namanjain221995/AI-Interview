@@ -134,6 +134,9 @@ class Settings(BaseSettings):
     whisper_base_url: str = "http://172.17.0.1:30007/v1"
     whisper_model: str = "openai/whisper-large-v3"
     whisper_extra_base_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Requests WHISPER_BASE_URL serves at once (1 = the shared transformers server; the optional "stt" compose
+    # profile runs Whisper large-v3-turbo on vLLM, which batches). WHISPER_EXTRA_BASE_URLS replicas always take 1.
+    whisper_base_url_parallelism: int = Field(1, ge=1, le=16)
     whisper_language: str = "en"
     whisper_timeout_seconds: float = 30.0
 

@@ -170,6 +170,7 @@ class RealAIServices:
             max_concurrency=settings.stt_max_concurrency,
             timeout=settings.whisper_timeout_seconds,
             ledger=self.ledger,
+            replica_slots=[settings.whisper_base_url_parallelism],
         )
         self.ocr = UnlimitedOcrClient(
             self.endpoints["ocr"], model=settings.ocr_model, prompt=settings.ocr_prompt, ledger=self.ledger
