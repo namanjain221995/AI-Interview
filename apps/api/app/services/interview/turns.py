@@ -54,7 +54,7 @@ from app.services.interview.policy import (
     PolicyDirective,
 )
 from app.services.interview.prompts import fence
-from app.services.interview.speech import AckEchoFilter, OpenerFilter, QuestionLimiter
+from app.services.interview.speech import AckEchoFilter, OpenerFilter, QuestionLimiter, ToneFilter
 from app.services.interview.state import InterviewState
 
 if TYPE_CHECKING:
@@ -335,9 +335,10 @@ def fallback_utterance(
 
 @dataclass(slots=True)
 class SpeechFilters:
-    """The streaming filters of one attempt, in order: AckEchoFilter -> OpenerFilter -> AttributionGuard ->
-    QuestionLimiter."""
+    """The streaming filters of one attempt, in order: ToneFilter -> AckEchoFilter -> OpenerFilter ->
+    AttributionGuard -> QuestionLimiter."""
 
+    tone: ToneFilter | None = None
     ack_echo: AckEchoFilter | None = None
     opener: OpenerFilter | None = None
     guard: AttributionGuard | None = None
@@ -346,6 +347,10 @@ class SpeechFilters:
     def run(self, text: str, outcome: TurnOutcome, *, final: bool) -> str:
         """New speech text through the filters; ``final`` flushes what they still hold."""
         out = text
+        if self.tone is not None:
+            out = self.tone.feed(out) if out else ""
+            if final:
+                out += self.tone.flush()
         if self.ack_echo is not None:
             out = self.ack_echo.feed(out) if out else ""
             if final:
@@ -436,6 +441,7 @@ async def stream_speech_object(
         speech_turn = schema is TurnDecision or getattr(schema, "SPEECH_FIRST_TURN", False)
         extractor = StreamingJsonFieldExtractor("speech")
         filters = SpeechFilters(
+            tone=ToneFilter() if speech_turn else None,
             # Only before anything was said: a regeneration continues an utterance that already started.
             ack_echo=AckEchoFilter() if speech_turn and after_ack and not emitted else None,
             opener=OpenerFilter() if speech_turn else None,

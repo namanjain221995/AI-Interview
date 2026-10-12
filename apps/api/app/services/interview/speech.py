@@ -154,6 +154,60 @@ _ACK_ECHO = re.compile(
 )
 
 
+_CHALLENGE = re.compile(r"\b(actually)\b,?\s*", re.IGNORECASE)
+_TRAILING_WORD = re.compile(r"[A-Za-z]+$")
+
+
+class ToneFilter:
+    """Streaming filter that removes "actually" from interviewer speech.
+
+    "How did you actually handle ...?" / "Which role actually involved ...?" reads as doubting the candidate (owner
+    report); the speech rules forbid it but the model still used it. The word carries no content in a question, so
+    it is dropped deterministically ("Actually, how ..." -> "How ..."). Only a trailing partial word is held
+    between chunks (it may be the start of "actually")."""
+
+    def __init__(self) -> None:
+        self._held = ""
+        self._strip = False  # a word was just dropped: the next text starts without its leading space
+        self._capitalize = False  # ... and with a capital letter (the dropped word opened a sentence)
+        self.dropped = 0
+
+    def feed(self, text: str) -> str:
+        buffer = self._held + text
+        partial = _TRAILING_WORD.search(buffer)
+        cut = partial.start() if partial else len(buffer)
+        out, self._held = buffer[:cut], buffer[cut:]
+        return self._clean(out)
+
+    def flush(self) -> str:
+        out, self._held = self._held, ""
+        return self._clean(out)
+
+    def _clean(self, text: str) -> str:
+        out: list[str] = []
+        pos = 0
+        for match in _CHALLENGE.finditer(text):
+            out.append(self._carry(text[pos : match.start()]))
+            pos = match.end()
+            self.dropped += 1
+            self._strip = True
+            self._capitalize = match.group(1)[0] == "A"  # sentence-initial "Actually, how ..." -> "How ..."
+        out.append(self._carry(text[pos:]))
+        return "".join(out)
+
+    def _carry(self, text: str) -> str:
+        """Apply what a dropped word left pending to the text that follows it."""
+        if self._strip:
+            text = text.lstrip()
+            if not text:
+                return ""
+            self._strip = False
+        if self._capitalize and text:
+            text = text[0].upper() + text[1:]
+            self._capitalize = False
+        return text
+
+
 class AckEchoFilter:
     """Streaming filter for a turn the runtime already acknowledged out loud ("Okay." right after the answer): a
     bare acknowledgement the reply starts with ("Right, so ...", "Got it. What ...") is dropped, so the candidate
@@ -297,6 +351,7 @@ __all__ = [
     "PRAISE",
     "OpenerFilter",
     "QuestionLimiter",
+    "ToneFilter",
     "is_evaluative_sentence",
     "style_issues",
 ]
