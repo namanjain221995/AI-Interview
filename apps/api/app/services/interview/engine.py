@@ -105,6 +105,7 @@ from app.services.interview.evaluation import (
     rebuild_hook,
     recompute_competencies,
 )
+from app.services.interview.gaps import answer_gaps, gap_instruction
 from app.services.interview.grounding import ungrounded_reference
 from app.services.interview.memory import apply_memory, needs_summary
 from app.services.interview.opening import SpokenText, generate_opening, template_opening
@@ -114,6 +115,7 @@ from app.services.interview.policy import (
     FLOW_ONLY_ACTIONS,
     FOLLOWUP_ACTIONS,
     NON_QUESTION_ACTIONS,
+    NON_TECHNICAL_KEYS,
     BankCandidate,
     PolicyDirective,
     check_decision,
@@ -827,6 +829,31 @@ class InterviewEngine:
         except AIError as exc:
             log.info("engine.prefix_warmup_skipped", session_id=state.session_id, reason=type(exc).__name__)
 
+    def _add_gap_probe(
+        self, state: InterviewState, directive: PolicyDirective, answer: str, special: SpecialResult | None
+    ) -> None:
+        """Tier 2 gap-targeted follow-up: name the one thing a substantive answer left out (app.services.interview
+        .gaps) so a follow-up asks for it instead of something generic or already given."""
+        if special is not None and special.is_special:
+            return
+        current = state.current_question()
+        gaps = answer_gaps(
+            answer,
+            question=current.text if current is not None else None,
+            expected_evidence=current.expected_evidence if current is not None else (),
+            technical=not (current is not None and current.competency_key in NON_TECHNICAL_KEYS),
+        )
+        probe = gap_instruction(
+            gaps,
+            recommended=directive.recommended_action,
+            alternatives=directive.alternatives,
+            allowed=directive.allowed_actions,
+        )
+        if probe is None:
+            return
+        directive.instructions.append(probe)
+        log.info("engine.gap_probe", session_id=state.session_id, gap=gaps[0].kind, gaps=[g.kind for g in gaps])
+
     def _turn_prompt_version(self) -> str:
         return PROMPT_VERSION_COMPACT if self.config.turn_decision_compact else PROMPT_VERSION
 
@@ -1116,6 +1143,8 @@ class InterviewEngine:
                 directive.instructions.append(
                     f'The candidate first asked whether you can hear them: begin your reply with "{heard.ack}"'
                 )
+            if self.config.gap_probes and not (directive.must_close or directive.start_coding):
+                self._add_gap_probe(state, directive, text, special)
             if directive.must_close or directive.start_coding:
                 if pending is not None:
                     await self._persist_pending_answer(state, pending)

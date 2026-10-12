@@ -208,6 +208,9 @@ class Settings(BaseSettings):
     # Tier 2: the model writes the compact turn decision (TurnDecisionCompact: judgement fields right after the
     # speech, no avatar fields, shorter lists) so the metadata arrives before the next turn instead of being cut.
     turn_decision_compact: bool = True
+    # Tier 2: a deterministic check of each substantive answer names what it left out (services/interview/gaps.py)
+    # and the turn prompt asks the interviewer to follow up on exactly that.
+    interview_gap_probes: bool = True
     ws_heartbeat_interval_seconds: int = 10
     ws_disconnect_grace_seconds: int = 180
     session_resume_buffer_messages: int = 300

@@ -35,6 +35,7 @@ class EngineConfig:
     turn_max_tokens: int = 900
     turn_retry_trimmed: bool = True
     turn_decision_compact: bool = field(default_factory=lambda: get_settings().turn_decision_compact)
+    gap_probes: bool = field(default_factory=lambda: get_settings().interview_gap_probes)
     # The metadata tail after the speech is bounded by roughly the speech's play time.
     turn_tail_min_s: float = 2.5
     turn_tail_s_per_word: float = 0.3
