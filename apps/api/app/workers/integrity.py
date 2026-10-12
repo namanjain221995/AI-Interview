@@ -20,6 +20,8 @@ from typing import Any
 from app.core.config import get_settings
 from app.core.errors import NotFound
 from app.core.queue import JobContext, PermanentJobError, job_handler
+from app.core.redis import get_redis
+from app.services.integrity.reply_window import wait_for_reply_start
 from app.services.integrity.retention import sweep_expired_media
 from app.services.integrity.service import ANALYZE_FRAME_JOB, get_integrity_service
 
@@ -44,6 +46,9 @@ def _require_uuid(payload: dict[str, Any], key: str) -> str:
 async def analyze_frame(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     session_id = _require_uuid(payload, "session_id")
     media_id = _require_uuid(payload, "media_id")
+    waited = 0.0
+    if get_settings().integrity_frames_yield_to_replies:
+        waited = await wait_for_reply_start(get_redis(), session_id)  # the turn gets the shared GPU first
     try:
         # Last attempt: a vision outage no longer fails the frame - camera frames are
         # then analysed with the face detection made when they were received.
@@ -69,6 +74,7 @@ async def analyze_frame(payload: dict[str, Any], ctx: JobContext) -> dict[str, A
             for o in outcomes
         ],
         "attempt": ctx.attempt,
+        "waited_for_reply_s": round(waited, 2),
     }
 
 

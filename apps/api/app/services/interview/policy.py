@@ -838,7 +838,7 @@ ACTION_GUIDANCE: dict[TurnAction, str] = {
     TurnAction.CLARIFY_QUESTION: "Rephrase the current question more clearly with the same intent. Do not give away the answer and do not ask a different question.",
     TurnAction.SIMPLIFY: "Narrow or simplify the question to a concrete, approachable part of it, in an encouraging tone. Do not hint at the answer.",
     TurnAction.INCREASE_DIFFICULTY: "Raise the difficulty one level on the same competency: a harder scenario, a trade-off, a failure mode or a scale constraint.",
-    TurnAction.VERIFY_CLAIM: "Ask about the resume claim without assuming it is true (say 'mentions', not 'claims'), in your own words, e.g. 'The resume mentions the EKS migration; how did the cutover actually run?' or 'Which part of that forty-service migration was yours?': what they personally did and concrete evidence on the listed topics.",
+    TurnAction.VERIFY_CLAIM: "Ask about the resume claim without assuming it is true (say 'mentions', not 'claims'), in your own words, naming the claim: what they personally did and concrete evidence on the listed topics.",
     TurnAction.VERIFY_CONTRADICTION: 'Raise the inconsistency respectfully and with curiosity ("Earlier you mentioned X; help me reconcile that with Y"). Never accuse.',
     TurnAction.CHANGE_TOPIC: "Acknowledge briefly, then transition naturally to the target competency with one open question.",
     TurnAction.REDIRECT: "Gently bring the conversation back to the question that was asked, restating its core briefly.",

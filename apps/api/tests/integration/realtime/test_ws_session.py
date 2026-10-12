@@ -948,7 +948,9 @@ async def test_reconnect_after_the_invite_deadline_is_accepted_mid_interview(
     assert ws.accepted
     await ws.hello()
     await ws.wait_type("session.state")  # admitted: the room syncs instead of refusing with 4011
-    assert not [m for m in ws.messages if m.get("type") == "error" and m.get("code") == "interview_unavailable"]
+    assert not [
+        m for m in ws.messages if m.get("type") == "error" and m.get("code") == "interview_unavailable"
+    ]
 
 
 async def test_expired_invite_without_a_started_session_is_refused(realtime_env, ws_connect) -> None:
@@ -959,3 +961,52 @@ async def test_expired_invite_without_a_started_session_is_refused(realtime_env,
     error = await ws.wait_type("error")
     assert error["code"] == "interview_unavailable"
     assert await ws.wait_closed() == 4011
+
+
+async def test_a_slow_reply_is_bridged_by_one_moment_and_the_answer_is_marked_acknowledged(
+    realtime_env, ws_connect, mock_ai, monkeypatch
+) -> None:
+    """Tier 1: "Okay." about a second after the answer, "One moment." when the reply is slow, never silence; the
+    engine learns the answer was already acknowledged (so the reply does not acknowledge it again)."""
+    from app.realtime import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "FILLER_AFTER_S", 1.0)
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    env.engine.first_event_delay = 2.5  # the model is slow to start its reply
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("We reduced costs by forty percent,", "mostly by rightsizing.")
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
+    ack = await ws.wait_type("ai.utterance.start", kind="acknowledgment", after=mark)
+    filler = await ws.wait_type("ai.utterance.start", kind="comment", after=mark)
+    filler_end = await ws.wait_type("ai.utterance.end", utterance_id=filler["utterance_id"])
+    assert filler_end["text"] in runtime_module.FILLER_PHRASES
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    order = [m.get("utterance_id") for m in ws.messages[mark:] if m["type"] == "ai.utterance.start"]
+    assert (
+        order.index(ack["utterance_id"])
+        < order.index(filler["utterance_id"])
+        < order.index(reply["utterance_id"])
+    )
+    assert (
+        sum(1 for m in ws.messages[mark:] if m["type"] == "ai.utterance.start" and m.get("kind") == "comment")
+        == 1
+    )
+    turn = env.engine.turns[0]
+    assert turn.acknowledged  # the phrase the candidate already heard
+
+
+async def test_a_quick_reply_needs_no_filler(realtime_env, ws_connect, mock_ai) -> None:
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("We reduced costs by forty percent,", "mostly by rightsizing.")
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"])
+    await asyncio.sleep(0.2)
+    assert not [
+        m for m in ws.messages[mark:] if m["type"] == "ai.utterance.start" and m.get("kind") == "comment"
+    ]

@@ -14,6 +14,8 @@ os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("LOG_JSON", "false")
 os.environ.setdefault("ENABLE_TEST_HOOKS", "true")
 os.environ.setdefault("COOKIE_SECURE", "false")
+# Policy tests exercise camera-optional configurations; tests/unit/jobs/test_camera_rule.py covers the platform rule.
+os.environ.setdefault("REQUIRE_CAMERA_FOR_ALL_INTERVIEWS", "false")
 os.environ["TEST_HOOKS_TOKEN"] = ""  # pytest calls hooks without the dev shared secret
 
 _PLUGIN_CANDIDATES = (

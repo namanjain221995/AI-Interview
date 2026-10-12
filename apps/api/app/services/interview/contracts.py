@@ -75,6 +75,9 @@ class CandidateTurn:
     audio_wav: bytes | None = None  # stored when recording policy allows
     speculative: bool = False  # True while the endpoint is not yet confirmed
     activity: ActivityCapture | None = None  # additive: an intake activity capture (7.5)
+    # The short acknowledgement the runtime already said out loud after this answer ("Okay."), if any: the reply
+    # then starts directly with its next sentence instead of acknowledging again.
+    acknowledged: str | None = None
 
 
 @dataclass(slots=True)

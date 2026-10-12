@@ -144,6 +144,67 @@ def is_evaluative_sentence(sentence: str) -> bool:
     return bool(PRAISE.search(s) or CRITIQUE.search(s))
 
 
+_ACK_WORDS = (
+    "okay", "ok", "alright", "all right", "right", "got it", "sure", "great", "thanks", "thank you", "understood",
+    "i see", "good", "perfect", "nice", "cool", "makes sense",
+)  # fmt: skip
+_ACK_ECHO = re.compile(
+    r"^\s*(?:" + "|".join(re.escape(w) for w in sorted(_ACK_WORDS, key=len, reverse=True)) + r")\s*[,.!;:\u2013\u2014-]+\s*",
+    re.IGNORECASE,
+)
+
+
+class AckEchoFilter:
+    """Streaming filter for a turn the runtime already acknowledged out loud ("Okay." right after the answer): a
+    bare acknowledgement the reply starts with ("Right, so ...", "Got it. What ...") is dropped, so the candidate
+    never hears two in a row. Anything else passes through unchanged."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._decided = False
+        self.dropped: str | None = None
+
+    def _may_still_be_ack(self, text: str) -> bool:
+        lowered = text.strip().lower()
+        if not lowered:
+            return True
+        for word in _ACK_WORDS:
+            if word.startswith(lowered):
+                return True  # the word is still streaming ("Rig" ...)
+            if lowered.startswith(word) and not lowered[len(word) :].strip():
+                return True  # the word is complete, its punctuation not yet
+        return False
+
+    def feed(self, text: str) -> str:
+        if self._decided:
+            return text
+        self._buffer += text
+        match = _ACK_ECHO.match(self._buffer)
+        if match:
+            rest = self._buffer[match.end() :]
+            if not rest.strip():
+                return ""  # wait for what follows the acknowledgement
+            self._decided = True
+            self.dropped = match.group(0).strip()
+            self._buffer = ""
+            rest = rest.lstrip()
+            return rest[:1].upper() + rest[1:]
+        if self._may_still_be_ack(self._buffer):
+            return ""
+        return self._release()
+
+    def _release(self) -> str:
+        self._decided = True
+        out, self._buffer = self._buffer, ""
+        return out
+
+    def flush(self) -> str:
+        """End of stream: an acknowledgement that is the whole utterance is kept (something must be said)."""
+        if self._decided:
+            return ""
+        return self._release()
+
+
 class QuestionLimiter:
     """Streaming guard: an asking turn ends at its first question. Text after the first
     question mark (a second question, an extra request) is not spoken."""
@@ -230,6 +291,7 @@ class OpenerFilter:
 
 __all__ = [
     "ASR_COMMENT",
+    "AckEchoFilter",
     "CRITIQUE",
     "NARRATION",
     "PRAISE",

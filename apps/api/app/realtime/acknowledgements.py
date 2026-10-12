@@ -43,7 +43,9 @@ SOFT_ACKNOWLEDGEMENTS: frozenset[str] = frozenset({"Okay.", "Mm-hmm.", "I see.",
 # Spoken by the runtime itself (never sent to the engine) when an answer could
 # not be understood.
 REPEAT_PROMPT = "Sorry, I didn't catch that. Could you say that again?"
-PROMPT_PHRASES: tuple[str, ...] = (REPEAT_PROMPT,)
+# Said by the runtime when the reply is slow to start (Tier 1: no long silences); never sent to the engine.
+FILLER_PHRASES: tuple[str, ...] = ("One moment.", "Let me think about that for a second.")
+PROMPT_PHRASES: tuple[str, ...] = (REPEAT_PROMPT, *FILLER_PHRASES)
 WARM_TIMEOUT_SECONDS = 20.0
 # Frequent first sentences of interviewer replies (live transcripts, 2026-10-07).
 OPENER_PHRASES: tuple[str, ...] = (

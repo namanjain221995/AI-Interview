@@ -109,7 +109,15 @@ export function normalizeMe(raw: unknown): MeResponse {
   const orgSource = isRecord(raw.organization) ? raw.organization : isRecord(userSource.organization) ? userSource.organization : null;
   const organization: OrganizationRef | null =
     orgSource && typeof orgSource.id === "string" && typeof orgSource.name === "string"
-      ? { id: orgSource.id, name: orgSource.name, slug: typeof orgSource.slug === "string" ? orgSource.slug : "", ...(isRecord(orgSource.features) ? { features: orgSource.features } : {}) }
+      ? {
+          id: orgSource.id,
+          name: orgSource.name,
+          slug: typeof orgSource.slug === "string" ? orgSource.slug : "",
+          ...(isRecord(orgSource.features) ? { features: orgSource.features } : {}),
+          ...(Array.isArray(orgSource.enforced_policy_fields)
+            ? { enforced_policy_fields: orgSource.enforced_policy_fields.filter((f): f is string => typeof f === "string") }
+            : {}),
+        }
       : null;
   const permissionSource = Array.isArray(raw.permissions) ? raw.permissions : Array.isArray(userSource.permissions) ? userSource.permissions : null;
   const permissions = permissionSource
@@ -276,6 +284,14 @@ export function hasFeature(state: Pick<AuthState, "organization" | "user">, feat
 
 export function useFeature(feature: string): boolean {
   return useAuthStore((s) => hasFeature(s, feature));
+}
+
+const NO_ENFORCED: readonly string[] = [];
+
+/** Policy fields of one section ("integrity", "recording") that the platform forces on, without the prefix. */
+export function useEnforcedPolicyFields(section: "integrity" | "recording"): ReadonlySet<string> {
+  const fields = useAuthStore((s) => s.organization?.enforced_policy_fields ?? NO_ENFORCED);
+  return new Set(fields.filter((f) => f.startsWith(`${section}.`)).map((f) => f.slice(section.length + 1)));
 }
 
 export function useHasRole(...roles: Role[]): boolean {

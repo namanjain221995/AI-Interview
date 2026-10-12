@@ -1117,6 +1117,8 @@ export interface OrganizationRef {
   slug: string;
   /** Plan features managed by the platform (G8), e.g. `{ intake: true }`. */
   features?: Record<string, unknown>;
+  /** Policy fields the platform forces on, e.g. `integrity.camera_required`; settings screens lock them. */
+  enforced_policy_fields?: string[];
 }
 
 export interface Organization extends OrganizationRef, Timestamps {

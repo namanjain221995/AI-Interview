@@ -26,7 +26,7 @@ from app.services.interview.prompts import (
     TURN_SYSTEM,
     TURN_USER,
 )
-from app.services.interview.state import ExchangeTurn, InterviewState
+from app.services.interview.state import ExchangeTurn, InterviewState, QuestionRecord
 
 _MAX_DESCRIPTION_CHARS = 1200
 #: Bank questions shown as inspiration (the policy keeps more for the deterministic fallback).
@@ -462,6 +462,35 @@ def directive_view(directive: PolicyDirective) -> dict[str, Any]:
     }
 
 
+def thread_evidence(state: InterviewState, *, last_answer: str | None = None, limit: int = 3) -> list[str]:
+    """What the current question thread already holds (Tier 1, "thread memory"): what a complete answer to the
+    current question covers, and what the candidate already said earlier in this thread (the current question and
+    the questions it follows up). The last answer is shown separately as LAST ANSWER. Fenced as derived data by
+    the template; it lets the interviewer ask for what is missing instead of asking again for what was given."""
+    current = state.current_question()
+    if current is None:
+        return []
+    out: list[str] = []
+    if current.expected_evidence:
+        out.append(
+            "A complete answer to your current question covers: " + "; ".join(current.expected_evidence[:5])
+        )
+    by_id = {q.id: q for q in state.questions}
+    thread: list[str] = []
+    node: QuestionRecord | None = current
+    while node is not None and node.id not in thread:
+        thread.append(node.id)
+        node = by_id.get(node.parent_id) if node.parent_id else None
+    last = (last_answer or "").strip()
+    earlier = [a for a in state.answers if a.question_id in thread and a.text.strip() and a.text.strip() != last]
+    for answer in earlier[-limit:]:
+        asked = by_id.get(answer.question_id or "")
+        topic = (asked.focus or asked.topic or "") if asked is not None else ""
+        about = f" about {_clip(topic, 60)}" if topic else ""
+        out.append(f'Already said earlier in this thread{about}: "{_clip(answer.text, 200)}"')
+    return out
+
+
 def user_prompt(
     state: InterviewState,
     directive: PolicyDirective,
@@ -558,6 +587,7 @@ def turn_messages(system: str, user: str) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "thread_evidence",
     "claims_lines",
     "claims_status",
     "coding_user_prompt",

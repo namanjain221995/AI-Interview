@@ -54,7 +54,7 @@ from app.services.interview.policy import (
     PolicyDirective,
 )
 from app.services.interview.prompts import fence
-from app.services.interview.speech import OpenerFilter, QuestionLimiter
+from app.services.interview.speech import AckEchoFilter, OpenerFilter, QuestionLimiter
 from app.services.interview.state import InterviewState
 
 if TYPE_CHECKING:
@@ -329,8 +329,10 @@ def fallback_utterance(
 
 @dataclass(slots=True)
 class SpeechFilters:
-    """The streaming filters of one attempt, in order: OpenerFilter -> AttributionGuard -> QuestionLimiter."""
+    """The streaming filters of one attempt, in order: AckEchoFilter -> OpenerFilter -> AttributionGuard ->
+    QuestionLimiter."""
 
+    ack_echo: AckEchoFilter | None = None
     opener: OpenerFilter | None = None
     guard: AttributionGuard | None = None
     limiter: QuestionLimiter | None = None
@@ -338,6 +340,10 @@ class SpeechFilters:
     def run(self, text: str, outcome: TurnOutcome, *, final: bool) -> str:
         """New speech text through the filters; ``final`` flushes what they still hold."""
         out = text
+        if self.ack_echo is not None:
+            out = self.ack_echo.feed(out) if out else ""
+            if final:
+                out += self.ack_echo.flush()
         if self.opener is not None:
             out = self.opener.feed(out) if out else ""
             if final:
@@ -384,6 +390,7 @@ async def stream_speech_object(
     retry_messages: list[dict[str, Any]] | None = None,
     limit_questions: bool = True,
     guard_factory: GuardFactory | None = None,
+    after_ack: bool = False,
 ) -> AsyncGenerator[SpeechDelta, None]:
     """Stream ``schema`` (speech-first) and yield its speech as deltas.
 
@@ -408,13 +415,23 @@ async def stream_speech_object(
     emitted: list[str] = []  # across attempts: a regeneration continues the utterance
     regenerations_left = 1 if guard_factory is not None else 0
     index = 0
+    first_speech_deadline = started + config.turn_first_speech_budget_s
     while index < len(attempts):
+        if (
+            not emitted
+            and outcome.attempts
+            and first_speech_deadline - time.monotonic() < config.turn_retry_min_s
+        ):
+            outcome.errors.append("first_speech_budget_spent")
+            break  # no time left for another attempt: the fallback question is spoken now
         msgs = attempts[index]
         index += 1
         outcome.attempts += 1
         speech_turn = schema is TurnDecision or getattr(schema, "SPEECH_FIRST_TURN", False)
         extractor = StreamingJsonFieldExtractor("speech")
         filters = SpeechFilters(
+            # Only before anything was said: a regeneration continues an utterance that already started.
+            ack_echo=AckEchoFilter() if speech_turn and after_ack and not emitted else None,
             opener=OpenerFilter() if speech_turn else None,
             guard=(
                 guard_factory(regenerations_left > 0, bool(emitted))
@@ -437,6 +454,12 @@ async def stream_speech_object(
         )
         outcome.model_call_id = getattr(stream, "model_call_id", None)
         attempt_start = time.monotonic()
+        # Before any speech this attempt may use the shared budget, keeping room for a retry if one is queued.
+        reserve = config.turn_retry_min_s if index < len(attempts) else 0.0
+        attempt_limit = max(
+            1.0,
+            min(config.turn_first_speech_timeout_s, first_speech_deadline - attempt_start - reserve),
+        )
         tail_deadline: float | None = None
         try:
             iterator = stream.__aiter__()
@@ -445,7 +468,7 @@ async def stream_speech_object(
                 if emitted:
                     budget = max(0.5, config.turn_total_timeout_s - (now - attempt_start))
                 else:
-                    budget = config.turn_first_speech_timeout_s - (now - attempt_start)
+                    budget = attempt_limit - (now - attempt_start)
                     if budget <= 0:
                         raise TimeoutError("no speech before the first-speech deadline")
                 if extractor.done and not finalized:

@@ -36,6 +36,7 @@ from app.core import metrics
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.queue import subscribe_session_events
+from app.core.redis import get_redis
 from app.domain.enums import (
     AvatarExpression,
     AvatarGesture,
@@ -48,6 +49,7 @@ from app.domain.enums import (
 )
 from app.realtime import close_codes
 from app.realtime.acknowledgements import (
+    FILLER_PHRASES,
     REPEAT_PROMPT,
     AcknowledgementCache,
     get_acknowledgement_cache,
@@ -133,6 +135,7 @@ from app.schemas.realtime import (
     pack_frame,
     unpack_frame,
 )
+from app.services.integrity import reply_window
 from app.services.interview.contracts import (
     ActivityCapture,
     ActivityEnded,
@@ -170,7 +173,8 @@ STT_RETRY_TIMEOUT_S = 20.0  # inline retry of failed segments before the turn be
 AUDIO_STALL_S = 3.0
 REPORT_LINGER_S = 120.0  # report generation takes 15-65 s after the end
 HEARTBEAT_DB_INTERVAL_S = 30.0
-ACK_MIN_SPEECH_MS = 2500
+FILLER_AFTER_S = 3.5  # "One moment." when the reply has not started this long after the end of the turn
+ACK_MIN_SPEECH_MS = 1200  # a finished answer this long hears "Okay." ~1 s after it ends (was 2500)
 MAX_TURN_AUDIO_BYTES = 16000 * 2 * 300  # 5 minutes of PCM16 for answer audio
 SEND_QUEUE_LIMIT = 2000
 UNRESOLVED_RETRY_DELAYS = (2.0, 4.0, 8.0, 15.0, 30.0)
@@ -389,6 +393,8 @@ class TurnCapture:
     end_at: float | None = None
     end_reason: str | None = None
     required_ms: int | None = None
+    acknowledged: str | None = None  # the acknowledgement phrase already played after this turn
+    replied: bool = False  # the first audio of the interviewer's reply to this turn was sent
     interrupted_task: asyncio.Task[InterruptedUtterance | None] | None = None
     engine_called: bool = False
     silence_episode: int = 0
@@ -577,6 +583,7 @@ class SessionRuntime:
         self.utterances: dict[str, ActiveUtterance] = {}
         self._last_engine_utt: ActiveUtterance | None = None
         self._last_ack: str | None = None
+        self._fillers = 0
         self._listening_since: float | None = None
         self._silence_prompts = 0
         self._time_warned = False
@@ -1517,6 +1524,9 @@ class SessionRuntime:
                 end_at = capture.end_at
 
                 def hook(sent_at: float, capture: TurnCapture = capture, end_at: float = end_at) -> None:
+                    capture.replied = True
+                    if self.settings.integrity_frames_yield_to_replies:
+                        self.spawn(reply_window.release(get_redis(), self.session_id), "integrity_reply_release")
                     fields: dict[str, Any] = {"first_audio_ms": round((sent_at - end_at) * 1000)}
                     timings = utt.speech.timings if utt.speech is not None else None
                     if timings is not None and timings.first_job_at is not None:
@@ -2330,6 +2340,33 @@ class SessionRuntime:
         self._enqueue(
             "turn", lambda: self._run_turn(capture), PRIORITY_TURN, capture=capture, needs_idle=False
         )
+        self.spawn(self._filler_watch(capture), "reply_filler")
+        if self.settings.integrity_frames_yield_to_replies:
+            self.spawn(reply_window.hold(get_redis(), self.session_id), "integrity_reply_hold")
+
+    async def _filler_watch(self, capture: TurnCapture) -> None:
+        """No long silences (Tier 1): when the reply has not started FILLER_AFTER_S after the end of the turn, say
+        a short pre-synthesized "One moment." once, so the candidate knows they were heard."""
+        end_at = capture.end_at
+        if end_at is None:
+            return
+        await asyncio.sleep(max(0.0, end_at + FILLER_AFTER_S - time.monotonic()))
+        if (
+            capture.replied
+            or capture.end_at != end_at  # the candidate kept talking: the turn was reopened
+            or self.ended
+            or self.closed
+            or self.transport is None
+            or self.turns.state is not TurnState.PROCESSING
+        ):
+            return
+        phrase = FILLER_PHRASES[self._fillers % len(FILLER_PHRASES)]
+        if self.ack_cache.prompt(get_ai().tts, self.voice, phrase) is None:
+            return  # not synthesized yet: silence rather than the browser's robotic voice
+        self._fillers += 1
+        self._play_prompt(phrase)
+        self.avatar(AvatarState.THINKING, expression=AvatarExpression.THOUGHTFUL)
+        self._latency_note(capture, filler_ms=round((time.monotonic() - end_at) * 1000), filler=phrase)
 
     async def _resume_after_empty_barge_in(self, task: asyncio.Task[InterruptedUtterance | None]) -> None:
         interrupted = await task
@@ -2420,7 +2457,8 @@ class SessionRuntime:
                     and commit_required_ms(text_so_far, self.endpointer.params)
                     <= self.endpointer.params.short_ms
                 )
-                self._play_ack(capture, soft=not finished)
+                if self._play_ack(capture, soft=not finished):
+                    capture.acknowledged = self._last_ack
             ok = await capture.transcriber.wait_finals(timeout=STT_FINAL_TIMEOUT_S)
             if not ok or not capture.transcriber.resolved:
                 # A segment still in flight after the wait is not "done": keep the turn
@@ -2511,6 +2549,7 @@ class SessionRuntime:
             interrupted_ai=capture.interrupted_task is not None,
             stt_confidence=capture.transcriber.confidence() if capture.typed_text is None else None,
             audio_wav=capture.wav(),
+            acknowledged=capture.acknowledged,
         )
         capture.engine_called = True
         self._silence_prompts = 0

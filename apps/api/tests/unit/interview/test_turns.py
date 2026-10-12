@@ -116,6 +116,42 @@ async def test_first_speech_timeout(mock_ai) -> None:
     assert any("TimeoutError" in e for e in outcome.errors)
 
 
+async def test_a_stalled_model_falls_back_within_one_first_speech_budget(mock_ai) -> None:
+    """Tier 1: the old 8 s + 8 s retry left the candidate in 16 s of silence before the fallback question."""
+    import time
+
+    mock_ai.llm.chunk_delay = 0.4
+    mock_ai.llm.chunk_size = 2
+    mock_ai.llm.script(ModelTask.TURN_DECISION, decision(), decision())
+    outcome = TurnOutcome()
+    started = time.monotonic()
+    deltas = await _collect(
+        mock_ai,
+        [{"role": "user", "content": "a"}],
+        outcome,
+        cfg(turn_first_speech_timeout_s=8.0, turn_first_speech_budget_s=1.2, turn_retry_min_s=0.5),
+        retry=[{"role": "user", "content": "trimmed"}],
+    )
+    elapsed = time.monotonic() - started
+    assert deltas == [] and outcome.fallback
+    assert elapsed < 2.0, elapsed  # one budget, not two full per-attempt timeouts
+    assert outcome.attempts == 1 and "first_speech_budget_spent" in outcome.errors
+
+
+async def test_a_retry_still_runs_while_the_budget_allows(mock_ai) -> None:
+    mock_ai.llm.chunk_size = 5
+    mock_ai.llm.script(ModelTask.TURN_DECISION, AIUnavailable("main down", endpoint="main"), decision())
+    outcome = TurnOutcome()
+    deltas = await _collect(
+        mock_ai,
+        [{"role": "user", "content": "a"}],
+        outcome,
+        cfg(turn_first_speech_budget_s=6.0, turn_retry_min_s=1.5),
+        retry=[{"role": "user", "content": "trimmed"}],
+    )
+    assert deltas and not outcome.fallback and outcome.attempts == 2
+
+
 async def test_aclose_closes_llm_stream(mock_ai) -> None:
     mock_ai.llm.chunk_size = 3
     mock_ai.llm.chunk_delay = 0.01

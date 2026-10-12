@@ -1,6 +1,7 @@
 import { RotateCcw, SlidersHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/Button";
+import { useEnforcedPolicyFields } from "@/lib/auth";
 import { INTEGRITY_EVENT_LABELS } from "@/lib/labels";
 import type { IntegrityPolicy, IntegrityRule, OrganizationSettings, RecordingPolicy, RetentionPolicy } from "@/lib/types";
 
@@ -26,6 +27,7 @@ export interface IntegrityOverridesProps {
 
 /** Job-level integrity: organization defaults with per-field overrides. */
 export function IntegrityOverrides({ defaults, overrides, onChange, errors }: IntegrityOverridesProps) {
+  const locked = useEnforcedPolicyFields("integrity");
   const effective = { ...defaults, ...overrides } as IntegrityPolicy;
   // Pinned values equal to the default behave like the default, so only differences count.
   const differing = new Set(differingIntegrityKeys(overrides, defaults));
@@ -50,6 +52,7 @@ export function IntegrityOverrides({ defaults, overrides, onChange, errors }: In
       </div>
       <PolicyFieldsEditor
         fields={INTEGRITY_FIELDS}
+        locked={locked}
         groups={INTEGRITY_GROUPS}
         values={effective as unknown as Record<string, unknown>}
         defaults={defaults as unknown as Record<string, unknown>}
@@ -118,11 +121,13 @@ export interface RecordingOverridesProps {
 }
 
 export function RecordingOverrides({ settings, recording, retention, onRecordingChange, onRetentionChange, errors }: RecordingOverridesProps) {
+  const locked = useEnforcedPolicyFields("recording");
   const effectiveRetention = { ...settings.retention, ...retention } as RetentionPolicy;
   return (
     <div className="grid gap-6">
       <PolicyFieldsEditor
         fields={RECORDING_FIELDS}
+        locked={locked}
         values={{ ...settings.recording, ...recording } as unknown as Record<string, unknown>}
         defaults={settings.recording as unknown as Record<string, unknown>}
         isOverridden={(key) => key in recording && recording[key as keyof RecordingPolicy] !== settings.recording[key as keyof RecordingPolicy]}

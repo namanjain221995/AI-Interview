@@ -27,6 +27,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.core.config import get_settings
 from app.core.errors import ValidationFailed
 from app.domain.enums import CandidateReportMode, IntegrityAction, IntegrityEventType
 from app.schemas.policies import (
@@ -97,6 +98,25 @@ def merge_recording(
     return recording, retention
 
 
+#: What the platform rule forces on (REQUIRE_CAMERA_FOR_ALL_INTERVIEWS); settings screens show these as locked.
+CAMERA_ENFORCED_FIELDS: tuple[str, ...] = (
+    "integrity.enabled",
+    "integrity.camera_required",
+    "integrity.camera_frame_analysis",
+    "recording.record_video",
+)
+
+
+def require_camera(
+    integrity: IntegrityPolicy, recording: RecordingPolicy
+) -> tuple[IntegrityPolicy, RecordingPolicy]:
+    """Camera on, required and analysed, video recorded - for every interview type."""
+    return (
+        integrity.model_copy(update={"enabled": True, "camera_required": True, "camera_frame_analysis": True}),
+        recording.model_copy(update={"record_video": True}),
+    )
+
+
 def build_policy_snapshot(org_settings: OrganizationSettings, job: Any = None) -> PolicySnapshot:
     """Effective policy for an interview of ``job`` (ORM row, mapping or None)."""
     integrity = merge_integrity(org_settings.integrity, _get(job, "integrity_settings"))
@@ -104,6 +124,8 @@ def build_policy_snapshot(org_settings: OrganizationSettings, job: Any = None) -
         org_settings.recording, org_settings.retention, _get(job, "recording_settings")
     )
     mode = _get(job, "candidate_report_mode") or org_settings.candidate_report_mode
+    if get_settings().require_camera_for_all_interviews:
+        integrity, recording = require_camera(integrity, recording)
     return PolicySnapshot(
         integrity=integrity,
         recording=recording,

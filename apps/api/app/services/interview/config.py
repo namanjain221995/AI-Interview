@@ -25,6 +25,11 @@ class EngineConfig:
     start_wait_for_plan_s: float = 8.0
     # Turn decision streaming
     turn_first_speech_timeout_s: float = 8.0
+    # Total wait for the first spoken words across attempts (Tier 1: the old 8 s + 8 s retry left candidates in
+    # 16-25 s of silence); a retry is only started while turn_retry_min_s of it remains, else the deterministic
+    # fallback question is spoken at once.
+    turn_first_speech_budget_s: float = 6.0
+    turn_retry_min_s: float = 1.5
     turn_total_timeout_s: float = 35.0
     turn_temperature: float = 0.5
     turn_max_tokens: int = 900

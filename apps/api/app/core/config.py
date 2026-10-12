@@ -199,6 +199,12 @@ class Settings(BaseSettings):
     think_pause_max_seconds: int = 25
     max_utterance_seconds: int = 240
     acknowledgment_enabled: bool = True
+    # Platform rule (owner decision 2026-10-12): every interview, whatever the round type, job or organisation
+    # settings, requires the camera, records video and analyses camera frames. Frozen into each invitation's
+    # policy snapshot at creation (existing invitations keep what the candidate consented to).
+    require_camera_for_all_interviews: bool = True
+    # New camera-frame analyses wait (<= 6 s) while an interviewer reply is starting (app.services.integrity.reply_window).
+    integrity_frames_yield_to_replies: bool = True
     ws_heartbeat_interval_seconds: int = 10
     ws_disconnect_grace_seconds: int = 180
     session_resume_buffer_messages: int = 300

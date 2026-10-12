@@ -74,7 +74,13 @@ from app.services.interview.coding_bridge import (
     transition_speech,
 )
 from app.services.interview.config import EngineConfig, get_engine_config
-from app.services.interview.context import coding_user_prompt, system_prompt, turn_messages, user_prompt
+from app.services.interview.context import (
+    coding_user_prompt,
+    system_prompt,
+    thread_evidence,
+    turn_messages,
+    user_prompt,
+)
 from app.services.interview.contracts import (
     ActivityEvent,
     BehaviorSpec,
@@ -637,6 +643,18 @@ class InterviewEngine:
 
         def _apply(s: InterviewState) -> bool:
             if s.status not in (SessionStatus.CREATED, SessionStatus.PREPARING):
+                if (
+                    s.status in (SessionStatus.LIVE, SessionStatus.PAUSED)
+                    and plan_source == "model"
+                    and s.plan_source == "fallback"
+                ):
+                    # The candidate began before the resume-aware plan was ready (it takes 20-45 s; most sessions
+                    # started on the deterministic plan and never used it). The plan is a time budget and
+                    # priorities that the policy reads afresh every turn, so the rest of the interview follows it.
+                    s.plan = plan
+                    s.plan_source = "model_late"
+                    applied["late"] = s.status.value
+                    return True
                 applied["skipped"] = s.status.value
                 return False
             if profile_doc is not None:
@@ -652,6 +670,13 @@ class InterviewEngine:
 
         saved = await self.store.save_with_retry(session_id, _apply, durable=True)
         duration_ms = round((time.monotonic() - started) * 1000.0, 1)
+        if applied.get("late"):
+            log.info("engine.plan_adopted_late", session_id=session_id, status=applied["late"], duration_ms=duration_ms)
+            async with session_scope() as db:
+                await log_event(
+                    db, session_id, "session.plan_adopted", {"plan_source": "model_late", "duration_ms": duration_ms}
+                )
+            return
         if applied.get("skipped"):
             log.info("engine.prepare_discarded", session_id=session_id, status=applied["skipped"])
             return
@@ -1120,6 +1145,7 @@ class InterviewEngine:
                     last_answer=text,
                     current_question=current.text if current else None,
                     interruption=self._interruption_note(state, turn),
+                    acknowledged=bool(turn.acknowledged),
                     pending_answer=pending if turn.speculative else None,
                     speculative=turn.speculative,
                     persist_task=persist_task,
@@ -1308,6 +1334,11 @@ class InterviewEngine:
             notes.append(
                 "The candidate has not heard your current question yet; respond to what they said, then ask it."
             )
+        if turn.acknowledged:
+            notes.append(
+                f'You have already said "{turn.acknowledged}" out loud after this answer: do not acknowledge or thank '
+                "again; start directly with your next sentence."
+            )
         return " ".join(notes) or None
 
     # ======================================================= decision turns
@@ -1319,6 +1350,7 @@ class InterviewEngine:
         last_answer: str | None,
         current_question: str | None = None,
         interruption: str | None = None,
+        acknowledged: bool = False,
         pending_answer: PendingAnswer | None = None,
         speculative: bool = False,
         coding_prompt: str | None = None,
@@ -1347,6 +1379,7 @@ class InterviewEngine:
                 last_answer=last_answer,
                 current_question=current_question,
                 interruption=interruption,
+                evidence=thread_evidence(state, last_answer=last_answer),
             )
             messages = turn_messages(system, user)
             retry = turn_messages(
@@ -1384,6 +1417,7 @@ class InterviewEngine:
                     config=self.config,
                     retry_messages=retry,
                     guard_factory=guard_factory,
+                    after_ack=acknowledged,
                 )
             ) as gen:
                 async for delta in gen:
