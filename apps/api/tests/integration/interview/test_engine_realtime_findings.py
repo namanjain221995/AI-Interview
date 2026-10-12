@@ -76,7 +76,7 @@ async def test_tail_is_bounded_and_fields_are_recovered(interview_env) -> None:
     assert meta.decision["latency"]["tail_cut"] is True and "tail_cut" in meta.decision["deviations"]
     # Fields that arrived before the cut are kept (action comes right after speech).
     assert meta.decision["action"] == "ask_followup"
-    assert meta.full_text.startswith("How did you handle failure recovery")
+    assert meta.full_text.startswith("How did you handle ")
     async with session_scope() as db:
         assert (await db.get(Question, uuid.UUID(meta.question_id))) is not None
 

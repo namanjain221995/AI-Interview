@@ -99,6 +99,9 @@ def _field(pattern: str, text: str) -> str | None:
     return m.group(1) if m else None
 
 
+FOLLOWUP_ASPECTS = ("failure recovery", "capacity planning", "monitoring and alerting", "rollout safety", "cost control")
+
+
 @dataclass
 class SimulatedInterviewer:
     """TURN_DECISION responder that follows the prompt's directive."""
@@ -130,7 +133,8 @@ class SimulatedInterviewer:
         n = self.calls
         speeches = {
             "request_specificity": f"What was the measured impact, roughly, and over what time range? (turn {n})",
-            "ask_followup": f"How did you handle failure recovery in that setup? (turn {n})",
+            # Follow-ups go one level deeper on different aspects (an identical re-ask is a repeat: policy.same_point).
+            "ask_followup": f"How did you handle {FOLLOWUP_ASPECTS[n % len(FOLLOWUP_ASPECTS)]} in that setup? (turn {n})",
             "increase_difficulty": f"How would that design change at ten times the traffic? (turn {n})",
             "simplify": f"Let's narrow it down: what is the first thing you would check? (turn {n})",
             "clarify_question": f"Let me put it another way: what did you personally build there? (turn {n})",

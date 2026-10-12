@@ -328,6 +328,47 @@ def off_topic_streak(state: InterviewState) -> int:
     return streak
 
 
+
+#: Words that say nothing about WHAT a question asks for ("specific", "details", "walk me through").
+_POINT_STOP = frozenset(
+    "about after again also before being could describe detail details does each example exactly explain from have "
+    "question questions "
+    "into just more name once other over specific specifically tell than that their them then there these they this "
+    "through walk what when where which while will with would your yours".split()
+)
+_POINT_WORD = re.compile(r"[a-z][a-z0-9_]+")
+#: Same-point threshold: share >= 2 content stems and >= 75 % of the shorter focus ("Specific Prometheus metric"
+#: vs "Prometheus health metric" - yes; "Terraform time savings" vs "Terraform provisioning time" - no).
+SAME_POINT_OVERLAP = 0.75
+
+
+def _point(text: str) -> frozenset[str]:
+    return frozenset(w[:6] for w in _POINT_WORD.findall(text.lower()) if len(w) >= 4 and w not in _POINT_STOP)
+
+
+def same_point(a: str, b: str) -> bool:
+    """Do two questions ask for the same thing (their short focus, else the text)?"""
+    pa, pb = _point(a), _point(b)
+    shared = len(pa & pb)
+    return shared >= 2 and shared >= SAME_POINT_OVERLAP * min(len(pa), len(pb))
+
+
+def same_point_asks(state: InterviewState) -> int:
+    """How many times in a row the interviewer has asked for the point of the current question (1 = once).
+
+    Live owner session: "a specific Prometheus metric" was asked four times in a row; the follow-up counter did
+    not stop it because each re-ask carried a different topic label."""
+    asked = [q for q in state.questions if q.action not in UNCOUNTED_ACTIONS]
+    if not asked:
+        return 0
+    focus = asked[-1].focus or asked[-1].text
+    count = 1
+    for q in reversed(asked[:-1]):
+        if not same_point(focus, q.focus or q.text):
+            break
+        count += 1
+    return count
+
 def count_questions(state: InterviewState) -> int:
     return sum(1 for q in state.questions if q.action not in UNCOUNTED_ACTIONS)
 
@@ -902,6 +943,14 @@ def compute_directive(
     limit = followup_limit(state, current)
     followups = current.followups_on_current_topic if current else 0
     max_reached = current is not None and followups >= limit
+    # At most one re-ask of the same point: asked twice and still not given, the interview moves on (unless the
+    # candidate asked for the question again).
+    asked_twice = (
+        not first_question
+        and same_point_asks(state) >= 2
+        and (special is None or special.kind not in (SpecialKind.REPEAT, SpecialKind.CLARIFICATION))
+    )
+    max_reached = max_reached or asked_twice
     last = state.answers[-1] if state.answers and not first_question else None
     last_hedge = (
         hedge_kind(last.text)
@@ -1098,12 +1147,12 @@ def compute_directive(
                     "Reassure them briefly that it's fine not to know everything, then move on."
                 )
     else:
-        if special is not None and special.kind is SpecialKind.BACKCHANNEL:
+        if special is not None and special.kind is SpecialKind.BACKCHANNEL and not asked_twice:
             recommended, stay = TurnAction.ASK_FOLLOWUP, True
             instructions.append(
                 "The candidate only gave a brief acknowledgement; invite them to elaborate on the question."
             )
-        elif special is not None and special.kind in (SpecialKind.BRIEF, SpecialKind.GARBLED):
+        elif special is not None and special.kind in (SpecialKind.BRIEF, SpecialKind.GARBLED) and not asked_twice:
             recommended, stay = TurnAction.CLARIFY_QUESTION, True
             instructions.append(
                 "The last answer was very short or hard to follow (it may have been cut off or misrecognized). "
@@ -1245,6 +1294,11 @@ def compute_directive(
         guidance = _guidance(recommended)
         if guidance:
             instructions.insert(0, guidance)
+    if asked_twice and not must_close:
+        instructions.append(
+            "You have already asked for this point twice; do not ask for it again in any form. Move to a "
+            "different area without commenting on the answer."
+        )
     if max_reached and not must_close:
         instructions.append(
             HEDGE_MOVE_ON
@@ -1754,6 +1808,8 @@ __all__ = [
     "compute_directive",
     "count_questions",
     "off_topic_streak",
+    "same_point",
+    "same_point_asks",
     "effective_quality",
     "explained_by_candidate",
     "open_contradiction",
