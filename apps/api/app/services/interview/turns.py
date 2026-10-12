@@ -248,9 +248,14 @@ def _template_question(state: InterviewState, directive: PolicyDirective) -> str
 
 
 def fallback_utterance(
-    state: InterviewState, directive: PolicyDirective, *, current_question: str | None
+    state: InterviewState,
+    directive: PolicyDirective,
+    *,
+    current_question: str | None,
+    acknowledged: bool = False,
 ) -> tuple[str, TurnAction, BankCandidate | None]:
-    """Deterministic utterance honouring the directive (LLM unavailable)."""
+    """Deterministic utterance honouring the directive (LLM unavailable). ``acknowledged``: the
+    realtime layer already said a short acknowledgement out loud, so the utterance adds none."""
     seed = f"{state.session_id}:{state.turn_index}"
     action = directive.required_action or directive.recommended_action
     core = question_core(current_question) if current_question else None
@@ -292,7 +297,7 @@ def fallback_utterance(
             action,
             None,
         )
-    ack = "" if directive.first_question else pick(ACKNOWLEDGEMENTS, seed) + " "
+    ack = "" if directive.first_question or acknowledged else pick(ACKNOWLEDGEMENTS, seed) + " "
     bank = directive.candidate_bank_questions[0] if directive.candidate_bank_questions else None
     if action in (TurnAction.SIMPLIFY, TurnAction.CLARIFY_QUESTION) and core:
         return f"{ack}Let me narrow that down a little. {core}", TurnAction.SIMPLIFY, None

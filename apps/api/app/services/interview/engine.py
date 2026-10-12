@@ -1118,7 +1118,9 @@ class InterviewEngine:
                 return
             if directive.start_coding:
                 started = False
-                async with aclosing(self._start_coding_events(state, ack=True)) as _relay:
+                async with aclosing(
+                    self._start_coding_events(state, ack=not turn.acknowledged)
+                ) as _relay:
                     async for event in _relay:
                         started = True
                         yield event
@@ -1473,7 +1475,7 @@ class InterviewEngine:
             extra_deviations.append("tail_cut" if outcome.tail_cut else "decision_recovered")
         else:
             fallback_text, action, bank = fallback_utterance(
-                state, directive, current_question=current_question
+                state, directive, current_question=current_question, acknowledged=acknowledged
             )
             decision = synthesize_decision(
                 fallback_text,

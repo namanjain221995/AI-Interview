@@ -227,6 +227,17 @@ def test_fallback_template_without_bank() -> None:
     assert chosen is None and "AWS" in text and text.endswith("?")
 
 
+def test_fallback_adds_no_acknowledgement_after_a_spoken_ack() -> None:
+    s = state()
+    ask(s, "kubernetes", followups=3)
+    d = _d(s)
+    spoken, _, _ = fallback_utterance(s, d, current_question=None)
+    quiet, _, _ = fallback_utterance(s, d, current_question=None, acknowledged=True)
+    assert spoken.split(" ", 1)[0].rstrip(",.") in {"Thanks", "Okay", "Got", "Alright", "Right"}
+    assert not quiet.startswith(("Thanks", "Okay", "Got it", "Alright", "Right."))
+    assert spoken.endswith(quiet)
+
+
 @pytest.mark.parametrize(
     "turn,expected_start",
     [
