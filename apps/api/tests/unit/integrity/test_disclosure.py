@@ -390,3 +390,48 @@ def test_rows_without_a_sweep_are_never_given_a_deletion_deadline() -> None:
     for item in d.items:
         if item.key in ("transcript", "ai_assessment"):
             assert not re.search(r"kept for \d+ days?", item.description), item.key
+
+
+# ---- one-line summaries (consent page: summaries by default, the full text one click away) ----
+
+
+@pytest.mark.parametrize(
+    "snap",
+    [
+        snapshot(),
+        snapshot(recording={"record_video": False, "record_answer_audio": False}),
+        snapshot(integrity={"enabled": False}),
+        snapshot(integrity={"camera_required": True, "camera_frame_analysis": True, "camera_frame_interval_seconds": 9}),
+    ],
+)
+def test_every_item_has_a_short_summary(snap: dict[str, Any]) -> None:
+    for item in build(snap).items:
+        assert item.summary and len(item.summary) <= 170, (item.key, item.summary)
+        assert item.summary[0].isupper() and item.summary.endswith("."), (item.key, item.summary)
+
+
+def test_summaries_follow_the_policy() -> None:
+    off = items(build(snapshot(recording={"record_video": False, "record_answer_audio": False})))
+    assert off["audio_recording"].summary == "Your audio is not recorded."
+    assert off["video_recording"].summary == "No video is recorded."
+    on = items(
+        build(
+            snapshot(
+                integrity={"camera_required": True, "camera_frame_analysis": True, "camera_frame_interval_seconds": 9},
+                recording={"record_video": True},
+                retention={"video_days": 21},
+            )
+        )
+    )
+    assert "About every 9 seconds" in on["camera_frames"].summary
+    assert on["camera"].summary.startswith("Your camera stays on for the whole interview")
+    assert "kept for 21 days" in on["video_recording"].summary
+    assert ORG in on["ai_assessment"].summary
+
+
+def test_summaries_are_part_of_the_hashed_and_rendered_text() -> None:
+    disclosure = build()
+    markdown = render_disclosure_markdown(disclosure)
+    for item in disclosure.items:
+        assert item.summary.split(";")[0][:30] in markdown.replace("\\", "")
+    assert "confirm the required items together" in disclosure.intro

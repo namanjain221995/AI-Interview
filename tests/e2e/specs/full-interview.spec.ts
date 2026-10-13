@@ -100,9 +100,9 @@ test("candidate completes an adaptive voice interview with coding, hint and repo
   await page.getByTestId("welcome-continue").click();
   await page.getByTestId("instructions-continue").click();
 
-  const items = page.locator('[data-testid^="consent-item-"]');
-  await expect(items.first()).toBeVisible();
-  for (let i = 0; i < (await items.count()); i++) await items.nth(i).check();
+  // One confirmation covers the required items (optional ones stay off).
+  await expect(page.locator('[data-testid^="consent-item-"]').first()).toBeVisible();
+  await page.getByTestId("consent-agree-all").check();
   await page.getByTestId("consent-accept-button").click();
 
   await page.getByTestId("resume-file-input").setInputFiles(RESUME);

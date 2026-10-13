@@ -36,7 +36,7 @@ const DISCLOSURE = {
   title: "Before you begin",
   intro: "Here is exactly what happens during your interview.",
   items: [
-    { key: "microphone", title: "Microphone", description: "Your voice is transcribed.", required: true, enabled: true },
+    { key: "microphone", title: "Microphone", description: "Your voice is transcribed by the speech service.", summary: "You answer by voice.", required: true, enabled: true },
     { key: "integrity_monitoring", title: "Monitoring", description: "Tab and window changes are noted.", required: true, enabled: true },
     { key: "camera_frames", title: "Camera checks", description: "A still image every 10 seconds.", required: false, enabled: true },
   ],
@@ -136,7 +136,7 @@ describe("InviteEntryPage", () => {
 });
 
 describe("ConsentPage", () => {
-  it("requires every required item, then posts the consent map with the policy hash", async () => {
+  it("confirms every required item with one tick, then posts the consent map with the policy hash", async () => {
     const post = vi.spyOn(api, "post").mockImplementation(async () => {
       interviewState = { ...interviewState, steps_completed: ["consent"] };
       return {} as never;
@@ -146,19 +146,40 @@ describe("ConsentPage", () => {
       { path: ":interviewId/resume", Component: ResumePage },
     ]);
     const accept = await screen.findByTestId("consent-accept-button");
-    expect(screen.getByTestId("consent-item-microphone")).toBeInTheDocument();
-    expect(screen.getByTestId("consent-item-camera_frames")).toBeInTheDocument();
+    // Summaries by default, the full text behind "Details".
+    expect(screen.getByTestId("consent-item-microphone")).toHaveTextContent("You answer by voice.");
+    expect(screen.getByText("Your voice is transcribed by the speech service.").closest("details")).not.toBeNull();
     expect(screen.getByText("A browser can't lock your computer.")).toBeInTheDocument();
     expect(accept).toBeDisabled();
-    fireEvent.click(screen.getByTestId("consent-item-microphone"));
-    expect(accept).toBeDisabled();
-    fireEvent.click(screen.getByTestId("consent-item-integrity_monitoring"));
+    fireEvent.click(screen.getByTestId("consent-agree-all"));
     expect(accept).toBeEnabled();
     fireEvent.click(accept);
     await waitFor(() => expect(router.state.location.pathname).toBe("/candidate/i1/resume"));
+    // The optional item stays off unless the candidate turns it on; never bundled with the required ones.
     expect(post).toHaveBeenCalledWith("/portal/interviews/i1/consent", {
       policy_hash: "hash-1",
       items: { microphone: true, integrity_monitoring: true, camera_frames: false },
+    });
+  });
+
+  it("records an optional item only when its own switch is turned on", async () => {
+    const post = vi.spyOn(api, "post").mockImplementation(async () => {
+      interviewState = { ...interviewState, steps_completed: ["consent"] };
+      return {} as never;
+    });
+    renderAt("/candidate/i1/consent", [
+      { path: ":interviewId/consent", Component: ConsentPage },
+      { path: ":interviewId/resume", Component: ResumePage },
+    ]);
+    const accept = await screen.findByTestId("consent-accept-button");
+    fireEvent.click(screen.getByTestId("consent-optional-camera_frames"));
+    expect(accept).toBeDisabled(); // an optional choice never stands in for the required confirmation
+    fireEvent.click(screen.getByTestId("consent-agree-all"));
+    fireEvent.click(accept);
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(post).toHaveBeenCalledWith("/portal/interviews/i1/consent", {
+      policy_hash: "hash-1",
+      items: { microphone: true, integrity_monitoring: true, camera_frames: true },
     });
   });
 

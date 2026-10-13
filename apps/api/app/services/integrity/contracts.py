@@ -59,6 +59,9 @@ class DisclosureItem:
     description: str
     required: bool
     enabled: bool
+    # One plain sentence shown by default on the consent page (the description stays one click away); derived
+    # from the same policy values as the description and covered by the policy hash.
+    summary: str = ""
 
 
 @dataclass(slots=True)

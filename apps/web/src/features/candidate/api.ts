@@ -280,6 +280,8 @@ export interface DisclosureItemView {
   key: string;
   title: string;
   description: string;
+  /** One plain sentence shown by default (the description stays one click away); empty from older servers. */
+  summary: string;
   required: boolean;
   enabled: boolean;
 }
@@ -332,6 +334,7 @@ export function normalizeDisclosure(raw: unknown): DisclosureView {
           key,
           title: firstStr(i.title, i.label) ?? ITEM_TITLES[key]?.title ?? key.replace(/_/g, " "),
           description: firstStr(i.description, i.text) ?? ITEM_TITLES[key]?.description ?? "",
+          summary: firstStr(i.summary) ?? "",
           required: bool(i.required, true),
           enabled: bool(i.enabled, true),
         };
@@ -345,7 +348,7 @@ export function normalizeDisclosure(raw: unknown): DisclosureView {
         continue;
       }
       if (value !== true) continue;
-      items.push({ key, title: ITEM_TITLES[key]?.title ?? key, description: ITEM_TITLES[key]?.description ?? "", required: true, enabled: true });
+      items.push({ key, title: ITEM_TITLES[key]?.title ?? key, description: ITEM_TITLES[key]?.description ?? "", summary: "", required: true, enabled: true });
     }
   }
   // `required_items` (list of keys) is the authority on what must be acknowledged.

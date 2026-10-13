@@ -144,6 +144,7 @@ class DisclosureItemOut(_Out):
     description: str
     required: bool
     enabled: bool
+    summary: str = ""
 
 
 class DisclosureOut(_Out):

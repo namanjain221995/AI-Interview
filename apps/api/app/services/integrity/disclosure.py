@@ -162,6 +162,8 @@ def _build_items(
             ),
             required=True,
             enabled=True,
+            summary="You answer by voice; what you say is turned into text."
+            + (" You can also type an answer." if rec.allow_typed_answers else ""),
         )
     )
 
@@ -193,6 +195,12 @@ def _build_items(
                 description=_join(camera_parts),
                 required=bool(on and integ.camera_required),
                 enabled=True,
+                summary=(
+                    "Your camera stays on for the whole interview"
+                    if (on and integ.camera_required)
+                    else "Your camera is used during the interview"
+                )
+                + ("; the video is recorded." if rec.record_video else "."),
             )
         )
     else:
@@ -203,6 +211,7 @@ def _build_items(
                 description="Your camera is not used for this interview.",
                 required=False,
                 enabled=False,
+                summary="Your camera is not used.",
             )
         )
 
@@ -221,6 +230,7 @@ def _build_items(
             ),
             required=True,
             enabled=True,
+            summary="Everything said in the interview is turned into text and used to evaluate your answers.",
         )
     )
 
@@ -283,6 +293,7 @@ def _build_items(
                 description=integrity_text,
                 required=True,
                 enabled=True,
+                summary=_integrity_summary(integ, has_policy_actions=bool(policy_rules)),
             )
         )
     else:
@@ -295,6 +306,7 @@ def _build_items(
                 ),
                 required=False,
                 enabled=False,
+                summary="Browser activity is not monitored.",
             )
         )
 
@@ -329,6 +341,8 @@ def _build_items(
                 ),
                 required=True,
                 enabled=True,
+                summary=f"About every {integ.camera_frame_interval_seconds} seconds an AI model checks a camera "
+                "snapshot for objective facts only, such as nobody in view, a second person or a phone.",
             )
         )
     else:
@@ -339,6 +353,7 @@ def _build_items(
                 description="Camera images are not analysed for this interview.",
                 required=False,
                 enabled=False,
+                summary="Camera images are not analysed.",
             )
         )
 
@@ -386,6 +401,8 @@ def _build_items(
                 ),
                 required=True,
                 enabled=True,
+                summary="Your browser checks a few times a second that one face is visible; the picture stays on "
+                "your device.",
             )
         )
     else:
@@ -396,6 +413,7 @@ def _build_items(
                 description="Your camera picture is not checked for faces for this interview.",
                 required=False,
                 enabled=False,
+                summary="Your camera picture is not checked for faces.",
             )
         )
 
@@ -438,6 +456,14 @@ def _build_items(
                 description=_join(share_parts),
                 required=bool((on and integ.screen_share_required) or rec.record_screen),
                 enabled=True,
+                summary=(
+                    "You share your entire screen for the whole interview"
+                    if (on and integ.screen_share_required)
+                    else "You may be asked to share your entire screen"
+                )
+                + ("; still images of it are checked by AI" if (on and integ.screen_share_analysis) else "")
+                + ("; it is recorded" if rec.record_screen else "")
+                + ".",
             )
         )
     else:
@@ -448,6 +474,7 @@ def _build_items(
                 description="Screen sharing is not used for this interview.",
                 required=False,
                 enabled=False,
+                summary="Screen sharing is not used.",
             )
         )
 
@@ -464,6 +491,9 @@ def _build_items(
             ),
             required=rec.record_answer_audio,
             enabled=rec.record_answer_audio,
+            summary=f"Your spoken answers are recorded and kept for {_days(ret.audio_days)}."
+            if rec.record_answer_audio
+            else "Your audio is not recorded.",
         )
     )
 
@@ -490,6 +520,14 @@ def _build_items(
             description=_join(video_parts) if video_parts else "No video is recorded.",
             required=bool(video_parts),
             enabled=bool(video_parts),
+            summary=(
+                f"The interview is recorded on video and kept for {_days(ret.video_days)}; reviewers at "
+                f"{organization} can watch it."
+                if rec.record_video
+                else f"Your shared screen is recorded and kept for {_days(ret.video_days)}."
+                if rec.record_screen
+                else "No video is recorded."
+            ),
         )
     )
 
@@ -509,6 +547,8 @@ def _build_items(
             ),
             required=True,
             enabled=True,
+            summary=f"An AI interviewer asks the questions and scores your answers; a person at {organization} "
+            "makes every hiring decision.",
         )
     )
 
@@ -520,10 +560,47 @@ def _build_items(
             description=_retention_summary(snap),
             required=True,
             enabled=True,
+            summary=_retention_short(snap),
         )
     )
     return items
 
+
+
+def _integrity_summary(integ: Any, *, has_policy_actions: bool) -> str:
+    """One sentence for the integrity item (its description lists every monitored event)."""
+    watched: list[str] = []
+    if integ.require_fullscreen:
+        watched.append("leaving fullscreen")
+    if integ.monitor_focus:
+        watched.append("switching tabs or windows")
+    if integ.monitor_clipboard:
+        watched.append("copying or pasting")
+    if integ.camera_required or integ.camera_frame_analysis:
+        watched.append("turning off your camera or microphone")
+    watched = watched[:3]
+    events = (
+        "browser events"
+        if not watched
+        else watched[0]
+        if len(watched) == 1
+        else ", ".join(watched[:-1]) + ", or " + watched[-1]
+    )
+    outcome = (
+        "Some of them can affect the interview (see Details)."
+        if has_policy_actions
+        else "They are only noted for a person to review."
+    )
+    return f"Your browser notes events such as {events}. {outcome}"
+
+
+def _retention_short(snap: PolicySnapshot) -> str:
+    days = sorted({d for _key, _label, d in auto_deleted_items(snap)})
+    period = _days(days[0]) if len(days) == 1 else f"{days[0]}-{_days(days[-1])}"
+    return (
+        f"Stored files are deleted automatically after {period}; your transcript and assessment stay until the "
+        "hiring team deletes them."
+    )
 
 def _seconds(value: float) -> str:
     n = max(1, int(round(value)))
@@ -600,7 +677,7 @@ def build_disclosure(
     title = "Before you start: how this interview uses your data"
     intro = (
         f"{organization} uses an AI interviewer for {job}. Before you begin, please read what this "
-        "interview collects, why, and for how long. You will be asked to confirm each required item."
+        "interview collects, why, and for how long. You confirm the required items together at the end."
     )
     purpose = (
         f"The information is used only to run and evaluate this interview for {job} at {organization}, and "
@@ -661,7 +738,10 @@ def render_disclosure_markdown(disclosure: Disclosure) -> str:
     lines = [f"# {_md(disclosure.title)}", "", _md(disclosure.intro), ""]
     for item in disclosure.items:
         status = "Required" if item.required else ("Optional" if item.enabled else "Not used")
-        lines += [f"## {_md(item.title)} ({status})", "", _md(item.description), ""]
+        lines += [f"## {_md(item.title)} ({status})", ""]
+        if item.summary:
+            lines += [f"*{_md(item.summary)}*", ""]
+        lines += [_md(item.description), ""]
     lines += [
         "## Purpose",
         "",
