@@ -437,9 +437,8 @@ Ordered by priority. Items 1-3 matter before any internet-facing deployment.
     the model-call ledger after their retention periods (erasure is manual, per candidate).
 11. **Smaller items**: log redaction applies to top-level keys only; invite link regeneration does not clear an active
     Redis lock; the role-assignment comment in `rbac.py` says "strictly below its own rank" but ADMIN can manage other
-    ADMINs; the developer pages `/dev/ui` and `/dev/avatar` ship in production builds; the sandbox replay cache is
-    per process; a `rounds.config` row with an unknown `round_type` makes session creation fail with a 500 instead of
-    a clean 409 (`round_config_from_row`, not reachable through the validated round endpoints).
+    ADMINs; the sandbox replay cache is
+    per process.
 
 ## Review checklist for changes
 

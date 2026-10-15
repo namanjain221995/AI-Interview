@@ -12,7 +12,7 @@ with `--stats`.
 | `catalog/roles.yaml` | The role vocabulary: `key`, `title`, `family`, `description`, `competency_keys`, `round_types` | validation only (not stored) |
 | `question_bank/**/*.yaml` | Curated interview questions, any directory depth (for example `question_bank/<area>/<topic>.yaml`) | `question_bank` (by `external_key`) |
 | `coding/<group>/<slug>.yaml` | One coding problem per file, grouped by topic (`arrays_hashing`, `sql`, ...); the original top-level `coding/<slug>.yaml` files stay valid | `coding_questions` (by `slug`) |
-| `jobs/*.yaml` | 4 demo jobs with requirements, integrity and recording policies and rounds built from the templates | `jobs`, `job_requirements`, `rounds` |
+| `jobs/*.yaml` | 5 demo jobs (incl. the intake training-program job) with requirements, integrity and recording policies and rounds built from the templates | `jobs`, `job_requirements`, `rounds` |
 | `resumes/` | Sample resumes in every supported format, including a scanned PDF that needs OCR | uploaded through the API |
 
 Files are discovered recursively and sorted by path; dot-files are ignored and `*.yml` files are
