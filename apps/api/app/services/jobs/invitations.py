@@ -25,7 +25,7 @@ from app.core.config import get_settings
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.lifecycle import run_after_commit
 from app.core.logging import get_logger
-from app.core.queue import publish_session_event
+from app.core.queue import enqueue, publish_session_event
 from app.core.security import generate_access_code, generate_invite_token, hash_access_code_async
 from app.db.models import AuthSession, Candidate, Interview, InterviewSession, Job, Round
 from app.domain.enums import InterviewStatus, JobStatus, SessionStatus
@@ -144,16 +144,7 @@ async def create_invitation(
         round_id = rounds[0].id
 
     now = _now()
-    existing = await db.scalar(
-        select(Interview.id).where(
-            Interview.candidate_id == candidate.id,
-            Interview.job_id == job.id,
-            or_(
-                Interview.status == InterviewStatus.IN_PROGRESS.value,
-                and_(Interview.status == InterviewStatus.INVITED.value, Interview.invite_expires_at > now),
-            ),
-        )
-    )
+    existing = await open_invitation_id(db, candidate.id, job.id, now=now)
     if existing is not None:
         raise Conflict(
             "This candidate already has an open invitation for this job. Regenerate its link instead.",
@@ -257,6 +248,15 @@ async def cancel_invitation(db: AsyncSession, interview: Interview, *, reason: s
     ).all()
     for session_id in open_sessions:
         run_after_commit(db, functools.partial(_announce_cancelled, session_id))
+        # Sessions without a live runtime (candidate gone, API restarted) never hear the bus event:
+        # the lifecycle job ends them offline (aborted, no scoring) a few seconds later (S1).
+        await enqueue(
+            "session.end",
+            {"session_id": str(session_id), "reason": "cancelled", "actor": "staff_cancel"},
+            dedupe_key=f"session.end:{session_id}:cancelled",
+            delay_seconds=15,
+            db=db,
+        )
     return revoked
 
 
@@ -288,6 +288,26 @@ async def regenerate_link(
     await revoke_candidate_sessions(db, interview.id, reason="invite_link_rotated")
     await db.flush()
     return IssuedInvite(interview, token, access_code)
+
+
+async def open_invitation_id(
+    db: AsyncSession, candidate_id: uuid.UUID, job_id: uuid.UUID, *, now: datetime | None = None
+) -> uuid.UUID | None:
+    """An interview of this candidate for this job that is in progress, or invited and not yet expired."""
+    now = now or _now()
+    found: uuid.UUID | None = await db.scalar(
+        select(Interview.id)
+        .where(
+            Interview.candidate_id == candidate_id,
+            Interview.job_id == job_id,
+            or_(
+                Interview.status == InterviewStatus.IN_PROGRESS.value,
+                and_(Interview.status == InterviewStatus.INVITED.value, Interview.invite_expires_at > now),
+            ),
+        )
+        .limit(1)
+    )
+    return found
 
 
 def interview_list_query(

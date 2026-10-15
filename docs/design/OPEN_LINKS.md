@@ -213,6 +213,15 @@ and are unique.
 
 Existing candidate rows are never overwritten by a registration: only empty `phone`/`location` are filled.
 
+**Identity stop-gap (S4).** A registration proves nothing about the email it types. An existing candidate row
+with history (any interview or résumé) is therefore only reused from a browser that already registered as that
+person in the organisation (the `ol_device` cookie of one of their registrations). Anyone else gets the generic
+refusal (409 `registration_unavailable`) and the attempt is stored as a `blocked` registration with
+`status_reason = identity_unverified`, which the hiring team can review and allow (unblock reuses the row). A row
+without history is reused as before. A person with an open invitation for the job is told `already_invited`
+first. Open-link interviews only ever see résumés uploaded within their own registration
+(`hooks.registration_interview_ids`). Verified reuse (email OTP, uniform responses) replaces this with G4.
+
 **Custom field types**: `text`, `textarea`, `number`, `email`, `phone`, `url`, `select`, `multiselect`, `checkbox`,
 `date`. `date` exists only for availability: answers must be today (UTC, one day tolerance) or later and at most two
 years ahead, which makes a date-of-birth field impossible by construction. There is no file field (the resume is

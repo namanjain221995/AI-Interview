@@ -61,7 +61,7 @@ async def test_personal_link_verify_and_lockout(link_env, public_client, redis, 
     body = ok.json()
     assert body["interview_id"] == registered.json()["interview_id"] and body["next_step"] == "welcome"
     assert body["progress"]["next_action"] == "continue_current"
-    assert any(c.startswith("access_token=") for c in ok.headers.get_list("set-cookie"))
+    assert any(c.startswith("cand_access_token=") for c in ok.headers.get_list("set-cookie"))  # G2
     assert (await phone.get(f"{API}/portal/me")).json()["interview_id"] == body["interview_id"]
     async with session_scope() as db:
         assert (await db.scalars(select(LinkRegistration))).one().personal_failed_count == 0
@@ -149,7 +149,7 @@ async def test_portal_link_routes_are_scoped(link_env, public_client, candidate_
     assert done.json()["error"]["details"]["status"] == "completed"
 
     staff = await link_env.recruiter.get(f"{API}/portal/link/progress")
-    assert staff.status_code == 403
+    assert staff.status_code == 401  # G2: a staff session is not a candidate session on candidate routes
 
 
 async def test_resume_required_guard_and_resume_flag(link_env, public_client) -> None:

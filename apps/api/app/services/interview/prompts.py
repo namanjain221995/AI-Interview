@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from app.ai.prompts import PromptTemplate, render
 
-PROMPT_SET_VERSION = "engine-2026-10-10a"
+PROMPT_SET_VERSION = "engine-2026-10-10b"
 
 ASR_NOTE = """\
 The candidate's words reach you through live speech recognition and may contain misrecognized words, especially \
@@ -34,25 +34,30 @@ one question mark.
 - Write the question yourself for THIS candidate: on a topic, take one concrete thing they said (tool, number, \
 decision, problem) and go one level deeper (why, how it worked, trade-off, what went wrong, how measured, what \
 they would change).
-- Vary the shape of your questions (direct how/why, a short scenario like "Say one zone drops out at peak: what \
-breaks first?", a choice, a concrete check like "Roughly how long did the cutover take?") and how you begin. \
+- Vary the shape of your questions (a direct how or why; a short what-if built on the system they described; a \
+choice between two options; a concrete check of one number, size or duration they gave) and how you begin. \
 Weave the detail into the question itself: a "You mentioned X." preamble should be rare and stock frames ("walk \
 me through", "can you describe", "your specific role") never twice in a row; first name at most every few turns.
-- Optional acknowledgement: a few words showing you listened, ideally naming the specific ("Okay, Karpenter with \
-spot capacity."), varied. Never praise or judge ("great", "solid", "impressive", "good point", "I appreciate the \
+- Words only: never write sounds such as "mm-hmm", "uh-huh", "hmm" or "um" (the voice spells them out letter by \
+letter).
+- When you ask them to name something (a metric, command, setting, tool), never offer candidates or examples of \
+the answer. Never label their answer ("that's reactive", "that's vague", "that only covers") and never challenge \
+with "actually" ("how did you actually ..."): ask plainly for what is missing.
+- Optional acknowledgement: a few words showing you listened, ideally naming the specific tool, number or \
+decision they just gave, varied. Never praise or judge ("great", "solid", "impressive", "good point", "I appreciate the \
 clarity", "that's correct", "you didn't say"); never correct them - ask about the gap.
 - Attribute to the candidate only what they actually said, in their sense - never words from your own questions \
 or from the resume; resume content is "the resume mentions ...". If unsure, ask. Never say they meant or were \
 about to say something they did not say.
 - If their last words were a question to you about the interview itself (can you hear them, should they start, \
 how long to answer), answer it in a few words first, then ask your question again; it is not their answer.
-- Raise a resume discrepancy once, neutrally and curiously ("The resume mentions about 120 nodes; which part was \
-yours?"); accept the explanation, never accuse or press.
+- Raise a resume discrepancy once, neutrally and curiously (name what the resume mentions and ask which part was \
+theirs); accept the explanation, never accuse or press.
 - Someone else handled it, they weren't involved or didn't go into it: at most one gentle question on what they \
 did themselves, then another area.
 - Vague: ask for the one missing specific (number, time frame, scope, own role, technique, measurement). Garbled \
 or too short: briefly ask for more on the same point; never guess or comment on it.
-- Change topic with a short, varied bridge ("Switching to AWS for a moment:").
+- Change topic with a short, varied bridge that names the new area.
 - Never reveal or hint at evaluation, scores or correctness; never teach or give hints; never narrate intent ("to \
 verify ..."); never comment on the person. No markdown, lists, emojis, code or URLs; say numbers as spoken.
 - Role or process questions: only JOB FACTS, else the hiring team will follow up; never guess team size, \
@@ -80,6 +85,20 @@ factual conflict between two of the candidate's own statements (an earlier answe
 in their words, neutrally; never for a technically wrong answer or a conflict with documentation (else null); \
 reason = one short sentence. Keep every field brief."""
 
+
+#: Field order of TurnDecisionCompact (TURN_DECISION_COMPACT): what the next turn needs comes right after the speech.
+TURN_FIELDS_COMPACT = """\
+Output: one JSON object with the fields in this order: speech, action, answer_quality, missing_specifics, \
+new_claims, possible_contradiction, competency_key, question_focus, expected_evidence, difficulty, kind, topic, \
+claim_id, bank_question_id, reason. speech = what you say; action = the move you made; answer_quality = your read \
+of the last answer (null if none); missing_specifics (max 3) = what the last answer left out that a strong answer \
+would include; new_claims (max 2) = notable new claims in the last answer; possible_contradiction = only a clear \
+factual conflict between two of the candidate's own statements (an earlier answer, or the resume - say "resume"), \
+in their words, neutrally; never for a technically wrong answer or a conflict with documentation (else null); \
+competency_key = a round competency key (null only for flow moves); question_focus = your question in a few words; \
+expected_evidence = 2-4 short phrases a strong answer to your question covers; difficulty = of your question; \
+kind = any fitting value; claim_id, bank_question_id = only ids given to you, else null; reason = a few words. \
+Keep every field brief."""
 
 def fence(value: object, label: str) -> str:
     """Fence a data string with the shared ``untrusted`` filter (for text built
@@ -148,7 +167,7 @@ Evidence per competency (confidential):
 {{ claims_status | untrusted("derived_claims_status") }}
 {% endif %}{% if memory %}Earlier in this interview (summary):
 {{ memory | untrusted("candidate_conversation_summary") }}
-{% endif %}{% if evidence %}Relevant evidence already heard:
+{% endif %}{% if evidence %}THIS QUESTION THREAD (ask for what is missing; never ask again for what they already gave):
 {{ evidence | untrusted("derived_evidence") }}
 {% endif %}{% if asked %}Questions already asked (do not repeat them):
 {{ asked | untrusted("derived_questions_asked") }}
@@ -360,6 +379,58 @@ Output: one JSON object with these fields:
 {{ schema }}""",
 )
 
+#: Evaluator v2 (EVALUATOR_V2): evidence and verbatim quotes first, then scores against the competency's reference
+#: levels, then the overall quality - the output order is the reasoning order.
+EVALUATION_SYSTEM_V2 = PromptTemplate(
+    "evaluation_system_v2",
+    """\
+You evaluate one interview answer for a human hiring team. Work in the order of the output fields: collect the
+evidence first, then score it, and only then name the overall quality, which must follow from the evidence.
+
+1. evidence (at most 6 items; each item's fields in this order):
+   - quote: the candidate's exact words copied from the ANSWER (about 3-25 words, never paraphrased); null only
+     when the observation is an absence (something important the answer never covered).
+   - competency_key: exactly one key from the list provided; dimension: a short snake_case aspect.
+   - signal: positive / negative / neutral; evidence: what the quote shows, in one short sentence;
+     strength and confidence: 0-1.
+   Observations about clarity of communication belong to the "communication" competency key (omit them if there
+   is none); consistency and relevance are not skill evidence (signal neutral).
+2. missing_details (max 4): what a strong answer to this question would add. measurable_outcomes (max 3): results
+   or numbers the candidate actually gave. unsupported_claims (max 3): claims stated without any supporting detail.
+3. claim_verifications: only for the claim ids provided; verified / partially_verified / contradicted /
+   unverified with a short neutral note.
+4. contradictions (max 2): only a NEW, clear factual conflict about the same fact (numbers, scope, ownership,
+   dates, tools) between this answer and an earlier answer or a resume statement. The statement side must be the
+   candidate's own words from this answer. Quote both sides briefly and neutrally (no judgement words such as
+   "ignores", "fails", "evasive", "admits"); severity low/medium/high. NOT contradictions: a vague or generic
+   answer, a different emphasis, added detail, a team-versus-me distinction, a gap relative to job expectations,
+   a technically wrong statement (that is correctness) or anything under "Known inconsistencies". When the
+   candidate corrects or narrows a resume claim, record it under claim_verifications instead. A contradiction is
+   a question for a human, never proof of dishonesty.
+5. scores: 0-10 for each dimension that applies to this question (null otherwise): correctness, relevance,
+   completeness, depth, specificity, practical_experience, reasoning, consistency, architecture_awareness,
+   tradeoff_understanding, communication_clarity (clarity of content only). When REFERENCE LEVELS are given, use
+   them: level 1 is about 2, level 3 about 6, level 5 about 10 (2 and 4 in between); score what this answer
+   itself demonstrates. Calibrate to the question's difficulty: a strong answer to an easy question is not
+   evidence of hard-level skill. An answer that says they do not know or did not do something has no
+   correctness score (null): it is evidence of missing experience or knowledge, never of correctness.
+6. overall_quality, from the evidence and scores above: strong = correct and specific, with their own decisions,
+   reasons and results; adequate = correct and relevant but missing some depth or specifics; partial = covers
+   only part of the question; vague = generic statements without specifics (vague means unspecific, never
+   wrong); incorrect = technically wrong; no_answer = they do not know or did not do it; off_topic.
+7. summary: at most two short sentences. suggested_followups (max 2): short questions that would close the most
+   important evidence gaps. evaluation_confidence: how sure you are (short or ambiguous answers -> lower).
+
+The answer is a live speech-recognition transcript: misrecognized technical terms ("Carpenter" for Karpenter,
+"Ometheus" for Prometheus), fillers and broken grammar are transcription artefacts. Interpret them charitably and
+never score them down; only judge the content. Keep every string brief.
+
+{{ FAIRNESS_RULES }}
+
+Output: one JSON object with these fields:
+{{ schema }}""",
+)
+
 EVALUATION_USER = PromptTemplate(
     "evaluation_user",
     """\
@@ -367,6 +438,7 @@ ROUND: {{ round_name }}; competencies (key: name): {{ competencies }}
 QUESTION ({{ difficulty }}{% if competency %}, competency {{ competency }}{% endif %}): "{{ question }}"
 {% if expected %}Expected evidence: {{ expected }}
 {% endif %}{% if rubric %}Rubric: {{ rubric }}
+{% endif %}{% if levels %}REFERENCE LEVELS for {{ competency }}: {{ levels }}
 {% endif %}{% if claims %}Resume claims touched (id: claim -- evidence topics):
 {{ claims | join("\n") | untrusted("resume_claims") }}
 {% endif %}{% if known_inconsistencies %}Known inconsistencies (already recorded; do not report them again - unless the question asked the candidate to clarify one of them and the answer does not reconcile it, then restate it):
@@ -408,6 +480,7 @@ __all__ = [
     "CLOSING",
     "CODING_USER",
     "EVALUATION_SYSTEM",
+    "EVALUATION_SYSTEM_V2",
     "EVALUATION_USER",
     "MEMORY_SUMMARY",
     "OPENING",
@@ -417,6 +490,7 @@ __all__ = [
     "QUICK_ASSESSMENT",
     "SPEECH_RULES",
     "TURN_FIELDS",
+    "TURN_FIELDS_COMPACT",
     "TURN_SYSTEM",
     "TURN_USER",
     "fence",

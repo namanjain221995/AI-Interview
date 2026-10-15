@@ -191,6 +191,7 @@ export type LocalAction =
   | { type: "rtt"; ms: number }
   | { type: "seed"; session: Partial<SessionView> & { id: string } }
   | { type: "begun" }
+  | { type: "begin.failed" }
   | { type: "playback.chunk_started"; utteranceId: string; text: string }
   | { type: "playback.word"; utteranceId: string }
   | { type: "playback.done"; utteranceId: string; interrupted: boolean }
@@ -334,6 +335,21 @@ export function currentUtterance(list: readonly UtteranceView[]): UtteranceView 
   return list.find((u) => !finished(u)) ?? list[list.length - 1] ?? null;
 }
 
+/**
+ * Insert a started utterance where the candidate will hear it. Normally that is last (speech plays in order),
+ * but an acknowledgement ("Okay.", "One moment.") is played at once from a cache: when it starts while the reply
+ * was already announced but has no audio yet (the model is still writing it), it is heard first. Placed after
+ * that silent reply it took over the caption, marked the reply as heard when it played, and stayed on screen
+ * instead of the question.
+ */
+function placeUtterance(list: readonly UtteranceView[], utterance: UtteranceView): UtteranceView[] {
+  const rest = list.filter((u) => u.id !== utterance.id);
+  if (utterance.kind !== "acknowledgment") return [...rest, utterance];
+  let at = rest.length;
+  while (at > 0 && !finished(rest[at - 1]) && rest[at - 1].mode === "pending" && rest[at - 1].spokenWords === 0) at--;
+  return [...rest.slice(0, at), utterance, ...rest.slice(at)];
+}
+
 function withUtterances(state: InterviewViewState, utterances: UtteranceView[]): InterviewViewState {
   const list = utterances.slice(-MAX_UTTERANCES);
   return { ...state, utterances: list, utterance: currentUtterance(list) };
@@ -428,7 +444,7 @@ function reduceServer(state: InterviewViewState, msg: ServerMessage, at: number)
         interrupted: false,
         delivered: false,
       };
-      const next = withUtterances(state, [...state.utterances.filter((u) => u.id !== utterance.id), utterance]);
+      const next = withUtterances(state, placeUtterance(state.utterances, utterance));
       return {
         ...next,
         ...(state.session ? { session: { ...state.session, ...liveOnceStarted(state.session, true, at) } } : {}),
@@ -459,9 +475,13 @@ function reduceServer(state: InterviewViewState, msg: ServerMessage, at: number)
       // already been heard, since speech plays in order.
       const index = state.utterances.findIndex((u) => u.id === msg.utterance_id);
       if (index === -1) return state;
+      const target = state.utterances[index];
+      // A reply cancelled before any of it played (the candidate simply kept talking after a short pause) was
+      // never heard: drop it, so the caption keeps the question they are still answering.
+      const unheard = !target.delivered && target.mode === "pending" && target.spokenWords === 0;
       return withUtterances(
         state,
-        state.utterances.slice(0, index + 1).map((u, i) =>
+        state.utterances.slice(0, unheard ? index : index + 1).map((u, i) =>
           i === index ? (u.delivered ? u : { ...u, interrupted: true }) : finished(u) ? u : { ...u, delivered: true, spokenWords: Number.MAX_SAFE_INTEGER },
         ),
       );
@@ -608,6 +628,9 @@ export function reduceInterview(state: InterviewViewState, action: InterviewActi
     }
     case "begun":
       return { ...state, begun: true };
+    case "begin.failed":
+      // Device setup or the first connection failed before a socket existed: back to the lobby (S5).
+      return { ...state, begun: false, connection: { ...state.connection, status: "idle" } };
     case "playback.chunk_started": {
       const index = state.utterances.findIndex((u) => u.id === action.utteranceId);
       if (index === -1) return state;

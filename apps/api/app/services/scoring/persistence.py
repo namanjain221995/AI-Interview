@@ -55,9 +55,10 @@ from app.domain.enums import (
 )
 from app.schemas.ai import AnswerEvaluation as AnswerEvaluationDoc
 from app.schemas.ai import CodingEvaluation, DimensionScores, InterviewPlan
-from app.schemas.rounds import RoundConfig
+from app.schemas.rounds import RoundConfig, load_round_config
 from app.services.integrity.queries import count_unreviewed_flags
 from app.services.integrity.rules import REVIEWABLE_ACTIONS
+from app.services.interview.policy import FLOW_ONLY_ACTION_VALUES
 from app.services.interview.state import CompetencyState
 from app.services.scoring.compute import (
     CompetencyCalculation,
@@ -176,7 +177,7 @@ class SessionScoringInputs:
 
 
 def parse_round_config(raw: dict[str, Any] | None) -> RoundConfig:
-    return RoundConfig.model_validate(raw or {})
+    return load_round_config(raw)
 
 
 def parse_plan(raw: dict[str, Any] | None) -> InterviewPlan | None:
@@ -393,14 +394,15 @@ EVALUATION_JOB_TYPES = ("answer.evaluate", "coding.evaluate")
 
 
 async def pending_evaluation_jobs(db: AsyncSession, session_id: uuid.UUID | str) -> int:
-    """Unfinished ``answer.evaluate`` / ``coding.evaluate`` jobs of a session."""
+    """Unfinished ``answer.evaluate`` / ``answer.reevaluate`` / ``coding.evaluate`` jobs of a session."""
     sid = _uuid(session_id)
     coding_ids = [
         str(c)
         for c in (await db.scalars(select(CodingSession.id).where(CodingSession.session_id == sid))).all()
     ]
     conditions = [
-        (BackgroundJob.type == "answer.evaluate") & (BackgroundJob.payload["session_id"].astext == str(sid)),
+        (BackgroundJob.type.in_(("answer.evaluate", "answer.reevaluate")))
+        & (BackgroundJob.payload["session_id"].astext == str(sid)),
     ]
     if coding_ids:
         conditions.append(
@@ -519,9 +521,13 @@ def _build_observations(inputs: SessionScoringInputs) -> None:
     evaluated: set[uuid.UUID] = set()
     for row in inputs.evaluations:
         evaluated.add(row.answer_id)
+        if row.is_fallback:
+            continue  # the model was down: unassessed, not "quality x 10 at weight 0.2" evidence (S12)
         answer = answers.get(row.answer_id)
         question_id = row.question_id or (answer.question_id if answer else None)
         question = questions.get(question_id) if question_id else None
+        if question is not None and str(question.action) in FLOW_ONLY_ACTION_VALUES:
+            continue  # replies to the invitation / intro / closing are not evidence (S9; cleans old sessions on recompute)
         keys = list(question.competency_keys or []) if question is not None else []
         difficulty = _difficulty(question.difficulty if question is not None else None)
         try:

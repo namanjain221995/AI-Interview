@@ -153,3 +153,27 @@ def test_rejected_requests_never_reach_docker(settings):
     )
     response = asyncio.run(executor.execute(req))
     assert response.status == RunStatus.REJECTED and "return_type" in response.stderr
+
+
+def test_ready_names_the_languages_whose_runtime_is_missing(settings):
+    """S19: /ready is 503 until every runtime image is present (/health stays 200 while Docker answers)."""
+
+    class MissingJava(FakeSandbox):
+        def runtime_status(self, force: bool = False) -> dict[str, Any]:
+            status = super().runtime_status(force)
+            status["runtimes"]["java"]["available"] = False
+            return status
+
+    class Partial(FakeExecutor):
+        def __init__(self, settings: Settings) -> None:
+            super().__init__(settings)
+            self.sandbox = MissingJava()  # type: ignore[assignment]
+
+    client = TestClient(create_app(settings, executor=Partial(settings), run_janitor=False))
+    with client:
+        ready = client.get("/ready")
+        assert ready.status_code == 503 and ready.json() == {"ready": False, "docker": True, "missing_languages": ["java"]}
+        assert client.get("/health").status_code == 200
+    healthy = TestClient(create_app(settings, executor=FakeExecutor(settings), run_janitor=False))
+    with healthy:
+        assert healthy.get("/ready").json() == {"ready": True, "docker": True, "missing_languages": []}

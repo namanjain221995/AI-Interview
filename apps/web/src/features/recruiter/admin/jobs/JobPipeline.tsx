@@ -12,55 +12,47 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { EmptyState } from "@/components/ui/EmptyState";
 import { usePermission } from "@/lib/auth";
 import { formatDate, formatRelativeOrDate } from "@/lib/format";
-import type { Interview, InterviewStatus, Round, SessionSummary } from "@/lib/types";
+import type { Interview, Round } from "@/lib/types";
 import { toast } from "sonner";
 
-import { useCancelInterview, useRegenerateInviteLink } from "../api/candidates";
+import { useCancelInterview, useRegenerateInviteLink, type JobPipelineRow, type PipelineCounts, type PipelineStage } from "../api/candidates";
 import type { InviteSecrets } from "../types";
 import { describeFailure } from "../lib/serverErrors";
-import { ScoreCell } from "../components/Controls";
+import { ScoreCell, SearchInput, SegmentedFilter } from "../components/Controls";
 import { InviteSecretsView } from "./InviteDialog";
 
-export interface PipelineRow {
-  interview: Interview;
-  session: SessionSummary | null;
-}
+export type PipelineRow = JobPipelineRow;
 
-export function buildPipeline(interviews: readonly Interview[], sessions: readonly SessionSummary[]): PipelineRow[] {
-  const byInterview = new Map<string, SessionSummary>();
-  for (const s of sessions) {
-    const current = byInterview.get(s.interview_id);
-    if (!current || Date.parse(s.created_at) > Date.parse(current.created_at)) byInterview.set(s.interview_id, s);
-  }
-  return [...interviews]
-    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
-    .map((interview) => ({ interview, session: byInterview.get(interview.id) ?? null }));
-}
-
-export type PipelineStage = "invited" | "in_progress" | "completed" | "closed";
-
-export function pipelineCounts(rows: readonly PipelineRow[]): Record<PipelineStage, number> {
-  const counts: Record<PipelineStage, number> = { invited: 0, in_progress: 0, completed: 0, closed: 0 };
-  for (const { interview } of rows) {
-    const status: InterviewStatus = interview.status;
-    if (status === "invited") counts.invited += 1;
-    else if (status === "in_progress") counts.in_progress += 1;
-    else if (status === "completed") counts.completed += 1;
-    else counts.closed += 1;
-  }
-  return counts;
-}
+const STAGE_FILTERS: ReadonlyArray<{ value: PipelineStage | "all"; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "invited", label: "Invited" },
+  { value: "in_progress", label: "In progress" },
+  { value: "completed", label: "Completed" },
+  { value: "closed", label: "Expired or cancelled" },
+];
 
 export interface JobPipelineProps {
-  rows: PipelineRow[];
+  rows: PipelineRow[] | undefined;
   rounds: Round[];
   loading: boolean;
+  /** A background refetch (another page, filter or search): rows stay, dimmed. */
+  fetching?: boolean;
   error: unknown;
   onRetry: () => void;
   onInvite?: () => void;
+  /** Server paging: zero-based page, page size and the number of matching rows. */
+  page: number;
+  pageSize: number;
+  total: number;
+  onPageChange: (page: number) => void;
+  stage: PipelineStage | "all";
+  onStageChange: (stage: PipelineStage | "all") => void;
+  counts: PipelineCounts;
+  search: string;
+  onSearchChange: (search: string) => void;
 }
 
-export function JobPipeline({ rows, rounds, loading, error, onRetry, onInvite }: JobPipelineProps) {
+export function JobPipeline({ rows, rounds, loading, fetching, error, onRetry, onInvite, page, pageSize, total, onPageChange, stage, onStageChange, counts, search, onSearchChange }: JobPipelineProps) {
   const navigate = useNavigate();
   const canInvite = usePermission("interviews:invite");
   const cancel = useCancelInterview();
@@ -127,7 +119,7 @@ export function JobPipeline({ rows, rounds, loading, error, onRetry, onInvite }:
       sortValue: (r) => r.interview.status,
       cell: ({ interview, session }) => (
         <div className="flex flex-wrap items-center gap-1.5">
-          <StatusBadge kind="interview" value={interview.status} size="sm" />
+          <StatusBadge kind="interview" value={interview.status === "invited" && interview.is_expired ? "expired" : interview.status} size="sm" />
           {session && session.status !== "completed" && interview.status === "in_progress" ? <StatusBadge kind="session" value={session.status} size="sm" /> : null}
         </div>
       ),
@@ -149,7 +141,7 @@ export function JobPipeline({ rows, rounds, loading, error, onRetry, onInvite }:
       cell: ({ interview }) => (
         <div className="grid text-xs">
           <span className="text-fg">{formatRelativeOrDate(interview.created_at)}</span>
-          {interview.status === "invited" ? <span className="text-fg-subtle">Expires {formatDate(interview.invite_expires_at)}</span> : null}
+          {interview.status === "invited" ? <span className="text-fg-subtle">{interview.is_expired ? "Expired" : "Expires"} {formatDate(interview.invite_expires_at)}</span> : null}
         </div>
       ),
     },
@@ -196,21 +188,38 @@ export function JobPipeline({ rows, rounds, loading, error, onRetry, onInvite }:
     },
   ];
 
+  const filtered = stage !== "all" || search.trim().length > 0;
   return (
     <>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-subtle px-4 py-3">
+        <SegmentedFilter<PipelineStage | "all">
+          label="Filter by stage"
+          value={stage}
+          onChange={onStageChange}
+          options={STAGE_FILTERS.map((s) => ({ value: s.value, label: s.label, count: counts[s.value] }))}
+        />
+        <SearchInput value={search} onChange={onSearchChange} placeholder="Search name or email" className="w-full sm:w-64" />
+      </div>
       <DataTable
         columns={columns}
         data={rows}
         getRowId={(r) => r.interview.id}
         loading={loading}
+        fetching={fetching}
         error={error}
         onRetry={onRetry}
         onRowClick={(r) => (r.session ? navigate(`/app/sessions/${r.session.id}`) : navigate(`/app/candidates/${r.interview.candidate_id}`))}
         rowLabel={(r) => `Open ${r.interview.candidate?.full_name ?? "interview"}`}
         defaultSort={null}
-        pageSize={20}
+        pageSize={pageSize}
+        page={page}
+        total={total}
+        onPageChange={onPageChange}
         caption="Candidates invited to this job"
         empty={
+          filtered ? (
+            <EmptyState size="sm" icon={<UserPlus />} title="No one matches" description="Try another stage or search." />
+          ) : (
           <EmptyState
             size="sm"
             icon={<UserPlus />}
@@ -224,6 +233,7 @@ export function JobPipeline({ rows, rounds, loading, error, onRetry, onInvite }:
               ) : undefined
             }
           />
+          )
         }
       />
       <Dialog open={secrets !== null} onOpenChange={(open) => !open && setSecrets(null)}>

@@ -80,7 +80,9 @@ const DEFAULT_MAX_PENDING = 48 * 1024 * 1024;
 const DEFAULT_RETRY_DELAYS = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000] as const;
 const STOP_DRAIN_TIMEOUT_MS = 20_000;
 /** Server codes that mean recording this part can never succeed. */
-const PERMANENT_CODES = new Set(["recording_not_enabled", "consent_required", "session_ended", "recording_part_closed", "session_not_found"]);
+// recording_quota_exceeded / storage_full (S3): the server will not take more of this recording; stop cleanly
+// instead of retrying (the interview itself continues).
+const PERMANENT_CODES = new Set(["recording_not_enabled", "consent_required", "session_ended", "recording_part_closed", "session_not_found", "recording_quota_exceeded", "storage_full"]);
 
 const MIME_TYPES = {
   // VP8 first: far cheaper to encode than VP9 on the candidate's machine.

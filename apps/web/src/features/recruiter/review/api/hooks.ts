@@ -374,6 +374,18 @@ export function useRegenerateReport(sessionId: string) {
   });
 }
 
+/** S12: evaluate again the answers scored while the AI model was unavailable; the report refreshes afterwards. */
+export function useReevaluateFallbacks(sessionId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<{ queued: number; fallback_evaluations: number }>(`/sessions/${sessionId}/reevaluate`),
+    meta: { successToast: "Re-evaluating those answers. Scores and the report refresh when it's done." },
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.sessions.detail(sessionId) });
+    },
+  });
+}
+
 export function useReleaseCandidateReport(sessionId: string) {
   const client = useQueryClient();
   return useMutation({

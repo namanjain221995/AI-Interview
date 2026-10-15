@@ -230,6 +230,13 @@ describe("SessionRecorder", () => {
     expect(uploadDecision(new TypeError("Failed to fetch"))).toEqual({ action: "retry" });
   });
 
+  it("stops cleanly when the session's recording budget is used up or storage is full (S3)", () => {
+    const quota = new ApiError({ status: 409, code: "recording_quota_exceeded", message: "" });
+    expect(uploadDecision(quota)).toEqual({ action: "fatal", fatal: { reason: "recording_quota_exceeded", permanent: true } });
+    const full = new ApiError({ status: 503, code: "storage_full", message: "", retryAfterSeconds: 300 });
+    expect(uploadDecision(full)).toEqual({ action: "fatal", fatal: { reason: "storage_full", permanent: true } });
+  });
+
   it("bounds memory while offline by dropping newer segments", async () => {
     let release: () => void = () => undefined;
     const recorder = new SessionRecorder({

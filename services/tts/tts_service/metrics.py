@@ -33,6 +33,7 @@ INFLIGHT = Gauge("interview_tts_inflight", "Synthesis jobs running")
 ERRORS = Counter("interview_tts_errors_total", "Failed requests by reason", ["reason"])
 READY = Gauge("interview_tts_ready", "1 when the model is loaded and warmed up")
 MODEL_LOAD_SECONDS = Gauge("interview_tts_model_load_seconds", "Model load plus warm-up time at startup")
+KEEPWARM = Counter("interview_tts_keepwarm_total", "Idle keep-warm syntheses (one per session each time)")
 
 
 def render_latest() -> tuple[bytes, str]:

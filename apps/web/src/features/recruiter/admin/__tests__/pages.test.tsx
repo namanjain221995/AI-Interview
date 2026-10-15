@@ -90,8 +90,7 @@ describe("admin pages", () => {
       "/jobs/j1": job,
       "/jobs/j1/requirements": { items: [], total: 0 },
       "/jobs/j1/rounds": { items: [round], total: 1 },
-      "/interviews": { items: [], total: 0 },
-      "/sessions": { items: [], total: 0 },
+      "/jobs/j1/pipeline": { items: [], total: 0, limit: 25, offset: 0, counts: { invited: 0, in_progress: 0, completed: 0, closed: 0, all: 0 } },
       "/competencies": { items: [], total: 0 },
       "/settings": defaultOrganizationSettings(),
     });
@@ -100,6 +99,47 @@ describe("admin pages", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Senior DevOps Engineer" })).toBeInTheDocument();
     expect(screen.getByTestId("invite-candidate-button")).toBeEnabled();
     expect(await screen.findByRole("article", { name: "Round 1: Combined AI Round" })).toBeInTheDocument();
+  });
+
+  it("pages the job pipeline on the server and shows its exact counts (S14)", async () => {
+    const expired = {
+      id: "i-old",
+      candidate_id: "c-old",
+      job_id: "j1",
+      round_id: null,
+      allow_round_selection: false,
+      status: "invited",
+      is_expired: true,
+      invite_expires_at: "2026-10-01T09:00:00Z",
+      invite_opened_at: null,
+      verified_at: null,
+      policy_snapshot: {},
+      system_check: {},
+      invited_by_id: null,
+      scheduled_for: null,
+      completed_at: null,
+      notes: null,
+      created_at: NOW,
+      updated_at: NOW,
+      candidate: { id: "c-old", full_name: "Asha Rao", email: "asha@example.com" },
+    };
+    const get = vi.spyOn(api, "get").mockImplementation(async (path: string) => {
+      if (path === "/jobs/j1") return job as never;
+      if (path === "/jobs/j1/pipeline") return { items: [{ interview: expired, session: null }], total: 600, limit: 25, offset: 0, counts: { invited: 310, in_progress: 40, completed: 200, closed: 50, all: 600 } } as never;
+      if (path === "/settings") return defaultOrganizationSettings() as never;
+      return { items: [], total: 0 } as never;
+    });
+    signIn("RECRUITER");
+    renderApp("/app/jobs/j1");
+    // The avatar's screen-reader name renders a tick later: query the row's candidate link.
+    expect(await screen.findByRole("link", { name: "Asha Rao" })).toBeInTheDocument();
+    expect(screen.getAllByText("310")).toHaveLength(2); // stat card and stage filter: the server count, never capped at 200
+    expect(screen.getByRole("tab", { name: /Pipeline\s*600/ })).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: "Filter by stage" })).toBeInTheDocument();
+    const row = screen.getByRole("link", { name: "Asha Rao" }).closest("tr")!;
+    expect(within(row).getAllByText(/Expired/).length).toBeGreaterThanOrEqual(2); // badge and date: past its deadline
+    const call = get.mock.calls.find(([path]) => path === "/jobs/j1/pipeline");
+    expect(call?.[1]).toMatchObject({ params: { stage: "all", limit: 25, offset: 0 } });
   });
 
   it("guards the settings page behind settings:manage and renders every section for admins", async () => {

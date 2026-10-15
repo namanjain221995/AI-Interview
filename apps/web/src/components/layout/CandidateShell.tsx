@@ -71,7 +71,8 @@ export function CandidateShell({ orgName, orgLogoUrl, subtitle, stepper, headerA
         <div className="mx-auto flex max-w-5xl flex-col gap-3 px-4 py-6 text-[13px] leading-5 text-fg-muted sm:flex-row sm:items-start sm:justify-between sm:px-6">
           <p className="max-w-xl">
             This interview is run by an AI interviewer. {name ? `A person at ${name}` : "A person at the hiring organization"} reviews the results and makes
-            every hiring decision. Your audio, transcript and any recordings are kept only for the period shown on the consent step.
+            every hiring decision. Recordings are deleted on the schedule shown on the consent step; your transcript stays with{" "}
+            {name || "the hiring organization"} until they delete it, and you can ask them to.
           </p>
           <p className="flex shrink-0 items-center gap-2 text-fg-subtle">
             <BrandMark size={16} />

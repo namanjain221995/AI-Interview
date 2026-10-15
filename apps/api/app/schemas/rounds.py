@@ -4,8 +4,12 @@ and frozen into ``interview_sessions.round_config`` when a session starts."""
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from collections.abc import Mapping
+from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+
+from app.core.errors import UnsupportedRoundType
 from app.domain.enums import CodeLanguage, Difficulty, RoundType
 from app.schemas.intake import (
     INTAKE_DEFAULT_MINUTES,
@@ -196,3 +200,20 @@ class RoundConfig(_Model):
             if c.key == key and c.min_evidence:
                 return c.min_evidence
         return self.min_evidence_per_competency
+
+
+def load_round_config(raw: Mapping[str, Any] | None) -> RoundConfig:
+    """Validate a *stored* configuration (session snapshot, template, round).
+
+    A ``round_type`` this build does not know (written by a newer release, e.g. before a
+    rollback) raises :class:`UnsupportedRoundType` (409) instead of a bare validation error
+    that would surface as a 500. Every other validation error propagates unchanged."""
+    try:
+        return RoundConfig.model_validate(dict(raw or {}))
+    except ValidationError as exc:
+        for error in exc.errors():
+            loc = error.get("loc") or ()
+            if loc and loc[0] == "round_type" and str(error.get("type", "")).startswith("enum"):
+                value = (raw or {}).get("round_type")
+                raise UnsupportedRoundType(details={"round_type": str(value)[:64]}) from exc
+        raise

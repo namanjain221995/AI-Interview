@@ -85,6 +85,14 @@ class Settings(BaseSettings):
     max_resume_bytes: int = 10 * 1024 * 1024
     max_frame_bytes: int = 2 * 1024 * 1024
     max_recording_chunk_bytes: int = 16 * 1024 * 1024
+    # Recording upload budget per session and kind (S3, audit D2): (round max duration + 15 min) at this
+    # bitrate - about 3x the browser recorder's ~650 kbps - and at most this many recorder parts. A session that
+    # has not started yet only gets the small pre-start budget. Uploads (recordings, frames) stop with 503
+    # storage_full while the storage disk has less than storage_min_free_ratio free.
+    recording_max_bitrate_bps: int = Field(2_000_000, ge=100_000)
+    recording_max_parts_per_session: int = Field(40, ge=1)
+    recording_prestart_budget_bytes: int = Field(48 * 1024 * 1024, ge=1024 * 1024)
+    storage_min_free_ratio: float = Field(0.10, ge=0.0, lt=1.0)
     # Interview recordings: `recording.finalize` joins a part's MediaRecorder
     # segments and remuxes them (stream copy) into one seekable file with
     # ffmpeg; without ffmpeg the joined segments are served as they are.
@@ -126,8 +134,19 @@ class Settings(BaseSettings):
     whisper_base_url: str = "http://172.17.0.1:30007/v1"
     whisper_model: str = "openai/whisper-large-v3"
     whisper_extra_base_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Requests WHISPER_BASE_URL serves at once (1 = the shared transformers server; the optional "stt" compose
+    # profile runs Whisper large-v3-turbo on vLLM, which batches). WHISPER_EXTRA_BASE_URLS replicas always take 1.
+    whisper_base_url_parallelism: int = Field(1, ge=1, le=16)
+    # Send the vocabulary/question prompt to Whisper (see WhisperSttClient.send_prompt: harmful with large-v3-turbo).
+    whisper_send_prompt: bool = False
     whisper_language: str = "en"
     whisper_timeout_seconds: float = 30.0
+
+    # Capability flags (S18): endpoints a node does not have. Calls fail fast with EndpointDisabled
+    # (no I/O, no breaker noise, no retries), health reports "disabled" and dependent work takes its
+    # fallback on the first attempt. Only optional endpoints may be disabled: main, whisper and tts
+    # are required for an interview.
+    ai_disabled_endpoints: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     ocr_base_url: str = "http://192.168.9.68:30004/v1"
     ocr_model: str = "baidu/Unlimited-OCR"
@@ -185,10 +204,34 @@ class Settings(BaseSettings):
     think_pause_max_seconds: int = 25
     max_utterance_seconds: int = 240
     acknowledgment_enabled: bool = True
+    # Platform rule (owner decision 2026-10-12): every interview, whatever the round type, job or organisation
+    # settings, requires the camera, records video and analyses camera frames. Frozen into each invitation's
+    # policy snapshot at creation (existing invitations keep what the candidate consented to).
+    require_camera_for_all_interviews: bool = True
+    # New camera-frame analyses wait (<= 6 s) while an interviewer reply is starting (app.services.integrity.reply_window).
+    integrity_frames_yield_to_replies: bool = True
+    # Tier 2: the model writes the compact turn decision (TurnDecisionCompact: judgement fields right after the
+    # speech, no avatar fields, shorter lists) so the metadata arrives before the next turn instead of being cut.
+    turn_decision_compact: bool = True
+    # Tier 2: a deterministic check of each substantive answer names what it left out (services/interview/gaps.py)
+    # and the turn prompt asks the interviewer to follow up on exactly that.
+    interview_gap_probes: bool = True
+    # Tier 2 evaluator v2 (AnswerEvaluationV2): evidence and verbatim quotes before the verdict, scores against the
+    # competency's level 1/3/5 reference levels, shorter output; contradictions only from substantive answers.
+    evaluator_v2: bool = True
     ws_heartbeat_interval_seconds: int = 10
     ws_disconnect_grace_seconds: int = 180
     session_resume_buffer_messages: int = 300
     session_lock_ttl_seconds: int = 30
+    # Session lifecycle (S1): a started session that nobody drives (no runtime holds its lock and
+    # nothing wrote to it) for this long is ended offline as disconnect_timeout, so scoring and the
+    # report run and recruiters stop seeing it as "in progress". Must exceed the reconnect grace.
+    session_abandon_after_seconds: int = 1200
+    session_sweep_batch: int = 25
+    # First deploy on a long-running database: report what the sweep would end without ending it.
+    session_sweep_dry_run: bool = False
+    # A session still COMPLETING this long after it ended, with no report job alive, is recovered (S2).
+    session_completing_stale_seconds: int = 900
 
     # ---------------------------------------------------- interview defaults
     interviewer_name: str = "Maya"
@@ -208,6 +251,11 @@ class Settings(BaseSettings):
     open_link_signal_retention_days: int = 90
     open_link_blocked_retention_days: int = 30
     open_link_register_ip_limit_per_hour: int = 600
+    # Proof-of-work on public registration (S15): a signed, single-use puzzle the browser solves while the
+    # form is being filled (about a second on a mid-range phone at 100k).
+    open_link_pow_enabled: bool = True
+    open_link_pow_max_number: int = Field(100_000, ge=10, le=10_000_000)
+    open_link_pow_ttl_seconds: int = Field(600, ge=60, le=3600)
     open_link_default_round_window_hours: int = 72
 
     # ---------------------------------------------------- intake interviews
@@ -233,7 +281,9 @@ class Settings(BaseSettings):
     seed_password: SecretStr | None = None
 
     # ------------------------------------------------------------ validators
-    @field_validator("cors_allowed_origins", "whisper_extra_base_urls", mode="before")
+    @field_validator(
+        "cors_allowed_origins", "whisper_extra_base_urls", "ai_disabled_endpoints", mode="before"
+    )
     @classmethod
     def _split_csv(cls, value: Any) -> Any:
         if isinstance(value, str):
@@ -322,6 +372,32 @@ class Settings(BaseSettings):
     @property
     def is_test(self) -> bool:
         return self.app_env == "test"
+
+    @model_validator(mode="after")
+    def _abandon_window_exceeds_grace(self) -> Settings:
+        minimum = self.ws_disconnect_grace_seconds + 60
+        if self.session_abandon_after_seconds < minimum:
+            raise ValueError(
+                f"SESSION_ABANDON_AFTER_SECONDS must be at least WS_DISCONNECT_GRACE_SECONDS + 60 ({minimum})"
+            )
+        if self.session_sweep_batch < 1:
+            raise ValueError("SESSION_SWEEP_BATCH must be >= 1")
+        return self
+
+    @field_validator("ai_disabled_endpoints", mode="after")
+    @classmethod
+    def _disabled_endpoints_allowed(cls, value: list[str]) -> list[str]:
+        names = sorted({str(v).strip().lower() for v in value if str(v).strip()})
+        allowed = {"vision", "embedding", "reranker", "ocr"}
+        bad = [n for n in names if n not in allowed]
+        if bad:
+            raise ValueError(
+                f"AI_DISABLED_ENDPOINTS: {', '.join(bad)} cannot be disabled (allowed: vision, embedding, reranker, ocr)"
+            )
+        return names
+
+    def ai_endpoint_disabled(self, name: str) -> bool:
+        return name in self.ai_disabled_endpoints
 
     @property
     def whisper_endpoints(self) -> list[str]:

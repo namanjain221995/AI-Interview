@@ -143,6 +143,12 @@ last 6 exchanges, relevant prior evidence (retrieval), resume claims touched, ea
 insert `competency_evidence` (embedding computed), update claim statuses, add contradictions, push suggested follow-ups,
 recompute competency states, write snapshots, mark answer evaluated, publish `evaluation.ready`. Idempotent by answer id.
 Fallback after retries: neutral evaluation with `is_fallback=True`, confidence 0.2, flagged for human review.
+Retries follow `OUTAGE_RETRY_SCHEDULE` (15 s, 1, 3, 10, 20 min; ~34 min in all) and honour a circuit breaker's
+`retry_after`, so an LLM outage delays evaluations instead of producing fallbacks (S11). A fallback is never
+evidence: scoring and the live competency state skip it (it counts as unassessed). `answer.reevaluate` evaluates
+it again and replaces the row in place, then `report.generate` (reason `reevaluation`) refreshes scores and
+reports; it is queued by staff (`POST /sessions/{id}/reevaluate`) or by `evaluation.fallback_sweep` (every 10 min,
+only while the main model is healthy, at most 3 tries per answer) (S12).
 
 ## 9. Prompts
 

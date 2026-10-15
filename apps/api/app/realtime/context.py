@@ -81,6 +81,15 @@ class SessionContext:
         return expires <= datetime.now(UTC)
 
     @property
+    def in_progress(self) -> bool:
+        """A started session that is live or paused: reconnects outlive the invitation's start deadline (S7)."""
+        return self.started_at is not None and self.status in (SessionStatus.LIVE, SessionStatus.PAUSED)
+
+    @property
+    def access_expired(self) -> bool:
+        return self.invite_expired and not self.in_progress
+
+    @property
     def ended(self) -> bool:
         return self.status in ENDED_STATUSES
 

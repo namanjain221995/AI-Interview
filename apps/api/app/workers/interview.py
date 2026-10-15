@@ -14,10 +14,20 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.logging import bind_context, get_logger
-from app.core.queue import JobContext, PermanentJobError, job_handler
+from app.core.queue import (
+    OUTAGE_RETRY_SCHEDULE,
+    JobContext,
+    PermanentJobError,
+    enqueue,
+    job_handler,
+    register_periodic_job,
+)
 from app.services.interview.engine import SessionNotFound, get_engine
 from app.services.interview.evaluation import EvaluationService
 from app.services.interview.memory import summarize_session_memory
+from app.services.interview.reevaluation import REEVALUATE_JOB, sweep_fallbacks
+from app.services.interview.reevaluation import SWEEP_INTERVAL_SECONDS as REEVALUATION_SWEEP_INTERVAL_SECONDS
+from app.services.interview.reevaluation import SWEEP_JOB as REEVALUATION_SWEEP_JOB
 
 log = get_logger(__name__)
 
@@ -40,7 +50,14 @@ async def prepare_session(payload: dict[str, Any], ctx: JobContext) -> dict[str,
     return {"session_id": session_id}
 
 
-@job_handler("answer.evaluate", concurrency=4, timeout_seconds=240)
+# An LLM outage delays evaluations (up to ~34 min) instead of storing fallbacks; the last attempt falls back (S11).
+@job_handler(
+    "answer.evaluate",
+    concurrency=4,
+    timeout_seconds=240,
+    max_attempts=len(OUTAGE_RETRY_SCHEDULE) + 1,
+    retry_schedule=OUTAGE_RETRY_SCHEDULE,
+)
 async def evaluate_answer(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     session_id = _session_id(payload)
     answer_id = str(payload.get("answer_id") or "").strip()
@@ -48,6 +65,43 @@ async def evaluate_answer(payload: dict[str, Any], ctx: JobContext) -> dict[str,
         raise PermanentJobError("payload.answer_id is required")
     bind_context(session_id=session_id, job_id=ctx.job_id)
     return await EvaluationService().evaluate(session_id, answer_id, is_last_attempt=ctx.is_last_attempt)
+
+
+@job_handler(
+    REEVALUATE_JOB,
+    concurrency=2,
+    timeout_seconds=240,
+    max_attempts=len(OUTAGE_RETRY_SCHEDULE) + 1,
+    retry_schedule=OUTAGE_RETRY_SCHEDULE,
+)
+async def reevaluate_answer(payload: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
+    """S12: evaluate a fallback answer again; when it is replaced, refresh the session's scores and reports."""
+    session_id = _session_id(payload)
+    answer_id = str(payload.get("answer_id") or "").strip()
+    if not answer_id:
+        raise PermanentJobError("payload.answer_id is required")
+    bind_context(session_id=session_id, job_id=ctx.job_id)
+    result = await EvaluationService().evaluate(
+        session_id, answer_id, is_last_attempt=ctx.is_last_attempt, replace_fallback=True
+    )
+    if result.get("replaced_fallback"):
+        # One refresh per session: deduplicated while queued, and it waits for the session's other
+        # re-evaluations (pending_evaluation_jobs counts answer.reevaluate).
+        await enqueue(
+            "report.generate",
+            {"session_id": session_id, "reason": "reevaluation"},
+            dedupe_key=f"report.generate:{session_id}:reevaluation",
+            delay_seconds=15,
+        )
+    return result
+
+
+@job_handler(REEVALUATION_SWEEP_JOB, concurrency=1, timeout_seconds=300)
+async def fallback_sweep(payload: dict[str, Any]) -> dict[str, Any]:
+    return await sweep_fallbacks()
+
+
+register_periodic_job(REEVALUATION_SWEEP_JOB, REEVALUATION_SWEEP_INTERVAL_SECONDS)
 
 
 @job_handler("memory.summarize", concurrency=2, timeout_seconds=180)

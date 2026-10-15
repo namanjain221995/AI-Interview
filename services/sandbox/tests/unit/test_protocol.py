@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import struct
 
+import pytest
+
 from sandbox_service.protocol import StreamDemux, encode_job, extract_result, new_nonce, sanitize
 
 
@@ -85,3 +87,48 @@ def test_demux_is_linear_on_floods():
     assert time.perf_counter() - started < 2.0
     assert demux.stdout_total == 96 * 1024 * 1024
     assert len(demux.stdout) == 32 * 1024 * 1024
+
+
+def test_absurdly_nested_records_are_invalid_results_not_errors():
+    """S19: a candidate-forged deeply nested record never raises (no HTTP 500 tripping the shared breaker)."""
+    nonce = new_nonce()
+    deep = {"protocol": 1, "ok": True, "steps": [{"actual": None}]}
+    raw = json.dumps(deep).replace("null", "[" * 995 + "]" * 995)
+    frame = f"\n<<SANDBOX-RESULT {nonce}>>\n{raw}\n<<SANDBOX-END {nonce}>>\n".encode()
+    assert extract_result(frame, nonce) is None
+
+
+def test_sanitize_is_iterative_with_a_depth_cap():
+    value = {"a": ["x", {"b": "\ud800"}]}
+    assert sanitize(value) == {"a": ["x", {"b": "?"}]}
+    nested: list = []
+    current = nested
+    for _ in range(110):
+        child: list = []
+        current.append(child)
+        current = child
+    with pytest.raises(ValueError):
+        sanitize(nested)
+    assert sanitize([[1]], max_depth=2) == [[1]]
+
+
+def _nested(depth: int) -> list:
+    root: list = []
+    current = root
+    for _ in range(depth - 1):
+        child: list = []
+        current.append(child)
+        current = child
+    return root
+
+
+def test_a_value_the_runner_accepts_is_never_rejected_by_the_service():
+    """Review of S19: the frame cap must exceed the runner's per-value cap plus the frame's own wrapping."""
+    from tests.unit.test_runner_unit import load_runner
+
+    depth = load_runner().MAX_ACTUAL_DEPTH
+    nonce = new_nonce()
+    record = {"protocol": 1, "ok": True, "steps": [{"tests": [{"id": "t1", "actual": _nested(depth)}]}]}
+    raw = json.dumps(record)
+    framed = f"\n<<SANDBOX-RESULT {nonce}>>\n{raw}\n<<SANDBOX-END {nonce}>>\n".encode()
+    assert extract_result(framed, nonce) == record

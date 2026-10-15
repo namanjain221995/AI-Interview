@@ -22,6 +22,8 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # OrganizationSettings (app.schemas.settings): retention, integrity defaults,
     # avatar/voice, candidate report mode, branding.
     settings: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    # What the organisation's plan includes (``{"intake": true}``); platform-managed, never self-service (G8, 0008).
+    features: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
 
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -44,6 +46,10 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set for admin-issued passwords (new account, reset); cleared by the user's own change (S13, 0007).
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
 
 class AuthSession(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
@@ -92,7 +98,9 @@ class AuditLog(Base):
     user_agent: Mapped[str | None] = mapped_column(String(512))
     request_id: Mapped[str | None] = mapped_column(String(64))
     details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
     __table_args__ = (
         Index("ix_audit_logs_org_created", "organization_id", "created_at"),

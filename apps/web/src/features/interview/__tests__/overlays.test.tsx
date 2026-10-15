@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_INTEGRITY } from "@/features/integrity/policy";
 import { createInterviewStore } from "@/features/realtime/store";
 
-import { BeginGate, NoticeArea, offlineCopy, type BeginGateProps } from "../components/Overlays";
+import { BeginGate, NoticeArea, offlineCopy, ReconnectOverlay, type BeginGateProps } from "../components/Overlays";
 import { MonitoringNotice, turnCue } from "../components/RoomChrome";
 
 function gate(over: Partial<BeginGateProps> = {}) {
@@ -159,5 +159,18 @@ describe("room copy", () => {
     act(() => store.dispatch({ type: "server", msg: { type: "notice", seq: 3, level: "info", code: "stt_recovered", message: "Working again." }, at: performance.now() }));
     act(() => store.dispatch({ type: "server", msg: { type: "notice", seq: 4, level: "warning", code: "stt_degraded", message: "Trouble." }, at: performance.now() }));
     expect(area).toHaveTextContent(/Transcription is slow right now/);
+  });
+});
+
+describe("ReconnectOverlay", () => {
+  it("covers nothing before the first connection attempt or after a failed Begin", () => {
+    const store = createInterviewStore();
+    store.dispatch({ type: "begun" });
+    const { container } = render(<ReconnectOverlay store={store} onRetry={() => undefined} />);
+    expect(container).toBeEmptyDOMElement(); // device setup: the lobby owns the screen
+    act(() => store.dispatch({ type: "connection", status: "connecting", attempt: 1, reason: null, at: 1 }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Connecting to your interview");
+    act(() => store.dispatch({ type: "begin.failed" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull(); // no permanent "Connecting…" over the lobby (S5)
   });
 });

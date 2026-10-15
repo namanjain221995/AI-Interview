@@ -1,6 +1,6 @@
 """Pre-synthesized acknowledgement backchannels (REALTIME_DESIGN.md section 5).
 
-A varied set ("Okay.", "Mm-hmm.", "I see.", ...) is synthesized once per
+A varied set ("Okay.", "I see.", "Right.", ...) is synthesized once per
 (provider, voice) in the background - at API startup for the default voice
 and when a session with another voice starts - so playing one at the end of
 a candidate's answer costs no TTS latency. It masks model latency without
@@ -29,9 +29,10 @@ from app.core.logging import get_logger
 
 log = get_logger(__name__)
 
+# No "Mm-hmm.": the voice (Kokoro's phonemizer) spells it out ("em-em-hum"); so do "Mhm", "Mm hm" and
+# "Uh-huh". Only words it pronounces naturally belong here.
 ACKNOWLEDGEMENT_PHRASES: tuple[str, ...] = (
     "Okay.",
-    "Mm-hmm.",
     "I see.",
     "Got it.",
     "Right.",
@@ -39,11 +40,13 @@ ACKNOWLEDGEMENT_PHRASES: tuple[str, ...] = (
 )
 # Backchannels that do not claim the floor: used while the answer may still
 # continue (the end of turn is only provisional until the transcript is final).
-SOFT_ACKNOWLEDGEMENTS: frozenset[str] = frozenset({"Okay.", "Mm-hmm.", "I see.", "Right."})
+SOFT_ACKNOWLEDGEMENTS: frozenset[str] = frozenset({"Okay.", "I see.", "Right."})
 # Spoken by the runtime itself (never sent to the engine) when an answer could
 # not be understood.
 REPEAT_PROMPT = "Sorry, I didn't catch that. Could you say that again?"
-PROMPT_PHRASES: tuple[str, ...] = (REPEAT_PROMPT,)
+# Said by the runtime when the reply is slow to start (Tier 1: no long silences); never sent to the engine.
+FILLER_PHRASES: tuple[str, ...] = ("One moment.", "Let me think about that for a second.")
+PROMPT_PHRASES: tuple[str, ...] = (REPEAT_PROMPT, *FILLER_PHRASES)
 WARM_TIMEOUT_SECONDS = 20.0
 # Frequent first sentences of interviewer replies (live transcripts, 2026-10-07).
 OPENER_PHRASES: tuple[str, ...] = (

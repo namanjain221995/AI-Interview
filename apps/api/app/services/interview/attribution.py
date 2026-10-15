@@ -149,6 +149,7 @@ class AttributionGuard:
         seed: str = "",
         avoid_ack: str | None = None,
         released_before: bool = False,
+        after_ack: bool = False,
     ) -> None:
         self._context_factory = context
         self._context: GroundingContext | None = None
@@ -161,6 +162,8 @@ class AttributionGuard:
         self._mode = "start"  # start | pass | hold | done
         self._fix_start = False  # capitalize the question after a dropped attribution clause
         self.released_any = released_before
+        # The realtime layer already said a short acknowledgement out loud: a rewrite adds none of its own.
+        self.after_ack = after_ack
         self.unsupported: Reference | None = None
         self.dropped: list[str] = []
         self.rewritten: str | None = None
@@ -203,7 +206,7 @@ class AttributionGuard:
         if not 2 <= len(words) <= REWRITE_MAX_WORDS or " as " in f" {phrase.lower()} ":
             return None  # too short / long, or "You described X as Y." (no natural acknowledgement form)
         trailing = unit[len(unit.rstrip()) :]
-        if self.released_any:
+        if self.released_any or self.after_ack:
             return phrase[0].upper() + phrase[1:] + "." + trailing
         lead = _words(unit[: ref.start] + " ")
         ack = next((w for w in lead if w in ("okay", "ok", "alright", "right", "so")), None)
@@ -319,7 +322,12 @@ class AttributionGuard:
 
 
 def guard_for_turn(
-    state: InterviewState, *, probe: bool, allow_regenerate: bool = True, released_before: bool = False
+    state: InterviewState,
+    *,
+    probe: bool,
+    allow_regenerate: bool = True,
+    released_before: bool = False,
+    after_ack: bool = False,
 ) -> AttributionGuard:
     return AttributionGuard(
         lambda: GroundingContext.from_state(state),
@@ -329,6 +337,7 @@ def guard_for_turn(
         seed=f"{state.session_id}:{state.turn_index}",
         avoid_ack=previous_opener(state),
         released_before=released_before,
+        after_ack=after_ack,
     )
 
 

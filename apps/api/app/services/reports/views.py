@@ -29,6 +29,7 @@ from app.db.models import (
     ScoreSnapshot,
 )
 from app.domain.enums import IntegrityReviewStatus, Recommendation, ReportType, RoundType, ScoreCategory
+from app.services.interview.reevaluation import fallback_count
 from app.services.reports.queries import (
     LIVE_STATUSES,
     TERMINAL_STATUSES,
@@ -302,6 +303,7 @@ async def session_detail(db: AsyncSession, session: InterviewSession) -> dict[st
             "claims": (digest or {}).get("claims", []),
             "contradictions": (digest or {}).get("contradictions", []),
             "review_count": await review_count(db, session.id),
+            "fallback_evaluations": await fallback_count(db, session.id),
         }
     )
     if overall is not None:

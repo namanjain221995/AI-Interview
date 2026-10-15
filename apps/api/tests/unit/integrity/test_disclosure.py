@@ -110,7 +110,8 @@ def test_default_policy_items() -> None:
     by_key = items(d)
     assert by_key["microphone"].required and by_key["microphone"].enabled
     assert by_key["camera"].required and "must stay on" in by_key["camera"].description
-    assert by_key["transcript"].required and "365 days" in by_key["transcript"].description
+    transcript = by_key["transcript"].description
+    assert by_key["transcript"].required and "until they delete it" in transcript and "days" not in transcript
     integrity = by_key["integrity_monitoring"]
     assert integrity.enabled and integrity.required
     for phrase in (
@@ -133,7 +134,11 @@ def test_default_policy_items() -> None:
     assert video.enabled and video.required
     assert "both sides of the conversation" in video.description and "30 days" in video.description
     assert ORG in by_key["ai_assessment"].description and JOB in by_key["ai_assessment"].description
-    assert "730 days" in d.retention_summary and "365 days" in d.retention_summary
+    assert "uploaded resume file: 365 days" in d.retention_summary and "730 days" not in d.retention_summary
+    assert (
+        "Your transcript, the written assessment and the details read from your resume stay"
+        in d.retention_summary
+    )
 
 
 def test_limitations_statement_is_honest() -> None:
@@ -341,3 +346,92 @@ def test_face_check_changes_the_policy_hash_and_follows_thresholds_and_storage()
     assert items(face_only)["face_check"].enabled
     assert "Camera snapshot analysis" not in items(face_only)["face_check"].description
     assert "images linked to an integrity observation: 30 days" in face_only.retention_summary
+
+
+# ------------------------------------------------------------------ G3: promise only what is enforced
+
+
+def _everything_on() -> dict[str, Any]:
+    return snapshot(
+        recording={"record_video": True, "record_screen": True, "record_answer_audio": True},
+        integrity={
+            "camera_frame_analysis": True,
+            "screen_share_analysis": True,
+            "store_evidence_frames": True,
+        },
+    )
+
+
+def test_every_automatic_deletion_promise_is_a_stored_file_the_sweep_deletes() -> None:
+    """Fails when the consent text promises a deletion nothing enforces (audit E1)."""
+    from app.domain.enums import MediaKind
+    from app.services.integrity.disclosure import auto_deleted_items
+    from app.services.integrity.retention_classes import AUTO_DELETED, KEPT_UNTIL_DELETED
+    from app.services.storage.media import retention_deadline
+
+    snap = PolicySnapshot.model_validate(_everything_on())
+    promised = auto_deleted_items(snap)
+    assert {key for key, _label, _days in promised} == {"resume_file", "answer_audio", "video", "frames"}
+    for key, _label, days in promised:
+        assert key in AUTO_DELETED and key not in KEPT_UNTIL_DELETED, key
+        for kind in AUTO_DELETED[key]:
+            assert isinstance(kind, MediaKind)
+            assert retention_deadline(kind, days) is not None  # every stored file gets a sweep deadline
+
+
+def test_rows_without_a_sweep_are_never_given_a_deletion_deadline() -> None:
+    d = build(_everything_on())
+    lowered = d.retention_summary.lower()
+    # The list after "deleted automatically after these periods:" up to the end of that sentence.
+    deadline_list = lowered.split("deleted automatically after these periods:", 1)[1].split(". ", 1)[0]
+    for phrase in ("transcript", "assessment", "report", "details read"):
+        assert phrase not in deadline_list, phrase
+    assert "your transcript, the written assessment and the details read from your resume stay" in lowered
+    for item in d.items:
+        if item.key in ("transcript", "ai_assessment"):
+            assert not re.search(r"kept for \d+ days?", item.description), item.key
+
+
+# ---- one-line summaries (consent page: summaries by default, the full text one click away) ----
+
+
+@pytest.mark.parametrize(
+    "snap",
+    [
+        snapshot(),
+        snapshot(recording={"record_video": False, "record_answer_audio": False}),
+        snapshot(integrity={"enabled": False}),
+        snapshot(integrity={"camera_required": True, "camera_frame_analysis": True, "camera_frame_interval_seconds": 9}),
+    ],
+)
+def test_every_item_has_a_short_summary(snap: dict[str, Any]) -> None:
+    for item in build(snap).items:
+        assert item.summary and len(item.summary) <= 170, (item.key, item.summary)
+        assert item.summary[0].isupper() and item.summary.endswith("."), (item.key, item.summary)
+
+
+def test_summaries_follow_the_policy() -> None:
+    off = items(build(snapshot(recording={"record_video": False, "record_answer_audio": False})))
+    assert off["audio_recording"].summary == "Your audio is not recorded."
+    assert off["video_recording"].summary == "No video is recorded."
+    on = items(
+        build(
+            snapshot(
+                integrity={"camera_required": True, "camera_frame_analysis": True, "camera_frame_interval_seconds": 9},
+                recording={"record_video": True},
+                retention={"video_days": 21},
+            )
+        )
+    )
+    assert "About every 9 seconds" in on["camera_frames"].summary
+    assert on["camera"].summary.startswith("Your camera stays on for the whole interview")
+    assert "kept for 21 days" in on["video_recording"].summary
+    assert ORG in on["ai_assessment"].summary
+
+
+def test_summaries_are_part_of_the_hashed_and_rendered_text() -> None:
+    disclosure = build()
+    markdown = render_disclosure_markdown(disclosure)
+    for item in disclosure.items:
+        assert item.summary.split(";")[0][:30] in markdown.replace("\\", "")
+    assert "confirm the required items together" in disclosure.intro

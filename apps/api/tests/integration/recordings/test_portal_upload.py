@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 
 from app.db.models import BackgroundJob, MediaAsset
@@ -20,6 +21,8 @@ from .conftest import (
     set_session,
     upload,
 )
+
+pytestmark = pytest.mark.integration
 
 
 async def _segments(session_id: uuid.UUID) -> list[MediaAsset]:
@@ -39,7 +42,8 @@ async def test_parts_are_stored_separately_with_timing(app, org, storage) -> Non
     rec = await make_session(org)
     http = await candidate_client(app, rec)
     first, second = uuid.uuid4(), uuid.uuid4()
-    sent = int(datetime.now(UTC).timestamp() * 1000) - 2_000  # browser clock 2 s behind
+    before_ms = int(datetime.now(UTC).timestamp() * 1000)
+    sent = before_ms - 2_000  # browser clock 2 s behind
     r = await upload(
         http,
         rec,
@@ -52,6 +56,7 @@ async def test_parts_are_stored_separately_with_timing(app, org, storage) -> Non
         session_ms=8_000,
         client_sent_at=sent,
     )
+    request_ms = int(datetime.now(UTC).timestamp() * 1000) - before_ms  # how long the upload took to arrive
     assert r.status_code == 201, r.text
     assert r.json()["part_id"] == str(first) and r.json()["duplicate"] is False
     # Out of order: segment 2 before segment 1; a second part (page reload) starts at 0 again.
@@ -76,7 +81,9 @@ async def test_parts_are_stored_separately_with_timing(app, org, storage) -> Non
         parts = {p.key: p for p in await load_parts(db, rec.session_id)}
     assert [s.index for s in parts[str(first)].segments] == [0, 1, 2]
     timing = parts[str(first)].timing()
-    assert timing.clock_offset_ms is not None and 1_900 <= timing.clock_offset_ms <= 4_000
+    # Receive time minus the browser's send time: the 2 s skew plus however long the request took (a fixed
+    # upper bound flaked on a loaded machine).
+    assert timing.clock_offset_ms is not None and 1_900 <= timing.clock_offset_ms <= 2_000 + request_ms + 100
     assert timing.anchors == [(10_000, 8_000)]
     await http.aclose()
 
@@ -182,3 +189,79 @@ async def test_legacy_uploads_without_part_keep_the_flat_layout(app, org, storag
         parts = await load_parts(db, rec.session_id)
     assert [p.key for p in parts] == ["legacy-camera"]
     await http.aclose()
+
+
+# ------------------------------------------------------------------ quotas and the disk guard (S3, audit D2)
+
+
+async def _row(session_id: uuid.UUID):
+    from app.db.models import InterviewSession
+
+    async with session_scope() as db:
+        return await db.get(InterviewSession, session_id)
+
+
+async def test_upload_budget_is_enforced_per_kind(app, org, storage, settings) -> None:
+    from app.services.recordings.segments import recording_budget_bytes
+
+    rec = await make_session(org)
+    http = await candidate_client(app, rec)
+    settings.recording_max_bitrate_bps = 8  # one byte per second: a budget of a few KB
+    budget = recording_budget_bytes(await _row(rec.session_id))
+    assert 1000 < budget < 10_000
+    part = uuid.uuid4()
+    first = WEBM_HEADER + b"a" * (budget - len(WEBM_HEADER) - 100)
+    assert (await upload(http, rec, segment=0, data=first, part_id=part)).status_code == 201
+    refused = await upload(http, rec, segment=1, data=b"b" * 200, part_id=part)
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "recording_quota_exceeded"
+    assert len(await _segments(rec.session_id)) == 1  # nothing stored for the refused chunk
+    # A retry of a stored chunk is idempotent, never refused by the budget; the screen has its own budget.
+    assert (await upload(http, rec, segment=0, data=first, part_id=part)).status_code == 200
+    screen = await upload(http, rec, segment=0, data=WEBM_HEADER + b"s", part_id=uuid.uuid4(), kind="screen")
+    assert screen.status_code in (201, 403), screen.text  # 403 only when screen recording is off by policy
+
+
+async def test_unstarted_session_only_gets_the_prestart_budget(app, org, storage, settings) -> None:
+    rec = await make_session(org)
+    await set_session(rec.session_id, started_at=None)
+    http = await candidate_client(app, rec)
+    settings.recording_prestart_budget_bytes = 2048
+    chunk = WEBM_HEADER + b"p" * 3000
+    refused = await upload(http, rec, segment=0, data=chunk, part_id=uuid.uuid4())
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "recording_quota_exceeded"
+    await set_session(rec.session_id, started_at=datetime.now(UTC))
+    assert (await upload(http, rec, segment=0, data=chunk, part_id=uuid.uuid4())).status_code == 201
+
+
+async def test_recorder_parts_are_capped(app, org, storage, settings) -> None:
+    rec = await make_session(org)
+    http = await candidate_client(app, rec)
+    settings.recording_max_parts_per_session = 2
+    a, b, c = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    assert (await upload(http, rec, segment=0, data=WEBM_HEADER, part_id=a)).status_code == 201
+    assert (await upload(http, rec, segment=0, data=WEBM_HEADER + b"2", part_id=b)).status_code == 201
+    third = await upload(http, rec, segment=0, data=WEBM_HEADER + b"3", part_id=c)
+    assert third.status_code == 409 and third.json()["error"]["details"]["limit"] == "parts"
+    assert (await upload(http, rec, segment=1, data=b"more", part_id=a)).status_code == 201  # a known part
+
+
+async def test_uploads_stop_when_the_storage_disk_is_nearly_full(app, org, storage, monkeypatch) -> None:
+    import shutil
+    from collections import namedtuple
+
+    import app.services.storage as storage_module
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(storage_module.shutil, "disk_usage", lambda _path: usage(1000, 960, 40))
+    assert storage_module.shutil is shutil
+    rec = await make_session(org)
+    http = await candidate_client(app, rec)
+    r = await upload(http, rec, segment=0, data=WEBM_HEADER, part_id=uuid.uuid4())
+    assert r.status_code == 503 and r.json()["error"]["code"] == "storage_full"
+    frame = await http.post(
+        f"/api/v1/portal/sessions/{rec.session_id}/frames",
+        files={"file": ("frame.jpg", b"\xff\xd8\xff" + b"0" * 100, "image/jpeg")},
+        data={"kind": "camera"},
+    )
+    assert frame.status_code == 503 and frame.json()["error"]["code"] == "storage_full"
+    assert await _segments(rec.session_id) == []

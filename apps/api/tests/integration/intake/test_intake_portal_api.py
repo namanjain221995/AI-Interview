@@ -320,7 +320,8 @@ async def test_scoping_not_applicable_lazy_rows_and_rate_limit(
         other = await create_intake(recruiter, (await intake_row(intake_id)).job_id)
         foreign = await http.get(f"{API}/portal/intake/{other['intake']['interview']['id']}")
         assert foreign.status_code == 404 and foreign.json()["error"]["code"] == "interview_not_found"
-        assert (await recruiter.get(f"{API}/portal/intake/{iid}")).status_code == 403
+        # G2: a staff session is not a candidate session on candidate routes.
+        assert (await recruiter.get(f"{API}/portal/intake/{iid}")).status_code == 401
 
         # A missing row (legacy invitation) is created lazily.
         async with session_scope() as db:

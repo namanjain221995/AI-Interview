@@ -92,6 +92,16 @@ groups:
           summary: "{{ $labels.job }} exporter is down"
           description: "{{ $labels.instance }} has not been scraped for 5 minutes; database/queue alerts are blind."
 
+      - alert: SessionsStuckCompleting
+        expr: max(interview_sessions_completing_stale) > 0
+        for: 15m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: Interview sessions are stuck in COMPLETING
+          description: "{{ $value }} session(s) have been COMPLETING for longer than SESSION_COMPLETING_STALE_SECONDS with no report job alive. The recovery sweep (session.recovery_sweep) re-enqueues the report; if this persists, check the worker and the dead-letter stream."
+
   # ---------------------------------------------------------------------------
   - name: interview-latency
     rules:
@@ -120,6 +130,22 @@ groups:
         annotations:
           summary: Time to first interviewer audio p95 above 2 s
           description: "p95 from utterance start to the first TTS chunk sent is {{ $value | printf \"%.2f\" }} s (target < 2 s)."
+
+      # What the candidate waits (P0.4): their last voiced audio -> first audio of the interviewer's reply. Counted
+      # from the last word, so it includes the end-of-turn silence that TurnLatencyP95High does not see. 15-minute
+      # window and at least 10 spoken turns: one slow turn in a quiet hour never pages.
+      - alert: VoiceToVoiceSlow
+        expr: |
+          histogram_quantile(0.90, sum by (le) (rate(interview_voice_to_voice_seconds_bucket{reply="question"}[15m]))) > 6
+          and on ()
+          sum(increase(interview_voice_to_voice_seconds_count{reply="question"}[15m])) >= 10
+        for: 5m
+        labels:
+          severity: warning
+          component: realtime
+        annotations:
+          summary: Candidates wait more than 6 s for the interviewer's reply
+          description: "p90 from the candidate's last word to the first audio of the interviewer's reply is {{ $value | printf \"%.2f\" }} s over 15 minutes (target < 6 s). The Turn stages panel and the turn.latency interview events show the slow stage."
 
       - alert: SttLatencyP95High
         expr: |

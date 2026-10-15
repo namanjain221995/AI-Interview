@@ -52,14 +52,19 @@ export function dataUseItems(d: PolicySummary, org: string): Array<{ key: string
     text: "Your answers on this form go only to the hiring team. The AI never sees them and they don't affect your assessment.",
   });
   const r = d.retention_days;
-  const kept = [
-    r.resume > 0 && `your résumé for ${days(r.resume)}`,
-    d.audio_recording && r.audio > 0 && `audio for ${days(r.audio)}`,
-    d.video_recording && r.video > 0 && `video for ${days(r.video)}`,
-    r.transcript > 0 && `the transcript for ${days(r.transcript)}`,
-    r.report > 0 && `the report for ${days(r.report)}`,
+  // Only stored files are deleted on a schedule today; the transcript and the assessment are kept until the
+  // hiring team deletes them (G3). Never promise a deletion nothing enforces.
+  const files = [
+    r.resume > 0 && `your résumé file after ${days(r.resume)}`,
+    d.audio_recording && r.audio > 0 && `audio after ${days(r.audio)}`,
+    d.video_recording && r.video > 0 && `video after ${days(r.video)}`,
   ].filter(Boolean) as string[];
-  if (kept.length) items.push({ key: "retention", icon: <Clock3 />, text: `Kept for a limited time, then deleted: ${formatList(kept)}.` });
+  const deleted = files.length ? `Stored files are deleted automatically: ${formatList(files)}. ` : "";
+  items.push({
+    key: "retention",
+    icon: <Clock3 />,
+    text: `${deleted}Your transcript and the assessment stay with ${org} until they delete them; you can ask them to at any time.`,
+  });
   return items;
 }
 

@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Globe2, MapPin, Timer, UserRound } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router";
 
 import { useCandidateChrome } from "@/components/layout/CandidateShell";
@@ -13,7 +13,8 @@ import { errorMessage, isApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { useDocumentTitle } from "@/lib/hooks";
 
-import { registerForLink, resetPortalCache, useLinkInfo } from "../api";
+import { fetchPowChallenge, registerForLink, resetPortalCache, useLinkInfo } from "../api";
+import { solveInBackground, type PowRun } from "../pow";
 import { LinkStatePanel, RegistrationOutcome, type LinkPanelState, type RegistrationOutcomePanel } from "../components/LinkStatePanel";
 import { PersonalLinkNotice } from "../components/PersonalLinkNotice";
 import { RegistrationForm } from "../components/RegistrationForm";
@@ -45,6 +46,7 @@ export function describeRegisterError(error: unknown): { outcome?: Outcome; fiel
   if (code === "invalid_access_code") return { fields: { access_code: "That access code isn't right. Check it and enter it exactly as shown." } };
   if (code === "privacy_ack_required") return { fields: { privacy_ack: "Tick this box to confirm you've read how your data is used." } };
   if (code === "origin_not_allowed") return { message: "Open the registration link directly in your browser, then try again." };
+  if (code === "pow_required" || code === "pow_invalid") return { message: "Your browser couldn't finish a quick security check. Reload the page and try again." };
   if (code === "validation_failed" || error.status === 422) {
     const fields = error.fieldErrors();
     return Object.keys(fields).length ? { fields } : { message: error.message || "Some answers need attention." };
@@ -126,6 +128,45 @@ function LinkHeader({ info }: { info: LinkInfo }) {
   );
 }
 
+/**
+ * Proof-of-work for this link (S15): a challenge is fetched and solved in the background as soon as the form
+ * is shown; `take()` hands out the solution (each is single use) and starts preparing the next one.
+ */
+function useProofOfWork(token: string, enabled: boolean) {
+  const current = useRef<{ solution: Promise<string | null>; cancel: () => void } | null>(null);
+  const prepare = useCallback(() => {
+    current.current?.cancel();
+    let run: PowRun | null = null;
+    let cancelled = false;
+    const solution = fetchPowChallenge(token)
+      .then((challenge) => {
+        if (cancelled) return null;
+        run = solveInBackground(challenge);
+        return run.promise;
+      })
+      .catch(() => null);
+    current.current = {
+      solution,
+      cancel: () => {
+        cancelled = true;
+        run?.cancel();
+      },
+    };
+  }, [token]);
+  useEffect(() => {
+    if (enabled) prepare();
+    return () => current.current?.cancel();
+  }, [enabled, prepare]);
+  return useCallback(async (): Promise<string | null> => {
+    // Solved in the background since the page loaded; a retry (or a second submit) fetches a fresh one on demand.
+    // Never prefetched after a submit: on a campus network every challenge counts against one shared address.
+    if (!current.current) prepare();
+    const solution = current.current!.solution;
+    current.current = null;
+    return solution;
+  }, [prepare]);
+}
+
 /** /j/:token: public registration for an open interview link. */
 export default function OpenLinkPage() {
   const { token = "" } = useParams();
@@ -144,13 +185,24 @@ export default function OpenLinkPage() {
   const [askCode, setAskCode] = useState(false);
 
   const enter = (result: RegisterResponse) => navigate(`/candidate/${result.interview_id}/${result.next_step || "welcome"}`, { replace: true });
+  const takeProof = useProofOfWork(token, info.isSuccess);
+
+  /** One registration; a rejected or expired proof of work is retried once with a fresh one. */
+  const registerWithProof = async (body: RegisterRequest): Promise<RegisterResponse> => {
+    try {
+      return await registerForLink(token, { ...body, pow: (await takeProof()) ?? undefined });
+    } catch (error) {
+      if (!(isApiError(error) && (error.code === "pow_invalid" || error.code === "pow_required"))) throw error;
+      return registerForLink(token, { ...body, pow: (await takeProof()) ?? undefined });
+    }
+  };
 
   const submit = async (body: RegisterRequest) => {
     setSubmitting(true);
     setFormError(null);
     setFieldErrors(undefined);
     try {
-      const result = await registerForLink(token, body);
+      const result = await registerWithProof(body);
       resetPortalCache(queryClient);
       if (result.outcome === "resumed" || !result.personal_url) {
         enter(result);

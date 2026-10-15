@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
-import { apiGet, apiPost, poll, staffLogin, testHookPost, type StaffSession } from "../helpers/api";
+import { apiGet, apiPatch, apiPost, poll, staffLogin, testHookPost, type StaffSession } from "../helpers/api";
 import { installFakeMedia, say } from "../helpers/media";
 
 const ROOT = path.resolve(__dirname, "../../..");
@@ -35,6 +35,14 @@ interface Page_<T> {
   items: T[];
   total: number;
 }
+
+// The demo jobs never promise candidates feedback (candidate_report_mode: never). This journey asserts the
+// candidate-facing report too, so it owns that setting for the duration of the test and puts it back afterwards.
+let restoreJob: (() => Promise<void>) | undefined;
+test.afterEach(async () => {
+  await restoreJob?.();
+  restoreJob = undefined;
+});
 
 async function findDevOpsJob(staff: StaffSession): Promise<{ jobId: string; roundId: string }> {
   const jobs = await apiGet<Page_<{ id: string; title: string }>>(staff, "/api/v1/jobs?limit=100");
@@ -62,6 +70,13 @@ test("candidate completes an adaptive voice interview with coding, hint and repo
 
   // ---------------------------------------------------------------- invite
   const { jobId, roundId } = await findDevOpsJob(staff);
+  const before = await apiGet<{ candidate_report_mode: string }>(staff, `/api/v1/jobs/${jobId}`);
+  if (before.candidate_report_mode !== "immediate") {
+    await apiPatch(staff, `/api/v1/jobs/${jobId}`, { candidate_report_mode: "immediate" });
+    restoreJob = async () => {
+      await apiPatch(staff, `/api/v1/jobs/${jobId}`, { candidate_report_mode: before.candidate_report_mode });
+    };
+  }
   const email = `e2e.candidate.${Date.now()}@example.com`;
   const candidate = await apiPost<{ id: string }>(staff, "/api/v1/candidates", { full_name: "Jane Doe", email });
   const invite = await apiPost<{ invite_url: string; interview: { id: string } }>(staff, "/api/v1/interviews", {
@@ -85,9 +100,9 @@ test("candidate completes an adaptive voice interview with coding, hint and repo
   await page.getByTestId("welcome-continue").click();
   await page.getByTestId("instructions-continue").click();
 
-  const items = page.locator('[data-testid^="consent-item-"]');
-  await expect(items.first()).toBeVisible();
-  for (let i = 0; i < (await items.count()); i++) await items.nth(i).check();
+  // One confirmation covers the required items (optional ones stay off).
+  await expect(page.locator('[data-testid^="consent-item-"]').first()).toBeVisible();
+  await page.getByTestId("consent-agree-all").check();
   await page.getByTestId("consent-accept-button").click();
 
   await page.getByTestId("resume-file-input").setInputFiles(RESUME);

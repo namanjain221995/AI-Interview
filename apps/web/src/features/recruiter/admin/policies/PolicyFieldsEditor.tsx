@@ -24,6 +24,8 @@ export interface PolicyFieldsEditorProps<K extends string> {
   /** Error path prefix (e.g. "integrity"). */
   errorPrefix?: string;
   disabled?: boolean;
+  /** Boolean fields the platform forces on: shown on, locked, with the reason. */
+  locked?: ReadonlySet<string>;
 }
 
 function describeValue(field: PolicyFieldDef<string>, value: unknown): string {
@@ -43,6 +45,7 @@ export function PolicyFieldsEditor<K extends string>({
   errors,
   errorPrefix,
   disabled,
+  locked,
 }: PolicyFieldsEditorProps<K>) {
   const grouped = groups
     ? groups.map((g) => ({ ...g, fields: fields.filter((f) => f.group === g.key) })).filter((g) => g.fields.length > 0)
@@ -73,18 +76,27 @@ export function PolicyFieldsEditor<K extends string>({
     ) : null;
 
     if (field.kind.type === "boolean") {
+      const isLocked = locked?.has(field.key) ?? false;
       return (
-        <div key={field.key} className={cn("flex items-start justify-between gap-6 py-3.5", off && "opacity-55")}>
+        <div key={field.key} className={cn("flex items-start justify-between gap-6 py-3.5", off && !isLocked && "opacity-55")} data-locked={isLocked || undefined}>
           <div className="min-w-0 flex-1">
             <Switch
               label={field.label}
               description={field.help}
-              checked={Boolean(value)}
-              disabled={disabled || off}
+              checked={isLocked || Boolean(value)}
+              disabled={disabled || off || isLocked}
               labelPosition="start"
               onCheckedChange={(checked) => onChange(field.key, checked)}
             />
-            {aside ? <div className="mt-1.5">{aside}</div> : null}
+            {isLocked ? (
+              <div className="mt-1.5">
+                <Badge tone="neutral" size="sm" title="Video is required for every interview on this platform.">
+                  Always on
+                </Badge>
+              </div>
+            ) : aside ? (
+              <div className="mt-1.5">{aside}</div>
+            ) : null}
           </div>
         </div>
       );

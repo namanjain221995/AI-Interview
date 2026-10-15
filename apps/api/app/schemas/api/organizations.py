@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,6 +18,7 @@ class OrganizationOut(BaseModel):
     name: str
     slug: str
     is_active: bool
+    features: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
@@ -33,5 +35,9 @@ class OrganizationUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    slug: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$")
+    slug: str | None = Field(
+        default=None, min_length=1, max_length=100, pattern=r"^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$"
+    )
     is_active: bool | None = None
+    # Platform-managed plan features, e.g. {"intake": true} (G8); merged into the current ones.
+    features: dict[str, bool] | None = None

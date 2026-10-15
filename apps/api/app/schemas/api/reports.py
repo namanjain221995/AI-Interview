@@ -51,6 +51,11 @@ class ReportListOut(BaseModel):
     total: int
 
 
+class ReevaluateResponse(BaseModel):
+    queued: int
+    fallback_evaluations: int
+
+
 class RegenerateResponse(BaseModel):
     session_id: uuid.UUID
     job_id: uuid.UUID

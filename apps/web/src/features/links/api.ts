@@ -8,6 +8,7 @@
  * means "wrong details", never "expired session".
  */
 
+import type { PowChallenge } from "./pow";
 import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import { api, isApiError } from "@/lib/api";
@@ -532,6 +533,11 @@ export function useLinkInfo(token: string) {
     refetchOnWindowFocus: false,
     meta: { errorToast: false },
   });
+}
+
+/** The proof-of-work challenge a registration on this link must solve (S15). */
+export async function fetchPowChallenge(token: string): Promise<PowChallenge> {
+  return api.get<PowChallenge>(`/link-access/${encodeURIComponent(token)}/challenge`, { skipAuthRefresh: true });
 }
 
 export async function registerForLink(token: string, body: RegisterRequest): Promise<RegisterResponse> {

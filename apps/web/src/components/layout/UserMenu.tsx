@@ -1,4 +1,4 @@
-import { ChevronDown, LogOut, Settings } from "lucide-react";
+import { ChevronDown, LogOut, Settings, UserRound } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 
@@ -61,9 +61,13 @@ export function UserMenu() {
             </Badge>
           ) : null}
         </div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => navigate("/app/account")}>
+          <UserRound />
+          Your account
+        </DropdownMenuItem>
         {canManageSettings ? (
           <>
-            <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => navigate("/app/settings")}>
               <Settings />
               Workspace settings

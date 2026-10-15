@@ -25,6 +25,7 @@ from app.services.jobs.catalog import (
     get_template,
     overlay_columns,
     parse_round_config,
+    parse_round_type,
     round_type_default,
     round_type_label,
     sync_round_columns,
@@ -51,11 +52,18 @@ async def get_round(db: AsyncSession, round_id: uuid.UUID, organization_id: uuid
     return row, job
 
 
+async def _ensure_intake_entitled(db: AsyncSession, organization_id: uuid.UUID) -> None:
+    from app.services.intake.access import intake_entitled
+
+    if not await intake_entitled(db, organization_id):
+        raise NotFound("Intake interviews are not part of this workspace.", code="intake_disabled")
+
+
 async def create_round(db: AsyncSession, job: Job, body: RoundCreate) -> Round:
     template_id: uuid.UUID | None = None
     if body.template_id is not None:
         template = await get_template(db, body.template_id, job.organization_id)
-        round_type = body.round_type or RoundType(template.round_type)
+        round_type = body.round_type or parse_round_type(template.round_type)
         base = dict(template.config)
         template_id = template.id
     elif body.round_type is not None:
@@ -63,6 +71,8 @@ async def create_round(db: AsyncSession, job: Job, body: RoundCreate) -> Round:
         base, _, _ = await round_type_default(db, round_type)
     else:
         raise ValidationFailed("round_type or template_id is required.", details={"field": "round_type"})
+    if round_type is RoundType.INTAKE:
+        await _ensure_intake_entitled(db, job.organization_id)
     data = deep_merge(base, body.config or {})
     data["round_type"] = round_type.value
     values = body.model_dump(exclude={"config", "template_id", "is_active"})
@@ -106,6 +116,8 @@ async def update_round(db: AsyncSession, row: Round, job: Job, body: RoundUpdate
     if not data.get("name"):
         data["name"] = row.name
     config = parse_round_config(data)
+    if config.round_type is RoundType.INTAKE and row.round_type != RoundType.INTAKE.value:
+        await _ensure_intake_entitled(db, job.organization_id)  # G8: same rule as creating one
     await validate_config_references(db, config, job.organization_id)
     sync_round_columns(row, config)
     if "is_active" in fields and body.is_active is not None:

@@ -63,6 +63,10 @@ PG_STATE_COLORS = {
     "active": SLOT[0], "idle": SLOT[1], "idle in transaction": SLOT[3],
     "idle in transaction (aborted)": SLOT[7], "fastpath function call": SLOT[4], "disabled": MUTED,
 }  # fmt: skip
+# Critical path of a spoken turn, in order (interview_turn_stage_seconds{stage}).
+TURN_STAGES = ["endpoint_silence", "stt_final", "commit_wait", "decision_to_text", "tts_first_chunk", "send"]
+STAGE_COLORS = {stage: SLOT[i] for i, stage in enumerate(TURN_STAGES)}
+DECISION_OUTCOME_COLORS = {"complete": GOOD, "tail_cut": WARNING, "synthesized": SERIOUS, "fallback": CRITICAL}
 
 TURN_TASK_RE = "|".join(TURN_TASKS)
 APP_JOBS = 'job=~"interview-(api|worker|tts|sandbox|edge)"'
@@ -495,6 +499,110 @@ def status_class(metric: str, selector: str, status_label: str) -> str:
     ).strip()
 
 
+def _v2v_quantile(q: str, reply: str, window: str = "$__rate_interval") -> str:
+    return (
+        f"histogram_quantile({q}, sum by (le) "
+        f'(rate(interview_voice_to_voice_seconds_bucket{{reply="{reply}"}}[{window}])))'
+    )
+
+
+def voice_to_voice(d: Dashboard) -> None:
+    """P0.4: the candidate's side of a spoken turn, from their last voiced audio (not from the end-of-turn
+    decision like interview_turn_latency_seconds). p90 is emphasised here: it is what VoiceToVoiceSlow alerts on."""
+    d.row("Voice to voice: what the candidate hears")
+    d.add_stacked(
+        [
+            stat(
+                "Voice to voice p90 (15m)",
+                _v2v_quantile("0.90", "question", "15m"),
+                unit="s", thresholds=status_thresholds(4.5, 6), decimals=1,
+                description="Candidate's last word to the first audio of the interviewer's reply, last 15 minutes. "
+                "Alert VoiceToVoiceSlow above 6 s.",
+            ),
+            stat(
+                "First sound p90 (15m)",
+                _v2v_quantile("0.90", "first_sound", "15m"),
+                unit="s", thresholds=status_thresholds(3, 5), decimals=1,
+                description='Candidate\'s last word to the first thing they hear: "Okay.", "One moment." or the reply. '
+                'Above 5 s the "One moment." filler is not covering slow replies.',
+            ),
+        ],
+        4, 4,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Voice to voice: candidate's last word to the reply's first audio",
+            [(_v2v_quantile("0.90", "question"), "p90"), (_v2v_quantile("0.50", "question"), "p50")],
+            unit="s", colors={"p90": SLOT[0], "p50": MUTED}, threshold=6,
+            description="interview_voice_to_voice_seconds{reply=\"question\"}: endpoint silence + transcription + "
+            "decision + first speech chunk, server side (the browser adds ~150 ms). Dashed line: 6 s "
+            "(alert VoiceToVoiceSlow, p90 over 15 minutes). Typed answers are not counted.",
+        ),
+        10, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "First sound: \"Okay.\", \"One moment.\" or the reply, whichever comes first",
+            [(_v2v_quantile("0.90", "first_sound"), "p90"), (_v2v_quantile("0.50", "first_sound"), "p50")],
+            unit="s", colors={"p90": SLOT[0], "p50": MUTED},
+            description="interview_voice_to_voice_seconds{reply=\"first_sound\"}: how long the candidate hears "
+            "nothing after their last word. The turn.latency interview event says which sound came first.",
+        ),
+        10, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Turn stages (median): where a spoken turn's time goes",
+            [(
+                "histogram_quantile(0.50, sum by (le, stage) "
+                "(rate(interview_turn_stage_seconds_bucket[$__rate_interval])))",
+                "{{stage}}",
+            )],
+            unit="s", colors=STAGE_COLORS,
+            description="interview_turn_stage_seconds: endpoint_silence (last word to end-of-turn decision), "
+            "stt_final, commit_wait, decision_to_text (engine and model to the first speech chunk), "
+            "tts_first_chunk, send. Medians do not add up exactly to the voice-to-voice median.",
+        ),
+        12, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Interviewer turn decisions by outcome per minute",
+            [("sum by (outcome) (rate(interview_turn_decisions_total[$__rate_interval])) * 60", "{{outcome}}")],
+            colors=DECISION_OUTCOME_COLORS, stack=True, fill=20,
+            description="complete: the model's full decision; tail_cut: the reply was spoken but the decision "
+            "after it was cut off; synthesized: the platform filled in a missing decision; fallback: a "
+            "question-bank line because the model failed.",
+        ),
+        12, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Premature end of turn and \"I already told you\" per hour",
+            [
+                ("sum(rate(interview_turn_resumed_total[$__rate_interval])) * 3600", "turn resumed"),
+                ("sum(rate(interview_candidate_repeat_complaints_total[$__rate_interval])) * 3600",
+                 "repeat complaint"),
+            ],
+            colors={"turn resumed": SLOT[0], "repeat complaint": SLOT[1]},
+            description="turn resumed: the candidate kept speaking after the end of their turn was decided "
+            "(endpointing too eager). repeat complaint: the candidate said they had already answered "
+            "(the interviewer asked the same thing again).",
+        ),
+        12, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Answer-evaluator contradictions per hour: kept or dropped by grounding",
+            [("sum by (result) (rate(interview_contradictions_total[$__rate_interval])) * 3600", "{{result}}")],
+            colors={"kept": SLOT[0], "dropped": SLOT[1]},
+            description="Inconsistencies the answer evaluator proposed; dropped ones were not supported by the "
+            "candidate's own words.",
+        ),
+        12, 8,
+    )  # fmt: skip
+
+
 # =============================================================================
 # Dashboards
 # =============================================================================
@@ -582,6 +690,8 @@ def overview() -> Dashboard:
         ),
         12, 8,
     )  # fmt: skip
+
+    voice_to_voice(d)
 
     d.row("Sessions and speech")
     d.add(
@@ -918,6 +1028,47 @@ def ai_models() -> Dashboard:
     d.add(timeseries("GPU temperature", [("max(dgx_gpu_temperature_celsius)", "temperature")], unit="celsius",
                      min_value=None), 4, 7)  # fmt: skip
     d.add(timeseries("GPU power", [("max(dgx_gpu_power_watts)", "power")], unit="watt"), 4, 7)
+    d.row("Endpoint reachability (deep readiness probe)")
+    d.add(
+        timeseries(
+            "AI endpoints up (1 up, 0 down, -1 unknown or disabled)",
+            [("min by (endpoint) (interview_ai_endpoint_up)", "{{endpoint}}")],
+            decimals=0,
+            description="From the 15 s cached health probe behind /readyz?deep=1 and the staff system-health page. "
+            "main, whisper and tts are required for interviews; vision, embedding, reranker and ocr only degrade features.",
+        ),
+        16, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "VAD engine in use",
+            [("max by (engine) (interview_vad_engine_info)", "{{engine}}")],
+            decimals=0,
+            description="silero is expected; energy means the Silero model file was missing or failed to load (turn-taking degrades).",
+        ),
+        8, 8,
+    )  # fmt: skip
+
+    d.row("Circuit breakers and call ledger")
+    d.add(
+        timeseries(
+            "Circuit breaker state by endpoint",
+            [("max by (endpoint) (interview_circuit_breaker_state)", "{{endpoint}}")],
+            decimals=0,
+            description="0 closed (healthy), 1 half-open (probing), 2 open (calls fail fast and fall back).",
+        ),
+        16, 8,
+    )  # fmt: skip
+    d.add(
+        stat(
+            "Ledger records dropped (range)",
+            "sum(increase(interview_model_call_ledger_dropped_total[$__range])) or vector(0)",
+            decimals=0, thresholds=status_thresholds(1, 100),
+            description="model_calls ledger records lost because the write queue was full or closed; should stay 0.",
+        ),
+        8, 8,
+    )  # fmt: skip
+
     return d
 
 
@@ -1114,6 +1265,97 @@ def workers_infra() -> Dashboard:
     )  # fmt: skip
     d.add(timeseries("Host memory available", [('max(node_memory_MemAvailable_bytes{job="host"})', "available")],
                      unit="bytes"), 12, 7)  # fmt: skip
+    d.row("Session lifecycle (abandoned sessions)")
+    d.add(
+        stat(
+            "Abandoned sessions pending",
+            "max(interview_sessions_abandoned_pending) or vector(0)",
+            decimals=0, thresholds=status_thresholds(1, 10),
+            description="Started sessions idle past SESSION_ABANDON_AFTER_SECONDS that the last sweep could not end "
+            "(lock held, Redis unreachable or SESSION_SWEEP_DRY_RUN).",
+        ),
+        6, 6,
+    )  # fmt: skip
+    d.add(
+        stat(
+            "Stuck in COMPLETING",
+            "max(interview_sessions_completing_stale) or vector(0)",
+            decimals=0, thresholds=status_thresholds(1, 5),
+            description="Sessions whose report job died; the recovery sweep re-enqueues the report (fallback narrative) "
+            "or completes the session so it reaches the review queue.",
+        ),
+        6, 6,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Sessions ended offline per hour by reason",
+            [("sum by (reason, actor) (increase(interview_sessions_ended_offline_total[1h]))", "{{reason}} ({{actor}})")],
+            decimals=0,
+            description="disconnect_timeout = the abandoned-session sweep; cancelled = staff cancel; candidate_ended = REST end.",
+        ),
+        12, 6,
+    )  # fmt: skip
+
+    d.row("Intake interviews and open links")
+    d.add(
+        timeseries(
+            "Open-link registrations per minute by outcome",
+            [("sum by (outcome) (rate(interview_open_link_registrations_total[$__rate_interval])) * 60", "{{outcome}}")],
+            decimals=1,
+            description="registered / resumed are normal; blocked, rejected and unavailable spikes suggest abuse or a full link.",
+        ),
+        12, 8,
+    )  # fmt: skip
+    d.add(
+        timeseries(
+            "Intake activities ended per minute by end reason",
+            [("sum by (end_reason) (rate(interview_intake_activities_total[$__rate_interval])) * 60", "{{end_reason}}")],
+            decimals=1,
+        ),
+        12, 8,
+    )  # fmt: skip
+    d.add(
+        stat(
+            "Intake invitations (range)",
+            "sum(increase(interview_intake_invitations_total[$__range])) or vector(0)",
+            decimals=0, description="Single, batch and draft invitations sent in the selected range.",
+        ),
+        4, 4,
+    )  # fmt: skip
+    d.add(
+        stat(
+            "Intake evaluation p95",
+            "histogram_quantile(0.95, sum by (le) (rate(interview_intake_evaluation_seconds_bucket[$__range])))",
+            unit="s", decimals=0, thresholds=status_thresholds(180, 600),
+            description="All evaluators plus scoring; the candidate waits for nothing, reviewers do.",
+        ),
+        4, 4,
+    )  # fmt: skip
+    d.add(
+        ranking(
+            "Intake evaluations by status (range)",
+            "sort_desc(sum by (status) (increase(interview_intake_evaluations_total[$__range])) > 0)",
+            "{{status}}", decimals=0,
+        ),
+        8, 8,
+    )  # fmt: skip
+    d.add(
+        ranking(
+            "Intake stage duration p50 (range)",
+            "sort_desc(histogram_quantile(0.5, sum by (le, stage) (rate(interview_intake_stage_seconds_bucket[$__range]))))",
+            "{{stage}}", unit="s",
+        ),
+        8, 8,
+    )  # fmt: skip
+    d.add(
+        ranking(
+            "Human intake decisions (range)",
+            "sort_desc(sum by (outcome, overrides_ai) (increase(interview_intake_decisions_total[$__range])) > 0)",
+            "{{outcome}} (overrides AI: {{overrides_ai}})", decimals=0,
+        ),
+        8, 8,
+    )  # fmt: skip
+
     return d
 
 

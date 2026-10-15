@@ -144,6 +144,7 @@ class DisclosureItemOut(_Out):
     description: str
     required: bool
     enabled: bool
+    summary: str = ""
 
 
 class DisclosureOut(_Out):
@@ -275,6 +276,15 @@ class PortalSession(_Out):
     # never); the portal hides every feedback element when it is "never".
     candidate_report_mode: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+class PortalSessionEndRequest(_In):
+    # The candidate can only end their own interview as themselves; other reasons are the server's.
+    reason: Literal["candidate_ended"] = "candidate_ended"
+
+
+class PortalSessionEndResponse(_Out):
+    status: Literal["ending", "already_ended", "not_started"]
 
 
 class WsTicketResponse(_Out):

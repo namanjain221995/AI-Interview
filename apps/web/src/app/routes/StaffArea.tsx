@@ -1,12 +1,13 @@
 import { CloudOff } from "lucide-react";
+import { Outlet } from "react-router";
 
 import { AppSplash, FullPageMessage } from "@/components/layout/FullPageStates";
 import { StaffShell } from "@/components/layout/StaffShell";
 import { Button } from "@/components/ui/Button";
-import { RequireAuth, RequirePermission } from "@/lib/auth";
+import { RequireAuth, RequirePermission, useFeature } from "@/lib/auth";
 import type { Permission } from "@/lib/types";
 
-import { ForbiddenPanel } from "./NotFound";
+import { ForbiddenPanel, NotFoundPanel } from "./NotFound";
 
 /** /app/*: signed-in staff only, inside the staff shell. */
 export function StaffArea() {
@@ -32,4 +33,9 @@ export function StaffArea() {
 /** Pathless route element that renders child routes only for holders of `permission`. */
 export function PermissionGate({ permission }: { permission: Permission }) {
   return <RequirePermission permission={permission} fallback={<ForbiddenPanel />} />;
+}
+
+/** Pages of a plan feature the organisation does not have look like they do not exist (G8). */
+export function FeatureGate({ feature }: { feature: string }) {
+  return useFeature(feature) ? <Outlet /> : <NotFoundPanel />;
 }

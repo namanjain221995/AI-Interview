@@ -15,6 +15,8 @@ of what was said.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.enums import (
@@ -302,6 +304,40 @@ class TurnDecision(AIModel):
         )
 
 
+
+class TurnDecisionCompact(AIModel):
+    """What the model writes for a turn when ``TURN_DECISION_COMPACT`` is on (Tier 2).
+
+    Same contract as ``TurnDecision`` (speech first, every field required), with the fields the next turn needs
+    straight after the speech (the metadata tail is cut when it outlasts the speech: ~70% of voice turns lost
+    their missing_specifics / new_claims / possible_contradiction), shorter lists, and no avatar fields (derived
+    from the action). ``turns.expand_compact`` turns it into a full ``TurnDecision``."""
+
+    SPEECH_FIRST_TURN: ClassVar[bool] = True
+
+    speech: str = Field(
+        ...,
+        min_length=1,
+        max_length=700,
+        description="Exactly what the interviewer says: conversational, 1-3 short sentences, ONE question, no markdown",
+    )
+    action: TurnAction
+    answer_quality: AnswerQuality | None = Field(
+        ..., description="Assessment of the candidate's last answer (null for the opening question)"
+    )
+    missing_specifics: list[str] = Field(..., max_length=3, description="What the last answer lacked")
+    new_claims: list[str] = Field(..., max_length=2, description="Interesting claims made in the last answer")
+    possible_contradiction: str | None = Field(..., max_length=300)
+    competency_key: str | None = Field(..., max_length=80)
+    question_focus: str | None = Field(..., max_length=200, description="Canonical short form of the question asked")
+    expected_evidence: list[str] = Field(..., max_length=4)
+    difficulty: Difficulty
+    kind: QuestionKind
+    topic: str | None = Field(..., max_length=120)
+    claim_id: str | None = Field(..., max_length=24)
+    bank_question_id: str | None = Field(..., max_length=40)
+    reason: str = Field(..., max_length=200, description="Why this move, in one short sentence")
+
 ACTION_AVATAR_STATE: dict[TurnAction, AvatarState] = {
     TurnAction.INTRODUCE: AvatarState.SPEAKING,
     TurnAction.ASK_QUESTION: AvatarState.QUESTIONING,
@@ -403,6 +439,58 @@ class AnswerEvaluation(AIModel):
     suggested_followups: list[SuggestedFollowup] = Field(default_factory=list, max_length=4)
     evaluation_confidence: float = Field(..., ge=0, le=1)
 
+
+
+class EvidenceItemV2(AIModel):
+    """Evaluator v2 evidence: the verbatim quote comes first, so the observation is written from it."""
+
+    quote: str | None = Field(
+        ...,
+        max_length=240,
+        description="Exact words copied from THIS answer that show it; null only when the observation is an absence",
+    )
+    competency_key: str = Field(..., max_length=80)
+    dimension: str = Field(..., max_length=80, description="e.g. availability, cost_measurement, debugging")
+    signal: EvidenceSignal
+    evidence: str = Field(..., max_length=300, description="What the quote shows, specific and attributable")
+    strength: float = Field(..., ge=0, le=1)
+    confidence: float = Field(..., ge=0, le=1)
+
+
+class AnswerEvaluationV2(AIModel):
+    """Evaluator v2 (Tier 2, EVALUATOR_V2): evidence before the verdict. The model quotes and assesses first,
+    then scores against the competency's reference levels and only then names the overall quality, so the
+    label follows the evidence instead of the evidence being written to fit a label. Shorter lists (the v1
+    output averaged ~680 tokens, up to 1,250). ``to_v1`` gives the stored/consumed ``AnswerEvaluation``."""
+
+    evidence: list[EvidenceItemV2] = Field(..., max_length=6)
+    missing_details: list[str] = Field(..., max_length=4)
+    measurable_outcomes: list[str] = Field(..., max_length=3)
+    unsupported_claims: list[str] = Field(..., max_length=3)
+    claim_verifications: list[ClaimVerification] = Field(..., max_length=4)
+    contradictions: list[ContradictionFinding] = Field(..., max_length=2)
+    scores: DimensionScores
+    overall_quality: AnswerQuality
+    summary: str = Field(..., max_length=400)
+    suggested_followups: list[SuggestedFollowup] = Field(..., max_length=2)
+    evaluation_confidence: float = Field(..., ge=0, le=1)
+
+    def to_v1(self) -> AnswerEvaluation:
+        evidence = [EvidenceItem.model_validate(item.model_dump()) for item in self.evidence]
+        return AnswerEvaluation(
+            overall_quality=self.overall_quality,
+            scores=self.scores,
+            summary=self.summary,
+            technical_evidence=[e.evidence for e in evidence if e.signal == EvidenceSignal.POSITIVE][:4],
+            measurable_outcomes=list(self.measurable_outcomes),
+            missing_details=list(self.missing_details),
+            unsupported_claims=list(self.unsupported_claims),
+            contradictions=list(self.contradictions),
+            evidence=evidence,
+            claim_verifications=list(self.claim_verifications),
+            suggested_followups=list(self.suggested_followups),
+            evaluation_confidence=self.evaluation_confidence,
+        )
 
 # =============================================================================
 # Coding

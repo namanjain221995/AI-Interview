@@ -107,7 +107,9 @@ async def test_escalation_creates_a_flag_row(service, make_session) -> None:
 
 async def test_rapid_focus_switching_is_derived(service, make_session) -> None:
     refs = await make_session()
-    batch = [ev(T.FOCUS_LOST, seconds_ago=30 - i * 5, duration_ms=500) for i in range(6)]
+    batch = [
+        ev(T.FOCUS_LOST, seconds_ago=30 - i * 5, duration_ms=3500) for i in range(6)
+    ]  # qualifying switches
     outcomes = await service.record_client_events(refs.sid, batch)
     rapid = [o for o in outcomes if o.event_type is T.RAPID_FOCUS_SWITCHING]
     assert (
@@ -116,7 +118,27 @@ async def test_rapid_focus_switching_is_derived(service, make_session) -> None:
     data = {r.type: r for r in await rows(refs.session_id)}
     assert data["rapid_focus_switching"].details["derived_from"] == "focus_changes"
     assert data["rapid_focus_switching"].count == 2  # 5th and 6th switch aggregate into one flag
-    assert data["focus_lost"].action == "log_only" and data["focus_lost"].count == 6
+    assert sum(r.count for r in await rows(refs.session_id) if r.type == "focus_lost") == 6
+
+
+async def test_sub_threshold_focus_blips_never_add_up_to_rapid_switching(service, make_session) -> None:
+    """S22: 300 ms blips (notifications, OS focus glitches) are below the focus rules' minimum duration."""
+    refs = await make_session()
+    blips = [ev(T.FOCUS_LOST, seconds_ago=30 - i * 5, duration_ms=300) for i in range(6)]
+    blips += [ev(T.TAB_HIDDEN, seconds_ago=29 - i * 5, duration_ms=300) for i in range(6)]
+    outcomes = await service.record_client_events(refs.sid, blips)
+    assert not [o for o in outcomes if o.event_type is T.RAPID_FOCUS_SWITCHING]
+    data = {r.type: r for r in await rows(refs.session_id)}
+    assert "rapid_focus_switching" not in data and data["focus_lost"].action == "log_only"
+
+
+async def test_repeated_short_glances_still_add_up_to_rapid_switching(service, make_session) -> None:
+    """Review of S22: 1.5 s looks are below the focus rule's own minimum (no warning each), yet six in half a
+    minute are the pattern rapid switching exists for."""
+    refs = await make_session()
+    glances = [ev(T.FOCUS_LOST, seconds_ago=30 - i * 5, duration_ms=1500) for i in range(6)]
+    outcomes = await service.record_client_events(refs.sid, glances)
+    assert [o for o in outcomes if o.event_type is T.RAPID_FOCUS_SWITCHING]
 
 
 async def test_large_paste_derived_from_paste_details_without_storing_content(service, make_session) -> None:

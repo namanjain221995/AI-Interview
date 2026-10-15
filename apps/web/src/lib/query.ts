@@ -36,7 +36,7 @@ export function createQueryClient(): QueryClient {
         // first-load failures are rendered by the page itself.
         const hadData = query.state.data !== undefined;
         if (meta === false || (!meta && !hadData)) return;
-        if (isApiError(error) && error.status === 401) return;
+        if (isApiError(error) && (error.status === 401 || error.code === "password_change_required")) return;
         toast.error(typeof meta === "string" ? meta : errorMessage(error), {
           id: `query-error:${query.queryHash}`,
           description: isApiError(error) && error.requestId ? `Request ID ${error.requestId}` : undefined,
@@ -46,7 +46,7 @@ export function createQueryClient(): QueryClient {
     mutationCache: new MutationCache({
       onError: (error, _variables, _context, mutation) => {
         if (mutation.meta?.silentError) return;
-        if (isApiError(error) && error.status === 401) return;
+        if (isApiError(error) && (error.status === 401 || error.code === "password_change_required")) return;
         toast.error(errorMessage(error), {
           description: isApiError(error) && error.requestId ? `Request ID ${error.requestId}` : undefined,
         });

@@ -71,14 +71,14 @@ export function ResultsPanel({ result, pending, className }: { result: CodingRun
           </span>
         ) : result ? (
           <div className="flex items-center gap-2">
-            {result.total > 0 ? (
+            {result.total > 0 && !result.platform_fault ? (
               <span className="text-[13px] text-fg-muted tabular-nums">
                 {result.passed}/{result.total} passed
               </span>
             ) : null}
             {result.runtime_ms !== null && result.runtime_ms !== undefined ? <span className="text-[13px] text-fg-subtle tabular-nums">{result.runtime_ms} ms</span> : null}
-            <Badge size="sm" tone={STATUS[result.status]?.tone ?? "neutral"}>
-              {STATUS[result.status]?.label ?? result.status}
+            <Badge size="sm" tone={result.platform_fault ? "neutral" : (STATUS[result.status]?.tone ?? "neutral")}>
+              {result.platform_fault ? "Couldn't run" : (STATUS[result.status]?.label ?? result.status)}
             </Badge>
           </div>
         ) : null}
@@ -94,6 +94,14 @@ export function ResultsPanel({ result, pending, className }: { result: CodingRun
 function ResultBody({ result }: { result: CodingRunResultMsg }) {
   const tests = visibleTests(result);
   const hidden = hiddenCounts(result);
+  if (result.platform_fault) {
+    // The code runner failed, not the candidate's code (S20): neutral, and nothing was submitted.
+    return (
+      <p data-testid="coding-platform-fault" className="rounded-md border border-line bg-surface-sunken px-3 py-2 text-[13px] leading-5 text-fg">
+        We couldn't run your code just now. That's on our side, not your code, and nothing was submitted. Try again in a moment.
+      </p>
+    );
+  }
   return (
     <div className="grid gap-3">
       {result.compile_output ? (

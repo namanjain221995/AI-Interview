@@ -1,5 +1,5 @@
 import { Lightbulb, Play, Send, Timer } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -25,6 +25,26 @@ import {
 import { formatValue, ResultsPanel } from "./ResultsPanel";
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
+
+/**
+ * The editor is a separate chunk loaded mid-interview; when it fails to load (flaky network, blocked CDN,
+ * an old cached bundle) the coding round continues in a plain text area instead of a blank panel (S5).
+ */
+class EditorBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown): void {
+    console.warn("code editor unavailable; using the plain text fallback", error);
+  }
+
+  render(): ReactNode {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
 
 export const CODE_UPDATE_DEBOUNCE_MS = 800;
 
@@ -317,16 +337,37 @@ export function CodingWorkspace({ coding, remainingS, blockPaste, pasteThreshold
         </div>
 
         <div ref={containerRef} data-testid="coding-editor" data-coding-editor="" className="relative min-h-[240px] flex-[3]">
-          <Suspense fallback={<div className="flex size-full items-center justify-center text-sm text-fg-muted">Loading the editor…</div>}>
-            <CodeEditor
-              path={`${coding.sessionId}/${state.language}`}
-              language={state.language}
-              defaultValue={state.buffers[state.language] ?? ""}
-              readOnly={ended}
-              onChange={onChange}
-              onCursorLine={(line) => (cursorLine.current = line)}
-            />
-          </Suspense>
+          <EditorBoundary
+            fallback={
+              <div className="flex size-full flex-col" data-testid="coding-editor-fallback">
+                <p role="status" className="border-b border-warning-line bg-warning-soft px-3 py-1.5 text-[13px] text-fg">
+                  The code editor couldn't load. You can still write your code here; it is saved and run the same way.
+                </p>
+                <textarea
+                  // One textarea per session and language, like the editor's model path: a language switch shows
+                  // that language's buffer instead of keeping the previous code on screen.
+                  key={`${coding.sessionId}/${state.language}`}
+                  aria-label="Your code"
+                  className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-sm leading-6 text-fg outline-none"
+                  defaultValue={state.buffers[state.language] ?? ""}
+                  readOnly={ended}
+                  spellCheck={false}
+                  onChange={(event) => onChange(event.target.value)}
+                />
+              </div>
+            }
+          >
+            <Suspense fallback={<div className="flex size-full items-center justify-center text-sm text-fg-muted">Loading the editor…</div>}>
+              <CodeEditor
+                path={`${coding.sessionId}/${state.language}`}
+                language={state.language}
+                defaultValue={state.buffers[state.language] ?? ""}
+                readOnly={ended}
+                onChange={onChange}
+                onCursorLine={(line) => (cursorLine.current = line)}
+              />
+            </Suspense>
+          </EditorBoundary>
           {pasteNotice ? (
             <div role="status" className="absolute right-3 bottom-3 left-3 rounded-md border border-warning-line bg-surface-raised px-3 py-2 text-[13px] text-fg shadow-overlay">
               {pasteNotice}

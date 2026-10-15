@@ -84,6 +84,16 @@ def answers(n: int | str = 1, **extra: Any) -> dict[str, Any]:
     }
 
 
+async def solved_pow(http: httpx.AsyncClient, token: str) -> str | None:
+    """Fetch this link's proof-of-work challenge and solve it, like the browser does (S15)."""
+    from app.core.pow import Challenge, solve
+
+    response = await http.get(f"{API}/link-access/{token}/challenge")
+    if response.status_code != 200:
+        return None  # unknown link: let the registration answer for itself
+    return solve(Challenge(**response.json()))
+
+
 async def register(
     http: httpx.AsyncClient, token: str, body_answers: dict[str, Any] | None = None, **extra: Any
 ) -> httpx.Response:
@@ -92,6 +102,8 @@ async def register(
         "privacy_ack": True,
         **extra,
     }
+    if "pow" not in payload:
+        payload["pow"] = await solved_pow(http, token)
     return await http.post(f"{API}/link-access/{token}/register", json=payload)
 
 

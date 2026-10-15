@@ -305,6 +305,17 @@ def test_page_reload_flags_when_resume_not_allowed() -> None:
     assert rules(allow_page_reload_resume=False)[T.PAGE_RELOAD].action is A.FLAG_FOR_HUMAN_REVIEW
 
 
+def test_allowed_reloads_and_mic_mutes_never_escalate_to_a_flag() -> None:
+    """S22: allowed reloads, reloads while monitoring is off and microphone mutes are never review flags."""
+    for reload_rule in (
+        rules(allow_page_reload_resume=True)[T.PAGE_RELOAD],
+        rules(enabled=False, allow_page_reload_resume=False)[T.PAGE_RELOAD],
+    ):
+        assert reload_rule.action is A.LOG_ONLY and reload_rule.escalate_after is None
+    mic = rules()[T.MICROPHONE_DISABLED]
+    assert mic.action is A.WARN_CANDIDATE and mic.escalate_after is None and mic.candidate_message
+
+
 def test_camera_events_only_flag_when_camera_required() -> None:
     assert rules(camera_required=True)[T.CAMERA_DISABLED].action is A.FLAG_FOR_HUMAN_REVIEW
     assert rules(camera_required=False, camera_frame_analysis=True)[T.CAMERA_DISABLED].action is A.LOG_ONLY

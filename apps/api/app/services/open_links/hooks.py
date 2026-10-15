@@ -47,19 +47,39 @@ async def registration_for_interview(db: AsyncSession, interview_id: uuid.UUID) 
     )
 
 
+async def registration_interview_ids(db: AsyncSession, interview_id: uuid.UUID) -> list[uuid.UUID] | None:
+    """The interviews (rounds) of the open-link registration that owns ``interview_id``; None when the
+    interview did not come from an open link.
+
+    Open-link registrations are not verified identities (S4): what the candidate sees and what counts as
+    "their résumé" is limited to these interviews, never the person's other applications.
+    """
+    registration = await registration_for_interview(db, interview_id)
+    if registration is None:
+        return None
+    rows = await db.scalars(
+        select(LinkRegistrationRound.interview_id).where(
+            LinkRegistrationRound.registration_id == registration.id
+        )
+    )
+    return [row for row in rows.all() if row is not None]
+
+
 async def ensure_resume_for_session(db: AsyncSession, interview: Interview) -> None:
     """409 ``resume_required`` when the interview's link requires a resume and
-    the candidate has none in a usable state."""
+    the candidate has none in a usable state within this registration."""
     registration = await registration_for_interview(db, interview.id)
     if registration is None:
         return
     link = await db.get(InterviewLink, registration.link_id)
     if link is None or not link.require_resume:
         return
+    scope = await registration_interview_ids(db, interview.id) or [interview.id]
     usable = await db.scalar(
         select(CandidateResume.id)
         .where(
             CandidateResume.candidate_id == interview.candidate_id,
+            CandidateResume.interview_id.in_(scope),
             CandidateResume.status.not_in(UNUSABLE_RESUME),
         )
         .limit(1)

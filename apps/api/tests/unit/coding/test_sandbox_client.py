@@ -11,7 +11,7 @@ import httpx
 import pytest
 import respx
 
-from app.ai.breaker import CircuitBreaker
+from app.ai.breaker import CircuitBreaker, CircuitState
 from app.core.metrics import REGISTRY
 from app.domain.enums import CodeLanguage, RunStatus
 from app.services.coding.contracts import ExecuteRequest, SandboxTestCase
@@ -285,6 +285,54 @@ async def test_circuit_opens_after_repeated_faults_and_fails_fast() -> None:
             await sandbox.execute(make_request())
         await sandbox.aclose()
     assert route.call_count == 2  # third call never reached the network
+    assert info.value.reason == "circuit_open"
+
+
+@pytest.mark.parametrize("code", ["queue_full", "queue_timeout"])
+async def test_back_pressure_never_opens_the_shared_breaker(code: str) -> None:
+    # A busy queue is not a sick sandbox: other candidates must keep running code (S20).
+    breaker = CircuitBreaker("sandbox-test", failure_threshold=2, reset_seconds=60)
+    with respx.mock(base_url=BASE) as mock:
+        route = mock.post("/v1/execute").respond(503, json={"error": {"code": code, "message": "busy"}})
+        sandbox = client(breaker=breaker)
+        for _ in range(3):
+            with pytest.raises(SandboxFault) as info:
+                await sandbox.execute(make_request())
+            assert info.value.reason == code
+        await sandbox.aclose()
+    assert route.call_count == 3  # every call reached the sandbox
+    assert breaker.state is CircuitState.CLOSED
+
+
+async def test_missing_runtime_is_not_retried_and_never_opens_the_breaker() -> None:
+    breaker = CircuitBreaker("sandbox-test", failure_threshold=2, reset_seconds=60)
+    sleeper = Sleeper()
+    with respx.mock(base_url=BASE) as mock:
+        route = mock.post("/v1/execute").respond(
+            503, headers={"Retry-After": "1"}, json={"error": {"code": "runtime_unavailable", "message": "no image"}}
+        )
+        sandbox = client(breaker=breaker, sleep=sleeper)
+        for _ in range(3):
+            with pytest.raises(SandboxFault) as info:
+                await sandbox.execute(make_request(CodeLanguage.GO))
+            assert info.value.reason == "runtime_unavailable" and info.value.status_code == 503
+        await sandbox.aclose()
+    assert route.call_count == 3 and sleeper.calls == []  # an operator problem: retrying cannot help
+    assert breaker.state is CircuitState.CLOSED
+
+
+async def test_docker_errors_still_open_the_breaker() -> None:
+    breaker = CircuitBreaker("sandbox-test", failure_threshold=2, reset_seconds=60)
+    with respx.mock(base_url=BASE) as mock:
+        route = mock.post("/v1/execute").respond(503, json={"error": {"code": "docker_error", "message": "x"}})
+        sandbox = client(breaker=breaker)
+        for _ in range(2):
+            with pytest.raises(SandboxFault):
+                await sandbox.execute(make_request())
+        with pytest.raises(SandboxFault) as info:
+            await sandbox.execute(make_request())
+        await sandbox.aclose()
+    assert route.call_count == 2
     assert info.value.reason == "circuit_open"
 
 

@@ -95,6 +95,8 @@ async def test_admin_deletes_an_intake_interview(auth_client, storage) -> None:
         "MediaAsset",
     } <= present, present
 
+    # G8: this organisation's plan does not include intake (it cannot list it), yet its data can always be removed
+    assert (await admin.get(f"{API}/intake/interviews")).status_code == 404
     response = await admin.delete(f"{API}/intake/interviews/{demo.intake_id}")
     assert response.status_code == 200, response.text
     body = response.json()

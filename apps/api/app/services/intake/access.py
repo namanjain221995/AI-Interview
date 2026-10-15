@@ -27,9 +27,18 @@ from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.deps import CurrentPrincipal, DbSession
 from app.core.errors import Conflict, NotFound, ValidationFailed, sanitize_validation_errors
 from app.core.logging import get_logger
-from app.db.models import CandidateResume, Consent, IntakeInterview, Interview, InterviewSession, Round
+from app.db.models import (
+    CandidateResume,
+    Consent,
+    IntakeInterview,
+    Interview,
+    InterviewSession,
+    Organization,
+    Round,
+)
 from app.domain.enums import ResumeStatus, RoundType, SessionStatus
 from app.schemas.intake import (
     INTAKE_ERROR_CODES,
@@ -86,9 +95,32 @@ def ensure_enabled() -> None:
         raise NotFound("Intake interviews are turned off for this workspace.", code="intake_disabled")
 
 
+INTAKE_FEATURE = "intake"
+
+
+async def intake_entitled(db: AsyncSession, organization_id: uuid.UUID | None) -> bool:
+    """The platform switch is on and the organisation's plan includes intake (G8)."""
+    if not intake_enabled() or organization_id is None:
+        return False
+    features = await db.scalar(select(Organization.features).where(Organization.id == organization_id))
+    return bool((features or {}).get(INTAKE_FEATURE))
+
+
 async def require_intake_enabled() -> None:
-    """Router-level FastAPI dependency (``dependencies=[Depends(require_intake_enabled)]``)."""
+    """Router-level FastAPI dependency (``dependencies=[Depends(require_intake_enabled)]``): the platform
+    switch. Listed first, so every intake route is a 404 while it is off, whoever asks."""
     ensure_enabled()
+
+
+async def require_intake_entitled(principal: CurrentPrincipal, db: DbSession, request: Request) -> None:
+    """Staff intake routes: 404 unless the caller's organisation's plan includes intake (G8); platform staff
+    see every organisation's. Candidate routes only use ``require_intake_enabled``: removing the feature from a
+    plan never locks out candidates already in an intake. Deleting existing intake data never depends on the
+    plan either (DELETE passes; the route's own permission and organisation checks still apply)."""
+    if principal.is_super_admin or request.method == "DELETE":
+        return
+    if not await intake_entitled(db, principal.organization_id):
+        raise NotFound("Intake interviews are not part of this workspace.", code="intake_disabled")
 
 
 # ============================================================================ validation errors
@@ -227,10 +259,17 @@ async def latest_session(db: AsyncSession, interview_id: uuid.UUID) -> Interview
 
 
 async def latest_resume(db: AsyncSession, interview: Interview) -> CandidateResume | None:
-    """The candidate's current résumé (one uploaded for this interview first), as the portal shows it."""
+    """The candidate's current résumé (one uploaded for this interview first), as the portal shows it. An
+    open-link registration only sees the résumés uploaded within it (S4)."""
+    from app.services.interview.sessions import profile_scope  # noqa: PLC0415 - import cycle
+
+    scope = await profile_scope(db, interview.id)
     return await db.scalar(
         select(CandidateResume)
-        .where(CandidateResume.candidate_id == interview.candidate_id)
+        .where(
+            CandidateResume.candidate_id == interview.candidate_id,
+            *((CandidateResume.interview_id.in_(scope),) if scope is not None else ()),
+        )
         .order_by(
             case((CandidateResume.interview_id == interview.id, 0), else_=1),
             CandidateResume.created_at.desc(),
@@ -437,7 +476,9 @@ __all__ = [
     "ensure_enabled",
     "get_intake",
     "has_consent",
+    "INTAKE_FEATURE",
     "intake_enabled",
+    "intake_entitled",
     "intake_for_interview",
     "intake_round_of_interview",
     "intake_steps",
@@ -451,6 +492,7 @@ __all__ = [
     "portal_state",
     "raise_validation",
     "require_intake_enabled",
+    "require_intake_entitled",
     "resume_usable",
     "review_done",
     "utcnow",

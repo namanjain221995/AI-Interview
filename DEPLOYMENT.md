@@ -271,6 +271,7 @@ latency p95 > 3 s, time to first audio p95 > 2 s, STT p95 > 2 s.
 | `PostgresDown` / `RedisDown` | critical | `make ps`; disk space; container logs |
 | `MonitoringExporterDown` | warning | `make ps`; restart `postgres-exporter` / `redis-exporter` (`make monitoring-up`) |
 | `TurnLatencyP95High` / `TimeToFirstAudioP95High` | warning | AI Models dashboard: vLLM waiting requests and TTFT (shared GPU contention), STT latency, TTS latency (CPU) |
+| `VoiceToVoiceSlow` | warning | candidates wait > 6 s (p90, 15 min) from their last word to the reply: Overview "Turn stages" panel for the slow stage (endpoint_silence = endpointing, stt_final = Whisper, decision_to_text = model); per-turn breakdown in the `turn.latency` interview events |
 | `SttLatencyP95High` | warning | Whisper endpoint load; `WHISPER_EXTRA_BASE_URLS` to spread load |
 | `TtsLatencyP95High` | warning | tts CPU usage vs `TTS_CPUS`; host CPU busy; `TTS_THREADS` x workers within the quota |
 | `LlmFailureRatioHigh` / `LlmCircuitOpen` / `MainLlmEndpointDown` | warning/critical | the model server belongs to another stack: check it, then the API logs for `reason`; turn tasks degrade to the 8B while the main circuit is open |

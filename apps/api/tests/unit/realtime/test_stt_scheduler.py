@@ -224,3 +224,13 @@ def test_second_pass_revision_rules() -> None:
     assert not is_material_revision("we used karpenter", "We used Karpenter.", min_ratio=0.08)  # same words
     long_live = "one two three four five six seven eight nine ten"
     assert not is_material_revision(long_live, "one two three", min_ratio=0.08)  # truncated pass never wins
+
+
+def test_no_preview_once_the_candidate_paused() -> None:
+    """Owner report (slow speech-to-text): a preview started in the pause after the last word held the only
+    Whisper slot while the answer's final piece waited behind it. A pause has no new words to preview."""
+    from app.realtime.stt import PARTIAL_PAUSE_MS, PartialScheduler
+
+    sched = PartialScheduler(base_interval_ms=1000, min_audio_ms=1200)
+    assert sched.due(now=10.0, open_audio_ms=1300, finals_pending=0, silence_ms=120)  # mid-sentence gap
+    assert not sched.due(now=10.0, open_audio_ms=1300, finals_pending=0, silence_ms=PARTIAL_PAUSE_MS)

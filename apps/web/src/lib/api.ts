@@ -14,7 +14,12 @@
 
 export const API_BASE = "/api/v1";
 export const CSRF_COOKIE = "csrf_token";
+/** Candidate sessions use their own cookie set (G2), so a recruiter who opens a candidate link stays signed in. */
+export const CANDIDATE_CSRF_COOKIE = "cand_csrf_token";
 export const CSRF_HEADER = "X-CSRF-Token";
+export const AUDIENCE_HEADER = "X-Session-Audience";
+/** SPA areas whose requests act as the candidate (invite, open link, personal link, the candidate journey). */
+const CANDIDATE_PAGE_PREFIXES = ["/candidate", "/i/", "/j/", "/r/"];
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -149,8 +154,20 @@ export function readCookie(name: string): string | null {
   return null;
 }
 
+/** Which session this page acts as: the candidate on candidate pages, staff everywhere else. */
+export function sessionAudience(): "staff" | "candidate" {
+  const path = typeof window === "undefined" ? "" : window.location.pathname;
+  return CANDIDATE_PAGE_PREFIXES.some((prefix) => path === prefix || path.startsWith(prefix.endsWith("/") ? prefix : `${prefix}/`)) ? "candidate" : "staff";
+}
+
 export function getCsrfToken(): string | null {
+  if (sessionAudience() === "candidate") return readCookie(CANDIDATE_CSRF_COOKIE) ?? readCookie(CSRF_COOKIE); // older sessions: old name
   return readCookie(CSRF_COOKIE);
+}
+
+/** Shared endpoints (/auth/refresh, /auth/logout, /media) need to know which of the browser's sessions is meant. */
+function audienceHeaders(): Record<string, string> {
+  return sessionAudience() === "candidate" ? { [AUDIENCE_HEADER]: "candidate" } : {};
 }
 
 /**
@@ -327,6 +344,33 @@ function emitUnauthorized(): void {
   }
 }
 
+// --------------------------------------------- password change required (S13)
+
+type PasswordChangeListener = () => void;
+const passwordChangeListeners = new Set<PasswordChangeListener>();
+
+/** Subscribe to "the server wants this account's password changed first" (403 password_change_required). */
+export function onPasswordChangeRequired(listener: PasswordChangeListener): () => void {
+  passwordChangeListeners.add(listener);
+  return () => {
+    passwordChangeListeners.delete(listener);
+  };
+}
+
+function failed(raw: RawResponse, body: unknown): ApiError {
+  const error = errorFromResponse(raw, body);
+  if (error.status === 403 && error.code === "password_change_required") {
+    for (const listener of [...passwordChangeListeners]) {
+      try {
+        listener();
+      } catch {
+        // A failing listener must not break the request pipeline.
+      }
+    }
+  }
+  return error;
+}
+
 // ----------------------------------------------------------------- refresh
 
 type RefreshOutcome = "refreshed" | "denied" | "unavailable";
@@ -344,7 +388,7 @@ async function performRefresh(): Promise<RefreshOutcome> {
     response = await fetch(buildUrl("/auth/refresh"), {
       method: "POST",
       credentials: "same-origin",
-      headers: { Accept: "application/json", ...csrfHeaders("POST") },
+      headers: { Accept: "application/json", ...audienceHeaders(), ...csrfHeaders("POST") },
     });
   } catch {
     return "unavailable";
@@ -429,7 +473,7 @@ function linkSignal(outer: AbortSignal | undefined, timeoutMs: number) {
 
 async function sendFetch(method: HttpMethod, url: string, options: RequestOptions): Promise<Response> {
   const { params: _params, body, headers, signal, timeoutMs = DEFAULT_TIMEOUT_MS, skipAuthRefresh: _skip, ...init } = options;
-  const finalHeaders: Record<string, string> = { Accept: "application/json", ...csrfHeaders(method), ...headers };
+  const finalHeaders: Record<string, string> = { Accept: "application/json", ...audienceHeaders(), ...csrfHeaders(method), ...headers };
   let finalBody: BodyInit | undefined;
   if (body !== undefined && body !== null) {
     if (isRawBody(body)) {
@@ -478,7 +522,7 @@ async function request<T>(method: HttpMethod, path: string, options: RequestOpti
   const response = await executeRaw(method, path, options);
   const raw = await toRaw(response);
   const body = parseBody(raw);
-  if (response.status < 200 || response.status >= 300) throw errorFromResponse(raw, body);
+  if (response.status < 200 || response.status >= 300) throw failed(raw, body);
   return body as T;
 }
 
@@ -493,7 +537,7 @@ async function requestRaw(method: HttpMethod, path: string, options: RequestOpti
     } catch {
       body = undefined;
     }
-    throw errorFromResponse(raw, body);
+    throw failed(raw, body);
   }
   return response;
 }
@@ -589,7 +633,7 @@ async function upload<T>(path: string, data: FormData | Blob, options: UploadOpt
     if (raw.status === 401) emitUnauthorized();
   }
   const body = parseBody(raw);
-  if (raw.status < 200 || raw.status >= 300) throw errorFromResponse(raw, body);
+  if (raw.status < 200 || raw.status >= 300) throw failed(raw, body);
   return body as T;
 }
 

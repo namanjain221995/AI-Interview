@@ -43,7 +43,7 @@ from app.domain.enums import (
     SegmentKind,
     TurnAction,
 )
-from app.schemas.ai import TurnDecision
+from app.schemas.ai import TurnDecision, TurnDecisionCompact
 from app.services.interview.behavior import provisional
 from app.services.interview.config import EngineConfig
 from app.services.interview.contracts import SpeechDelta
@@ -54,7 +54,7 @@ from app.services.interview.policy import (
     PolicyDirective,
 )
 from app.services.interview.prompts import fence
-from app.services.interview.speech import OpenerFilter, QuestionLimiter
+from app.services.interview.speech import AckEchoFilter, OpenerFilter, QuestionLimiter, ToneFilter
 from app.services.interview.state import InterviewState
 
 if TYPE_CHECKING:
@@ -64,6 +64,7 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 TURN_SCHEMA: dict[str, Any] = {"name": "TurnDecision", "schema": schema_for(TurnDecision)}
+COMPACT_TURN_SCHEMA: dict[str, Any] = {"name": "TurnDecision", "schema": schema_for(TurnDecisionCompact)}
 
 _MARKDOWN = re.compile(r"[*`#]+")
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
@@ -248,9 +249,14 @@ def _template_question(state: InterviewState, directive: PolicyDirective) -> str
 
 
 def fallback_utterance(
-    state: InterviewState, directive: PolicyDirective, *, current_question: str | None
+    state: InterviewState,
+    directive: PolicyDirective,
+    *,
+    current_question: str | None,
+    acknowledged: bool = False,
 ) -> tuple[str, TurnAction, BankCandidate | None]:
-    """Deterministic utterance honouring the directive (LLM unavailable)."""
+    """Deterministic utterance honouring the directive (LLM unavailable). ``acknowledged``: the
+    realtime layer already said a short acknowledgement out loud, so the utterance adds none."""
     seed = f"{state.session_id}:{state.turn_index}"
     action = directive.required_action or directive.recommended_action
     core = question_core(current_question) if current_question else None
@@ -292,7 +298,7 @@ def fallback_utterance(
             action,
             None,
         )
-    ack = "" if directive.first_question else pick(ACKNOWLEDGEMENTS, seed) + " "
+    ack = "" if directive.first_question or acknowledged else pick(ACKNOWLEDGEMENTS, seed) + " "
     bank = directive.candidate_bank_questions[0] if directive.candidate_bank_questions else None
     if action in (TurnAction.SIMPLIFY, TurnAction.CLARIFY_QUESTION) and core:
         return f"{ack}Let me narrow that down a little. {core}", TurnAction.SIMPLIFY, None
@@ -329,8 +335,11 @@ def fallback_utterance(
 
 @dataclass(slots=True)
 class SpeechFilters:
-    """The streaming filters of one attempt, in order: OpenerFilter -> AttributionGuard -> QuestionLimiter."""
+    """The streaming filters of one attempt, in order: ToneFilter -> AckEchoFilter -> OpenerFilter ->
+    AttributionGuard -> QuestionLimiter."""
 
+    tone: ToneFilter | None = None
+    ack_echo: AckEchoFilter | None = None
     opener: OpenerFilter | None = None
     guard: AttributionGuard | None = None
     limiter: QuestionLimiter | None = None
@@ -338,6 +347,14 @@ class SpeechFilters:
     def run(self, text: str, outcome: TurnOutcome, *, final: bool) -> str:
         """New speech text through the filters; ``final`` flushes what they still hold."""
         out = text
+        if self.tone is not None:
+            out = self.tone.feed(out) if out else ""
+            if final:
+                out += self.tone.flush()
+        if self.ack_echo is not None:
+            out = self.ack_echo.feed(out) if out else ""
+            if final:
+                out += self.ack_echo.flush()
         if self.opener is not None:
             out = self.opener.feed(out) if out else ""
             if final:
@@ -384,6 +401,7 @@ async def stream_speech_object(
     retry_messages: list[dict[str, Any]] | None = None,
     limit_questions: bool = True,
     guard_factory: GuardFactory | None = None,
+    after_ack: bool = False,
 ) -> AsyncGenerator[SpeechDelta, None]:
     """Stream ``schema`` (speech-first) and yield its speech as deltas.
 
@@ -408,13 +426,24 @@ async def stream_speech_object(
     emitted: list[str] = []  # across attempts: a regeneration continues the utterance
     regenerations_left = 1 if guard_factory is not None else 0
     index = 0
+    first_speech_deadline = started + config.turn_first_speech_budget_s
     while index < len(attempts):
+        if (
+            not emitted
+            and outcome.attempts
+            and first_speech_deadline - time.monotonic() < config.turn_retry_min_s
+        ):
+            outcome.errors.append("first_speech_budget_spent")
+            break  # no time left for another attempt: the fallback question is spoken now
         msgs = attempts[index]
         index += 1
         outcome.attempts += 1
         speech_turn = schema is TurnDecision or getattr(schema, "SPEECH_FIRST_TURN", False)
         extractor = StreamingJsonFieldExtractor("speech")
         filters = SpeechFilters(
+            tone=ToneFilter() if speech_turn else None,
+            # Only before anything was said: a regeneration continues an utterance that already started.
+            ack_echo=AckEchoFilter() if speech_turn and after_ack and not emitted else None,
             opener=OpenerFilter() if speech_turn else None,
             guard=(
                 guard_factory(regenerations_left > 0, bool(emitted))
@@ -437,6 +466,12 @@ async def stream_speech_object(
         )
         outcome.model_call_id = getattr(stream, "model_call_id", None)
         attempt_start = time.monotonic()
+        # Before any speech this attempt may use the shared budget, keeping room for a retry if one is queued.
+        reserve = config.turn_retry_min_s if index < len(attempts) else 0.0
+        attempt_limit = max(
+            1.0,
+            min(config.turn_first_speech_timeout_s, first_speech_deadline - attempt_start - reserve),
+        )
         tail_deadline: float | None = None
         try:
             iterator = stream.__aiter__()
@@ -445,7 +480,7 @@ async def stream_speech_object(
                 if emitted:
                     budget = max(0.5, config.turn_total_timeout_s - (now - attempt_start))
                 else:
-                    budget = config.turn_first_speech_timeout_s - (now - attempt_start)
+                    budget = attempt_limit - (now - attempt_start)
                     if budget <= 0:
                         raise TimeoutError("no speech before the first-speech deadline")
                 if extractor.done and not finalized:
@@ -535,6 +570,8 @@ async def stream_speech_object(
                     outcome.synthesized = True
                     return
                 continue
+            if isinstance(parsed, TurnDecisionCompact):
+                parsed = expand_compact(parsed)
             if isinstance(parsed, TurnDecision):
                 if not spoken and guard is not None and guard.dropped:
                     # Everything the model said was a dropped attribution: nothing was spoken, so the turn
@@ -580,6 +617,19 @@ async def stream_speech_object(
     outcome.fallback = True
 
 
+def expand_compact(compact: TurnDecisionCompact) -> TurnDecision:
+    """The full decision for a compact one: the avatar fields follow the action (behavior.provisional)."""
+    spec = provisional(compact.action)
+    return TurnDecision.model_validate(
+        {
+            **compact.model_dump(),
+            "expression": spec.expression,
+            "gesture": spec.gesture,
+            "gesture_intensity": spec.gesture_intensity,
+        }
+    )
+
+
 def recover_decision(
     raw: str | None, speech: str, directive: PolicyDirective, state: InterviewState, *, reason: str
 ) -> TurnDecision:
@@ -609,6 +659,10 @@ def recover_decision(
             except ValidationError:
                 continue
             base = trial
+    if isinstance(obj, dict) and "action" in obj and "expression" not in obj:
+        # Compact decisions carry no avatar fields: they follow the recovered action.
+        spec = provisional(TurnAction(base["action"]))
+        base.update(expression=spec.expression, gesture=spec.gesture, gesture_intensity=spec.gesture_intensity)
     return TurnDecision.model_validate(base)
 
 
@@ -632,7 +686,9 @@ def default_difficulty(value: Any) -> Difficulty:
 
 __all__ = [
     "ACKNOWLEDGEMENTS",
+    "COMPACT_TURN_SCHEMA",
     "TURN_SCHEMA",
+    "expand_compact",
     "GuardFactory",
     "correction_messages",
     "TurnOutcome",

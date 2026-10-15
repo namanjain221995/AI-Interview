@@ -11,7 +11,7 @@ import { createElement, Fragment, useEffect, type ReactNode } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
 import { create } from "zustand";
 
-import { api, isApiError, onUnauthorized, type ApiError } from "@/lib/api";
+import { api, isApiError, onPasswordChangeRequired, onUnauthorized, type ApiError } from "@/lib/api";
 import {
   PERMISSIONS,
   type LoginRequest,
@@ -109,13 +109,22 @@ export function normalizeMe(raw: unknown): MeResponse {
   const orgSource = isRecord(raw.organization) ? raw.organization : isRecord(userSource.organization) ? userSource.organization : null;
   const organization: OrganizationRef | null =
     orgSource && typeof orgSource.id === "string" && typeof orgSource.name === "string"
-      ? { id: orgSource.id, name: orgSource.name, slug: typeof orgSource.slug === "string" ? orgSource.slug : "" }
+      ? {
+          id: orgSource.id,
+          name: orgSource.name,
+          slug: typeof orgSource.slug === "string" ? orgSource.slug : "",
+          ...(isRecord(orgSource.features) ? { features: orgSource.features } : {}),
+          ...(Array.isArray(orgSource.enforced_policy_fields)
+            ? { enforced_policy_fields: orgSource.enforced_policy_fields.filter((f): f is string => typeof f === "string") }
+            : {}),
+        }
       : null;
   const permissionSource = Array.isArray(raw.permissions) ? raw.permissions : Array.isArray(userSource.permissions) ? userSource.permissions : null;
   const permissions = permissionSource
     ? (permissionSource.filter((p): p is Permission => typeof p === "string" && KNOWN_PERMISSIONS.has(p)) as Permission[])
     : permissionsForRole(role);
-  return { user, organization, permissions };
+  const mustChangePassword = raw.must_change_password === true || userSource.must_change_password === true;
+  return { user, organization, permissions, mustChangePassword };
 }
 
 // ------------------------------------------------------------------- store
@@ -128,6 +137,8 @@ export interface AuthState {
   user: StaffUser | null;
   organization: OrganizationRef | null;
   permissions: Permission[];
+  /** An administrator issued this password: the account page is the only page until it is changed (S13). */
+  mustChangePassword: boolean;
   /** Set when the session check failed for a reason other than "not signed in". */
   error: ApiError | null;
   signedOutReason: SignedOutReason;
@@ -144,6 +155,7 @@ const initialState = {
   user: null,
   organization: null,
   permissions: [] as Permission[],
+  mustChangePassword: false,
   error: null,
   signedOutReason: null as SignedOutReason,
 };
@@ -210,6 +222,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       user: me.user,
       organization: me.organization,
       permissions: me.permissions ?? permissionsForRole(me.user.role),
+      mustChangePassword: Boolean(me.mustChangePassword),
       error: null,
       signedOutReason: null,
     }),
@@ -228,6 +241,11 @@ onUnauthorized(() => {
   if (useAuthStore.getState().status === "authenticated") {
     useAuthStore.getState().clearSession("expired");
   }
+});
+
+// Any API call refused with password_change_required: send the user to the account page (S13).
+onPasswordChangeRequired(() => {
+  if (useAuthStore.getState().status === "authenticated") useAuthStore.setState({ mustChangePassword: true });
 });
 
 // ------------------------------------------------------------------- hooks
@@ -259,6 +277,23 @@ export function useCan(required: readonly Permission[], mode: "any" | "all" = "a
   );
 }
 
+/** Whether the organisation's plan includes a feature (G8); platform staff see every feature. */
+export function hasFeature(state: Pick<AuthState, "organization" | "user">, feature: string): boolean {
+  return state.user?.role === "SUPER_ADMIN" || Boolean(state.organization?.features?.[feature]);
+}
+
+export function useFeature(feature: string): boolean {
+  return useAuthStore((s) => hasFeature(s, feature));
+}
+
+const NO_ENFORCED: readonly string[] = [];
+
+/** Policy fields of one section ("integrity", "recording") that the platform forces on, without the prefix. */
+export function useEnforcedPolicyFields(section: "integrity" | "recording"): ReadonlySet<string> {
+  const fields = useAuthStore((s) => s.organization?.enforced_policy_fields ?? NO_ENFORCED);
+  return new Set(fields.filter((f) => f.startsWith(`${section}.`)).map((f) => f.slice(section.length + 1)));
+}
+
 export function useHasRole(...roles: Role[]): boolean {
   return useAuthStore((s) => (s.user ? roles.includes(s.user.role) : false));
 }
@@ -273,6 +308,8 @@ export interface RequireAuthProps {
   errorFallback?: (error: ApiError, retry: () => void) => ReactNode;
   /** Where anonymous visitors are sent (default /login). */
   loginPath?: string;
+  /** The only page while the account still has an administrator-issued password (default /app/account). */
+  passwordChangePath?: string;
 }
 
 /**
@@ -280,9 +317,10 @@ export interface RequireAuthProps {
  * Anonymous visitors are redirected to the login page with `?next=` set to
  * the page they asked for.
  */
-export function RequireAuth({ children, loadingFallback = null, errorFallback, loginPath = "/login" }: RequireAuthProps) {
+export function RequireAuth({ children, loadingFallback = null, errorFallback, loginPath = "/login", passwordChangePath = "/app/account" }: RequireAuthProps) {
   const status = useAuthStore((s) => s.status);
   const error = useAuthStore((s) => s.error);
+  const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
   const bootstrap = useAuthStore((s) => s.bootstrap);
   const location = useLocation();
 
@@ -290,6 +328,9 @@ export function RequireAuth({ children, loadingFallback = null, errorFallback, l
     if (status === "idle") void bootstrap();
   }, [status, bootstrap]);
 
+  if (status === "authenticated" && mustChangePassword && location.pathname !== passwordChangePath) {
+    return createElement(Navigate, { to: passwordChangePath, replace: true });
+  }
   if (status === "authenticated") return createElement(Fragment, null, children ?? createElement(Outlet));
   if (status === "anonymous") {
     const next = `${location.pathname}${location.search}${location.hash}`;

@@ -30,9 +30,8 @@ async def test_foreign_origin_is_rejected_before_accept(realtime_env, ws_connect
 
 async def test_lan_and_missing_origin(realtime_env, ws_connect, settings) -> None:
     env = await realtime_env()
-    ws = await ws_connect(
-        env.session_id, await env.ticket(), origin="http://localhost:3200"
-    )  # PUBLIC_BASE_URL
+    # The browser origin of the deployed SPA (PUBLIC_BASE_URL, whatever the local .env sets it to).
+    ws = await ws_connect(env.session_id, await env.ticket(), origin=settings.public_base_url.rstrip("/"))
     assert ws.accepted
     await ws.disconnect()
     ws = await ws_connect(env.session_id, await env.ticket(), origin=None)  # non-browser client in test env

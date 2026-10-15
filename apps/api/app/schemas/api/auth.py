@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,12 +20,23 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+def _enforced_policy_fields() -> list[str]:
+    from app.core.config import get_settings
+    from app.services.jobs.policy import CAMERA_ENFORCED_FIELDS
+
+    return list(CAMERA_ENFORCED_FIELDS) if get_settings().require_camera_for_all_interviews else []
+
+
 class OrganizationBrief(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     name: str
     slug: str
+    # Plan features of the organisation (G8), e.g. {"intake": true}; the console hides what is not included.
+    features: dict[str, Any] = Field(default_factory=dict)
+    # Policy fields the platform forces on (e.g. the camera for every interview); settings screens lock them.
+    enforced_policy_fields: list[str] = Field(default_factory=lambda: _enforced_policy_fields())
 
 
 class MeResponse(BaseModel):
@@ -37,6 +49,9 @@ class MeResponse(BaseModel):
     organization: OrganizationBrief | None = None
     interview_id: uuid.UUID | None = None
     permissions: list[str]
+    # Additive (S13): the account still has an administrator-issued password; the app shows only the
+    # change-password page until it is changed.
+    must_change_password: bool = False
 
 
 class SessionResponse(BaseModel):

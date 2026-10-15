@@ -75,7 +75,7 @@ def _late_plan() -> GuidedPlan:
     )
 
 
-async def _run_until_coding(env: dict[str, Any], *, evaluate: bool = True):
+async def _run_until_coding(env: dict[str, Any], *, evaluate: bool = True, **turn_fields: Any):
     world = await build_world(env["mock_ai"], config=combined_config(), with_coding_question=True)
     sid = await create_session(env, world)
     fake = FakeCodingService(str(world.coding_question_id))
@@ -84,7 +84,7 @@ async def _run_until_coding(env: dict[str, Any], *, evaluate: bool = True):
     driver = Driver(env, engine, sid)
     await driver.start()
     for turn, text in enumerate(ANSWERS, start=1):
-        events = await driver.answer(text, advance=90.0, evaluate=evaluate)
+        events = await driver.answer(text, advance=90.0, evaluate=evaluate, **turn_fields)
         if any(isinstance(e, CodingStarted) for e in events):
             return sid, driver, events, turn
         assert driver.closing is None, f"closed at turn {turn} before coding started"
@@ -137,3 +137,12 @@ async def test_combined_round_coding_starts_without_evaluations(interview_env) -
     limit, started = state.time_limit_s, state.coding.started_at_s
     # The first turn boundary at or after 40 % (turns are 90 s apart here).
     assert 0.4 * limit <= started < 0.4 * limit + 90.0, (started, turn)
+
+
+async def test_coding_transition_skips_its_thanks_after_a_spoken_ack(interview_env) -> None:
+    """The realtime layer already said "Okay." after the answer: the transition starts with the exercise."""
+    interview_env["mock_ai"].llm.script(ModelTask.INTERVIEW_PLANNING, _late_plan())
+    _sid, _driver, events, _turn = await _run_until_coding(interview_env, acknowledged="Okay.")
+    transition = [e for e in events if isinstance(e, UtteranceBegin)][-1]
+    assert transition.kind == "transition"
+    assert transition.text.startswith("Let's move to a short coding exercise"), transition.text

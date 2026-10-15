@@ -211,12 +211,14 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         loader = asyncio.create_task(service.start(), name="tts-startup")
+        warmer = asyncio.create_task(service.keep_warm(), name="tts-keepwarm")
         try:
             yield
         finally:
-            loader.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await loader
+            for task in (warmer, loader):
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             service.shutdown()
 
     app = FastAPI(

@@ -253,7 +253,7 @@ async def test_platform_fault_maps_to_candidate_safe_error(service, coding_env, 
     result = await service.run(
         state.coding_session_id, kind=RunKind.TEST, code=PASS_VISIBLE, language=CodeLanguage.PYTHON
     )
-    assert result.status == RunStatus.ERROR
+    assert result.status == RunStatus.ERROR and result.platform_fault is True
     assert result.stderr == SANDBOX_BUSY_MESSAGE
     assert "docker" not in result.model_dump_json()
     async with session_scope() as db:
@@ -269,6 +269,20 @@ async def test_platform_fault_maps_to_candidate_safe_error(service, coding_env, 
         and run.sandbox_meta["reason"] == "docker_error"
     )
     assert cs.observer_state["runs"][-1]["platform_fault"] is True
+
+
+async def test_a_submit_the_runner_failed_never_becomes_the_final_submission(
+    service, coding_env, fake_sandbox
+) -> None:
+    state = await start_two_sum(service, coding_env)
+    cs_id = state.coding_session_id
+    fake_sandbox.fail_next.append(SandboxFault("docker down", reason="docker_error", status_code=503))
+    result = await service.run(cs_id, kind=RunKind.SUBMIT, code=HASHMAP, language=CodeLanguage.PYTHON)
+    assert result.platform_fault is True
+    await service.finish(cs_id, reason="time_limit")
+    async with session_scope() as db:
+        cs = await db.get(CodingSession, uuid.UUID(cs_id))
+    assert cs.final_run_id is None  # the evaluation re-runs the final code instead (S20)
 
 
 async def test_runs_are_rejected_for_disallowed_languages_and_rapid_repeats(service, coding_env) -> None:

@@ -25,10 +25,18 @@ class EngineConfig:
     start_wait_for_plan_s: float = 8.0
     # Turn decision streaming
     turn_first_speech_timeout_s: float = 8.0
+    # Total wait for the first spoken words across attempts (Tier 1: the old 8 s + 8 s retry left candidates in
+    # 16-25 s of silence); a retry is only started while turn_retry_min_s of it remains, else the deterministic
+    # fallback question is spoken at once.
+    turn_first_speech_budget_s: float = 6.0
+    turn_retry_min_s: float = 1.5
     turn_total_timeout_s: float = 35.0
     turn_temperature: float = 0.5
     turn_max_tokens: int = 900
     turn_retry_trimmed: bool = True
+    turn_decision_compact: bool = field(default_factory=lambda: get_settings().turn_decision_compact)
+    gap_probes: bool = field(default_factory=lambda: get_settings().interview_gap_probes)
+    evaluator_v2: bool = field(default_factory=lambda: get_settings().evaluator_v2)
     # The metadata tail after the speech is bounded by roughly the speech's play time.
     turn_tail_min_s: float = 2.5
     turn_tail_s_per_word: float = 0.3
@@ -69,6 +77,9 @@ class EngineConfig:
     utterances_max: int = 16
     # Concurrency / persistence
     lock_timeout_s: float = 20.0
+    # Terminal and administrative transitions (pause, resume, end) wait out a turn that legitimately holds the
+    # lock (bounded by turn_total_timeout_s) before giving up with EngineLockTimeout.
+    strict_lock_timeout_s: float = 45.0
     postgres_flush_interval_s: float = 15.0
     state_ttl_active_s: int = 48 * 3600
     state_ttl_ended_s: int = 24 * 3600

@@ -22,6 +22,7 @@ import { describeFailure, fieldErrorsOf } from "@/features/recruiter/admin/lib/s
 import { jsonEqual } from "@/features/recruiter/admin/lib/utils";
 import { IntegrityRulesEditor } from "@/features/recruiter/admin/policies/IntegrityRulesEditor";
 import { PolicyFieldsEditor } from "@/features/recruiter/admin/policies/PolicyFieldsEditor";
+import { useEnforcedPolicyFields } from "@/lib/auth";
 import { INTEGRITY_FIELDS, INTEGRITY_GROUPS, RECORDING_FIELDS, RETENTION_FIELDS } from "@/features/recruiter/admin/policies/policyFields";
 import { InterviewerSettings } from "@/features/recruiter/admin/settings/InterviewerSettings";
 import { describeDays, toOrganizationSettings, validateSettings } from "@/features/recruiter/admin/settings/settingsModel";
@@ -88,6 +89,8 @@ export default function SettingsPage() {
 }
 
 function SettingsForm({ initial }: { initial: OrganizationSettings }) {
+  const lockedIntegrity = useEnforcedPolicyFields("integrity");
+  const lockedRecording = useEnforcedPolicyFields("recording");
   const [draft, setDraft] = useState<OrganizationSettings>(initial);
   const [baseline, setBaseline] = useState<OrganizationSettings>(initial);
   const [attempted, setAttempted] = useState(false);
@@ -193,6 +196,7 @@ function SettingsForm({ initial }: { initial: OrganizationSettings }) {
                 onChange={(key, value) => set("integrity", { ...draft.integrity, [key]: value })}
                 errors={errors}
                 errorPrefix="integrity"
+                locked={lockedIntegrity}
               />
               <div className="grid gap-3">
                 <div className="grid gap-0.5">
@@ -211,10 +215,11 @@ function SettingsForm({ initial }: { initial: OrganizationSettings }) {
               onChange={(key, value) => set("recording", { ...draft.recording, [key]: value })}
               errors={errors}
               errorPrefix="recording"
+              locked={lockedRecording}
             />
           </SectionBlock>
 
-          <SectionBlock id="settings-retention" title="Data retention" description="Each type of data is deleted automatically after this period. Candidates see these periods in the consent step.">
+          <SectionBlock id="settings-retention" title="Data retention" description="Recordings, snapshots and uploaded files are deleted automatically after these periods. Transcripts, reports and text read from résumés are not deleted automatically yet: candidates are told they stay until you delete them.">
             <PolicyFieldsEditor
               fields={RETENTION_FIELDS.map((f) => ({ ...f, help: `${f.help} ${describeDays(draft.retention[f.key])}.` }))}
               values={draft.retention as unknown as Record<string, unknown>}

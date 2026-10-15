@@ -64,6 +64,8 @@ export interface SessionDetailView extends SessionDetail {
   claims?: Array<{ id: string; claim: string; status: ClaimStatus }>;
   contradictions?: Array<{ id: string | null; description: string | null; severity: string | null; status: string | null }>;
   review_count?: number;
+  /** Answers whose evaluation is a fallback (the AI model was unavailable); left out of the scores (S12). */
+  fallback_evaluations?: number;
 }
 
 /** The "why this score" block the scores API attaches to each competency. */

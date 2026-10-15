@@ -237,9 +237,9 @@ test("intake interview: staff create -> candidate journey -> seven stages and ex
   await expect(page.getByTestId("intake-instructions")).toBeVisible();
   await page.getByTestId("instructions-continue").click();
 
-  const consent = page.locator('[data-testid^="consent-item-"]');
-  await expect(consent.first()).toBeVisible();
-  for (let i = 0; i < (await consent.count()); i++) await consent.nth(i).check();
+  // One confirmation covers the required items (optional ones stay off).
+  await expect(page.locator('[data-testid^="consent-item-"]').first()).toBeVisible();
+  await page.getByTestId("consent-agree-all").check();
   await page.getByTestId("consent-accept-button").click();
 
   await page.getByTestId("resume-file-input").setInputFiles(RESUME);

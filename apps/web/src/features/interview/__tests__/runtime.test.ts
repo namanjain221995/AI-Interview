@@ -12,7 +12,7 @@ import { createInterviewStore } from "@/features/realtime/store";
 import { ApiError } from "@/lib/api";
 import { FRAME_TTS_AUDIO, FRAME_HEADER_BYTES } from "@/lib/realtime/protocol";
 
-import { frameUploadDecision, InterviewRuntime } from "../runtime";
+import { frameUploadDecision, InterviewRuntime, type RuntimeApi } from "../runtime";
 import { BackoffUploadsError, StopUploadsError } from "@/features/integrity/frames";
 
 // ------------------------------------------------------------------ fakes
@@ -152,6 +152,7 @@ async function startRuntime(
     policy?: ReturnType<typeof effectivePolicy>;
     screenShare?: ConstructorParameters<typeof InterviewRuntime>[0]["screenShare"];
     beforeBegin?: (runtime: InterviewRuntime) => void;
+    api?: Partial<RuntimeApi>;
   } = {},
 ) {
   const store = createInterviewStore();
@@ -178,7 +179,7 @@ async function startRuntime(
     screenShare: overrides.screenShare,
     prefs: { avatarMode: "3d", avatarFps: 60, ttsMode: "server" },
     avatar,
-    api: { fetchTicket: async () => ({ ticket: "tk", ws_url: "/ws/sessions/s1" }), postIntegrityEvents, uploadFrame: vi.fn(), uploadRecording: vi.fn() },
+    api: { fetchTicket: async () => ({ ticket: "tk", ws_url: "/ws/sessions/s1" }), postIntegrityEvents, uploadFrame: vi.fn(), uploadRecording: vi.fn(), ...overrides.api },
     onEnded: overrides.onEnded,
   });
   overrides.beforeBegin?.(runtime);
@@ -404,13 +405,87 @@ describe("InterviewRuntime", () => {
     expect(onEnded).toHaveBeenCalledTimes(1);
   });
 
+  it("retries a failed start a few times before leaving it to the candidate", async () => {
+    const { socket } = await startRuntime();
+    socket.push(stateMsg("ready"));
+    const starts = () => socket.types().filter((t) => t === "control.start").length;
+    expect(starts()).toBe(1);
+    socket.push(msg({ type: "error", code: "start_failed", message: "The interview could not start.", recoverable: true }));
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(starts()).toBe(2);
+    for (let i = 0; i < 3; i++) {
+      socket.push(msg({ type: "error", code: "start_failed", message: "The interview could not start.", recoverable: true }));
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(starts()).toBe(4); // the first attempt plus three retries, then the notice stands
+  });
+
+  it("ends over REST when the socket is down, and leaves", async () => {
+    const onEnded = vi.fn();
+    const endSession = vi.fn(async () => ({ status: "ending" }));
+    const { socket, runtime } = await startRuntime({ onEnded, api: { endSession } });
+    socket.push(stateMsg("live", "listening"));
+    socket.onclose?.({ code: 1006, reason: "" }); // the network dropped; the client is reconnecting
+    runtime.endInterview();
+    expect(endSession).toHaveBeenCalledWith("s1", "candidate_ended");
+    expect(socket.json().some((m) => m.type === "control.end_interview")).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onEnded).toHaveBeenCalled();
+  });
+
   it("asks to end, and leaves even if the server never confirms", async () => {
     const onEnded = vi.fn();
-    const { socket, runtime } = await startRuntime({ onEnded });
+    const endSession = vi.fn(async () => ({ status: "ending" }));
+    const { socket, runtime } = await startRuntime({ onEnded, api: { endSession } });
+    socket.push(stateMsg("live", "listening"));
     runtime.endInterview();
     expect(socket.json().find((m) => m.type === "control.end_interview")).toMatchObject({ reason: "candidate_ended" });
+    expect(endSession).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(13_000);
+    expect(endSession).toHaveBeenCalledWith("s1", "candidate_ended"); // a half-open socket may have swallowed it
     expect(onEnded).toHaveBeenCalled();
+    expect(sessionStorage.getItem("interview:end-requested:s1")).toBe("candidate_ended"); // the complete page re-sends it
+  });
+});
+
+describe("InterviewRuntime before the interview starts", () => {
+  it("leaves over REST without ending anything when End is pressed before the start", async () => {
+    const onEnded = vi.fn();
+    const endSession = vi.fn(async () => ({ status: "not_started" }));
+    const { socket, runtime } = await startRuntime({ onEnded, api: { endSession } });
+    socket.push(stateMsg("ready")); // Begin sent control.start; the server is still preparing the interview
+    runtime.endInterview();
+    expect(endSession).toHaveBeenCalledWith("s1", "candidate_ended"); // the server answers not_started
+    expect(socket.json().some((m) => m.type === "control.end_interview")).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onEnded).toHaveBeenCalled(); // no 12 s wait for a refusal
+  });
+
+  it("releases the devices and never connects when the room is left during the permission prompt", async () => {
+    const track = { stop: vi.fn(), kind: "audio" };
+    const stream = { getTracks: () => [track], getAudioTracks: () => [track], getVideoTracks: () => [] };
+    let grant!: (value: unknown) => void;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn(() => new Promise((resolve) => (grant = resolve))) },
+    });
+    const runtime = new InterviewRuntime({
+      interviewId: "i1",
+      sessionId: "s1",
+      store: createInterviewStore(),
+      policy: effectivePolicy({ integrity: { ...effectivePolicy(null, null, null).integrity, require_fullscreen: false, camera_required: false, camera_frame_analysis: false } }, null, null),
+      prefs: { avatarMode: "3d", avatarFps: 60, ttsMode: "server" },
+      api: { fetchTicket: async () => ({ ticket: "tk", ws_url: "/ws/sessions/s1" }), postIntegrityEvents: vi.fn(), uploadFrame: vi.fn(), uploadRecording: vi.fn() },
+    });
+    runtime.prepareGesture();
+    const begun = runtime.begin();
+    await vi.advanceTimersByTimeAsync(0);
+    runtime.dispose(); // End pressed (or the page left) while the browser still shows the prompt
+    grant(stream); // the candidate clicks Allow afterwards
+    await begun;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(track.stop).toHaveBeenCalled(); // microphone released at once
+    expect(FakeSocket.all).toHaveLength(0); // and the room never connects
   });
 });
 

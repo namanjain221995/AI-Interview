@@ -1,5 +1,5 @@
 import { Archive, ChevronDown, CircleSlash, Code2, Pencil, Play, UserPlus } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
@@ -17,18 +17,18 @@ import { StatCard, StatGroup } from "@/components/ui/StatCard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { usePermission } from "@/lib/auth";
 import { formatNumber } from "@/lib/format";
-import { useDocumentTitle } from "@/lib/hooks";
+import { useDebounce, useDocumentTitle } from "@/lib/hooks";
 import { CANDIDATE_REPORT_MODE_LABELS, CODE_LANGUAGE_LABELS, DIFFICULTY_LABELS } from "@/lib/labels";
 import type { JobRequirement, JobStatus, RequirementKind } from "@/lib/types";
 
 import { useOrgSettings } from "@/features/recruiter/admin/api/admin";
 import { useCompetencies } from "@/features/recruiter/admin/api/catalog";
-import { useInterviews, useSessions } from "@/features/recruiter/admin/api/candidates";
+import { useJobPipeline, type PipelineStage } from "@/features/recruiter/admin/api/candidates";
 import { useJob, useJobRequirements, useJobRounds, useUpdateJobStatus } from "@/features/recruiter/admin/api/jobs";
 import { DetailSkeleton, Fact, LoadError } from "@/features/recruiter/admin/components/Controls";
 import { InviteDialog } from "@/features/recruiter/admin/jobs/InviteDialog";
 import { EMPLOYMENT_TYPES, SENIORITY_LEVELS } from "@/features/recruiter/admin/jobs/jobDraft";
-import { buildPipeline, JobPipeline, pipelineCounts } from "@/features/recruiter/admin/jobs/JobPipeline";
+import { JobPipeline } from "@/features/recruiter/admin/jobs/JobPipeline";
 import { describeFailure } from "@/features/recruiter/admin/lib/serverErrors";
 import { RoundCard } from "@/features/recruiter/admin/rounds/RoundCard";
 import { differingIntegrityKeys } from "@/features/recruiter/admin/jobs/jobDraft";
@@ -54,6 +54,8 @@ const KIND_HEADINGS: Record<RequirementKind, string> = {
   qualification: "Qualifications",
 };
 
+const PIPELINE_PAGE_SIZE = 25;
+
 /** /app/jobs/:jobId */
 export default function JobDetailPage() {
   const { jobId } = useParams();
@@ -62,8 +64,11 @@ export default function JobDetailPage() {
   const job = useJob(jobId);
   const requirements = useJobRequirements(jobId);
   const rounds = useJobRounds(jobId);
-  const interviews = useInterviews({ job_id: jobId }, Boolean(jobId));
-  const sessions = useSessions({ job_id: jobId }, Boolean(jobId));
+  const [pipelinePage, setPipelinePage] = useState(0);
+  const [stage, setStage] = useState<PipelineStage | "all">("all");
+  const [search, setSearch] = useState("");
+  const q = useDebounce(search.trim(), 250);
+  const pipeline = useJobPipeline(jobId, { stage, q, limit: PIPELINE_PAGE_SIZE, offset: pipelinePage * PIPELINE_PAGE_SIZE });
   const competencies = useCompetencies();
   const settings = useOrgSettings();
   const updateStatus = useUpdateJobStatus();
@@ -72,8 +77,8 @@ export default function JobDetailPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   useDocumentTitle(job.data?.title ?? "Job");
 
-  const pipeline = useMemo(() => buildPipeline(interviews.data?.items ?? [], sessions.data?.items ?? []), [interviews.data, sessions.data]);
-  const counts = pipelineCounts(pipeline);
+  // Exact counts for the whole job from the server (S14): the stat cards and the tab badge never cap.
+  const counts = pipeline.data?.counts ?? { invited: 0, in_progress: 0, completed: 0, closed: 0, all: 0 };
   const activeRounds = (rounds.data ?? []).filter((r) => r.is_active !== false);
 
   if (job.error) {
@@ -187,10 +192,10 @@ export default function JobDetailPage() {
       ) : null}
 
       <StatGroup columns={4} className="mb-6">
-        <StatCard bare label="Invited" value={formatNumber(counts.invited)} hint="Link sent, not started" loading={interviews.isLoading} />
-        <StatCard bare label="In progress" value={formatNumber(counts.in_progress)} hint="Started, not finished" loading={interviews.isLoading} />
-        <StatCard bare label="Completed" value={formatNumber(counts.completed)} hint="Interview finished" loading={interviews.isLoading} />
-        <StatCard bare label="Expired or cancelled" value={formatNumber(counts.closed)} hint="Link no longer works" loading={interviews.isLoading} />
+        <StatCard bare label="Invited" value={formatNumber(counts.invited)} hint="Link sent, not started" loading={pipeline.isLoading} />
+        <StatCard bare label="In progress" value={formatNumber(counts.in_progress)} hint="Started, not finished" loading={pipeline.isLoading} />
+        <StatCard bare label="Completed" value={formatNumber(counts.completed)} hint="Interview finished" loading={pipeline.isLoading} />
+        <StatCard bare label="Expired or cancelled" value={formatNumber(counts.closed)} hint="Link no longer works" loading={pipeline.isLoading} />
       </StatGroup>
 
       <Tabs
@@ -204,7 +209,7 @@ export default function JobDetailPage() {
       >
         <TabsList aria-label="Job sections">
           <TabsTrigger value="pipeline">
-            Pipeline <span className="text-xs text-fg-subtle tabular-nums">{pipeline.length}</span>
+            Pipeline <span className="text-xs text-fg-subtle tabular-nums">{counts.all}</span>
           </TabsTrigger>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="rounds">
@@ -218,12 +223,28 @@ export default function JobDetailPage() {
         <TabsContent value="pipeline">
           <Card className="overflow-hidden">
             <JobPipeline
-              rows={pipeline}
+              rows={pipeline.data?.items}
               rounds={rounds.data ?? []}
-              loading={interviews.isLoading}
-              error={interviews.error}
-              onRetry={() => void interviews.refetch()}
+              loading={pipeline.isLoading}
+              fetching={pipeline.isFetching && !pipeline.isLoading}
+              error={pipeline.error}
+              onRetry={() => void pipeline.refetch()}
               onInvite={() => setInviteOpen(true)}
+              page={pipelinePage}
+              pageSize={PIPELINE_PAGE_SIZE}
+              total={pipeline.data?.total ?? 0}
+              onPageChange={setPipelinePage}
+              stage={stage}
+              onStageChange={(next) => {
+                setStage(next);
+                setPipelinePage(0);
+              }}
+              counts={counts}
+              search={search}
+              onSearchChange={(next) => {
+                setSearch(next);
+                setPipelinePage(0);
+              }}
             />
           </Card>
         </TabsContent>

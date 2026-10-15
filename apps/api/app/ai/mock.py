@@ -204,10 +204,24 @@ class MockLLMCall:
     context: CallContext | None = None
 
 
-def _to_text(value: Any) -> str:
+def _schema_properties(json_schema: dict[str, Any] | None) -> list[str] | None:
+    if json_schema is None:
+        return None
+    schema = response_format(json_schema)["json_schema"]["schema"]
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    return list(properties) if isinstance(properties, dict) else None
+
+
+def _to_text(value: Any, json_schema: dict[str, Any] | None = None) -> str:
     if value is None:
         return ""
     if isinstance(value, BaseModel):
+        properties = _schema_properties(json_schema)
+        if properties is not None and set(type(value).model_fields) - set(properties):
+            # Guided decoding emits exactly the requested schema's fields, in its order: a scripted richer object
+            # (e.g. a full TurnDecision for the compact turn schema) is narrowed the same way.
+            data = value.model_dump(mode="json")
+            return json.dumps({k: data[k] for k in properties if k in data}, ensure_ascii=False)
         return value.model_dump_json()
     if isinstance(value, dict | list):
         return json.dumps(value, ensure_ascii=False, default=str)
@@ -303,6 +317,11 @@ class MockLLM:
         self._queues[task].extend(responses)
         return self
 
+    def fail_next(self, task: ModelTask | None, *errors: BaseException) -> MockLLM:
+        """The next calls for ``task`` raise ``errors`` (in order), before anything already scripted."""
+        self._queues[task].extendleft(reversed(errors))
+        return self
+
     def set_default(self, task: ModelTask | None, response: Any) -> MockLLM:
         self._defaults[task] = response
         return self
@@ -350,7 +369,7 @@ class MockLLM:
                 schema = response_format(call.json_schema)["json_schema"]["schema"]
                 return json.dumps(minimal_payload_from_json_schema(schema))
             return f"Mock response for {call.task.value}."
-        return _to_text(self._resolve(item, call))
+        return _to_text(self._resolve(item, call), call.json_schema)
 
     # -------------------------------------------------------------- client
     async def chat(
@@ -451,7 +470,7 @@ class MockLLM:
             value = self._resolve(item, call)
             if isinstance(value, schema):
                 return value.model_dump_json()
-            return _to_text(value)
+            return _to_text(value, {"name": schema.__name__, "schema": schema_for(schema)})
 
         outcome = await run_structured(
             schema, messages, generate, max_attempts=max_attempts, fallback=fallback

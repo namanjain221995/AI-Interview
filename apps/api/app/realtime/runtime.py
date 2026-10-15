@@ -36,6 +36,8 @@ from app.core import metrics
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.queue import subscribe_session_events
+from app.core.redis import get_redis
+from app.db.session import session_scope
 from app.domain.enums import (
     AvatarExpression,
     AvatarGesture,
@@ -48,6 +50,7 @@ from app.domain.enums import (
 )
 from app.realtime import close_codes
 from app.realtime.acknowledgements import (
+    FILLER_PHRASES,
     REPEAT_PROMPT,
     AcknowledgementCache,
     get_acknowledgement_cache,
@@ -60,6 +63,7 @@ from app.realtime.bridges import CodingBridge, IntegrityBridge
 from app.realtime.context import SessionContext, record_connection, refresh_status, touch_heartbeat
 from app.realtime.endpointing import Endpointer, EndpointParams, commit_required_ms
 from app.realtime.glossary import Glossary, log_corrections
+from app.realtime.latency import observe_turn_latency
 from app.realtime.lock import SessionLock
 from app.realtime.outbox import Outbox
 from app.realtime.revision import is_material_revision, revise_answer_transcript, word_difference
@@ -76,8 +80,11 @@ from app.realtime.transport import Transport
 from app.realtime.turns import (
     TurnController,
     is_backchannel,
+    is_repeat_complaint,
     is_repeat_or_clarification,
+    resume_after_backchannel,
     spoken_portion,
+    unspoken_words,
 )
 from app.schemas.realtime import (
     FRAME_MIC_AUDIO,
@@ -131,6 +138,7 @@ from app.schemas.realtime import (
     pack_frame,
     unpack_frame,
 )
+from app.services.integrity import reply_window
 from app.services.interview.contracts import (
     ActivityCapture,
     ActivityEnded,
@@ -152,6 +160,7 @@ from app.services.interview.contracts import (
     UtteranceBegin,
     UtteranceMeta,
 )
+from app.services.interview.records import log_event
 from app.services.interview.understanding import understand as understand_turn
 
 log = get_logger(__name__)
@@ -168,7 +177,8 @@ STT_RETRY_TIMEOUT_S = 20.0  # inline retry of failed segments before the turn be
 AUDIO_STALL_S = 3.0
 REPORT_LINGER_S = 120.0  # report generation takes 15-65 s after the end
 HEARTBEAT_DB_INTERVAL_S = 30.0
-ACK_MIN_SPEECH_MS = 2500
+FILLER_AFTER_S = 3.5  # "One moment." when the reply has not started this long after the end of the turn
+ACK_MIN_SPEECH_MS = 1200  # a finished answer this long hears "Okay." ~1 s after it ends (was 2500)
 MAX_TURN_AUDIO_BYTES = 16000 * 2 * 300  # 5 minutes of PCM16 for answer audio
 SEND_QUEUE_LIMIT = 2000
 UNRESOLVED_RETRY_DELAYS = (2.0, 4.0, 8.0, 15.0, 30.0)
@@ -387,6 +397,15 @@ class TurnCapture:
     end_at: float | None = None
     end_reason: str | None = None
     required_ms: int | None = None
+    acknowledged: str | None = None  # the acknowledgement phrase already played after this turn
+    replied: bool = False  # the first audio of the interviewer's reply to this turn was sent
+    reply_text: bool = False  # the reply's first words arrived (its audio is under a second away)
+    # The candidate's speech cut off a reply that had not started playing: nothing was heard, so this is the
+    # same answer going on (fast transcription ends turns at short pauses), not an interruption of the interviewer.
+    interrupted_unheard: bool = False
+    # Silence since the candidate's last voiced audio when the end of turn was decided (P0.4): the part of the
+    # wait the candidate experiences before any end-of-turn timer starts.
+    silence_at_end_ms: int | None = None
     interrupted_task: asyncio.Task[InterruptedUtterance | None] | None = None
     engine_called: bool = False
     silence_episode: int = 0
@@ -575,6 +594,7 @@ class SessionRuntime:
         self.utterances: dict[str, ActiveUtterance] = {}
         self._last_engine_utt: ActiveUtterance | None = None
         self._last_ack: str | None = None
+        self._fillers = 0
         self._listening_since: float | None = None
         self._silence_prompts = 0
         self._time_warned = False
@@ -940,6 +960,10 @@ class SessionRuntime:
                 await self.aclose("ended_disconnect")
                 return
             if not self.started:
+                # A Begin deferred while the interview was being prepared must not start it with nobody here
+                # (on session.ready or the start retry): the candidate presses Begin again on reconnect.
+                self._awaiting_ready = False
+                self._start_requested = False
                 self._schedule_grace()
                 return
             if not self._interview_began():
@@ -1332,6 +1356,7 @@ class SessionRuntime:
             full_text=utt.text,
             spoken_text=spoken,
             played_ms=int(played),
+            text_complete=utt.ended,
         )
         try:
             await _maybe_await(self.engine.handle_interruption(self.session_id, interrupted))
@@ -1389,6 +1414,7 @@ class SessionRuntime:
                         and event.text
                     ):
                         first_text_logged = True  # model time to first spoken text
+                        capture.reply_text = True
                         self._latency_note(
                             capture, first_delta_ms=round((time.monotonic() - capture.end_at) * 1000)
                         )
@@ -1510,6 +1536,9 @@ class SessionRuntime:
                 end_at = capture.end_at
 
                 def hook(sent_at: float, capture: TurnCapture = capture, end_at: float = end_at) -> None:
+                    capture.replied = True
+                    if self.settings.integrity_frames_yield_to_replies:
+                        self.spawn(reply_window.release(get_redis(), self.session_id), "integrity_reply_release")
                     fields: dict[str, Any] = {"first_audio_ms": round((sent_at - end_at) * 1000)}
                     timings = utt.speech.timings if utt.speech is not None else None
                     if timings is not None and timings.first_job_at is not None:
@@ -1689,6 +1718,20 @@ class SessionRuntime:
         )
         if not self.ended:
             await self._run_end(SessionEndReason.TIME_LIMIT)
+
+    async def request_end(self, reason: str) -> bool:
+        """End the session the way a ``control.end_interview`` message would; False when already ending or
+        when the interview has not started (nothing to end, like ``control.end_interview`` before the start)."""
+        if self.ended or self.ending is not None or not self.started:
+            return False
+        try:
+            end_reason = SessionEndReason(reason)
+        except ValueError:
+            end_reason = SessionEndReason.CANDIDATE_ENDED
+        await self._interrupt_current("end_interview", notify_client=True)
+        await self._discard_capture()
+        self._enqueue("end", lambda: self._run_end(end_reason), PRIORITY_END, needs_idle=False)
+        return True
 
     async def _run_end(self, reason: SessionEndReason) -> None:
         if self.ended:
@@ -2174,6 +2217,8 @@ class SessionRuntime:
             capture.audio_until_ms = self.segmenter.received_ms
         self._capture = capture
         self.turns.to(TurnState.CANDIDATE_SPEAKING, "speech_resumed")
+        metrics.TURN_RESUMED.inc()  # the end of turn was decided too early
+        self._latency_reopen(capture)
         log.debug("realtime.turn_merged", session_id=self.session_id, capture=capture.capture_id)
 
     def _notify_silence(self, capture: TurnCapture) -> None:
@@ -2226,7 +2271,12 @@ class SessionRuntime:
         start = self.segmenter.open_segment_start_ms or 0
         open_ms = self.segmenter.now_ms - start
         now = time.monotonic()
-        if not self.partials.due(now=now, open_audio_ms=open_ms, finals_pending=capture.transcriber.pending):
+        if not self.partials.due(
+            now=now,
+            open_audio_ms=open_ms,
+            finals_pending=capture.transcriber.pending,
+            silence_ms=self.segmenter.silence_ms,
+        ):
             return
         if not stt_has_spare_capacity(get_ai().stt):
             return  # never let a caption delay a segment final; try again on a later frame
@@ -2304,11 +2354,44 @@ class SessionRuntime:
         capture.ended_session_ms = self._session_ms()
         capture.end_at = time.monotonic()
         capture.end_reason = endpoint_reason or reason
+        capture.silence_at_end_ms = int(self.segmenter.silence_ms) if capture.typed_text is None else None
         self.turns.to(TurnState.PROCESSING, reason)
         self.avatar(AvatarState.THINKING, expression=AvatarExpression.THOUGHTFUL)
         self._enqueue(
             "turn", lambda: self._run_turn(capture), PRIORITY_TURN, capture=capture, needs_idle=False
         )
+        self.spawn(self._filler_watch(capture), "reply_filler")
+        if self.settings.integrity_frames_yield_to_replies:
+            self.spawn(reply_window.hold(get_redis(), self.session_id), "integrity_reply_hold")
+
+    async def _filler_watch(self, capture: TurnCapture) -> None:
+        """No long silences (Tier 1): when the reply has not started FILLER_AFTER_S after the end of the turn, say
+        a short pre-synthesized "One moment." once, so the candidate knows they were heard."""
+        end_at = capture.end_at
+        if end_at is None:
+            return
+        await asyncio.sleep(max(0.0, end_at + FILLER_AFTER_S - time.monotonic()))
+        if (
+            capture.replied
+            # The reply's words are already here: its audio follows within a second, and a filler would land on
+            # top of the question (and, played after the question was announced, used to take over its caption).
+            or capture.reply_text
+            or capture.end_at != end_at  # the candidate kept talking: the turn was reopened
+            or self.ended
+            or self.closed
+            or self.transport is None
+            # PROCESSING: still transcribing / deciding; AI_SPEAKING before any reply audio: the model is writing
+            # (the engine announces the utterance before its first words) - both are silence for the candidate.
+            or self.turns.state not in (TurnState.PROCESSING, TurnState.AI_SPEAKING)
+        ):
+            return
+        phrase = FILLER_PHRASES[self._fillers % len(FILLER_PHRASES)]
+        if self.ack_cache.prompt(get_ai().tts, self.voice, phrase) is None:
+            return  # not synthesized yet: silence rather than the browser's robotic voice
+        self._fillers += 1
+        self._play_prompt(phrase, kind="acknowledgment")
+        self.avatar(AvatarState.THINKING, expression=AvatarExpression.THOUGHTFUL)
+        self._latency_note(capture, filler_ms=round((time.monotonic() - end_at) * 1000), filler=phrase)
 
     async def _resume_after_empty_barge_in(self, task: asyncio.Task[InterruptedUtterance | None]) -> None:
         interrupted = await task
@@ -2332,7 +2415,7 @@ class SessionRuntime:
     def _ack_eligible(self, capture: TurnCapture, text_so_far: str) -> bool:
         if not self.settings.acknowledgment_enabled or capture.typed_text is not None:
             return False
-        if capture.interrupted_task is not None or self.coding_bridge.active:
+        if capture.interrupted_task is not None and not capture.interrupted_unheard or self.coding_bridge.active:
             return False
         if self.speech.initial_fallback_reason() is not None:
             return False
@@ -2399,7 +2482,8 @@ class SessionRuntime:
                     and commit_required_ms(text_so_far, self.endpointer.params)
                     <= self.endpointer.params.short_ms
                 )
-                self._play_ack(capture, soft=not finished)
+                if self._play_ack(capture, soft=not finished):
+                    capture.acknowledged = self._last_ack
             ok = await capture.transcriber.wait_finals(timeout=STT_FINAL_TIMEOUT_S)
             if not ok or not capture.transcriber.resolved:
                 # A segment still in flight after the wait is not "done": keep the turn
@@ -2417,6 +2501,8 @@ class SessionRuntime:
         else:
             text = capture.typed_text
         stt_wait_ms = round((time.monotonic() - started) * 1000)
+        if is_repeat_complaint(text):
+            metrics.CANDIDATE_REPEAT_COMPLAINTS.inc()  # "I already told you": the interviewer asked again
         stt_fields: dict[str, Any] = {}
         jobs = capture.transcriber.segments
         if capture.typed_text is None and jobs:
@@ -2435,6 +2521,7 @@ class SessionRuntime:
             capture,
             turn_id=capture.capture_id,
             end_reason=capture.end_reason,
+            endpoint_silence_ms=capture.silence_at_end_ms,
             required_silence_ms=capture.required_ms,
             voiced_ms=capture.voiced_ms,
             stt_wait_ms=stt_wait_ms,
@@ -2453,7 +2540,7 @@ class SessionRuntime:
             )
         )
         interrupted = await capture.interrupted_task if capture.interrupted_task is not None else None
-        if interrupted is not None and capture.typed_text is None and is_backchannel(text):
+        if resume_after_backchannel(interrupted, text, typed=capture.typed_text is not None):
             capture.engine_called = True
             await self._drive(
                 self.engine.handle_backchannel_resume(self.session_id, interrupted),
@@ -2462,6 +2549,15 @@ class SessionRuntime:
                 capture=capture,
             )
             return
+        if interrupted is not None and capture.typed_text is None and is_backchannel(text):
+            # Spoken over the last moments of the question: a short "Yes." answers it instead of resuming (S10).
+            log.info(
+                "realtime.overlap_answer",
+                session_id=self.session_id,
+                utterance_id=interrupted.utterance_id,
+                unspoken_words=unspoken_words(interrupted.full_text, interrupted.spoken_text),
+                words=len(text.split()),
+            )
         if capture.typed_text is None and capture.end_reason not in ("manual", "max_utterance"):
             waited = await self._await_commit(capture, text)
             if waited:
@@ -2481,6 +2577,7 @@ class SessionRuntime:
             interrupted_ai=capture.interrupted_task is not None,
             stt_confidence=capture.transcriber.confidence() if capture.typed_text is None else None,
             audio_wav=capture.wav(),
+            acknowledged=capture.acknowledged,
         )
         capture.engine_called = True
         self._silence_prompts = 0
@@ -2559,12 +2656,13 @@ class SessionRuntime:
         self._go_idle("not_understood")
         return True
 
-    def _play_prompt(self, phrase: str) -> None:
+    def _play_prompt(self, phrase: str, *, kind: str = "comment") -> None:
         """Speak a runtime prompt (never reported to the engine): pre-synthesized
-        audio when available, otherwise the browser's voice/captions."""
+        audio when available, otherwise the browser's voice/captions. A filler is sent as an "acknowledgment"
+        (a quiet caption that never stands in for the last question); "Sorry, I didn't catch that" as a comment."""
         utt = ActiveUtterance(
             utterance_id=_new_id("prompt"),
-            kind="comment",
+            kind=kind,
             behavior=BehaviorSpec(state=AvatarState.SPEAKING, expression=AvatarExpression.WARM),
             is_ack=True,
             full_text=phrase,
@@ -2573,7 +2671,7 @@ class SessionRuntime:
         self.post(
             UtteranceStartMsg(
                 utterance_id=utt.utterance_id,
-                kind="comment",
+                kind=kind,  # type: ignore[arg-type]
                 behavior=_behavior_msg(utt.behavior, utt.utterance_id),
             )
         )
@@ -2732,15 +2830,42 @@ class SessionRuntime:
         )
 
     def _latency_note(self, capture: TurnCapture, **fields: Any) -> None:
+        """Add timings (ms since the end-of-turn decision) to this turn's record. The "Okay." (ack_ms) and the
+        "One moment." (filler_ms) are noted before the reply's first audio; that one completes the record: the
+        candidate-facing totals and the metrics are computed once, and the record is persisted (turn.latency)."""
         record = next((r for r in reversed(self.latency) if r.get("turn_id") == capture.capture_id), None)
         if record is None:
             record = {"turn_id": capture.capture_id}
             self.latency.append(record)
             if len(self.latency) > 100:
                 del self.latency[:50]
+        completes = "first_audio_ms" in fields and "first_audio_ms" not in record
         record.update(fields)
-        if "first_audio_ms" in fields:
+        if completes:
+            observe_turn_latency(record)
             log.info("realtime.turn_latency", session_id=self.session_id, **record)
+            self.spawn(self._persist_latency(dict(record)), "turn_latency_record")
+
+    def _latency_reopen(self, capture: TurnCapture) -> None:
+        """The candidate kept talking after the end of turn was decided: timings noted so far (an "Okay." already
+        played, the STT wait, a commit wait) count from a decision that no longer stands. Start the record again so
+        the turn is measured from the decision that does, keeping only how often it was reopened."""
+        record = next((r for r in reversed(self.latency) if r.get("turn_id") == capture.capture_id), None)
+        reopened = int(record.get("reopened", 0)) + 1 if record is not None else 1
+        if record is not None:
+            self.latency.remove(record)
+        self._latency_note(capture, reopened=reopened)
+
+    async def _persist_latency(self, record: dict[str, Any]) -> None:
+        """Keep the per-turn breakdown as an interview event: log lines vanish with the container."""
+        try:
+            async with session_scope() as db:
+                await log_event(db, self.session_id, "turn.latency", record)
+        except Exception as exc:  # noqa: BLE001 - telemetry must never disturb the interview
+            # Visible (not debug): a turn missing from the persisted record would bias the numbers unnoticed.
+            log.warning(
+                "realtime.turn_latency_persist_failed", session_id=self.session_id, error=type(exc).__name__
+            )
 
     # ========================================================= intake activities
     # INTAKE_INTERVIEW.md 7: the engine arms an activity (ActivityStarted after its instruction utterance); the
@@ -3519,6 +3644,7 @@ class SessionRuntime:
             start = max(0, self.segmenter.now_ms - (event.sustained_ms if event else 300) - 300)
         capture = self._open_capture(start, reason="barge_in")
         if utt is not None:
+            capture.interrupted_unheard = utt.playback_started_at is None and utt.played_ms == 0
             capture.interrupted_task = self.track(
                 asyncio.create_task(
                     self._report_interruption(utt, wait_report=True),
@@ -3662,6 +3788,10 @@ class SessionRuntime:
                 self._enqueue(
                     "end", lambda: self._run_end(SessionEndReason.CANCELLED), PRIORITY_END, needs_idle=False
                 )
+        elif kind == "session.end_requested":
+            # The candidate asked to end over REST because the socket was down (S6): same path as the
+            # control.end_interview message, on whichever instance holds the runtime.
+            await self.request_end(str(event.get("reason") or SessionEndReason.CANDIDATE_ENDED.value))
         elif kind == "evaluation.ready":
             await self._refresh_state_cache()
         elif kind == "runtime.takeover":

@@ -63,6 +63,9 @@ class ContainerOutcome:
     output_overflow: bool = False
     error: str | None = None
     timings_ms: dict[str, float] = field(default_factory=dict)
+    # Docker / the daemon / job delivery failed after the container existed: the platform's fault, never the
+    # candidate's program (S19). The executor turns it into SandboxUnavailable("docker_error").
+    infra_error: bool = False
 
 
 def _ms(value: Any) -> float:

@@ -37,22 +37,37 @@ async def list_organizations(
     stmt = select(Organization)
     if q:
         pattern = "%" + q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        stmt = stmt.where(or_(Organization.name.ilike(pattern, escape="\\"), Organization.slug.ilike(pattern, escape="\\")))
+        stmt = stmt.where(
+            or_(Organization.name.ilike(pattern, escape="\\"), Organization.slug.ilike(pattern, escape="\\"))
+        )
     if is_active is not None:
         stmt = stmt.where(Organization.is_active.is_(is_active))
     total = int(await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
     rows = (await db.scalars(page.apply(stmt.order_by(Organization.name, Organization.id)))).all()
     return Page[OrganizationOut](
-        items=[OrganizationOut.model_validate(o) for o in rows], total=total, limit=page.limit, offset=page.offset
+        items=[OrganizationOut.model_validate(o) for o in rows],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
     )
 
 
-@router.post("", response_model=OrganizationOut, status_code=status.HTTP_201_CREATED, summary="Create an organization")
-async def create(body: OrganizationCreate, request: Request, principal: OrgManager, db: DbSession) -> OrganizationOut:
+@router.post(
+    "", response_model=OrganizationOut, status_code=status.HTTP_201_CREATED, summary="Create an organization"
+)
+async def create(
+    body: OrganizationCreate, request: Request, principal: OrgManager, db: DbSession
+) -> OrganizationOut:
     org = await create_organization(db, name=body.name, slug=body.slug, settings=body.settings)
     await audit(
-        db, principal, "organization.create", resource_type="organization", resource_id=str(org.id),
-        organization_id=org.id, request=request, details={"slug": org.slug, "name": org.name},
+        db,
+        principal,
+        "organization.create",
+        resource_type="organization",
+        resource_id=str(org.id),
+        organization_id=org.id,
+        request=request,
+        details={"slug": org.slug, "name": org.name},
     )
     return OrganizationOut.model_validate(org)
 
@@ -64,7 +79,11 @@ async def get_one(organization_id: uuid.UUID, principal: OrgManager, db: DbSessi
 
 @router.patch("/{organization_id}", response_model=OrganizationOut, summary="Update an organization")
 async def update(
-    organization_id: uuid.UUID, body: OrganizationUpdate, request: Request, principal: OrgManager, db: DbSession
+    organization_id: uuid.UUID,
+    body: OrganizationUpdate,
+    request: Request,
+    principal: OrgManager,
+    db: DbSession,
 ) -> OrganizationOut:
     org = await get_organization(db, organization_id)
     changes: dict[str, object] = {}
@@ -80,11 +99,22 @@ async def update(
     if body.is_active is not None and body.is_active != org.is_active:
         changes["is_active"] = {"from": org.is_active, "to": body.is_active}
         org.is_active = body.is_active
+    if body.features is not None:
+        merged = {**(org.features or {}), **body.features}
+        if merged != (org.features or {}):
+            changes["features"] = {"from": dict(org.features or {}), "to": merged}
+            org.features = merged
     if changes:
         await db.flush()
         await db.refresh(org)
         await audit(
-            db, principal, "organization.update", resource_type="organization", resource_id=str(org.id),
-            organization_id=org.id, request=request, details={"changes": changes},
+            db,
+            principal,
+            "organization.update",
+            resource_type="organization",
+            resource_id=str(org.id),
+            organization_id=org.id,
+            request=request,
+            details={"changes": changes},
         )
     return OrganizationOut.model_validate(org)

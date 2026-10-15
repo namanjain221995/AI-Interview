@@ -37,7 +37,7 @@ from app.ai.base import AIError, AIServices, CallContext
 from app.ai.prompts import prompt_version
 from app.ai.registry import get_ai
 from app.core.logging import bind_context, get_logger
-from app.core.metrics import ERRORS
+from app.core.metrics import ERRORS, TURN_DECISIONS
 from app.core.queue import enqueue, publish_session_event
 from app.db.models import CodingSession, Interview, InterviewSession, Question
 from app.db.session import session_scope
@@ -52,7 +52,7 @@ from app.domain.enums import (
     TurnAction,
     TurnState,
 )
-from app.schemas.ai import InterviewPlan, TurnDecision
+from app.schemas.ai import InterviewPlan, TurnDecision, TurnDecisionCompact
 from app.services.interview import behavior as beh
 from app.services.interview import understanding as U
 from app.services.interview.adapters import CodingPort, ScoringPort, get_scoring
@@ -74,7 +74,13 @@ from app.services.interview.coding_bridge import (
     transition_speech,
 )
 from app.services.interview.config import EngineConfig, get_engine_config
-from app.services.interview.context import coding_user_prompt, system_prompt, turn_messages, user_prompt
+from app.services.interview.context import (
+    coding_user_prompt,
+    system_prompt,
+    thread_evidence,
+    turn_messages,
+    user_prompt,
+)
 from app.services.interview.contracts import (
     ActivityEvent,
     BehaviorSpec,
@@ -99,20 +105,23 @@ from app.services.interview.evaluation import (
     rebuild_hook,
     recompute_competencies,
 )
+from app.services.interview.gaps import answer_gaps, gap_instruction
 from app.services.interview.grounding import ungrounded_reference
 from app.services.interview.memory import apply_memory, needs_summary
 from app.services.interview.opening import SpokenText, generate_opening, template_opening
 from app.services.interview.planner import fallback_plan, generate_plan
 from app.services.interview.policy import (
     CODING_FLOW_ACTIONS,
+    FLOW_ONLY_ACTIONS,
     FOLLOWUP_ACTIONS,
     NON_QUESTION_ACTIONS,
+    NON_TECHNICAL_KEYS,
     BankCandidate,
     PolicyDirective,
     check_decision,
     compute_directive,
 )
-from app.services.interview.prompts import TURN_SYSTEM, TURN_USER
+from app.services.interview.prompts import TURN_FIELDS, TURN_FIELDS_COMPACT, TURN_SYSTEM, TURN_USER
 from app.services.interview.records import (
     add_answer,
     add_question,
@@ -130,7 +139,7 @@ from app.services.interview.selection import (
     job_role_tags,
     load_asked_vectors,
 )
-from app.services.interview.sessions import attach_profile, latest_profile, resume_pending
+from app.services.interview.sessions import attach_profile, latest_profile, profile_scope, resume_pending
 from app.services.interview.special import SpecialKind, SpecialResult, classify
 from app.services.interview.speculative import (
     PrepEntry,
@@ -156,8 +165,10 @@ from app.services.interview.transitions import (
     record_interviewer_text,
 )
 from app.services.interview.turns import (
+    COMPACT_TURN_SCHEMA,
     TURN_SCHEMA,
     TurnOutcome,
+    expand_compact,
     fallback_utterance,
     pick,
     question_core,
@@ -171,7 +182,13 @@ from app.services.retrieval import cosine_similarity
 
 log = get_logger(__name__)
 
-PROMPT_VERSION = prompt_version("turn", TURN_SYSTEM.template + "\x00" + TURN_USER.template)
+PROMPT_VERSION = prompt_version(
+    "turn", TURN_SYSTEM.template + "\x00" + TURN_USER.template + "\x00" + TURN_FIELDS
+)
+#: TURN_DECISION_COMPACT: the system prompt lists the compact fields (a different prompt, stamped as such).
+PROMPT_VERSION_COMPACT = prompt_version(
+    "turn-compact", TURN_SYSTEM.template + "\x00" + TURN_USER.template + "\x00" + TURN_FIELDS_COMPACT
+)
 QUESTION_KINDS_FOR_UTTERANCE = {
     TurnAction.ASK_FOLLOWUP: "followup",
     TurnAction.REQUEST_SPECIFICITY: "followup",
@@ -243,6 +260,15 @@ class PendingAnswer:
 
 class SessionNotFound(LookupError):
     pass
+
+
+class EngineLockTimeout(RuntimeError):
+    """A terminal or administrative transition could not take the session lock in time (G1)."""
+
+    def __init__(self, session_id: str, timeout_s: float) -> None:
+        super().__init__(f"engine lock timeout for session {session_id} after {timeout_s:.1f}s")
+        self.session_id = session_id
+        self.timeout_s = timeout_s
 
 
 class InterviewEngine:
@@ -332,15 +358,31 @@ class InterviewEngine:
         await self.store.drain()
 
     @asynccontextmanager
-    async def _session_lock(self, session_id: str) -> AsyncIterator[None]:
+    async def _session_lock(self, session_id: str, *, strict: bool = False) -> AsyncIterator[None]:
+        """Per-process session lock.
+
+        ``strict`` (terminal and administrative transitions: pause, resume, end, test hooks)
+        raises :class:`EngineLockTimeout` when the lock cannot be taken, because running those
+        unlocked would race a turn handler and lose its writes (G1). Turn-level handlers keep the
+        historical behaviour (proceed with a loud log) so a wedged handler cannot silence an
+        interview; their state writes are additionally guarded by the CAS versioning."""
         lock = self._locks.setdefault(session_id, asyncio.Lock())
         acquired = False
+        timeout_s = self.config.strict_lock_timeout_s if strict else self.config.lock_timeout_s
         try:
-            await asyncio.wait_for(lock.acquire(), timeout=self.config.lock_timeout_s)
+            await asyncio.wait_for(lock.acquire(), timeout=timeout_s)
             acquired = True
         except TimeoutError:
             ERRORS.labels(component="engine_lock").inc()
-            log.error("engine.lock_timeout", session_id=session_id, timeout_s=self.config.lock_timeout_s)
+            log.error(
+                "engine.lock_timeout",
+                session_id=session_id,
+                timeout_s=timeout_s,
+                strict=strict,
+                lost_update_risk=not strict,
+            )
+            if strict:
+                raise EngineLockTimeout(session_id, timeout_s) from None
         try:
             yield
         finally:
@@ -426,18 +468,59 @@ class InterviewEngine:
         durable: bool = False,
         db: AsyncSession | None = None,
         extra_columns: dict[str, Any] | None = None,
-    ) -> None:
+        reapply: Callable[[InterviewState], bool] | None = None,
+    ) -> InterviewState:
+        """Persist ``state`` (CAS on the version).
+
+        On a version conflict (another writer saved meanwhile): with ``reapply``, reload the
+        stored state and apply the mutation to it so nothing the other writer saved is lost
+        (``reapply`` returns False to skip the write, e.g. the session already ended); without
+        it the historical last-writer-wins overwrite remains, logged as a lost-update risk.
+        Returns the state object that was saved (callers that keep using the state must rebind)."""
         try:
             await self.store.save(state, durable=durable, db=db, extra_columns=extra_columns)
+            return state
         except StateConflict as exc:
-            # Another process wrote meanwhile; the session lock makes this rare. Last writer wins
-            # but the version stays monotonic.
             ERRORS.labels(component="engine_state").inc()
-            log.warning(
-                "engine.state_conflict", session_id=state.session_id, expected=exc.expected, stored=exc.stored
-            )
-            state.version = max(exc.stored, state.version)
-            await self.store.save(state, durable=durable, db=db, force=True, extra_columns=extra_columns)
+            if reapply is None:
+                log.warning(
+                    "engine.state_conflict",
+                    session_id=state.session_id,
+                    expected=exc.expected,
+                    stored=exc.stored,
+                    resolution="force_overwrite",
+                )
+                state.version = max(exc.stored, state.version)
+                await self.store.save(state, durable=durable, db=db, force=True, extra_columns=extra_columns)
+                return state
+        for attempt in range(3):
+            fresh = await self.store.load(state.session_id)
+            if fresh is None:
+                break
+            if reapply(fresh) is False:
+                log.info("engine.state_conflict", session_id=state.session_id, resolution="skipped")
+                state.__dict__.update(fresh.__dict__)
+                return state
+            try:
+                await self.store.save(fresh, durable=durable, db=db, extra_columns=extra_columns)
+                log.info(
+                    "engine.state_conflict",
+                    session_id=state.session_id,
+                    resolution="reapplied",
+                    attempt=attempt,
+                )
+                # Callers keep using their own object: make it the saved state.
+                state.__dict__.update(fresh.__dict__)
+                return state
+            except StateConflict:
+                continue
+        log.warning(
+            "engine.state_conflict", session_id=state.session_id, resolution="force_overwrite_after_retries"
+        )
+        current = await self.store.load(state.session_id)
+        state.version = max(state.version, current.version if current is not None else 0)
+        await self.store.save(state, durable=durable, db=db, force=True, extra_columns=extra_columns)
+        return state
 
     def _elapsed(self, state: InterviewState) -> float:
         return state.elapsed_seconds(self.now())
@@ -570,6 +653,18 @@ class InterviewEngine:
 
         def _apply(s: InterviewState) -> bool:
             if s.status not in (SessionStatus.CREATED, SessionStatus.PREPARING):
+                if (
+                    s.status in (SessionStatus.LIVE, SessionStatus.PAUSED)
+                    and plan_source == "model"
+                    and s.plan_source == "fallback"
+                ):
+                    # The candidate began before the resume-aware plan was ready (it takes 20-45 s; most sessions
+                    # started on the deterministic plan and never used it). The plan is a time budget and
+                    # priorities that the policy reads afresh every turn, so the rest of the interview follows it.
+                    s.plan = plan
+                    s.plan_source = "model_late"
+                    applied["late"] = s.status.value
+                    return True
                 applied["skipped"] = s.status.value
                 return False
             if profile_doc is not None:
@@ -585,6 +680,13 @@ class InterviewEngine:
 
         saved = await self.store.save_with_retry(session_id, _apply, durable=True)
         duration_ms = round((time.monotonic() - started) * 1000.0, 1)
+        if applied.get("late"):
+            log.info("engine.plan_adopted_late", session_id=session_id, status=applied["late"], duration_ms=duration_ms)
+            async with session_scope() as db:
+                await log_event(
+                    db, session_id, "session.plan_adopted", {"plan_source": "model_late", "duration_ms": duration_ms}
+                )
+            return
         if applied.get("skipped"):
             log.info("engine.prepare_discarded", session_id=session_id, status=applied["skipped"])
             return
@@ -660,7 +762,9 @@ class InterviewEngine:
                 },
             )
         await publish_session_event(session_id, {"type": "session.ready", "session_id": session_id})
-        log.info("engine.session_prepared", session_id=session_id, plan_source="intake", duration_ms=duration_ms)
+        log.info(
+            "engine.session_prepared", session_id=session_id, plan_source="intake", duration_ms=duration_ms
+        )
 
     async def _profile_gate(self, state: InterviewState) -> tuple[str, Any | None]:
         """("ok"|"wait"|"timeout", newly found profile row). Waits only while a
@@ -670,10 +774,13 @@ class InterviewEngine:
         if state.candidate_profile:
             return "ok", None
         async with session_scope() as db:
-            row = await latest_profile(db, uuid.UUID(state.candidate_id), uuid.UUID(state.job_id))
+            scope = await profile_scope(db, state.interview_id)  # open links: this registration's résumés only
+            row = await latest_profile(
+                db, uuid.UUID(state.candidate_id), uuid.UUID(state.job_id), interview_ids=scope
+            )
             if row is not None:
                 return "ok", row
-            pending = await resume_pending(db, uuid.UUID(state.candidate_id))
+            pending = await resume_pending(db, uuid.UUID(state.candidate_id), interview_ids=scope)
         if not pending:
             return "ok", None
         started = state.profile_wait_started_at or self.now()
@@ -681,7 +788,7 @@ class InterviewEngine:
             return "wait", None
         from app.services.resume.service import quick_profile_fallback
 
-        fallback = await quick_profile_fallback(state.candidate_id, state.job_id)
+        fallback = await quick_profile_fallback(state.candidate_id, state.job_id, interview_ids=scope)
         log.info(
             "engine.profile_wait_fallback",
             session_id=state.session_id,
@@ -722,6 +829,35 @@ class InterviewEngine:
         except AIError as exc:
             log.info("engine.prefix_warmup_skipped", session_id=state.session_id, reason=type(exc).__name__)
 
+    def _add_gap_probe(
+        self, state: InterviewState, directive: PolicyDirective, answer: str, special: SpecialResult | None
+    ) -> None:
+        """Tier 2 gap-targeted follow-up: name the one thing a substantive answer left out (app.services.interview
+        .gaps) so a follow-up asks for it instead of something generic or already given."""
+        if special is not None and special.is_special:
+            return
+        current = state.current_question()
+        gaps = answer_gaps(
+            answer,
+            question=current.text if current is not None else None,
+            expected_evidence=current.expected_evidence if current is not None else (),
+            technical=not (current is not None and current.competency_key in NON_TECHNICAL_KEYS),
+            followup=current is not None and current.parent_id is not None,
+        )
+        probe = gap_instruction(
+            gaps,
+            recommended=directive.recommended_action,
+            alternatives=directive.alternatives,
+            allowed=directive.allowed_actions,
+        )
+        if probe is None:
+            return
+        directive.instructions.append(probe)
+        log.info("engine.gap_probe", session_id=state.session_id, gap=gaps[0].kind, gaps=[g.kind for g in gaps])
+
+    def _turn_prompt_version(self) -> str:
+        return PROMPT_VERSION_COMPACT if self.config.turn_decision_compact else PROMPT_VERSION
+
     async def _prepare_first_question(self, state: InterviewState) -> dict[str, Any] | None:
         directive = compute_directive(
             state, now=self.now(), closing_reserve_s=self.config.closing_reserve_s, first_question=True
@@ -730,9 +866,9 @@ class InterviewEngine:
         messages = turn_messages(system_prompt(state), user_prompt(state, directive, last_answer=None))
         try:
             result = await self.ai.llm.structured(
-                TurnDecision,
+                TurnDecisionCompact if self.config.turn_decision_compact else TurnDecision,
                 messages,
-                context=turn_context(state, PROMPT_VERSION),
+                context=turn_context(state, self._turn_prompt_version()),
                 temperature=self.config.turn_temperature,
                 max_tokens=self.config.turn_max_tokens,
                 timeout=self.config.first_question_timeout_s,
@@ -741,8 +877,10 @@ class InterviewEngine:
         except AIError as exc:
             log.info("engine.first_question_live", session_id=state.session_id, reason=type(exc).__name__)
             return None
+        value = result.value
+        first = expand_compact(value) if isinstance(value, TurnDecisionCompact) else cast(TurnDecision, value)
         check = check_decision(
-            directive, result.value, state, valid_bank_ids=[b.id for b in directive.candidate_bank_questions]
+            directive, first, state, valid_bank_ids=[b.id for b in directive.candidate_bank_questions]
         )
         decision = check.decision
         if decision.action in NON_QUESTION_ACTIONS or "?" not in decision.speech:
@@ -1006,6 +1144,8 @@ class InterviewEngine:
                 directive.instructions.append(
                     f'The candidate first asked whether you can hear them: begin your reply with "{heard.ack}"'
                 )
+            if self.config.gap_probes and not (directive.must_close or directive.start_coding):
+                self._add_gap_probe(state, directive, text, special)
             if directive.must_close or directive.start_coding:
                 if pending is not None:
                     await self._persist_pending_answer(state, pending)
@@ -1021,7 +1161,9 @@ class InterviewEngine:
                 return
             if directive.start_coding:
                 started = False
-                async with aclosing(self._start_coding_events(state, ack=True)) as _relay:
+                async with aclosing(
+                    self._start_coding_events(state, ack=not turn.acknowledged)
+                ) as _relay:
                     async for event in _relay:
                         started = True
                         yield event
@@ -1048,6 +1190,7 @@ class InterviewEngine:
                     last_answer=text,
                     current_question=current.text if current else None,
                     interruption=self._interruption_note(state, turn),
+                    acknowledged=bool(turn.acknowledged),
                     pending_answer=pending if turn.speculative else None,
                     speculative=turn.speculative,
                     persist_task=persist_task,
@@ -1076,6 +1219,14 @@ class InterviewEngine:
         )
         question_id = state.current_question_id
         evaluate = bool(question_id and text and (special.kind in (SpecialKind.NONE, SpecialKind.DONT_KNOW)))
+        current = state.current_question()
+        if evaluate and current is not None and current.action in FLOW_ONLY_ACTIONS:
+            # A reply to "any questions for me?", the intro or the closing is conversation, not an answer:
+            # evaluating it produced synthetic negative evidence against the last competency (S9). Answering
+            # the candidate's questions keeps the invitation row current, so those replies stay unevaluated;
+            # a real question asked after the interview reopened (a late evaluation lowered sufficiency) is
+            # its own row and its answer is evaluated.
+            evaluate = False
         if state.intake is not None:
             evaluate = False  # intake answers are judged by intake.evaluate after the session (8.1)
         record_answer(
@@ -1111,6 +1262,8 @@ class InterviewEngine:
         async def _write(session: AsyncSession) -> None:
             turn = pending.turn
             quick_meta: dict[str, Any] = {"special": pending.special.kind.value}
+            if pending.special.suspect:
+                quick_meta["suspect_instruction"] = pending.special.suspect  # audit trail (S8); still evaluated
             if pending.quick:
                 quick_meta["assessment"] = pending.quick
             await add_answer(
@@ -1226,6 +1379,11 @@ class InterviewEngine:
             notes.append(
                 "The candidate has not heard your current question yet; respond to what they said, then ask it."
             )
+        if turn.acknowledged:
+            notes.append(
+                f'You have already said "{turn.acknowledged}" out loud after this answer: do not acknowledge or thank '
+                "again; start directly with your next sentence."
+            )
         return " ".join(notes) or None
 
     # ======================================================= decision turns
@@ -1237,6 +1395,7 @@ class InterviewEngine:
         last_answer: str | None,
         current_question: str | None = None,
         interruption: str | None = None,
+        acknowledged: bool = False,
         pending_answer: PendingAnswer | None = None,
         speculative: bool = False,
         coding_prompt: str | None = None,
@@ -1265,6 +1424,7 @@ class InterviewEngine:
                 last_answer=last_answer,
                 current_question=current_question,
                 interruption=interruption,
+                evidence=thread_evidence(state, last_answer=last_answer),
             )
             messages = turn_messages(system, user)
             retry = turn_messages(
@@ -1284,7 +1444,11 @@ class InterviewEngine:
 
         def guard_factory(allow_regenerate: bool, released_before: bool) -> Any:
             return guard_for_turn(
-                state, probe=probe, allow_regenerate=allow_regenerate, released_before=released_before
+                state,
+                probe=probe,
+                allow_regenerate=allow_regenerate,
+                released_before=released_before,
+                after_ack=acknowledged,
             )
 
         spoken: list[str] = []
@@ -1294,14 +1458,15 @@ class InterviewEngine:
                 stream_speech_object(
                     self.ai,
                     messages,
-                    schema=TurnDecision,
-                    json_schema=TURN_SCHEMA,
-                    context=turn_context(state, PROMPT_VERSION),
+                    schema=TurnDecisionCompact if self.config.turn_decision_compact else TurnDecision,
+                    json_schema=COMPACT_TURN_SCHEMA if self.config.turn_decision_compact else TURN_SCHEMA,
+                    context=turn_context(state, self._turn_prompt_version()),
                     utterance_id=utterance_id,
                     outcome=outcome,
                     config=self.config,
                     retry_messages=retry,
                     guard_factory=guard_factory,
+                    after_ack=acknowledged,
                 )
             ) as gen:
                 async for delta in gen:
@@ -1357,7 +1522,7 @@ class InterviewEngine:
             extra_deviations.append("tail_cut" if outcome.tail_cut else "decision_recovered")
         else:
             fallback_text, action, bank = fallback_utterance(
-                state, directive, current_question=current_question
+                state, directive, current_question=current_question, acknowledged=acknowledged
             )
             decision = synthesize_decision(
                 fallback_text,
@@ -1560,6 +1725,15 @@ class InterviewEngine:
             state.turn_state = TurnState.AI_SPEAKING
             if deviations:
                 state.deviations += len([d for d in deviations if not d.startswith("speech:")])
+            TURN_DECISIONS.labels(
+                outcome="fallback"
+                if outcome.fallback
+                else "tail_cut"
+                if outcome.tail_cut
+                else "synthesized"
+                if decision_record["synthesized"]
+                else "complete"
+            ).inc()
             await log_event(
                 db,
                 state.session_id,
@@ -1986,12 +2160,21 @@ class InterviewEngine:
                 db,
                 state.session_id,
                 "turn.flow",
-                {"intent": heard.intent.value, "topic": heard.topic, "question_id": question_id, "streak": streak},
+                {
+                    "intent": heard.intent.value,
+                    "topic": heard.topic,
+                    "question_id": question_id,
+                    "streak": streak,
+                },
                 elapsed_s=elapsed,
             )
             await self._save(state, db=db)
         yield UtteranceBegin(
-            utterance_id=utterance_id, kind="acknowledgment", behavior=spec, question_id=question_id, text=text
+            utterance_id=utterance_id,
+            kind="acknowledgment",
+            behavior=spec,
+            question_id=question_id,
+            text=text,
         )
         yield UtteranceMeta(
             utterance_id=utterance_id,
@@ -2350,7 +2533,7 @@ class InterviewEngine:
 
     # ============================================================ pause/resume
     async def pause(self, session_id: str, *, reason: str = "disconnect") -> None:
-        async with self._session_lock(session_id):
+        async with self._session_lock(session_id, strict=True):
             state = await self._load(session_id)
             if state.status != SessionStatus.LIVE:
                 return
@@ -2361,19 +2544,32 @@ class InterviewEngine:
             last = state.utterances[-1] if state.utterances else None
             if last is not None and not last.delivered:
                 last.interrupted = True  # will be re-spoken on resume
+
+            def reapply_pause(fresh: InterviewState) -> bool:
+                # A turn handler saved meanwhile: pause its state, never resurrect ours (G1).
+                if fresh.status != SessionStatus.LIVE:
+                    return False
+                fresh.pause(now)
+                fresh.status = SessionStatus.PAUSED
+                fresh.turn_state = TurnState.PAUSED
+                tail = fresh.utterances[-1] if fresh.utterances else None
+                if tail is not None and not tail.delivered:
+                    tail.interrupted = True
+                return True
+
             async with session_scope() as db:
                 if state.intake is not None:
                     await self.intake.on_pause(state, db)
                 await log_event(
                     db, session_id, "session.paused", {"reason": reason}, elapsed_s=state.elapsed_seconds(now)
                 )
-                await self._save(state, durable=True, db=db)
+                await self._save(state, durable=True, db=db, reapply=reapply_pause)
 
     def resume(self, session_id: str, *, reconnect: bool) -> EventStream:
         return EventStream(self._resume(session_id, reconnect=reconnect))
 
     async def _resume(self, session_id: str, *, reconnect: bool) -> AsyncGenerator[TurnEvent, None]:
-        async with self._session_lock(session_id):
+        async with self._session_lock(session_id, strict=True):
             state = await self._load(session_id)
             if state.status in ENDED_STATUSES:
                 return
@@ -2410,7 +2606,10 @@ class InterviewEngine:
                     elapsed_s=elapsed,
                 )
                 await self._save(
-                    state, durable=True, db=db, extra_columns={"reconnect_count": state.reconnects} if reconnect else None
+                    state,
+                    durable=True,
+                    db=db,
+                    extra_columns={"reconnect_count": state.reconnects} if reconnect else None,
                 )
             async with aclosing(
                 self.intake.resume_events(state, reconnect=reconnect, mid_answer=mid_answer)
@@ -2518,7 +2717,7 @@ class InterviewEngine:
     async def _end_session(
         self, session_id: str, reason: SessionEndReason
     ) -> AsyncGenerator[TurnEvent, None]:
-        async with self._session_lock(session_id):
+        async with self._session_lock(session_id, strict=True):
             state = await self._load(session_id)
             if state.status in ENDED_STATUSES:
                 return
@@ -2660,6 +2859,42 @@ class InterviewEngine:
                     dedupe_key=f"report.generate:{state.session_id}",
                     db=db,
                 )
+            closing_status = state.status
+            transcript_id = state.utterances[-1].transcript_id if text and state.utterances else None
+
+            def reapply_closing(fresh: InterviewState) -> bool:
+                # Another writer saved while we were closing: end *its* state rather than
+                # overwrite it; if it already ended the session there is nothing to do (G1).
+                if fresh.status in ENDED_STATUSES:
+                    return False
+                if fresh.coding.active and fresh.coding.coding_session_id:
+                    fresh.coding.active = False
+                    fresh.coding.ended_reason = "session_ended"
+                    fresh.coding.problems_done += 1
+                    fresh.coding.completed = True
+                fresh.closing_started = True
+                fresh.end_reason = reason
+                fresh.pause(now)
+                fresh.status = closing_status
+                fresh.turn_state = TurnState.ENDED
+                fresh.awaiting_answer = False
+                if text:
+                    add_utterance(
+                        fresh,
+                        UtteranceRecord(
+                            id=utterance_id,
+                            kind="closing",
+                            action=TurnAction.CLOSE_INTERVIEW,
+                            text=text,
+                            at_s=elapsed,
+                            transcript_id=transcript_id,
+                        ),
+                    )
+                    record_interviewer_text(fresh, text=text, at_s=elapsed, question_id=None)
+                    fresh.closing_utterance_id = utterance_id
+                    fresh.avatar_state = spec.state
+                return True
+
             await self._save(
                 state,
                 durable=True,
@@ -2669,6 +2904,7 @@ class InterviewEngine:
                     "end_reason": reason.value,
                     "elapsed_seconds": round(elapsed, 3),
                 },
+                reapply=reapply_closing,
             )
         # Double-check: an evaluation finishing while we were closing found the
         # session still live and only queued its result; apply it now.
@@ -3363,7 +3599,7 @@ class InterviewEngine:
 
     async def intake_jump(self, session_id: str, stage: str) -> InterviewState:
         """Test hook: move an intake session to the start of ``stage``."""
-        async with self._session_lock(session_id):
+        async with self._session_lock(session_id, strict=True):
             state = await self._load(session_id)
             if state.intake is None:
                 raise SessionNotFound(f"session {session_id} is not an intake session")
@@ -3372,7 +3608,7 @@ class InterviewEngine:
 
     # ============================================================ test hooks
     async def advance_clock(self, session_id: str, seconds: float) -> InterviewState:
-        async with self._session_lock(session_id):
+        async with self._session_lock(session_id, strict=True):
             state = await self._load(session_id)
             state.elapsed_before_pause_s = max(0.0, state.elapsed_before_pause_s + float(seconds))
             async with session_scope() as db:
@@ -3390,7 +3626,7 @@ class InterviewEngine:
         return state
 
     async def force_coding(self, session_id: str) -> InterviewState:
-        async with self._session_lock(session_id):
+        async with self._session_lock(session_id, strict=True):
             state = await self._load(session_id)
             state.force_coding = True
             state.coding.unavailable = False

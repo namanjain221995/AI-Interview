@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -251,15 +252,27 @@ class ResumeServiceImpl:
         job_id: uuid.UUID | None = None,
         *,
         include_quick: bool = False,
+        interview_ids: Sequence[uuid.UUID] | None = None,
     ) -> CandidateProfile | None:
         """Latest usable (ready|partial) profile, preferring the job-specific one.
         With ``include_quick`` a newer quick profile (a resume whose model profile
-        is still being generated) is returned when no usable profile is newer."""
+        is still being generated) is returned when no usable profile is newer.
+        ``interview_ids`` limits it to résumés uploaded for those interviews (an open-link registration, S4)."""
+        scope = (
+            (
+                CandidateProfile.resume_id.in_(
+                    select(CandidateResume.id).where(CandidateResume.interview_id.in_(interview_ids))
+                ),
+            )
+            if interview_ids is not None
+            else ()
+        )
         base = (
             select(CandidateProfile)
             .where(
                 CandidateProfile.candidate_id == candidate_id,
                 CandidateProfile.status.in_(USABLE_PROFILE_STATUSES),
+                *scope,
             )
             .order_by(CandidateProfile.version.desc(), CandidateProfile.created_at.desc())
             .limit(1)
@@ -272,7 +285,11 @@ class ResumeServiceImpl:
         if include_quick:
             quick = await db.scalar(
                 select(CandidateProfile)
-                .where(CandidateProfile.candidate_id == candidate_id, CandidateProfile.status == QUICK_STATUS)
+                .where(
+                    CandidateProfile.candidate_id == candidate_id,
+                    CandidateProfile.status == QUICK_STATUS,
+                    *scope,
+                )
                 .order_by(CandidateProfile.version.desc())
                 .limit(1)
             )
@@ -461,7 +478,10 @@ assert isinstance(ResumeServiceImpl(), ResumeService)  # noqa: S101 - protocol c
 
 
 async def quick_profile_fallback(
-    candidate_id: uuid.UUID | str, job_id: uuid.UUID | str | None = None
+    candidate_id: uuid.UUID | str,
+    job_id: uuid.UUID | str | None = None,
+    *,
+    interview_ids: Sequence[uuid.UUID] | None = None,
 ) -> CandidateProfile | None:
     """For the interview engine when its profile wait budget runs out: the latest
     usable profile or, while the model profile is still being generated, the
@@ -470,5 +490,9 @@ async def quick_profile_fallback(
 
     async with session_scope() as db:
         return await get_resume_service().latest_profile(
-            db, uuid.UUID(str(candidate_id)), _uuid_or_none(job_id), include_quick=True
+            db,
+            uuid.UUID(str(candidate_id)),
+            _uuid_or_none(job_id),
+            include_quick=True,
+            interview_ids=interview_ids,
         )

@@ -25,6 +25,7 @@ from app.services.jobs.catalog import (
     ensure_org_owned,
     get_template,
     org_visible,
+    parse_round_type,
 )
 
 router = APIRouter(tags=["catalog"], responses=ERROR_RESPONSES)
@@ -118,7 +119,7 @@ async def update_template(
     row = await get_template(db, template_id, org_id)
     ensure_org_owned(row, org_id, what="template")
     fields = set(body.model_fields_set)
-    round_type = body.round_type or RoundType(row.round_type)
+    round_type = body.round_type or parse_round_type(row.round_type)
     name = body.name.strip() if body.name else row.name
     if fields & {"config", "round_type", "name"}:
         patch = dict(body.config or {})

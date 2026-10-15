@@ -266,6 +266,7 @@ def default_rules(policy: IntegrityPolicy) -> dict[IntegrityEventType, Effective
         stop_action = A.PAUSE_INTERVIEW
         stop_message = "Screen sharing is required for this interview. Please share your entire screen again to continue."
     reload_allowed = policy.allow_page_reload_resume
+    reload_quiet = reload_allowed or not on
     rules = [
         # --- browser: fullscreen / focus ------------------------------------------------
         _rule(
@@ -376,11 +377,12 @@ def default_rules(policy: IntegrityPolicy) -> dict[IntegrityEventType, Effective
             min_duration_seconds=20,
             candidate_message="Your camera view seems to be covered or too dark. Please check your camera.",
         ),
+        # A muted microphone is a practical problem, not an integrity signal: the candidate is told, never
+        # flagged (S22; repeated mutes used to escalate to a human-review flag).
         _rule(
             T.MICROPHONE_DISABLED,
             S.MEDIUM,
             A.WARN_CANDIDATE,
-            escalate_after=2,
             candidate_message="Your microphone seems to be off. Please turn it back on so we can hear your answers.",
         ),
         # --- screen share (browser-observed, objective) ------------------------------------
@@ -411,11 +413,11 @@ def default_rules(policy: IntegrityPolicy) -> dict[IntegrityEventType, Effective
             else None,
         ),
         # --- server-observed -----------------------------------------------------------
+        # Allowed reloads (or any reload while monitoring is off) are only logged and never escalate (S22).
         _rule(
             T.PAGE_RELOAD,
-            S.LOW if reload_allowed else S.MEDIUM,
-            A.LOG_ONLY if reload_allowed else A.FLAG_FOR_HUMAN_REVIEW,
-            escalate_after=3 if reload_allowed else None,
+            S.LOW if reload_quiet else S.MEDIUM,
+            A.LOG_ONLY if reload_quiet else A.FLAG_FOR_HUMAN_REVIEW,
         ),
         _rule(T.DISCONNECT, S.INFO, A.LOG_ONLY),
         _rule(T.RECONNECT, S.INFO, A.LOG_ONLY),

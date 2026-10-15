@@ -1,10 +1,11 @@
 import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppProviders } from "@/app/providers";
 import { routes } from "@/app/router";
+import { api } from "@/lib/api";
 import { resetAuthStore } from "@/lib/auth";
 import { HUMAN_DECISION_NOTE } from "@/components/domain/RecommendationBadge";
 
@@ -167,6 +168,29 @@ describe("recruiter report", () => {
   });
 });
 
+describe("re-evaluating answers scored during an AI outage (S12)", () => {
+  it("explains the unassessed answers and queues their re-evaluation", async () => {
+    const get = vi.mocked(api.get).getMockImplementation()!;
+    vi.mocked(api.get).mockImplementation(async (path: string, options?: unknown) => {
+      const value = await get(path, options as never);
+      return (path === `/sessions/${DEMO_IDS.completed}` ? { ...(value as object), fallback_evaluations: 2 } : value) as never;
+    });
+    const post = vi.mocked(api.post).getMockImplementation()!;
+    vi.mocked(api.post).mockImplementation(async (path: string, body?: unknown) => {
+      if (path === `/sessions/${DEMO_IDS.completed}/reevaluate`) {
+        calls.push({ method: "POST", path, body });
+        return { queued: 2, fallback_evaluations: 2 } as never;
+      }
+      return post(path, body as never);
+    });
+    renderApp(`/app/reports/${DEMO_IDS.completed}`);
+    const warning = await screen.findByTestId("fallback-evaluations");
+    expect(warning).toHaveTextContent("2 answers were not assessed: the AI model was unavailable");
+    fireEvent.click(within(warning).getByRole("button", { name: "Re-evaluate 2 answers" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === `/sessions/${DEMO_IDS.completed}/reevaluate`)).toBe(true));
+  });
+});
+
 describe("integrity queue", () => {
   it("defaults to actionable unreviewed observations and bulk-reviews the selection", async () => {
     renderApp("/app/integrity");
@@ -196,7 +220,10 @@ describe("dashboard and analytics", () => {
   it("loads every analytics breakdown for the chosen period", async () => {
     renderApp("/app/analytics?days=90");
     expect(await screen.findByRole("heading", { level: 1, name: "Analytics" })).toBeInTheDocument();
-    expect(await screen.findByText("Interviewer turns")).toBeInTheDocument();
+    // The model's whole decision time, not what the candidate waits (P0.4): labelled as such.
+    expect(await screen.findByText("Interviewer turns: full decision time")).toBeInTheDocument();
+    expect(screen.getByText(/Candidates hear the reply much sooner/)).toBeInTheDocument();
+    expect(screen.queryByText("Interviewer turns")).not.toBeInTheDocument();
     for (const name of ["overview", "funnel", "scores", "competencies", "completion", "integrity", "hints", "model-usage"]) {
       expect(calls.some((c) => c.path === `/analytics/${name}` && c.params?.days === 90)).toBe(true);
     }

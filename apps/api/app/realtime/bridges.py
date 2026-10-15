@@ -102,7 +102,7 @@ def is_execution_result(result: CodingRunResultMsg) -> bool:
     """True when the sandbox actually ran the candidate's code: not a rejected
     run and not a platform fault (the coding service turns those into an
     ``error`` result carrying the sandbox client's busy message)."""
-    if result.status is RunStatus.REJECTED:
+    if result.status is RunStatus.REJECTED or result.platform_fault:
         return False
     return not (result.status is RunStatus.ERROR and result.stderr.strip() == SANDBOX_BUSY_MESSAGE)
 
@@ -233,6 +233,7 @@ class CodingBridge:
                 kind=kind,
                 status=RunStatus.ERROR,
                 stderr="The code runner is temporarily unavailable. Please try again in a moment.",
+                platform_fault=True,
             )
             self.rt.post(result)
             return

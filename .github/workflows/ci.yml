@@ -1,0 +1,259 @@
+# Continuous integration for the AI Interview Platform (plan package C1).
+#
+# Runs on every push to the integration branches and on every pull request, on arm64 so the
+# wheels, images and tests match the DGX Spark hosts. GitHub-hosted arm64 runners
+# (ubuntu-24.04-arm) are free for public repositories and billed for private ones; set the
+# repository variable CI_RUNNER to a self-hosted arm64 label (never a GPU node) to override.
+#
+# Jobs:  api-lint (ruff, mypy)        api-unit (mock AI, no services)
+#        api-integration (postgres + redis service containers, single-Alembic-head check)
+#        web (tsc, vitest, production build)      infra (caddy, promtool, compose, dashboards, shellcheck, edge tests)
+#        sandbox (ruff, mypy, unit tests incl. the runner copies being in sync)
+#        e2e-mock (nightly + on demand: the mock-AI browser e2e, no model calls)
+name: ci
+
+on:
+  push:
+    branches: [hd-dev, main]
+  pull_request:
+  schedule:
+    - cron: "30 21 * * *"   # 03:00 IST nightly: e2e-mock
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  api-lint:
+    name: API lint + types (ruff, mypy)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04-arm' }}
+    if: github.event_name != 'schedule'
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+      - name: Install (frozen lockfile)
+        working-directory: apps/api
+        run: uv sync --frozen
+      - name: ruff
+        working-directory: apps/api
+        run: uv run ruff check . ../../infra
+      - name: mypy (report-only until the type-baseline package clears the 60 pre-existing errors)
+        working-directory: apps/api
+        continue-on-error: true
+        run: |
+          uv run mypy app | tee mypy.txt || true
+          count="$(grep -c ': error:' mypy.txt || true)"
+          echo "::warning title=mypy::${count} type errors (pre-existing baseline: 60 in 12 files; do not add new ones)"
+          # Ratchet: fail only when the count grows beyond the recorded baseline.
+          test "${count:-0}" -le 60
+
+  api-unit:
+    name: API unit tests (mock AI)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04-arm' }}
+    if: github.event_name != 'schedule'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+      - name: Install (frozen lockfile)
+        working-directory: apps/api
+        run: uv sync --frozen
+      - name: Model assets needed by unit tests (VAD, face detector; sha256-verified)
+        run: scripts/download_assets.sh vad face
+      - name: pytest (not live, not integration)
+        working-directory: apps/api
+        run: uv run pytest -m "not live and not integration" -q -p no:cacheprovider
+
+  api-integration:
+    name: API integration tests (postgres + redis)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04-arm' }}
+    if: github.event_name != 'schedule'
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg17-trixie   # same image as docker-compose.yml
+        env:
+          POSTGRES_USER: interview
+          POSTGRES_PASSWORD: interview
+          POSTGRES_DB: interview
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -p 5432 -U interview -d interview"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:8.8.3                           # same image as docker-compose.yml
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # tests/fixtures/core.py creates interview_test_<pid>_<hex> databases through the
+      # ".../postgres" admin URL and leases Redis logical databases 1-14.
+      DATABASE_URL: postgresql+asyncpg://interview:interview@127.0.0.1:5432/interview
+      REDIS_URL: redis://127.0.0.1:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+      - name: Install (frozen lockfile)
+        working-directory: apps/api
+        run: uv sync --frozen
+      - name: Model assets (VAD, face detector)
+        run: scripts/download_assets.sh vad face
+      - name: Exactly one Alembic head
+        working-directory: apps/api
+        run: |
+          heads="$(uv run alembic heads | sed '/^\s*$/d')"
+          echo "$heads"
+          test "$(printf '%s\n' "$heads" | wc -l)" -eq 1 || { echo "::error::more than one Alembic head - merge the migration ledger"; exit 1; }
+      - name: pytest -m integration
+        working-directory: apps/api
+        run: uv run pytest -m "integration and not live" -q -p no:cacheprovider
+
+  web:
+    name: Web (tsc, vitest, build)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04-arm' }}
+    if: github.event_name != 'schedule'
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: npm ci
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+      - name: typecheck
+        working-directory: apps/web
+        run: npm run typecheck
+      - name: vitest
+        working-directory: apps/web
+        run: npm test
+      - name: production build
+        working-directory: apps/web
+        run: npm run build
+
+  sandbox:
+    name: Sandbox service (ruff, mypy, unit tests)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04-arm' }}
+    if: github.event_name != 'schedule'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: services/sandbox/uv.lock
+      - name: Install (frozen lockfile)
+        working-directory: services/sandbox
+        run: uv sync --frozen
+      - name: ruff
+        working-directory: services/sandbox
+        run: uv run ruff check .
+      - name: mypy
+        working-directory: services/sandbox
+        run: uv run mypy sandbox_service
+      - name: unit tests (no Docker; the per-language runner copies must match runtimes/runner.py)
+        working-directory: services/sandbox
+        run: uv run pytest -q
+
+  infra:
+    name: Infra (caddy, promtool, compose, dashboards, shellcheck, edge tests)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04-arm' }}
+    if: github.event_name != 'schedule'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+      - name: Install (frozen lockfile)
+        working-directory: apps/api
+        run: uv sync --frozen
+      - name: Generate a throwaway .env (compose interpolation needs the variables)
+        run: scripts/setup.sh
+      - name: make test-infra
+        run: make test-infra
+
+  e2e-mock:
+    name: Browser e2e on the mock-AI stack (intake spec)
+    # Nightly and on demand: about 5 minutes, no model endpoints (the stack points them at a closed port).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg17-trixie
+        env:
+          POSTGRES_USER: interview
+          POSTGRES_PASSWORD: interview
+          POSTGRES_DB: interview
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -p 5432 -U interview -d interview"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:8.8.3
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://interview:interview@127.0.0.1:5432/interview
+      REDIS_URL: redis://127.0.0.1:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install API, web and e2e dependencies
+        run: |
+          (cd apps/api && uv sync --frozen)
+          (cd apps/web && npm ci --no-audit --no-fund)
+          (cd tests/e2e && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium)
+      - name: Model assets (VAD, face detector)
+        run: scripts/download_assets.sh vad face
+      - name: Throwaway .env
+        run: scripts/setup.sh
+      - name: Run the intake spec against the mock stack
+        working-directory: apps/api
+        run: uv run python ../../tests/e2e/mock-stack/stack.py --run specs/intake.spec.ts
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            tests/e2e/playwright-report
+            tests/e2e/test-results
+            tests/e2e/mock-stack/.out
+          if-no-files-found: ignore
+          retention-days: 7

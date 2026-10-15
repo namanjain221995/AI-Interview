@@ -83,6 +83,7 @@ class RealAIServices:
                 max_retries=retries,
                 breaker=breaker,
                 api_key=api_key,
+                disabled=settings.ai_endpoint_disabled(name),
             )
 
         self.ledger: LedgerSink = ledger or ModelCallLedger(log_payloads=settings.model_call_log_payloads)
@@ -169,6 +170,8 @@ class RealAIServices:
             max_concurrency=settings.stt_max_concurrency,
             timeout=settings.whisper_timeout_seconds,
             ledger=self.ledger,
+            replica_slots=[settings.whisper_base_url_parallelism],
+            send_prompt=settings.whisper_send_prompt,
         )
         self.ocr = UnlimitedOcrClient(
             self.endpoints["ocr"], model=settings.ocr_model, prompt=settings.ocr_prompt, ledger=self.ledger
@@ -206,8 +209,13 @@ class RealAIServices:
             "ocr": lambda: self._probe_models(self.endpoints["ocr"]),
             "tts": self._probe_tts,
         }
+        disabled = {name for name in probes if name in self.endpoints and self.endpoints[name].disabled}
+        probes = {name: probe for name, probe in probes.items() if name not in disabled}
         results = await asyncio.gather(*(probe() for probe in probes.values()), return_exceptions=True)
-        report: dict[str, dict[str, Any]] = {}
+        report: dict[str, dict[str, Any]] = {
+            name: {"status": "disabled", "latency_ms": None, "detail": "disabled by AI_DISABLED_ENDPOINTS"}
+            for name in disabled
+        }
         for name, result in zip(probes, results, strict=True):
             if isinstance(result, BaseException):
                 report[name] = {

@@ -49,23 +49,54 @@ def extract_result(stdout: bytes, nonce: str) -> dict[str, Any] | None:
         return None
     if not isinstance(result, dict) or result.get("protocol") != PROTOCOL_VERSION:
         return None
-    clean: dict[str, Any] = sanitize(result)
+    try:
+        clean: dict[str, Any] = sanitize(result)
+    except (ValueError, RecursionError):
+        return None  # a forged, absurdly nested record: an invalid program result, never an HTTP 500 (S19)
     return clean
 
 
-def sanitize(value: Any) -> Any:
-    """Drop lone surrogates (valid in JSON escapes, not encodable as UTF-8) from container data."""
+# The runner refuses a returned value nested deeper than its MAX_ACTUAL_DEPTH (64) per test; the result frame wraps
+# that value a few levels deep (result -> steps -> step -> tests -> test -> actual). The frame cap must leave room
+# for both, or a value the runner accepted would turn the whole run into an unreadable "crash".
+MAX_DEPTH = 96
+
+
+def _clean_str(value: str) -> str:
+    try:
+        value.encode("utf-8")
+        return value
+    except UnicodeEncodeError:
+        return value.encode("utf-8", "replace").decode("utf-8")
+
+
+def sanitize(value: Any, *, max_depth: int = MAX_DEPTH) -> Any:
+    """Drop lone surrogates (valid in JSON escapes, not encodable as UTF-8) from container data.
+
+    Iterative, so a candidate-controlled record cannot exhaust the stack; nesting deeper than ``max_depth``
+    raises ``ValueError`` (S19)."""
     if isinstance(value, str):
-        try:
-            value.encode("utf-8")
-            return value
-        except UnicodeEncodeError:
-            return value.encode("utf-8", "replace").decode("utf-8")
-    if isinstance(value, list):
-        return [sanitize(v) for v in value]
-    if isinstance(value, dict):
-        return {sanitize(k) if isinstance(k, str) else k: sanitize(v) for k, v in value.items()}
-    return value
+        return _clean_str(value)
+    if not isinstance(value, (list, dict)):
+        return value
+    root: Any = [] if isinstance(value, list) else {}
+    stack: list[tuple[Any, Any, int]] = [(value, root, 1)]
+    while stack:
+        source, target, depth = stack.pop()
+        if depth > max_depth:
+            raise ValueError("record nests too deeply")
+        items = enumerate(source) if isinstance(source, list) else source.items()
+        for key, item in items:
+            if isinstance(item, (list, dict)):
+                child: Any = [] if isinstance(item, list) else {}
+                stack.append((item, child, depth + 1))
+            else:
+                child = _clean_str(item) if isinstance(item, str) else item
+            if isinstance(target, list):
+                target.append(child)
+            else:
+                target[_clean_str(key) if isinstance(key, str) else key] = child
+    return root
 
 
 class StreamDemux:

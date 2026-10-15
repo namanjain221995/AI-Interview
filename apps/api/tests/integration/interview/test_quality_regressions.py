@@ -143,6 +143,48 @@ async def test_declining_questions_after_the_invitation_closes_the_interview(int
     assert any(isinstance(e, SessionClosing) for e in events)
     actions = [e.decision.get("action") for e in events if isinstance(e, UtteranceMeta)]
     assert actions == ["close_interview"]  # no extra "answer" to a question nobody asked
+    # S9: the reply to the invitation is conversation, not an answer - it is never queued for evaluation
+    # and the stored invitation question carries no competency.
+    state = await d.state()
+    invite = next(q for q in state.questions if q.action.value == "invite_candidate_questions")
+    assert invite.competency_key is None
+    reply = state.answers[-1]
+    assert reply.question_id == invite.id
+    assert reply.id not in state.pending_evaluations and not await _evaluation_jobs_for(reply.id)
+
+
+async def test_pleasantries_after_the_invitation_are_never_evaluated(interview_env) -> None:
+    """'Okay great, thanks for the info' after the invitation used to be deep-evaluated against the last
+    competency and could lower its score (S9)."""
+    _, sid, engine = await _setup(interview_env)
+    d = Driver(interview_env, engine, sid)
+    await d.start()
+    await d.answer("[adequate] We ran EKS with managed node groups.", speculate=False)
+    interview_env["clock"].advance(1400)
+    events = await d.answer("[adequate] We also used spot instances for stateless services.", speculate=False)
+    assert any(
+        isinstance(e, UtteranceMeta) and e.decision.get("action") == "invite_candidate_questions"
+        for e in events
+    )
+    await d.answer("Okay great, thanks for the info, that was really helpful.", advance=5, speculate=False)
+    state = await d.state()
+    reply = state.answers[-1]
+    assert reply.id not in state.pending_evaluations and not await _evaluation_jobs_for(reply.id)
+
+
+async def _evaluation_jobs_for(answer_id: str) -> list[str]:
+    from sqlalchemy import select
+
+    from app.db.models import BackgroundJob
+
+    async with session_scope() as db:
+        rows = await db.scalars(
+            select(BackgroundJob.id).where(
+                BackgroundJob.type == "answer.evaluate",
+                BackgroundJob.payload["answer_id"].astext == str(answer_id),
+            )
+        )
+        return [str(r) for r in rows.all()]
 
 
 async def test_injection_turn_is_redirected_and_not_followed(interview_env) -> None:
@@ -174,3 +216,63 @@ async def test_plan_uses_the_compact_guided_schema(interview_env) -> None:
     assert plan_calls[-1].kwargs.get("max_tokens") == PLAN_MAX_TOKENS
     state = await engine.load_state(sid)
     assert state.plan_source == "model" and state.plan is not None
+
+
+async def test_a_technical_answer_about_system_prompts_is_evaluated(interview_env) -> None:
+    """Prompt-engineering vocabulary is content: the answer is scored, not redirected (S8; harness finding)."""
+    _, sid, engine = await _setup(interview_env)
+    d = Driver(interview_env, engine, sid)
+    await d.start()
+    events = await d.answer(
+        "The system prompt had three parts: the role and task, the hard rules with their priorities, and the output "
+        "format. We told the model to act as a strict JSON generator, kept the rules at the end because with long "
+        "contexts it tends to ignore the earlier instructions, and versioned the prompt next to the code.",
+        speculate=False,
+    )
+    meta = [e for e in events if isinstance(e, UtteranceMeta)][-1]
+    assert meta.decision["directive"]["special"] is None
+    assert meta.decision["directive"]["recommended_action"] != "redirect"
+    state = await d.state()
+    reply = state.answers[-1]
+    assert reply.special is None and reply.quality != "off_topic"
+    assert reply.evaluated or reply.id in state.pending_evaluations or await _evaluation_jobs_for(reply.id)
+
+
+async def test_evaluator_v2_gets_the_reference_levels_and_writes_evidence_first(interview_env) -> None:
+    """Tier 2 evaluator v2: the competency's level 1/3/5 anchors reach the prompt; the requested schema starts
+    with the evidence and its quotes, and names the overall quality only after the scores."""
+    from app.db.models import Competency
+
+    world, sid, engine = await _setup(interview_env)
+    async with session_scope() as db:
+        db.add(
+            Competency(
+                organization_id=world.organization_id,
+                key="kubernetes",
+                name="Kubernetes",
+                category="technical",
+                rubric={
+                    "levels": {
+                        "1": "Names basic objects only.",
+                        "3": "Operates production workloads and debugs common failures.",
+                        "5": "Designs multi-AZ clusters with explicit trade-offs.",
+                    }
+                },
+            )
+        )
+    d = Driver(interview_env, engine, sid)
+    await d.start()
+    await d.answer("[adequate] We ran three EKS clusters across three zones.", speculate=False, evaluate=False)
+    await d.run_evaluations()
+    call = interview_env["mock_ai"].llm.calls_for(ModelTask.ANSWER_EVALUATION)[-1]
+    user = str(call.messages[-1]["content"])
+    assert "REFERENCE LEVELS for kubernetes" in user and "level 5 = Designs multi-AZ clusters" in user
+    assert call.schema is not None and call.schema.__name__ == "AnswerEvaluationV2"
+    assert "collect the evidence first" in " ".join(str(call.messages[0]["content"]).split())
+    async with session_scope() as db:
+        row = (
+            (await db.execute(select(AnswerEvaluationRow).order_by(AnswerEvaluationRow.created_at.desc())))
+            .scalars()
+            .first()
+        )
+    assert row is not None and not row.is_fallback

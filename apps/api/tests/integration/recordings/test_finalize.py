@@ -8,6 +8,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from sqlalchemy import select
 
 from app.db.models import MediaAsset
@@ -26,6 +27,8 @@ from .conftest import (
     split_bytes,
     upload,
 )
+
+pytestmark = pytest.mark.integration
 
 CUES_ID = b"\x1c\x53\xbb\x6b"
 

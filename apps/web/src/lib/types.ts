@@ -1115,6 +1115,10 @@ export interface OrganizationRef {
   id: string;
   name: string;
   slug: string;
+  /** Plan features managed by the platform (G8), e.g. `{ intake: true }`. */
+  features?: Record<string, unknown>;
+  /** Policy fields the platform forces on, e.g. `integrity.camera_required`; settings screens lock them. */
+  enforced_policy_fields?: string[];
 }
 
 export interface Organization extends OrganizationRef, Timestamps {
@@ -1147,6 +1151,8 @@ export interface MeResponse {
   user: StaffUser;
   organization: OrganizationRef | null;
   permissions?: Permission[];
+  /** The account still has an administrator-issued password: only the account page is usable (S13). */
+  mustChangePassword?: boolean;
 }
 
 export interface UserCreate {
@@ -1664,6 +1670,8 @@ export interface Interview extends Timestamps {
   job?: JobRef;
   round?: RoundRef | null;
   latest_session?: { id: string; status: SessionStatus } | null;
+  /** Still "invited" but past its start deadline (the server never rewrites the status). */
+  is_expired?: boolean;
 }
 
 export interface InterviewCreate {

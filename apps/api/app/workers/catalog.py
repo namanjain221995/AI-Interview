@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.config import get_settings
 from app.core.lifecycle import on_startup
 from app.core.logging import get_logger
 from app.core.queue import enqueue, job_handler, register_periodic_job
@@ -24,20 +25,32 @@ BACKFILL_INTERVAL_SECONDS = 3600
 register_periodic_job(BACKFILL_JOB, BACKFILL_INTERVAL_SECONDS)
 
 
+def _embeddings_disabled() -> bool:
+    """AI_DISABLED_ENDPOINTS=embedding: skip instead of dead-lettering (S18)."""
+    return get_settings().ai_endpoint_disabled("embedding")
+
+
 @job_handler(EMBED_JOB, concurrency=2, timeout_seconds=600)
 async def question_bank_embed(payload: dict[str, Any]) -> dict[str, Any]:
+    if _embeddings_disabled():
+        return {"skipped": "embeddings_disabled"}
     counts = await embed_payload(payload)
     return {"embedded": counts}
 
 
 @job_handler(BACKFILL_JOB, concurrency=1, timeout_seconds=1800)
 async def catalog_backfill_embeddings(payload: dict[str, Any]) -> dict[str, Any]:
+    if _embeddings_disabled():
+        return {"skipped": "embeddings_disabled"}
     counts = await backfill_missing()
     return {"embedded": counts}
 
 
 @on_startup("catalog.backfill_embeddings.enqueue", processes=("worker",))
 async def enqueue_backfill_on_start() -> None:
+    if _embeddings_disabled():
+        log.info("catalog.backfill_skipped", reason="embeddings_disabled")
+        return
     try:
         await enqueue(BACKFILL_JOB, {}, dedupe_key=f"{BACKFILL_JOB}:startup")
     except Exception as exc:  # noqa: BLE001 - never block worker start

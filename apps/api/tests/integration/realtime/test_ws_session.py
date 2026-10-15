@@ -4,11 +4,17 @@ candidate audio (tests/e2e/fixtures/audio) and mocked STT/TTS."""
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
+from sqlalchemy import update
 
 from app.core import metrics
+from app.core.queue import publish_session_event
+from app.db.models import Interview, InterviewSession
+from app.db.session import session_scope
+from app.domain.enums import SessionEndReason
 from app.realtime.registry import get_registry
 from app.realtime.turns import ChunkRecord, spoken_portion
 from app.schemas.realtime import unpack_frame
@@ -152,6 +158,11 @@ async def test_voice_turn_message_order_latency_and_answer_audio(realtime_env, w
         assert isinstance(record[key], int) and record[key] >= 0, (key, record)
     assert record["first_chunk_chars"] > 0 and isinstance(record["tts_first_ms"], int)
     assert record["engine_first_event_ms"] <= record["first_delta_ms"] <= record["first_audio_ms"]
+    # P0.4: the candidate's clock starts at their last voiced audio, before the end-of-turn decision.
+    assert record["endpoint_silence_ms"] > 0
+    assert record["voice_to_voice_ms"] == record["endpoint_silence_ms"] + record["first_audio_ms"]
+    assert record["first_sound_by"] == "ack"
+    assert record["first_sound_ms"] == record["endpoint_silence_ms"] + record["ack_ms"]
 
 
 async def test_barge_in_backchannel_resumes_interrupted_question(realtime_env, ws_connect, mock_ai) -> None:
@@ -204,6 +215,37 @@ async def test_barge_in_backchannel_resumes_interrupted_question(realtime_env, w
     # Not a new answer: handle_candidate_turn was only called for the typed answer.
     assert [t.text for t in env.engine.turns] == ["We ran EKS with three node groups."]
     assert isinstance(ChunkRecord, type)
+
+
+async def test_short_reply_over_the_end_of_a_question_is_an_answer(realtime_env, ws_connect, mock_ai) -> None:
+    """S10 (audit B8): "Yes." spoken while the last word of a yes-no question plays answers it; nothing is re-spoken."""
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    env.engine.replies = ["Got it. Did you own the Karpenter configuration yourself?"]
+    await ws.send_json({"type": "answer.text", "text": "We ran EKS with three node groups."})
+    reply = await ws.wait_type("ai.utterance.start", kind="question")
+    await ws.wait_type("turn.state", state="ai_speaking")
+    # Both sentences are synthesized before the candidate speaks over the last word.
+    await ws.wait_type("tts.chunk", utterance_id=reply["utterance_id"], index=1)
+    await ws.send_json({"type": "playback.started", "utterance_id": reply["utterance_id"], "played_ms": 0})
+
+    mark = len(ws.messages)
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("Yes.")
+    await ws.send_audio(load_clip("backchannel"))
+    await ws.wait_type("barge_in", after=mark)
+    # The client reports that the whole question had already played when the candidate spoke.
+    await ws.send_json(
+        {"type": "playback.interrupted", "utterance_id": reply["utterance_id"], "played_ms": 600_000}
+    )
+    await ws.send_audio(silence(2000))
+    for _ in range(250):
+        if len(env.engine.turns) == 2:
+            break
+        await asyncio.sleep(0.02)
+    assert [t.text for t in env.engine.turns] == ["We ran EKS with three node groups.", "Yes."]
+    assert env.engine.turns[-1].interrupted_ai
+    assert not [c for c in env.engine.calls if c[0] == "backchannel_resume"]
 
 
 async def test_barge_in_with_substantive_answer_starts_new_turn(realtime_env, ws_connect, mock_ai) -> None:
@@ -736,13 +778,18 @@ async def test_mid_thought_pause_does_not_end_the_answer(realtime_env, ws_connec
         after=mark,
         timeout=15,
     )
-    await ws.wait_type("ai.utterance.start", kind="question", after=mark, timeout=15)
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark, timeout=15)
     assert [t.text for t in env.engine.turns] == [
         "We moved the batch jobs to spot instances and then rightsized the databases."
     ]
     assert final["text"] == env.engine.turns[0].text
     states = [m.get("reason") for m in ws.messages[mark:] if m.get("type") == "turn.state"]
     assert "speech_resumed" in states  # merged back instead of answering half an answer
+    # P0.4: the turn is measured from the end-of-turn decision that stood, not the reopened one.
+    await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"])
+    record = get_registry().get(env.session_id).latency[-1]
+    assert record["reopened"] >= 1
+    assert record["voice_to_voice_ms"] == record["endpoint_silence_ms"] + record["first_audio_ms"]
 
 
 async def test_done_answering_is_the_fast_path(realtime_env, ws_connect, mock_ai) -> None:
@@ -870,3 +917,267 @@ async def test_second_pass_revises_the_stored_answer_only_before_evaluation(real
     assert not await revise_answer_transcript(
         sid, started_ms=20000, ended_ms=25000, live_text="old", revised_text="new words here"
     )
+
+
+async def test_rest_end_request_reaches_the_room_over_the_bus(realtime_env, ws_connect) -> None:
+    """S6: POST /portal/sessions/{id}/end publishes session.end_requested; the room ends like control.end_interview."""
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    await publish_session_event(
+        env.session_id, {"type": "session.end_requested", "reason": "candidate_ended", "actor": "candidate"}
+    )
+    call = await wait_call(env.engine, "end_session")
+    assert call[1] == SessionEndReason.CANDIDATE_ENDED
+    await ws.wait_type("session.ended")
+
+
+async def _expire_invite(env, *, session_status: str, started: bool) -> None:
+    async with session_scope() as db:
+        await db.execute(
+            update(Interview)
+            .where(Interview.id == env.interview_id)
+            .values(invite_expires_at=datetime.now(UTC) - timedelta(minutes=5), status="in_progress")
+        )
+        await db.execute(
+            update(InterviewSession)
+            .where(InterviewSession.id == env.session_id)
+            .values(
+                status=session_status,
+                started_at=datetime.now(UTC) - timedelta(minutes=15) if started else None,
+            )
+        )
+
+
+async def test_reconnect_after_the_invite_deadline_is_accepted_mid_interview(
+    realtime_env, ws_connect
+) -> None:
+    """S7: a paused, started session reconnects although its invitation's start deadline has passed."""
+    env = await realtime_env()
+    await _expire_invite(env, session_status="paused", started=True)
+    ws = await ws_connect(env.session_id, await env.ticket())
+    assert ws.accepted
+    await ws.hello()
+    await ws.wait_type("session.state")  # admitted: the room syncs instead of refusing with 4011
+    assert not [
+        m for m in ws.messages if m.get("type") == "error" and m.get("code") == "interview_unavailable"
+    ]
+
+
+async def test_expired_invite_without_a_started_session_is_refused(realtime_env, ws_connect) -> None:
+    env = await realtime_env()
+    await _expire_invite(env, session_status="ready", started=False)
+    ws = await ws_connect(env.session_id, await env.ticket())
+    assert ws.accepted
+    error = await ws.wait_type("error")
+    assert error["code"] == "interview_unavailable"
+    assert await ws.wait_closed() == 4011
+
+
+
+def _fillers(ws, mark: int) -> list[dict]:
+    """Filler utterance starts after ``mark`` (sent as quiet acknowledgements; identified by their text)."""
+    from app.realtime.acknowledgements import FILLER_PHRASES
+
+    ids = {
+        m["utterance_id"]
+        for m in ws.messages[mark:]
+        if m["type"] == "ai.utterance.end" and m.get("text") in FILLER_PHRASES
+    }
+    return [m for m in ws.messages[mark:] if m["type"] == "ai.utterance.start" and m["utterance_id"] in ids]
+
+async def test_a_slow_reply_is_bridged_by_one_moment_and_the_answer_is_marked_acknowledged(
+    realtime_env, ws_connect, mock_ai, monkeypatch
+) -> None:
+    """Tier 1: "Okay." about a second after the answer, "One moment." when the reply is slow, never silence; the
+    engine learns the answer was already acknowledged (so the reply does not acknowledge it again)."""
+    from app.realtime import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "FILLER_AFTER_S", 1.0)
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    env.engine.first_event_delay = 2.5  # the model is slow to start its reply
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("We reduced costs by forty percent,", "mostly by rightsizing.")
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
+    ack = await ws.wait_type("ai.utterance.start", kind="acknowledgment", after=mark)
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"])
+    fillers = _fillers(ws, mark)
+    assert len(fillers) == 1 and fillers[0]["kind"] == "acknowledgment"  # a quiet caption, never the question's
+    filler = fillers[0]
+    order = [m.get("utterance_id") for m in ws.messages[mark:] if m["type"] == "ai.utterance.start"]
+    assert (
+        order.index(ack["utterance_id"])
+        < order.index(filler["utterance_id"])
+        < order.index(reply["utterance_id"])
+    )
+    turn = env.engine.turns[0]
+    assert turn.acknowledged  # the phrase the candidate already heard
+
+
+
+async def test_a_reply_announced_but_slow_to_speak_is_bridged_too(
+    realtime_env, ws_connect, mock_ai, monkeypatch
+) -> None:
+    """Live run: the engine announced the reply at once, its first words came 5 s later (the model was writing
+    under load), and the filler - which only covered the transcription wait - never played: ~6 s of silence."""
+    from app.realtime import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "FILLER_AFTER_S", 1.0)
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    env.engine.speech_start_delay = 2.5
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("We reduced costs by forty percent,", "mostly by rightsizing.")
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    reply_end = await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"])
+    fillers = _fillers(ws, mark)
+    assert len(fillers) == 1 and fillers[0]["kind"] == "acknowledgment"
+    filler = fillers[0]
+    # The filler went out while the reply was announced but still silent, and the reply was then spoken in full.
+    assert ws.messages.index(filler) < ws.messages.index(reply_end) and reply_end["text"]
+
+
+async def test_no_filler_once_the_replys_words_are_arriving(realtime_env, ws_connect, mock_ai, monkeypatch) -> None:
+    """Owner report: "One moment." played while the question was already on its way (its words had arrived, its
+    audio was being synthesized), landing on top of it and taking over its caption. Once the reply's text has
+    started, the filler stays quiet even if the audio is still a moment away."""
+    from app.realtime import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "FILLER_AFTER_S", 1.0)
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    mock_ai.tts.delay_s = 2.0  # the reply's text is immediate, its first audio ~2 s later
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("We reduced costs by forty percent,", "mostly by rightsizing.")
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"], timeout=15)
+    # The question was really synthesized (late), not degraded to a fallback.
+    assert any(m["type"] == "tts.chunk" and m.get("utterance_id") == reply["utterance_id"] for m in ws.messages[mark:])
+    assert _fillers(ws, mark) == []
+
+
+async def test_a_continuation_that_cut_off_an_unheard_reply_is_still_acknowledged(
+    realtime_env, ws_connect, mock_ai
+) -> None:
+    """Live run after the fast-STT switch: the turn ended at a short pause, the reply was announced, the candidate
+    went on talking and the reply was cancelled before any audio. Nothing was heard, so the rest of the answer is
+    the same answer going on: it gets its "Okay." like any other (it used to count as an interruption: silence)."""
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    env.engine.speech_start_delay = 4.0  # the reply is announced, its words are slow
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script(
+        "We reduced costs by forty percent,", "mostly by rightsizing.",
+        "Then we moved batch jobs to spot instances,", "which saved the most.",
+    )  # fmt: skip
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
+    await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    again = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1500))))
+    barge = await ws.wait_type("barge_in", after=again)
+    after = ws.messages.index(barge)
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=after + 1, timeout=15)
+    starts = [m.get("kind") for m in ws.messages[after : ws.messages.index(reply)] if m["type"] == "ai.utterance.start"]
+    assert starts == ["acknowledgment"], starts  # "Okay." first, then the reply to the whole answer
+
+async def test_a_quick_reply_needs_no_filler(realtime_env, ws_connect, mock_ai) -> None:
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("We reduced costs by forty percent,", "mostly by rightsizing.")
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"])
+    await asyncio.sleep(0.2)
+    assert not [
+        m for m in ws.messages[mark:] if m["type"] == "ai.utterance.start" and m.get("kind") == "comment"
+    ]
+
+
+async def _turn_latency_events(session_id, *, timeout: float = 5.0) -> list[dict]:  # noqa: ASYNC109
+    from sqlalchemy import select
+
+    from app.db.models import InterviewEvent
+
+    for _ in range(int(timeout / 0.05)):
+        async with session_scope() as db:
+            rows = (
+                (
+                    await db.execute(
+                        select(InterviewEvent.payload)
+                        .where(InterviewEvent.session_id == session_id, InterviewEvent.type == "turn.latency")
+                        .order_by(InterviewEvent.seq)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        if rows:
+            return list(rows)
+        await asyncio.sleep(0.05)
+    return []
+
+
+def _voice_to_voice_count() -> float:
+    labels = {"reply": "question"}
+    return metrics.REGISTRY.get_sample_value("interview_voice_to_voice_seconds_count", labels) or 0.0
+
+
+async def test_a_spoken_turn_persists_its_voice_to_voice_breakdown(
+    realtime_env, ws_connect, mock_ai, monkeypatch
+) -> None:
+    """P0.4: every spoken turn leaves a turn.latency interview event (it survives restarts, unlike log lines).
+    A slow reply hears "Okay." then "One moment." then the question: the first sound is the "Okay.", the
+    voice-to-voice number is the question's first audio, both counted from the candidate's last word."""
+    from app.realtime import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "FILLER_AFTER_S", 1.0)
+    env = await realtime_env()
+    ws, _, _ = await live(env, ws_connect)
+    env.engine.first_event_delay = 2.5  # the model is slow to start its reply
+    mock_ai.stt.default_text = ""
+    mock_ai.stt.script("We reduced costs by forty percent,", "mostly by rightsizing.")
+    before = _voice_to_voice_count()
+    mark = len(ws.messages)
+    await ws.send_audio(np.concatenate((load_clip("cost_vague"), silence(1200))))
+    reply = await ws.wait_type("ai.utterance.start", kind="question", after=mark)
+    await ws.wait_type("ai.utterance.end", utterance_id=reply["utterance_id"])
+
+    (event,) = await _turn_latency_events(env.session_id)
+    for key in (
+        "turn_id",
+        "end_reason",
+        "endpoint_silence_ms",
+        "required_silence_ms",
+        "voiced_ms",
+        "stt_wait_ms",
+        "ack_ms",
+        "ack",
+        "filler_ms",
+        "filler",
+        "engine_first_event_ms",
+        "first_delta_ms",
+        "first_audio_ms",
+        "first_chunk_ready_ms",
+        "tts_first_ms",
+        "voice_to_voice_ms",
+        "first_sound_ms",
+        "first_sound_by",
+    ):
+        assert event.get(key) is not None, (key, event)
+    assert event["typed"] is False and event["chars"] > 0
+    assert event["filler"] in runtime_module.FILLER_PHRASES
+    assert 0 <= event["ack_ms"] < event["filler_ms"] < event["first_audio_ms"]
+    assert event["filler_ms"] >= 1000  # FILLER_AFTER_S after the end-of-turn decision
+    assert event["voice_to_voice_ms"] == event["endpoint_silence_ms"] + event["first_audio_ms"]
+    assert event["first_sound_by"] == "ack"
+    assert event["first_sound_ms"] == event["endpoint_silence_ms"] + event["ack_ms"]
+    assert _voice_to_voice_count() == before + 1  # observed once for the turn

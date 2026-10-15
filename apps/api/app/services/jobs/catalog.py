@@ -17,11 +17,11 @@ from pydantic import ValidationError
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import Conflict, Forbidden, NotFound, ValidationFailed
+from app.core.errors import Conflict, Forbidden, NotFound, UnsupportedRoundType, ValidationFailed
 from app.core.logging import get_logger
 from app.db.models import CodingQuestion, Competency, InterviewTemplate, Round
 from app.domain.enums import RoundType
-from app.schemas.rounds import RoundConfig
+from app.schemas.rounds import RoundConfig, load_round_config
 
 log = get_logger(__name__)
 
@@ -57,8 +57,23 @@ ROUND_TYPE_INFO: dict[RoundType, tuple[str, str]] = {
 }
 
 
+def parse_round_type(value: RoundType | str) -> RoundType:
+    """Stored ``round_type`` -> enum. Unknown values (written by a newer release) -> 409, never a 500."""
+    if isinstance(value, RoundType):
+        return value
+    try:
+        return RoundType(value)
+    except ValueError as exc:
+        raise UnsupportedRoundType(details={"round_type": str(value)[:64]}) from exc
+
+
 def round_type_label(round_type: RoundType | str) -> str:
-    return ROUND_TYPE_INFO.get(RoundType(round_type), (str(round_type).replace("_", " ").title(), ""))[0]
+    """Human label; unknown stored values fall back to a title-cased version of the key."""
+    fallback = (str(round_type).replace("_", " ").title(), "")
+    try:
+        return ROUND_TYPE_INFO.get(RoundType(round_type), fallback)[0]
+    except ValueError:
+        return fallback[0]
 
 
 def org_visible(column: Any, organization_id: uuid.UUID) -> Any:
@@ -163,7 +178,7 @@ def deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
 
 def parse_round_config(data: dict[str, Any]) -> RoundConfig:
     try:
-        return RoundConfig.model_validate(data)
+        return load_round_config(data)  # unknown round_type -> 409 unsupported_round_type
     except ValidationError as exc:
         raise ValidationFailed(
             "The round configuration is invalid.", details=validation_details(exc)

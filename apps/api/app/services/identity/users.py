@@ -74,7 +74,9 @@ def _locked(retry_after_seconds: float) -> AccountLocked:
     return AccountLocked(details={"retry_after_seconds": seconds}, headers={"Retry-After": str(seconds)})
 
 
-async def authenticate(db: AsyncSession, *, email: str, password: str, request: Request | None = None) -> User:
+async def authenticate(
+    db: AsyncSession, *, email: str, password: str, request: Request | None = None
+) -> User:
     """Verify credentials, enforcing lockout after ``LOGIN_MAX_ATTEMPTS`` failures.
 
     Failure bookkeeping (counters, lock, audit rows) is committed before the
@@ -84,18 +86,28 @@ async def authenticate(db: AsyncSession, *, email: str, password: str, request: 
     settings = get_settings()
     normalized = normalize_email(email)
     user = await db.scalar(
-        select(User).where(User.email == normalized).with_for_update().execution_options(populate_existing=True)
+        select(User)
+        .where(User.email == normalized)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     now = _utcnow()
 
     if user is None:
         await burn_password_check_async(password)
         attempt = await hit(
-            "login_unknown", hashed_key(normalized), settings.login_max_attempts, settings.login_lockout_seconds
+            "login_unknown",
+            hashed_key(normalized),
+            settings.login_max_attempts,
+            settings.login_lockout_seconds,
         )
         await audit(
-            db, None, "auth.login_failed", resource_type="user",
-            details={"reason": "unknown_email", "email_sha256": hashed_key(normalized)}, request=request,
+            db,
+            None,
+            "auth.login_failed",
+            resource_type="user",
+            details={"reason": "unknown_email", "email_sha256": hashed_key(normalized)},
+            request=request,
         )
         await db.commit()
         AUTH_EVENTS.labels(event="login_failed").inc()
@@ -111,8 +123,14 @@ async def authenticate(db: AsyncSession, *, email: str, password: str, request: 
     if user.locked_until is not None and user.locked_until > now:
         await burn_password_check_async(password)
         await audit(
-            db, None, "auth.login_blocked", resource_type="user", resource_id=str(user.id),
-            organization_id=user.organization_id, details={"reason": "locked"}, request=request,
+            db,
+            None,
+            "auth.login_blocked",
+            resource_type="user",
+            resource_id=str(user.id),
+            organization_id=user.organization_id,
+            details={"reason": "locked"},
+            request=request,
         )
         await db.commit()
         AUTH_EVENTS.labels(event="login_failed").inc()
@@ -122,17 +140,27 @@ async def authenticate(db: AsyncSession, *, email: str, password: str, request: 
         user.failed_login_count = (user.failed_login_count or 0) + 1
         lock_now = user.failed_login_count >= settings.login_max_attempts
         await audit(
-            db, None, "auth.login_failed", resource_type="user", resource_id=str(user.id),
+            db,
+            None,
+            "auth.login_failed",
+            resource_type="user",
+            resource_id=str(user.id),
             organization_id=user.organization_id,
-            details={"reason": "bad_password", "failed_attempts": user.failed_login_count}, request=request,
+            details={"reason": "bad_password", "failed_attempts": user.failed_login_count},
+            request=request,
         )
         if lock_now:
             user.locked_until = now + timedelta(seconds=settings.login_lockout_seconds)
             user.failed_login_count = 0
             await audit(
-                db, None, "auth.account_locked", resource_type="user", resource_id=str(user.id),
+                db,
+                None,
+                "auth.account_locked",
+                resource_type="user",
+                resource_id=str(user.id),
                 organization_id=user.organization_id,
-                details={"lockout_seconds": settings.login_lockout_seconds}, request=request,
+                details={"lockout_seconds": settings.login_lockout_seconds},
+                request=request,
             )
             AUTH_EVENTS.labels(event="account_locked").inc()
         await db.commit()
@@ -144,12 +172,19 @@ async def authenticate(db: AsyncSession, *, email: str, password: str, request: 
 
     org_active = True
     if user.organization_id is not None:
-        org_active = bool(await db.scalar(select(Organization.is_active).where(Organization.id == user.organization_id)))
+        org_active = bool(
+            await db.scalar(select(Organization.is_active).where(Organization.id == user.organization_id))
+        )
     if not user.is_active or not org_active or Role(user.role) not in STAFF_ROLES:
         await audit(
-            db, None, "auth.login_denied", resource_type="user", resource_id=str(user.id),
+            db,
+            None,
+            "auth.login_denied",
+            resource_type="user",
+            resource_id=str(user.id),
             organization_id=user.organization_id,
-            details={"reason": "account_disabled" if not user.is_active else "organization_disabled"}, request=request,
+            details={"reason": "account_disabled" if not user.is_active else "organization_disabled"},
+            request=request,
         )
         await db.commit()
         AUTH_EVENTS.labels(event="login_failed").inc()
@@ -186,7 +221,9 @@ async def get_user_for_actor(db: AsyncSession, actor: Principal, user_id: uuid.U
     return user
 
 
-async def _count_other_active_admins(db: AsyncSession, organization_id: uuid.UUID | None, exclude: uuid.UUID) -> int:
+async def _count_other_active_admins(
+    db: AsyncSession, organization_id: uuid.UUID | None, exclude: uuid.UUID
+) -> int:
     if organization_id is None:
         return 1  # platform-level super admins are not bound to an organization
     # Lock the organization row so concurrent demotions/deactivations of the
@@ -251,6 +288,7 @@ async def create_user(
         password_hash=await hash_password_async(password),
         is_active=True,
         password_changed_at=_utcnow(),
+        must_change_password=True,  # an administrator chose it: the user picks their own at first sign-in
     )
     db.add(user)
     await db.flush()
@@ -276,7 +314,11 @@ async def update_user(db: AsyncSession, actor: Principal, user: User, changes: U
         summary["role"] = {"from": current_role.value, "to": changes.role.value}
         user.role = changes.role.value
 
-    if "is_active" in changes.fields and changes.is_active is not None and changes.is_active != user.is_active:
+    if (
+        "is_active" in changes.fields
+        and changes.is_active is not None
+        and changes.is_active != user.is_active
+    ):
         if is_self and not changes.is_active:
             raise Forbidden("You cannot deactivate your own account.", code="self_modification")
         if not changes.is_active and Role(user.role) is Role.ADMIN:
@@ -298,9 +340,13 @@ async def update_user(db: AsyncSession, actor: Principal, user: User, changes: U
 
     password_changed = False
     if "password" in changes.fields and changes.password is not None:
+        if is_self:
+            # Your own password changes only through POST /auth/password, which checks the current one.
+            raise Forbidden("Change your own password from your account page.", code="self_password_change")
         validate_password(changes.password, email=user.email, full_name=user.full_name)
         user.password_hash = await hash_password_async(changes.password)
         user.password_changed_at = _utcnow()
+        user.must_change_password = True  # an admin reset: the user chooses their own at next sign-in
         user.failed_login_count = 0
         user.locked_until = None
         password_changed = True
@@ -322,18 +368,30 @@ async def deactivate_user(db: AsyncSession, actor: Principal, user: User) -> dic
 
 
 async def change_own_password(
-    db: AsyncSession, user: User, *, current_password: str, new_password: str, keep_family_id: uuid.UUID | None
+    db: AsyncSession,
+    user: User,
+    *,
+    current_password: str,
+    new_password: str,
+    keep_family_id: uuid.UUID | None,
 ) -> None:
     """Self-service password change; other sessions of the user are revoked."""
     if not await verify_password_async(current_password, user.password_hash):
         # 422, not 401: a 401 would make the SPA try to refresh its session.
         raise ValidationFailed(
-            "The current password is incorrect.", code="invalid_current_password", details={"field": "current_password"}
+            "The current password is incorrect.",
+            code="invalid_current_password",
+            details={"field": "current_password"},
         )
     if current_password == new_password:
-        raise ValidationFailed("The new password must differ from the current one.", details={"field": "new_password"})
+        raise ValidationFailed(
+            "The new password must differ from the current one.", details={"field": "new_password"}
+        )
     validate_password(new_password, email=user.email, full_name=user.full_name)
     user.password_hash = await hash_password_async(new_password)
     user.password_changed_at = _utcnow()
+    user.must_change_password = False
     await db.flush()
     await revoke_user_sessions(db, user.id, reason="password_changed", keep_family_id=keep_family_id)
+    # The kept session's cached auth state still says "must change": refresh it now, not in 30 s.
+    await invalidate_user_auth_cache(db, user.id)

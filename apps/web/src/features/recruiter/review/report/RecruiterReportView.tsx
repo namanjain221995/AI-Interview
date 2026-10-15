@@ -23,6 +23,7 @@ import type { CandidateReportMode, MediaUrl } from "@/lib/types";
 import {
   isInProgress,
   useCompetencyCatalog,
+  useReevaluateFallbacks,
   useRegenerateReport,
   useReleaseCandidateReport,
   useSessionCoding,
@@ -60,10 +61,12 @@ export function RecruiterReportView({ sessionId }: { sessionId: string }) {
   const reviews = useSessionReviews(sessionId);
   const catalog = useCompetencyCatalog();
   const regenerate = useRegenerateReport(sessionId);
+  const reevaluate = useReevaluateFallbacks(sessionId);
   const release = useReleaseCandidateReport(sessionId);
   const regenerateStarted = useRef<number>(0);
 
   const session = detail.data;
+  const fallbacks = session?.fallback_evaluations ?? 0;
   useDocumentTitle(session?.candidate?.full_name ? `${session.candidate.full_name}: report` : "Interview report");
 
   const notReady = isApiError(report.error) && report.error.status === 404;
@@ -127,6 +130,15 @@ export function RecruiterReportView({ sessionId }: { sessionId: string }) {
       onSuccess: () => {
         if (requestedVersion) setParams({}, { replace: true });
         setAwaitingVersion(reportData?.version ?? 0);
+      },
+    });
+  };
+
+  const startReevaluate = () => {
+    regenerateStarted.current = Date.now();
+    reevaluate.mutate(undefined, {
+      onSuccess: (result) => {
+        if (result.queued > 0) setAwaitingVersion(reportData?.version ?? 0);
       },
     });
   };
@@ -280,6 +292,22 @@ export function RecruiterReportView({ sessionId }: { sessionId: string }) {
       </div>
 
       <div data-print-hide className="mx-auto mb-6 grid max-w-[900px] gap-3">
+        {fallbacks > 0 && !inProgress && session.status !== "completing" ? (
+          <Callout
+            tone="warning"
+            title={`${fallbacks === 1 ? "One answer was" : `${fallbacks} answers were`} not assessed: the AI model was unavailable`}
+            data-testid="fallback-evaluations"
+            actions={
+              canRegenerate ? (
+                <Button size="sm" onClick={startReevaluate} loading={reevaluate.isPending} disabled={generating}>
+                  {fallbacks === 1 ? "Re-evaluate it" : `Re-evaluate ${fallbacks} answers`}
+                </Button>
+              ) : undefined
+            }
+          >
+            They are left out of the scores until they are evaluated again, which also happens automatically once the model is back. The report refreshes afterwards.
+          </Callout>
+        ) : null}
         {session.status === "completing" ? (
           <Callout tone="info" icon={<Spinner size="sm" label={null} />} title="Final scores and the report are being prepared">
             The interview has ended. Below is a draft from the evidence evaluated so far; it updates when processing finishes.

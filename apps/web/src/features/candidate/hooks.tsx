@@ -13,13 +13,20 @@ import { queryKeys } from "@/lib/query";
 import { getPortalInterview, getPortalMe, type PortalInterviewView } from "./api";
 import { completedSteps, journeySteps, markVisited, readLocal, requiredRedirect, stepAfter, stepBefore, type StepKey } from "./journey";
 
-export function usePortalInterview(interviewId: string | undefined) {
+export interface PortalInterviewQueryOptions {
+  /** The interview room passes false: a failed background refetch must never disturb a live interview (S5). */
+  refetchOnWindowFocus?: boolean;
+  refetchOnReconnect?: boolean;
+}
+
+export function usePortalInterview(interviewId: string | undefined, options: PortalInterviewQueryOptions = {}) {
   return useQuery({
     queryKey: queryKeys.portal.interview(interviewId ?? "none"),
     queryFn: () => getPortalInterview(interviewId!),
     enabled: Boolean(interviewId),
     staleTime: 15_000,
     meta: { errorToast: false },
+    ...options,
   });
 }
 

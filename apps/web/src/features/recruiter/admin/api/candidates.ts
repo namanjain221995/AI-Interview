@@ -290,6 +290,47 @@ export function useInterviews(params: InterviewListQuery, enabled = true) {
   });
 }
 
+// ----------------------------------------------------------- job pipeline (S14)
+
+export type PipelineStage = "invited" | "in_progress" | "completed" | "closed";
+export type PipelineCounts = Record<PipelineStage | "all", number>;
+
+export interface JobPipelineRow {
+  interview: Interview;
+  session: SessionSummary | null;
+}
+
+export interface JobPipelinePage {
+  items: JobPipelineRow[];
+  total: number;
+  limit: number;
+  offset: number;
+  counts: PipelineCounts;
+}
+
+export interface JobPipelineQuery {
+  stage?: PipelineStage | "all";
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+const EMPTY_COUNTS: PipelineCounts = { invited: 0, in_progress: 0, completed: 0, closed: 0, all: 0 };
+
+/** One server page of a job's candidates with exact stage counts (the browser never assembles or caps it). */
+export function useJobPipeline(jobId: string | undefined, params: JobPipelineQuery) {
+  return useQuery({
+    // Under "interviews" so cancelling or re-inviting refreshes it with every other interview list.
+    queryKey: [...queryKeys.interviews.all, "pipeline", jobId ?? "", params] as const,
+    queryFn: async (): Promise<JobPipelinePage> => {
+      const raw = await api.get<Partial<JobPipelinePage>>(`/jobs/${jobId}/pipeline`, { params: { ...params, q: params.q || undefined } });
+      return { items: raw.items ?? [], total: raw.total ?? 0, limit: raw.limit ?? params.limit ?? 0, offset: raw.offset ?? 0, counts: { ...EMPTY_COUNTS, ...raw.counts } };
+    },
+    enabled: Boolean(jobId),
+    placeholderData: keepPreviousData,
+  });
+}
+
 export function useCandidateInterviews(candidateId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.candidates.interviews(candidateId ?? ""),

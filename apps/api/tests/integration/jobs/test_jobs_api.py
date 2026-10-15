@@ -107,7 +107,9 @@ async def test_job_validation_and_permissions(auth_client, org_factory, mock_ai)
 async def test_round_types_and_rounds(auth_client, mock_ai, seeded_catalog) -> None:
     client = await auth_client(Role.RECRUITER)
     types = (await client.get(f"{API}/round-types")).json()
-    assert types["total"] == len(RoundType)  # one default template per round type (incl. intake)
+    assert (
+        types["total"] == len(RoundType) - 1
+    )  # one per round type; intake only for entitled organisations (G8)
     by_type = {item["round_type"]: item for item in types["items"]}
     assert by_type["combined"]["source"] == "database" and by_type["combined"]["template_id"]
     assert by_type["coding"]["config"]["coding"]["enabled"] is True
@@ -188,7 +190,9 @@ async def test_round_types_and_rounds(auth_client, mock_ai, seeded_catalog) -> N
 async def test_round_types_fall_back_to_samples(auth_client) -> None:
     client = await auth_client(Role.RECRUITER)
     types = (await client.get(f"{API}/round-types")).json()
-    assert types["total"] == len(RoundType) and {item["source"] for item in types["items"]} == {"samples"}
+    assert types["total"] == len(RoundType) - 1 and {item["source"] for item in types["items"]} == {
+        "samples"
+    }  # no intake (G8)
 
 
 async def test_templates(auth_client, org_factory, mock_ai, seeded_catalog, db_session) -> None:

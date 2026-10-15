@@ -25,6 +25,8 @@ export interface StaffNavItem {
   icon: LucideIcon;
   /** Hidden unless the user holds this permission. */
   permission?: Permission;
+  /** Hidden unless the organisation's plan includes this feature (G8). */
+  feature?: string;
   /** Extra words the command menu matches. */
   keywords?: string;
 }
@@ -48,7 +50,7 @@ export const STAFF_NAV: StaffNavGroup[] = [
       { key: "links", label: "Interview links", to: "/app/links", icon: Link2, permission: "jobs:read", keywords: "open link campus drive registration share" },
       { key: "candidates", label: "Candidates", to: "/app/candidates", icon: Users, permission: "candidates:read", keywords: "people applicants resumes" },
       { key: "sessions", label: "Sessions", to: "/app/sessions", icon: MonitorPlay, permission: "sessions:read", keywords: "interviews live" },
-      { key: "intake", label: "Intake interviews", to: "/app/intake", icon: ClipboardCheck, permission: "sessions:read", keywords: "intake screening training onboarding" },
+      { key: "intake", label: "Intake interviews", to: "/app/intake", icon: ClipboardCheck, permission: "sessions:read", feature: "intake", keywords: "intake screening training onboarding" },
       { key: "reports", label: "Reports", to: "/app/reports", icon: FileText, permission: "reports:read", keywords: "results evaluations" },
       { key: "integrity", label: "Integrity review", to: "/app/integrity", icon: ShieldCheck, permission: "integrity:review", keywords: "flags proctoring" },
     ],
@@ -77,9 +79,9 @@ export const STAFF_NAV: StaffNavGroup[] = [
   },
 ];
 
-export function visibleNav(permissions: readonly Permission[]): StaffNavGroup[] {
+export function visibleNav(permissions: readonly Permission[], hasFeature: (feature: string) => boolean = () => true): StaffNavGroup[] {
   return STAFF_NAV.map((group) => ({
     ...group,
-    items: group.items.filter((item) => !item.permission || permissions.includes(item.permission)),
+    items: group.items.filter((item) => (!item.permission || permissions.includes(item.permission)) && (!item.feature || hasFeature(item.feature))),
   })).filter((group) => group.items.length > 0);
 }

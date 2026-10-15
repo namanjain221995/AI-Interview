@@ -15,6 +15,7 @@ start aborts startup. Development and test log the error and continue.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -22,6 +23,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
 
 from app.api.routers.health import app_version, root_router
+from app.core.ai_health import log_startup_probe
 from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.lifecycle import (
@@ -101,6 +103,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if not await ping_redis():
         log.warning("api.redis_unavailable_at_startup")
     ai_started = await init_ai_registry(strict=strict, is_test=settings.is_test)
+    if ai_started:
+        # One log line per unreachable AI endpoint (S16); runs in the background, never delays startup.
+        _startup_probe = asyncio.create_task(log_startup_probe("api"), name="ai.startup_probe")
     runner = LifecycleRunner("api", strict=strict)
     app.state.lifecycle = runner
     await runner.start()

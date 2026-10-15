@@ -23,12 +23,14 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 # group|relative destination|url|sha256|bytes
+# URLs on moving branches are pinned to the commit whose bytes match the sha256 (opencv_zoo is
+# Git LFS: keep the github.com/<repo>/raw/<sha>/ form, raw.githubusercontent.com returns the pointer).
 ASSETS=(
   "tts|services/tts/models/kokoro-v1.0.onnx|https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx|7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5|325532387"
   "tts|services/tts/models/voices-v1.0.bin|https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin|bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d|28214398"
-  "vad|apps/api/models/silero_vad.onnx|https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx|1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3|2327524"
-  "avatar|apps/web/public/avatars/source/mpfb.glb|https://raw.githubusercontent.com/met4citizen/TalkingHead/main/avatars/mpfb.glb|63c645a2a863b9972e9a9c2ed576a1de4c390b8475508e1473e69c87a3ee299c|36815920"
-  "face|apps/api/models/face_detection_yunet_2023mar.onnx|https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx|8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4|232589"
+  "vad|apps/api/models/silero_vad.onnx|https://raw.githubusercontent.com/snakers4/silero-vad/1e261b036686cd0017d500ee96acd1c4ba572a9d/src/silero_vad/data/silero_vad.onnx|1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3|2327524"
+  "avatar|apps/web/public/avatars/source/mpfb.glb|https://raw.githubusercontent.com/met4citizen/TalkingHead/b3e277b3b46f88e557bf28a2c5612a5b04e075c3/avatars/mpfb.glb|63c645a2a863b9972e9a9c2ed576a1de4c390b8475508e1473e69c87a3ee299c|36815920"
+  "face|apps/api/models/face_detection_yunet_2023mar.onnx|https://github.com/opencv/opencv_zoo/raw/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_detection_yunet/face_detection_yunet_2023mar.onnx|8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4|232589"
   "face|apps/web/public/mediapipe/models/blaze_face_short_range.tflite|https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite|b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f|229746"
   "face|apps/web/public/mediapipe/wasm/vision_wasm_internal.js|https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm/vision_wasm_internal.js|33a4125f825b343d2d9773951a73692f40bee368c9b591af8ff652fd501af90b|203819"
   "face|apps/web/public/mediapipe/wasm/vision_wasm_internal.wasm|https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm/vision_wasm_internal.wasm|c88cf472dd5cab0a3954b071e5f442102ded3701dcccc987a7a02ee8f54aae85|9514390"

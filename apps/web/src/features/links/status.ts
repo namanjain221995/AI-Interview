@@ -54,6 +54,7 @@ export const STATUS_REASON_LABELS: Record<string, string> = {
   policy_termination: "Round ended by an integrity rule",
   technical_failure: "Round ended by a technical problem",
   device_policy: "Same device as another registration",
+  identity_unverified: "Email matches an existing candidate: confirm it's them before allowing",
   recruiter_cancelled: "Cancelled by the hiring team",
   recruiter_allowed: "Allowed by the hiring team",
   job_not_open: "Next round not unlocked: the job is closed",

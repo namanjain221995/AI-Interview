@@ -10,7 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.enums import CandidateReportMode, CodeLanguage, Difficulty, JobStatus, RequirementKind
 from app.schemas.api.catalog import CompetencyKey, RoundOut
-from app.schemas.api.common import APIModel
+from app.schemas.api.common import APIModel, Page
+from app.schemas.api.interviews import InterviewOut
+from app.schemas.api.sessions import SessionSummaryOut
 
 
 class _Input(BaseModel):
@@ -147,3 +149,25 @@ class JobDetail(JobOut):
     effective_policy: dict[str, Any] | None = Field(
         None, description="PolicySnapshot an invite would freeze now"
     )
+
+
+# ------------------------------------------------------------------ pipeline (S14)
+
+
+class PipelineCounts(BaseModel):
+    """Interviews of the job per stage; an invitation past its start deadline counts as closed."""
+
+    invited: int = 0
+    in_progress: int = 0
+    completed: int = 0
+    closed: int = 0
+    all: int = 0
+
+
+class PipelineRowOut(BaseModel):
+    interview: InterviewOut
+    session: SessionSummaryOut | None = None
+
+
+class PipelinePage(Page[PipelineRowOut]):
+    counts: PipelineCounts

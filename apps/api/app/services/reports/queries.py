@@ -281,7 +281,10 @@ async def answer_audio_media(db: AsyncSession, session_id: uuid.UUID) -> dict[uu
 
 
 async def resolve_candidate_report_mode(db: AsyncSession, session: InterviewSession) -> CandidateReportMode:
-    """Policy frozen at invite time, then the job, then the organization."""
+    """Policy frozen at invite time, then the job, then the organization. Intake interviews never produce a
+    candidate report, so they never promise one (S21: no endless "preparing feedback" spinner)."""
+    if (session.round_config or {}).get("round_type") == "intake":
+        return CandidateReportMode.NEVER
     interview = await db.get(Interview, session.interview_id)
     snapshot = (interview.policy_snapshot if interview is not None else None) or {}
     raw = snapshot.get("candidate_report_mode")

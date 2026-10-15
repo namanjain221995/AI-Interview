@@ -34,15 +34,18 @@ help: ## List targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-18s %s\n", $$1, $$2 } /^##@/ { printf "\n%s\n", substr($$0, 5) }' $(MAKEFILE_LIST)
 
 ##@ Setup
-.PHONY: setup env deps download-assets optimize-avatar
+.PHONY: setup env deps download-assets optimize-avatar doctor
 setup: env download-assets deps optimize-avatar ## First-time setup: .env secrets, model/avatar assets, dependencies
-	@echo "Setup complete. Next: make sandbox-images && make up && make seed"
+	@echo "Setup complete. Next: make doctor && make sandbox-images && make up && make seed"
 
 env: ## Create .env with fresh secrets (never overwrites an existing one)
 	@bash $(ROOT)/scripts/setup.sh
 
+doctor: ## Preflight this node: tooling, .env, the configured AI endpoints, assets, runtime images, deep readiness
+	@$(ROOT)/scripts/doctor.sh
+
 deps: ## Install API (uv) and web/e2e (npm) dependencies when missing
-	cd $(API) && uv sync
+	cd $(API) && uv sync --frozen
 	@if [ ! -d $(WEB)/node_modules ]; then cd $(WEB) && npm ci; else echo "apps/web/node_modules present (run 'npm ci' there to reinstall)"; fi
 	@if [ -f $(E2E)/package.json ] && [ ! -d $(E2E)/node_modules ]; then cd $(E2E) && npm ci; fi
 
@@ -55,7 +58,7 @@ optimize-avatar: ## Build the optimized interviewer avatar from the MPFB source 
 
 ##@ Stack (docker compose, project "interview")
 .PHONY: up down ps logs build build-edge sandbox-images restart monitoring-up
-up: ## Build missing images, start the whole stack and wait until healthy
+up: prom-targets ## Build missing images, start the whole stack and wait until healthy
 	$(COMPOSE) up -d
 	@$(ROOT)/scripts/wait_for_healthy.sh --timeout 600
 
@@ -84,7 +87,7 @@ monitoring-up: ## Start only Prometheus, Grafana and the exporters
 	$(COMPOSE) up -d --no-deps $(MONITORING)
 
 ##@ Database
-.PHONY: migrate migrate-docker seed demo backup-db restore-db backup-storage restore-storage
+.PHONY: migrate migrate-docker seed demo seed-docker demo-docker backup-db restore-db backup-storage restore-storage
 migrate: ## Apply Alembic migrations from the host (postgres must be up)
 	cd $(API) && $(UV) alembic upgrade head
 
@@ -96,6 +99,12 @@ seed: ## Seed the organization and staff accounts (prints the logins)
 
 demo: ## Seed demo jobs + demo candidates and print their live interview invite links
 	cd $(API) && $(UV) python -m app.seed --demo --print-credentials
+
+seed-docker: ## Seed from inside the running api container (no host uv needed)
+	$(COMPOSE) exec -T api python -m app.seed --print-credentials
+
+demo-docker: ## Demo seed from inside the running api container (no host uv needed)
+	$(COMPOSE) exec -T api python -m app.seed --demo --print-credentials
 
 backup-db: ## pg_dump to data/backups/db/ (custom format + sha256)
 	@$(ROOT)/scripts/backup_db.sh
@@ -128,8 +137,24 @@ web-dev: ## Run the Vite dev server on :5173 (proxies /api and /ws to :8200)
 	cd $(WEB) && npm run dev
 
 ##@ Quality
-.PHONY: test test-api test-web test-integration test-live test-e2e test-infra lint typecheck smoke
+.PHONY: test test-api test-web test-integration test-live test-e2e test-infra lint typecheck smoke ci-api ci-web ci-sandbox ci-infra ci
 test: test-api test-web ## Unit tests (API + web)
+
+ci: ci-api ci-web ci-sandbox ci-infra ## Everything the CI workflow runs (.github/workflows/ci.yml), locally
+
+ci-api: ## CI: ruff, mypy, API unit tests, single Alembic head, integration tests
+	cd $(API) && $(UV) ruff check . $(ROOT)/infra && $(UV) mypy app
+	cd $(API) && $(UV) pytest -m "not live and not integration" -q
+	cd $(API) && test "$$($(UV) alembic heads | sed '/^\s*$$/d' | wc -l)" -eq 1 || { echo 'more than one Alembic head'; exit 1; }
+	cd $(API) && $(UV) pytest -m "integration and not live" -q
+
+ci-web: ## CI: typecheck, vitest, production build
+	cd $(WEB) && npm run typecheck && npm test && npm run build
+
+ci-sandbox: ## CI: sandbox service ruff, mypy, unit tests (no Docker needed)
+	cd $(ROOT)/services/sandbox && $(UV) ruff check . && $(UV) mypy sandbox_service && $(UV) pytest -q
+
+ci-infra: test-infra ## CI: infra checks + edge behaviour tests
 
 test-api: ## API unit tests (live-model tests excluded)
 	cd $(API) && $(UV) pytest -m "not live and not integration" $(ARGS)
@@ -138,7 +163,7 @@ test-web: ## Web unit tests (vitest)
 	cd $(WEB) && npm test
 
 test-integration: ## API integration tests against the running postgres/redis
-	cd $(API) && $(UV) pytest -m integration $(ARGS)
+	cd $(API) && $(UV) pytest -m "integration and not live" $(ARGS)
 
 test-live: ## Tests that call the real local AI endpoints (keep them small: shared GPUs)
 	cd $(API) && $(UV) pytest -m live $(ARGS)
@@ -162,7 +187,7 @@ smoke: ## Smoke-test a running stack (health, edge headers, targets)
 	@$(ROOT)/scripts/smoke_test.sh
 
 ##@ Edge, monitoring, infra
-.PHONY: edge-validate edge-reload edge-ca prom-check prom-reload dashboards dashboards-check compose-check shellcheck
+.PHONY: edge-validate edge-reload edge-ca prom-targets prom-check prom-reload dashboards dashboards-check compose-check shellcheck
 edge-validate: ## caddy validate + fmt check of infra/caddy/Caddyfile
 	docker run --rm -v $(ROOT)/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro $(CADDY_IMAGE) \
 		sh -c 'caddy fmt --diff /etc/caddy/Caddyfile >/dev/null && caddy validate --config /etc/caddy/Caddyfile 2>&1 | tail -n 1'
@@ -177,7 +202,10 @@ prom-check: ## promtool: config, rules and alert unit tests
 	docker run --rm --entrypoint promtool -v $(ROOT)/infra/prometheus:/etc/prometheus:ro $(PROM_IMAGE) check config /etc/prometheus/prometheus.yml
 	docker run --rm --entrypoint promtool -v $(ROOT)/infra/prometheus:/etc/prometheus:ro $(PROM_IMAGE) test rules /etc/prometheus/tests/alerts_test.yml
 
-prom-reload: prom-check ## Reload Prometheus configuration and rules
+prom-targets: ## Write Prometheus targets for the AI endpoints from .env (infra/prometheus/targets/)
+	@python3 -I $(ROOT)/scripts/prom_targets.py
+
+prom-reload: prom-targets prom-check ## Reload Prometheus configuration and rules
 	curl -fsS -X POST http://127.0.0.1:9191/-/reload && echo "prometheus reloaded"
 
 dashboards: ## Regenerate Grafana dashboards from infra/grafana/generate_dashboards.py

@@ -55,6 +55,7 @@ from app.schemas.intake import (
 from app.services.candidates.service import create_candidate, ensure_active, get_candidate
 from app.services.intake.access import (
     intake_enabled,
+    intake_entitled,
     intake_for_interview,
     intake_round_of_interview,
     is_intake_round,
@@ -265,7 +266,18 @@ def _patch_max_reconnects(interview: Interview, max_reconnects: int) -> None:
     integrity = dict(snapshot.get("integrity") or {})
     integrity["max_reconnects"] = int(max_reconnects)
     snapshot["integrity"] = integrity
+    snapshot["candidate_report_mode"] = "never"  # intake has no candidate report (S21)
     interview.policy_snapshot = snapshot  # new dict: JSONB change detection
+
+
+def _freeze_no_candidate_report(interview: Interview) -> bool:
+    """True when the snapshot changed (the row's ``updated_at`` then needs reloading after the flush)."""
+    snapshot = dict(interview.policy_snapshot or {})
+    if snapshot.get("candidate_report_mode") == "never":
+        return False
+    snapshot["candidate_report_mode"] = "never"
+    interview.policy_snapshot = snapshot
+    return True
 
 
 async def send_intake(
@@ -615,6 +627,8 @@ async def ensure_intake_for_interview(
     if not intake_enabled():
         return None
     existing = await intake_for_interview(db, interview.id)
+    if existing is None and not await intake_entitled(db, interview.organization_id):
+        return None  # G8: never start intake for an organisation whose plan does not include it
     if existing is not None:
         return existing
     round_ = round_ if is_intake_round(round_) else await intake_round_of_interview(db, interview)
@@ -622,6 +636,7 @@ async def ensure_intake_for_interview(
         return None
     org = await get_org_settings(db, interview.organization_id)
     kit = kit_info()
+    frozen_report_mode = _freeze_no_candidate_report(interview)  # S21: generic invites / open-link rounds too
     snapshot = interview.policy_snapshot if isinstance(interview.policy_snapshot, dict) else {}
     raw_integrity = snapshot.get("integrity")
     integrity: dict[str, Any] = raw_integrity if isinstance(raw_integrity, dict) else {}
@@ -649,6 +664,10 @@ async def ensure_intake_for_interview(
         kit_sha256=kit.sha256,
     )
     await db.flush()
+    if frozen_report_mode:
+        # The UPDATE expired the server-maintained updated_at; callers serialise the interview right after
+        # (a lazy load would fail in an async session).
+        await db.refresh(interview, attribute_names=["updated_at"])
     await db.execute(
         pg_insert(IntakeInterview)
         .values(

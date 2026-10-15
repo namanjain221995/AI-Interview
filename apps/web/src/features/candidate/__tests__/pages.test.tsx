@@ -36,7 +36,7 @@ const DISCLOSURE = {
   title: "Before you begin",
   intro: "Here is exactly what happens during your interview.",
   items: [
-    { key: "microphone", title: "Microphone", description: "Your voice is transcribed.", required: true, enabled: true },
+    { key: "microphone", title: "Microphone", description: "Your voice is transcribed by the speech service.", summary: "You answer by voice.", required: true, enabled: true },
     { key: "integrity_monitoring", title: "Monitoring", description: "Tab and window changes are noted.", required: true, enabled: true },
     { key: "camera_frames", title: "Camera checks", description: "A still image every 10 seconds.", required: false, enabled: true },
   ],
@@ -136,7 +136,7 @@ describe("InviteEntryPage", () => {
 });
 
 describe("ConsentPage", () => {
-  it("requires every required item, then posts the consent map with the policy hash", async () => {
+  it("confirms every required item with one tick, then posts the consent map with the policy hash", async () => {
     const post = vi.spyOn(api, "post").mockImplementation(async () => {
       interviewState = { ...interviewState, steps_completed: ["consent"] };
       return {} as never;
@@ -146,19 +146,40 @@ describe("ConsentPage", () => {
       { path: ":interviewId/resume", Component: ResumePage },
     ]);
     const accept = await screen.findByTestId("consent-accept-button");
-    expect(screen.getByTestId("consent-item-microphone")).toBeInTheDocument();
-    expect(screen.getByTestId("consent-item-camera_frames")).toBeInTheDocument();
+    // Summaries by default, the full text behind "Details".
+    expect(screen.getByTestId("consent-item-microphone")).toHaveTextContent("You answer by voice.");
+    expect(screen.getByText("Your voice is transcribed by the speech service.").closest("details")).not.toBeNull();
     expect(screen.getByText("A browser can't lock your computer.")).toBeInTheDocument();
     expect(accept).toBeDisabled();
-    fireEvent.click(screen.getByTestId("consent-item-microphone"));
-    expect(accept).toBeDisabled();
-    fireEvent.click(screen.getByTestId("consent-item-integrity_monitoring"));
+    fireEvent.click(screen.getByTestId("consent-agree-all"));
     expect(accept).toBeEnabled();
     fireEvent.click(accept);
     await waitFor(() => expect(router.state.location.pathname).toBe("/candidate/i1/resume"));
+    // The optional item stays off unless the candidate turns it on; never bundled with the required ones.
     expect(post).toHaveBeenCalledWith("/portal/interviews/i1/consent", {
       policy_hash: "hash-1",
       items: { microphone: true, integrity_monitoring: true, camera_frames: false },
+    });
+  });
+
+  it("records an optional item only when its own switch is turned on", async () => {
+    const post = vi.spyOn(api, "post").mockImplementation(async () => {
+      interviewState = { ...interviewState, steps_completed: ["consent"] };
+      return {} as never;
+    });
+    renderAt("/candidate/i1/consent", [
+      { path: ":interviewId/consent", Component: ConsentPage },
+      { path: ":interviewId/resume", Component: ResumePage },
+    ]);
+    const accept = await screen.findByTestId("consent-accept-button");
+    fireEvent.click(screen.getByTestId("consent-optional-camera_frames"));
+    expect(accept).toBeDisabled(); // an optional choice never stands in for the required confirmation
+    fireEvent.click(screen.getByTestId("consent-agree-all"));
+    fireEvent.click(accept);
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(post).toHaveBeenCalledWith("/portal/interviews/i1/consent", {
+      policy_hash: "hash-1",
+      items: { microphone: true, integrity_monitoring: true, camera_frames: true },
     });
   });
 
@@ -244,6 +265,40 @@ describe("Completion and report", () => {
     expect(screen.getByText("FinOps")).toBeInTheDocument();
   });
 
+  it("says the interview is still being closed while the session is open (End pressed while offline)", async () => {
+    interviewState = { ...INTERVIEW, status: "in_progress", steps_completed: ["consent", "resume", "system_check"] };
+    sessionState = { id: "s1", interview_id: "i1", status: "live", candidate_report_available: false, candidate_report_mode: "immediate" };
+    renderAt("/candidate/i1/complete?session=s1", [{ path: ":interviewId/complete", Component: CompletePage }]);
+    const outcome = await screen.findByTestId("complete-outcome");
+    await waitFor(() => expect(outcome).toHaveAttribute("data-outcome", "wrapping_up"));
+    expect(outcome).toHaveTextContent("closing your interview");
+    expect(screen.queryByTestId("feedback-card")).not.toBeInTheDocument(); // nothing promised before it is closed
+  });
+
+  it("re-sends a remembered end request while the session is still open (End pressed offline)", async () => {
+    sessionStorage.setItem("interview:end-requested:s1", "candidate_ended");
+    const post = vi.spyOn(api, "post").mockResolvedValue({ status: "ending" } as never);
+    interviewState = { ...INTERVIEW, status: "in_progress", steps_completed: ["consent", "resume", "system_check"] };
+    sessionState = { id: "s1", interview_id: "i1", status: "paused", candidate_report_available: false, candidate_report_mode: "never" };
+    renderAt("/candidate/i1/complete?session=s1", [{ path: ":interviewId/complete", Component: CompletePage }]);
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/portal/sessions/s1/end", { reason: "candidate_ended" }, expect.anything()));
+    sessionStorage.removeItem("interview:end-requested:s1");
+  });
+
+  it("tells a candidate who left before the start that nothing ended and offers the way back", async () => {
+    interviewState = { ...INTERVIEW, status: "in_progress", steps_completed: ["consent", "resume", "system_check"] };
+    sessionState = { id: "s1", interview_id: "i1", status: "ready", candidate_report_available: false, candidate_report_mode: "immediate" };
+    renderAt("/candidate/i1/complete?session=s1", [{ path: ":interviewId/complete", Component: CompletePage }]);
+    const outcome = await screen.findByTestId("complete-outcome");
+    await waitFor(() => expect(outcome).toHaveAttribute("data-outcome", "not_started"));
+    expect(outcome).toHaveTextContent("hasn't started yet");
+    // G3: only stored files follow a deletion schedule; the transcript stays until the hiring team deletes it.
+    expect(screen.getByTestId("complete-page")).toHaveTextContent("Your transcript and the written assessment stay with");
+    expect(screen.getByTestId("complete-page")).not.toHaveTextContent(/transcript and any images are kept only/);
+    expect(screen.getByTestId("return-to-interview")).toHaveAttribute("href", "/candidate/i1/interview");
+    expect(screen.queryByTestId("feedback-card")).not.toBeInTheDocument();
+  });
+
   it("hides every feedback element when the session's report mode is never (the session wins over the invitation)", async () => {
     interviewState = { ...INTERVIEW, organization: { name: "TechSara Solutions" }, status: "completed", steps_completed: ["consent", "resume", "system_check"] };
     sessionState = { id: "s1", interview_id: "i1", status: "completed", candidate_report_available: false, candidate_report_mode: "never" };
@@ -266,6 +321,16 @@ describe("Completion and report", () => {
     expect(await screen.findByTestId("report-not-shared")).toHaveTextContent("The hiring team will contact you");
     expect(screen.queryByTestId("candidate-report")).not.toBeInTheDocument();
     expect(vi.mocked(api.get)).not.toHaveBeenCalledWith("/portal/sessions/s1/report");
+  });
+
+  it("never shows a feedback card for an intake interview, even when reports are immediate (S21)", async () => {
+    interviewState = { ...INTERVIEW, status: "completed", steps_completed: ["consent", "resume", "system_check"], intake: { intake_id: "in1", title: "Intake interview", estimated_minutes: 25, presence: "orb" } } as typeof interviewState;
+    sessionState = { id: "s1", interview_id: "i1", status: "completed", candidate_report_available: false, candidate_report_mode: "immediate" };
+    renderAt("/candidate/i1/complete?session=s1", [{ path: ":interviewId/complete", Component: CompletePage }]);
+    const page = await screen.findByTestId("complete-page");
+    await waitFor(() => expect(vi.mocked(api.get)).toHaveBeenCalledWith("/portal/sessions/s1"));
+    expect(screen.queryByTestId("feedback-card")).not.toBeInTheDocument();
+    expect(page).not.toHaveTextContent(/preparing/i);
   });
 
   it("keeps the dashboard free of feedback promises when the invitation shares none", async () => {

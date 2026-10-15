@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import ipaddress
 import re
 import secrets
 from collections.abc import Awaitable, Callable
@@ -88,6 +89,25 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def ip_key(ip: str) -> str:
+    """Rate-limit key of an address: IPv4 as is, IPv6 by its /64 (one subscriber's allocation), so rotating
+    addresses inside it does not reset the limits (S15)."""
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            return str(address.ipv4_mapped)
+        return str(ipaddress.IPv6Network(f"{address}/64", strict=False))
+    return str(address)
+
+
+def client_ip_key(request: Request) -> str:
+    """``ip_key`` of the client (``client_ip`` stays the full address for logging)."""
+    return ip_key(client_ip(request))
+
+
 async def hit(
     scope: str,
     key: str,
@@ -112,7 +132,9 @@ async def hit(
         ERRORS.labels(component="ratelimit").inc()
         log.warning("ratelimit.redis_unavailable", scope=scope, error=type(exc).__name__)
         return RateLimitResult(allowed=True, remaining=limit, retry_after=0.0)
-    return RateLimitResult(allowed=bool(int(allowed)), remaining=int(remaining), retry_after=int(retry_ms) / 1000.0)
+    return RateLimitResult(
+        allowed=bool(int(allowed)), remaining=int(remaining), retry_after=int(retry_ms) / 1000.0
+    )
 
 
 async def reset(scope: str, key: str, *, redis: Redis | None = None) -> None:

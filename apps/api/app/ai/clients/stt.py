@@ -247,6 +247,12 @@ class _Replica:
     client: EndpointClient
     inflight: int = 0
     speed: float = 1.0  # EWMA of observed / expected latency (1.0 = nominal)
+    # Requests it serves at once: 1 for the transformers server, several for a batching vLLM server.
+    slots: int = 1
+
+    def load(self) -> float:
+        """Relative time to an answer if one more request went here: its speed, stretched by how full it is."""
+        return self.speed * (1.0 + self.inflight / max(1, self.slots))
 
     @property
     def url(self) -> str:
@@ -289,22 +295,40 @@ class WhisperSttClient:
         timeout: float = 30.0,
         ledger: LedgerSink | None = None,
         replica_parallelism: int = 1,
+        replica_slots: Sequence[int] | None = None,
         response_format: ResponseFormat = "json",
         no_speech_check: bool = True,
         hedge: bool = True,
+        send_prompt: bool = False,
     ) -> None:
         if not replicas:
             raise ValueError("at least one Whisper endpoint is required")
-        self._replicas = [_Replica(client) for client in replicas]
         self.model = model
         self.language = language
         self.max_concurrency = max(1, max_concurrency)
         self.slots_per_replica = max(1, min(self.max_concurrency, replica_parallelism))
+        # Per-replica capacity (``replica_slots``, by position) overrides ``replica_parallelism``: e.g. a fast
+        # batching server for interviews next to the shared one-request-at-a-time server as the fallback.
+        slots = list(replica_slots or [])
+        self._replicas = [
+            _Replica(
+                client,
+                slots=max(1, min(self.max_concurrency, slots[i]))
+                if i < len(slots)
+                else self.slots_per_replica,
+            )
+            for i, client in enumerate(replicas)
+        ]
         self.partial_budget = max(1, partial_budget if partial_budget is not None else 1)
         self.timeout = timeout
         self.response_format: ResponseFormat = response_format
         self.no_speech_check = no_speech_check
         self.hedge = hedge
+        # Off by default (WHISPER_SEND_PROMPT): the shared large-v3 server ignores prompts, and Whisper
+        # large-v3-turbo on vLLM honours them badly - measured 2026-10-13 on the e2e clips: an empty transcript
+        # when the prompt ended with the interviewer's question (every answer of a live run lost), the term list
+        # echoed back ("Karpenter, Prometheus, Rho, ...") and a repetition loop ("Rhoh, Rhoh, ...").
+        self.send_prompt = send_prompt
         self._ledger: LedgerSink = ledger or NullLedger()
         self._partials_inflight = 0
         self._waiters: deque[_Waiter] = deque()
@@ -335,7 +359,7 @@ class WhisperSttClient:
 
     # ---------------------------------------------------------- scheduling
     def _free_slots(self, replica: _Replica) -> int:
-        return max(0, self.slots_per_replica - replica.inflight)
+        return max(0, replica.slots - replica.inflight)
 
     def _idle(self, exclude: Collection[_Replica] = ()) -> list[_Replica]:
         return [r for r in self._replicas if self._free_slots(r) > 0 and r not in exclude]
@@ -346,7 +370,9 @@ class WhisperSttClient:
         pool = [r for r in candidates if r.healthy] or candidates
         if slowest:
             return max(pool, key=lambda r: (-r.inflight, r.speed))
-        return min(pool, key=lambda r: (r.inflight, r.speed))
+        # Identical one-slot replicas: idle ones only, so this is the fastest (as before). Mixed capacity: a fast
+        # batching replica already serving a request still beats an idle replica three times slower.
+        return min(pool, key=lambda r: (r.load(), r.inflight))
 
     def _take(self, exclude: Collection[_Replica] = ()) -> _Replica | None:
         replica = self._best(self._idle(exclude))
@@ -362,7 +388,7 @@ class WhisperSttClient:
         free = sum(self._free_slots(r) for r in self._replicas)
         if free == 0:
             return "all STT slots busy"
-        total = self.slots_per_replica * len(self._replicas)
+        total = sum(r.slots for r in self._replicas)
         if total > 1 and free < 2:
             return "keeping the last free STT slot for finals"
         return None
@@ -372,18 +398,23 @@ class WhisperSttClient:
         reason = self._partial_refusal(count_budget=False)
         if reason is not None:
             raise PartialSkipped(reason, endpoint="whisper")
-        replica = self._best(self._idle(), slowest=True)
-        assert replica is not None
+        replica = self._spare()
         replica.inflight += 1
+        return replica
+
+    def _spare(self) -> _Replica:
+        """Where optional work (partials, background passes) goes: the best replica that still has a free slot
+        afterwards, else the slower idle one - the faster one stays free for the next final."""
+        roomy = [r for r in self._idle() if self._free_slots(r) >= 2]
+        replica = self._best(roomy) if roomy else self._best(self._idle(), slowest=True)
+        assert replica is not None
         return replica
 
     def _reserve_partial(self) -> _Replica:
         reason = self._partial_refusal()
         if reason is not None:
             raise PartialSkipped(reason, endpoint="whisper")
-        # The slower idle replica: keep the faster one free for the next final.
-        replica = self._best(self._idle(), slowest=True)
-        assert replica is not None
+        replica = self._spare()
         replica.inflight += 1
         self._partials_inflight += 1
         return replica
@@ -474,7 +505,7 @@ class WhisperSttClient:
         }
         if lang:
             data["language"] = lang
-        clipped = truncate_prompt(prompt)
+        clipped = truncate_prompt(prompt) if self.send_prompt else None
         if clipped:
             data["prompt"] = clipped
         audio_seconds = wav_seconds(audio) if is_wav else None

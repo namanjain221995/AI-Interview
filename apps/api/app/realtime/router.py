@@ -247,8 +247,9 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
             await _close(websocket, close_codes.SESSION_ENDED)
             return
         if (
-            ctx.interview_status in (InterviewStatus.CANCELLED.value, InterviewStatus.EXPIRED.value)
-            or ctx.invite_expired
+            ctx.interview_status == InterviewStatus.CANCELLED.value
+            or (ctx.interview_status == InterviewStatus.EXPIRED.value and not ctx.in_progress)
+            or ctx.access_expired
         ):
             await _send_error(websocket, "interview_unavailable", "This interview is no longer available.")
             await _close(websocket, close_codes.SESSION_ENDED)

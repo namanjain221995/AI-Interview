@@ -45,10 +45,12 @@ from app.core.security import AccessTokenClaims, constant_time_equals, decode_ac
 from app.db.session import get_sessionmaker
 from app.domain.enums import Role, SubjectType
 from app.services.identity.auth_cache import load_auth_state
-from app.services.identity.cookies import ACCESS_COOKIE, CSRF_COOKIE, CSRF_HEADER
+from app.services.identity.cookies import CSRF_HEADER, access_cookie, csrf_cookie
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 CSRF_EXEMPT_PATHS = frozenset({"/api/v1/auth/login"})
+# What a staff user whose password was issued by an administrator may call before choosing their own (S13).
+PASSWORD_CHANGE_PATHS = frozenset({"/api/v1/auth/me", "/api/v1/auth/password", "/api/v1/auth/logout"})
 CSRF_EXEMPT_PREFIXES = ("/api/v1/candidate-access/",)
 
 # ----------------------------------------------------------------- database
@@ -67,7 +69,9 @@ async def _request_session() -> AsyncIterator[AsyncSession]:
         await session.close()
 
 
-async def get_db(session: Annotated[AsyncSession, Depends(_request_session, scope="function")]) -> AsyncSession:
+async def get_db(
+    session: Annotated[AsyncSession, Depends(_request_session, scope="function")],
+) -> AsyncSession:
     return session
 
 
@@ -88,18 +92,18 @@ RedisClient = Annotated[Redis, Depends(get_redis)]
 # ------------------------------------------------------------ authentication
 
 
-def _extract_token(request: Request) -> tuple[str | None, bool]:
-    """Return ``(token, from_cookie)``. An Authorization header wins over the cookie."""
+def _extract_token(request: Request) -> tuple[str | None, bool, bool]:
+    """Return ``(token, from_cookie, legacy_cookie)``. An Authorization header wins over the cookie."""
     header = request.headers.get("authorization")
     if header:
         scheme, _, value = header.partition(" ")
         if scheme.lower() != "bearer" or not value.strip():
             raise Unauthorized("Unsupported authorization scheme.", code="invalid_token")
-        return value.strip(), False
-    cookie = request.cookies.get(ACCESS_COOKIE)
+        return value.strip(), False, False
+    cookie, legacy = access_cookie(request)  # the staff or candidate cookie set, by the request's audience (G2)
     if cookie:
-        return cookie, True
-    return None, False
+        return cookie, True, legacy
+    return None, False, False
 
 
 def csrf_exempt(path: str) -> bool:
@@ -111,8 +115,13 @@ def verify_csrf(request: Request, auth_session_id: uuid.UUID | str) -> None:
     if not get_settings().csrf_enabled:
         return
     header = request.headers.get(CSRF_HEADER)
-    cookie = request.cookies.get(CSRF_COOKIE)
-    if not header or not cookie or not constant_time_equals(header, cookie) or not verify_csrf_token(auth_session_id, header):
+    cookie = csrf_cookie(request)
+    if (
+        not header
+        or not cookie
+        or not constant_time_equals(header, cookie)
+        or not verify_csrf_token(auth_session_id, header)
+    ):
         raise Forbidden("Missing or invalid CSRF token.", code="csrf_failed")
 
 
@@ -141,22 +150,34 @@ def _principal_from_state(claims: AccessTokenClaims, state: Any) -> Principal:
     )
 
 
-async def _authenticate(request: Request, db: AsyncSession, redis: Redis, *, required: bool) -> Principal | None:
+async def _authenticate(
+    request: Request, db: AsyncSession, redis: Redis, *, required: bool
+) -> Principal | None:
     cached = getattr(request.state, "principal", None)
     if isinstance(cached, Principal):
         return cached
-    token, from_cookie = _extract_token(request)
+    token, from_cookie, legacy = _extract_token(request)
     if token is None:
         if required:
             raise Unauthorized()
         return None
     claims = decode_access_token(token)
+    if legacy and claims.typ is not SubjectType.CANDIDATE:
+        # Migration window (G2): the staff-named cookie stands in for a candidate session only when it is one;
+        # a recruiter's own session is never used on a candidate page.
+        if required:
+            raise Unauthorized()
+        return None
     state = await load_auth_state(db, redis, claims)
     if not state.ok:
-        raise Unauthorized("Your session is no longer valid. Please sign in again.", code=state.reason or "session_revoked")
+        raise Unauthorized(
+            "Your session is no longer valid. Please sign in again.", code=state.reason or "session_revoked"
+        )
     principal = _principal_from_state(claims, state)
     if from_cookie and request.method.upper() not in SAFE_METHODS and not csrf_exempt(request.url.path):
         verify_csrf(request, claims.auth_session_id)
+    if getattr(state, "must_change_password", False) and request.url.path not in PASSWORD_CHANGE_PATHS:
+        raise Forbidden("Please choose a new password before continuing.", code="password_change_required")
     request.state.principal = principal
     bind_context(
         user_id=str(principal.user_id) if principal.user_id else None,
@@ -269,7 +290,9 @@ def resolve_org_id(principal: Principal, requested: uuid.UUID | None = None) -> 
 
 async def get_org_scope(
     principal: StaffPrincipal,
-    organization_id: Annotated[uuid.UUID | None, Query(description="SUPER_ADMIN only: target organization")] = None,
+    organization_id: Annotated[
+        uuid.UUID | None, Query(description="SUPER_ADMIN only: target organization")
+    ] = None,
 ) -> uuid.UUID:
     return resolve_org_id(principal, organization_id)
 

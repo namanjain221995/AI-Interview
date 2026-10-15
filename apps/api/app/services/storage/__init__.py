@@ -9,7 +9,11 @@ and hand out access only through :mod:`app.services.storage.signing`.
 
 from __future__ import annotations
 
+import shutil
+
 from app.core.config import get_settings
+from app.core.errors import ServiceUnavailable
+from app.core.logging import get_logger
 from app.services.storage.base import (
     InvalidStorageKey,
     ObjectNotFound,
@@ -40,7 +44,35 @@ def set_storage(backend: StorageBackend | None) -> None:
     _storage = backend
 
 
+def storage_free_ratio() -> float | None:
+    """Free share of the storage disk (None when it cannot be measured)."""
+    settings = get_settings()
+    if settings.storage_backend != "local":
+        return None
+    try:
+        usage = shutil.disk_usage(settings.storage_local_root)
+    except OSError:
+        return None
+    return usage.free / usage.total if usage.total else None
+
+
+def ensure_storage_headroom() -> None:
+    """503 ``storage_full`` while the storage disk is nearly full (S3, audit D2): candidate uploads must never
+    fill the disk that also holds the database. Unknown usage never blocks (health reports it)."""
+    ratio = storage_free_ratio()
+    floor = get_settings().storage_min_free_ratio
+    if ratio is not None and ratio < floor:
+        get_logger(__name__).error("storage.low_headroom", free_ratio=round(ratio, 4), min_free_ratio=floor)
+        raise ServiceUnavailable(
+            "Uploads are paused because storage is nearly full. The interview itself continues.",
+            code="storage_full",
+            retry_after=300,
+        )
+
+
 __all__ = [
+    "ensure_storage_headroom",
+    "storage_free_ratio",
     "InvalidStorageKey",
     "LocalStorage",
     "ObjectNotFound",

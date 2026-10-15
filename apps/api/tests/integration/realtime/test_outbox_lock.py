@@ -111,3 +111,22 @@ async def test_refresh_reacquires_after_redis_flush(redis) -> None:
     assert await lock.refresh()
     assert (await redis.get(lock_key("sess-6"))) == lock.value
     await lock.release()
+
+
+class _BrokenRedis:
+    """Every command fails: Redis is unreachable."""
+
+    def __getattr__(self, name: str):
+        async def fail(*args, **kwargs):
+            from redis.exceptions import RedisError
+
+            raise RedisError("connection refused")
+
+        return fail
+
+
+async def test_lock_fails_open_for_the_runtime_and_closed_for_background_writers() -> None:
+    runtime_lock = SessionLock("sess-g1", _BrokenRedis(), instance_id="api-1")  # type: ignore[arg-type]
+    assert await runtime_lock.acquire() is True and runtime_lock.held
+    sweeper_lock = SessionLock("sess-g1", _BrokenRedis(), instance_id="worker-1", fail_open=False)  # type: ignore[arg-type]
+    assert await sweeper_lock.acquire() is False and not sweeper_lock.held

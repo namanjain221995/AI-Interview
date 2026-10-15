@@ -60,7 +60,7 @@ services:
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5442}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -197,6 +197,8 @@ services:
           memory: ${TTS_MEMORY_LIMIT:-4g}
         reservations:
           memory: 1g
+    # No swap: a paged-out model made the first question after a pause take ~4 s to synthesize (measured).
+    memswap_limit: ${TTS_MEMORY_LIMIT:-4g}
     logging: *default-logging
     networks: [backend]
 
@@ -463,6 +465,46 @@ services:
     logging: *default-logging
     networks: [backend]
 
+  # Optional: interview speech-to-text on this node's GPU (`--profile stt`, or COMPOSE_PROFILES=stt in .env)
+  # --------------------------------------------------------------------------
+  # Whisper large-v3-turbo on vLLM (services/stt): ~5x faster than the shared large-v3 server on this node
+  # (measured on the e2e clips: 0.74 s vs 3.99 s median, 1.2 s vs 12.3 s for three at once) and it batches.
+  # Point WHISPER_BASE_URL at it (WHISPER_BASE_URL_PARALLELISM=4) and keep the shared server in
+  # WHISPER_EXTRA_BASE_URLS as the fallback. Loopback only; ~3 GB of GPU memory.
+  stt:
+    image: interview-stt:local
+    build:
+      context: ./services/stt
+    profiles: ["stt"]
+    restart: unless-stopped
+    network_mode: host
+    ipc: host
+    command:
+      - --model=openai/whisper-large-v3-turbo
+      - --revision=41f01f3fe87f28c78e2fbf8b568835947dd65ed9
+      - --host=127.0.0.1
+      - --port=${STT_PORT:-30017}
+      - --gpu-memory-utilization=0.06
+      - --kv-cache-memory-bytes=1073741824
+      - --max-num-seqs=8
+      - --enforce-eager
+    volumes:
+      - stthf:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:${STT_PORT:-30017}/health', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 300s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging: *default-logging
+
 networks:
   backend:
     name: interview-backend
@@ -475,3 +517,5 @@ volumes:
   promdata:
   grafanadata:
   clamavdata:
+  stthf:
+    name: aiint-stt-hf  # the Whisper turbo weights (downloaded once)

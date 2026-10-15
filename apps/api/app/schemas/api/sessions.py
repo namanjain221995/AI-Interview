@@ -97,6 +97,8 @@ class SessionDetailOut(SessionSummaryOut):
     claims: list[dict[str, Any]] = Field(default_factory=list)
     contradictions: list[dict[str, Any]] = Field(default_factory=list)
     review_count: int = 0
+    # S12: answers whose evaluation is a fallback (the model was down); POST /sessions/{id}/reevaluate.
+    fallback_evaluations: int = 0
 
 
 class TranscriptSegmentOut(APIModel):

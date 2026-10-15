@@ -257,6 +257,10 @@ def test_repeated_you_mentioned_frame_becomes_a_specific_acknowledgement() -> No
     g = _guard(s, frame_recent=True, released_before=True)
     out = _feed(g, "You mentioned Karpenter for node provisioning. How did you size the node pools?")
     assert out == "Karpenter for node provisioning. How did you size the node pools?"
+    # The realtime layer already said "Okay." after the answer: the rewrite adds no second acknowledgement.
+    g = _guard(s, frame_recent=True, after_ack=True)
+    out = _feed(g, "You mentioned Karpenter for node provisioning. How did you size the node pools?")
+    assert out == "Karpenter for node provisioning. How did you size the node pools?"
 
 
 async def test_stream_regenerates_once_when_the_question_depends_on_an_invented_attribution(mock_ai) -> None:

@@ -80,7 +80,8 @@ async def test_completed_person_cannot_retake(link_env, public_client) -> None:
 
 async def test_job_scope_spans_links_and_link_scope_does_not(link_env, public_client) -> None:
     job_link = (await create_link(link_env, round_ids=[str(link_env.round_ids[0])]))["link"]
-    first = await register(public_client(), token_of(job_link), answers(1))
+    browser = public_client()
+    first = await register(browser, token_of(job_link), answers(1))
     await complete(link_env.recruiter, first.json()["interview_id"])
     second_link = (await create_link(link_env, name="Second drive"))["link"]
     refused = await register(public_client(), token_of(second_link), answers(1))
@@ -88,7 +89,11 @@ async def test_job_scope_spans_links_and_link_scope_does_not(link_env, public_cl
     repeat_drive = (await create_link(link_env, name="Repeat drive", duplicate_policy={"scope": "link"}))[
         "link"
     ]
-    allowed = await register(public_client(), token_of(repeat_drive), answers(1))
+    # S4: the email alone does not prove it is the same person - a new browser is refused (kept as a blocked
+    # registration the hiring team can allow); the browser that registered before is the returning person.
+    stranger = await register(public_client(), token_of(repeat_drive), answers(1))
+    assert stranger.status_code == 409 and stranger.json()["error"]["code"] == "registration_unavailable"
+    allowed = await register(browser, token_of(repeat_drive), answers(1))
     assert allowed.status_code == 201, allowed.text
     async with session_scope() as db:
         assert (

@@ -67,6 +67,7 @@ def make_stt(endpoint_factory, ledger):
         **options,
     ) -> WhisperSttClient:
         replicas = [endpoint_factory(f"whisper-{i}", url, retries=1) for i, url in enumerate(urls)]
+        options.setdefault("send_prompt", True)  # these tests cover the prompt mechanics
         return WhisperSttClient(
             replicas,
             model="whisper-large",
@@ -414,3 +415,49 @@ def test_helpers() -> None:
 async def test_empty_audio_short_circuits(make_stt) -> None:
     result = await make_stt().transcribe(b"")
     assert result.text == "" and result.duration_s == 0.0
+
+
+async def test_a_batching_replica_takes_previews_and_finals_next_to_a_slow_fallback(make_stt) -> None:
+    """Owner report (slow STT): an interview-only Whisper large-v3-turbo on vLLM (several requests at once, ~5x
+    faster) is the primary replica, the shared one-at-a-time large-v3 server the fallback. Previews and finals
+    both go to the fast replica while it has room; the slow one is only used when the fast one is full."""
+    stt = make_stt(urls=(A, B), hedge=False, partial_budget=2, concurrency=4, replica_slots=[3])
+    assert [r.slots for r in stt._replicas] == [3, 1]
+    stt._replicas[0].speed, stt._replicas[1].speed = 0.25, 1.2  # as measured: turbo vs the shared server
+    gate = asyncio.Event()
+
+    async def slow(request: httpx.Request) -> httpx.Response:
+        await gate.wait()
+        return httpx.Response(200, json=ok())
+
+    with respx.mock() as mock:
+        mock.post(f"{A}/audio/transcriptions").mock(side_effect=slow)
+        mock.post(f"{B}/audio/transcriptions").mock(side_effect=slow)
+        partial = asyncio.create_task(stt.transcribe(wav_bytes(), partial=True))
+        await asyncio.sleep(0.02)
+        assert stt.inflight == {A: 1, B: 0}  # the preview went to the fast replica (it still has room)
+        first = asyncio.create_task(stt.transcribe(wav_bytes()))
+        await asyncio.sleep(0.02)
+        assert stt.inflight == {A: 2, B: 0}  # a busy fast replica beats an idle one five times slower
+        second = asyncio.create_task(stt.transcribe(wav_bytes()))
+        third = asyncio.create_task(stt.transcribe(wav_bytes()))
+        await asyncio.sleep(0.02)
+        assert stt.inflight == {A: 3, B: 1} and stt.queued == 0  # full: the fallback takes the overflow
+        gate.set()
+        await asyncio.gather(partial, first, second, third)
+
+
+def test_replica_slots_default_to_one_for_the_shared_server(make_stt) -> None:
+    stt = make_stt(urls=(A, B))
+    assert [r.slots for r in stt._replicas] == [1, 1]
+
+
+
+async def test_no_prompt_is_sent_by_default(make_stt) -> None:
+    """Whisper large-v3-turbo on vLLM returned an empty transcript when the prompt ended with the interviewer's
+    question (a whole live e2e run lost every answer) and echoed or looped on the term list."""
+    stt = make_stt(send_prompt=False)
+    with respx.mock(base_url=A) as mock:
+        route = mock.post("/audio/transcriptions").respond(200, json=ok())
+        await stt.transcribe(wav_bytes(), prompt="Technical terms: Karpenter. How did you scale the nodes?")
+    assert field(route.calls[0].request.content, "prompt") is None

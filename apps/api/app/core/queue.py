@@ -51,7 +51,7 @@ import random
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -83,6 +83,12 @@ _JOB_TYPE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 _MAX_ERROR_CHARS = 2000
 _DEAD_STREAM_MAXLEN = 10_000
 DEFAULT_MAX_ATTEMPTS = 3
+# Retry delays (seconds) for jobs that need a model: a main-LLM outage of up to ~30 min (vLLM restart, an open
+# circuit) delays their work instead of turning it into permanent fallbacks (S11, audit B3). Used with
+# ``job_handler(retry_schedule=..., max_attempts=len + 1)``; the last attempt applies the job's own fallback.
+OUTAGE_RETRY_SCHEDULE: tuple[float, ...] = (15.0, 60.0, 180.0, 600.0, 1200.0)
+# A retry-after hint from the failure (``CircuitOpenError.retry_after``) is honoured up to this long.
+MAX_RETRY_AFTER_SECONDS = 3600.0
 
 
 class PermanentJobError(Exception):
@@ -146,7 +152,9 @@ def _now() -> datetime:
 
 
 def _delayed_member(job_type: str, job_id: str, missing: int = 0) -> str:
-    return json.dumps({"job_id": job_id, "missing": missing, "type": job_type}, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        {"job_id": job_id, "missing": missing, "type": job_type}, sort_keys=True, separators=(",", ":")
+    )
 
 
 # ----------------------------------------------------------------- registry
@@ -168,6 +176,7 @@ class JobContext:
 
 
 CallStyle = Literal["payload", "payload_ctx", "ctx", "kwargs"]
+ExhaustedHook = Callable[["JobContext", BaseException], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +189,12 @@ class JobHandlerSpec:
     call_style: CallStyle
     accepts_var_kwargs: bool
     kwarg_names: frozenset[str]
+    # Runs once when the job will never run again (permanent failure, attempts exhausted, or a
+    # worker killed through every attempt): the owner leaves its domain state decidable (S2).
+    on_exhausted: ExhaustedHook | None = None
+    # Explicit retry delays (attempt n waits schedule[min(n - 1, len - 1)], with jitter) instead of the
+    # exponential backoff (S11).
+    retry_schedule: tuple[float, ...] | None = None
 
 
 _HANDLERS: dict[str, JobHandlerSpec] = {}
@@ -215,17 +230,25 @@ def job_handler(
     concurrency: int = 1,
     max_attempts: int | None = None,
     timeout_seconds: float | None = None,
+    on_exhausted: ExhaustedHook | None = None,
+    retry_schedule: Sequence[float] | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
     """Register an async handler for ``job_type`` (see module docstring)."""
     validate_job_type(job_type)
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
+    schedule = tuple(float(delay) for delay in retry_schedule) if retry_schedule else None
+    if schedule is not None and any(delay <= 0 for delay in schedule):
+        raise ValueError("retry_schedule delays must be positive")
 
     def decorator(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
         if not inspect.iscoroutinefunction(fn):
             raise TypeError(f"Job handler {fn.__qualname__} must be an async function")
         existing = _HANDLERS.get(job_type)
-        if existing is not None and (existing.fn.__module__, existing.fn.__qualname__) != (fn.__module__, fn.__qualname__):
+        if existing is not None and (existing.fn.__module__, existing.fn.__qualname__) != (
+            fn.__module__,
+            fn.__qualname__,
+        ):
             raise ValueError(
                 f"Job type {job_type!r} already handled by {existing.fn.__module__}.{existing.fn.__qualname__}"
             )
@@ -239,10 +262,27 @@ def job_handler(
             call_style=style,
             accepts_var_kwargs=var_kw,
             kwarg_names=names,
+            on_exhausted=on_exhausted,
+            retry_schedule=schedule,
         )
         return fn
 
     return decorator
+
+
+def retry_after_hint(exc: BaseException) -> float | None:
+    """A positive ``retry_after`` (seconds) carried by the failure or what caused it (``CircuitOpenError``)."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    for _ in range(6):
+        if current is None or id(current) in seen:
+            return None
+        seen.add(id(current))
+        value = getattr(current, "retry_after", None)
+        if isinstance(value, int | float) and not isinstance(value, bool) and value > 0:
+            return float(value)
+        current = current.__cause__ or current.__context__
+    return None
 
 
 def registered_job_types() -> list[str]:
@@ -259,7 +299,9 @@ class PeriodicJob:
 _PERIODIC: dict[str, PeriodicJob] = {}
 
 
-def register_periodic_job(job_type: str, interval_seconds: int, payload: Mapping[str, Any] | None = None) -> None:
+def register_periodic_job(
+    job_type: str, interval_seconds: int, payload: Mapping[str, Any] | None = None
+) -> None:
     """Ask the worker to enqueue ``job_type`` every ``interval_seconds`` (once
     per interval across all workers; only while a handler is registered)."""
     validate_job_type(job_type)
@@ -305,7 +347,11 @@ async def _invoke(spec: JobHandlerSpec, ctx: JobContext) -> Any:
         return await spec.fn(ctx.payload)
     if spec.call_style == "ctx":
         return await spec.fn(ctx)
-    kwargs = ctx.payload if spec.accepts_var_kwargs else {k: v for k, v in ctx.payload.items() if k in spec.kwarg_names}
+    kwargs = (
+        ctx.payload
+        if spec.accepts_var_kwargs
+        else {k: v for k, v in ctx.payload.items() if k in spec.kwarg_names}
+    )
     return await spec.fn(**kwargs)
 
 
@@ -361,7 +407,9 @@ async def _insert_job(
     raise RuntimeError(f"Could not enqueue {job_type!r} with dedupe key {dedupe_key!r}")
 
 
-async def dispatch(job_id: str, job_type: str, run_after: datetime | None = None, *, redis: Redis | None = None) -> None:
+async def dispatch(
+    job_id: str, job_type: str, run_after: datetime | None = None, *, redis: Redis | None = None
+) -> None:
     """Send the stream message (or schedule it). Failures leave the row queued;
     the worker's reconciliation re-dispatches it."""
     client = _redis(redis)
@@ -404,13 +452,23 @@ async def enqueue(
     if db is None:
         async with session_scope() as session:
             job_id, created = await _insert_job(
-                session, job_type=job_type, payload=body, dedupe_key=dedupe_key, max_attempts=max_attempts, run_after=run_after
+                session,
+                job_type=job_type,
+                payload=body,
+                dedupe_key=dedupe_key,
+                max_attempts=max_attempts,
+                run_after=run_after,
             )
         if created:
             await dispatch(job_id, job_type, run_after, redis=redis)
     else:
         job_id, created = await _insert_job(
-            db, job_type=job_type, payload=body, dedupe_key=dedupe_key, max_attempts=max_attempts, run_after=run_after
+            db,
+            job_type=job_type,
+            payload=body,
+            dedupe_key=dedupe_key,
+            max_attempts=max_attempts,
+            run_after=run_after,
         )
         if created:
 
@@ -418,7 +476,9 @@ async def enqueue(
                 await dispatch(job_id, job_type, run_after, redis=redis)
 
             run_after_commit(db, _after_commit)
-    log.info("queue.enqueued", job_id=job_id, job_type=job_type, created=created, delay_seconds=delay_seconds or 0)
+    log.info(
+        "queue.enqueued", job_id=job_id, job_type=job_type, created=created, delay_seconds=delay_seconds or 0
+    )
     return job_id
 
 
@@ -427,7 +487,12 @@ async def get_job(job_id: str | uuid.UUID) -> BackgroundJob | None:
         return await session.get(BackgroundJob, uuid.UUID(str(job_id)))
 
 
-async def wait_for_job(job_id: str | uuid.UUID, *, timeout: float = 10.0, poll_interval: float = 0.05) -> BackgroundJob:  # noqa: ASYNC109
+async def wait_for_job(
+    job_id: str | uuid.UUID,
+    *,
+    timeout: float = 10.0,  # noqa: ASYNC109
+    poll_interval: float = 0.05,
+) -> BackgroundJob:
     """Poll until the job reaches a terminal state (tests, admin tooling)."""
     terminal = {JobState.SUCCEEDED.value, JobState.FAILED.value, JobState.DEAD.value}
     deadline = time.monotonic() + timeout
@@ -436,7 +501,9 @@ async def wait_for_job(job_id: str | uuid.UUID, *, timeout: float = 10.0, poll_i
         if job is not None and job.status in terminal:
             return job
         if time.monotonic() >= deadline:
-            raise TimeoutError(f"Job {job_id} did not finish within {timeout}s (status={getattr(job, 'status', None)})")
+            raise TimeoutError(
+                f"Job {job_id} did not finish within {timeout}s (status={getattr(job, 'status', None)})"
+            )
         await asyncio.sleep(poll_interval)
 
 
@@ -466,6 +533,7 @@ class Worker:
         visibility_timeout: float = 60.0,
         backoff_base: float = 2.0,
         backoff_cap: float = 300.0,
+        retry_schedule_scale: float = 1.0,
         shutdown_grace: float = 30.0,
         delayed_poll_interval: float = 0.5,
         claim_interval: float = 15.0,
@@ -482,6 +550,8 @@ class Worker:
         self.visibility_timeout = visibility_timeout
         self.backoff_base = backoff_base
         self.backoff_cap = backoff_cap
+        # Tests shrink explicit retry schedules (and retry-after hints) the way they shrink the backoff.
+        self.retry_schedule_scale = retry_schedule_scale
         self.shutdown_grace = shutdown_grace
         self.delayed_poll_interval = delayed_poll_interval
         self.claim_interval = claim_interval
@@ -543,10 +613,16 @@ class Worker:
         await self.ensure_groups()
         await self.recover()
         self._service_tasks = [
-            asyncio.create_task(self._periodic(self.move_due_delayed, self.delayed_poll_interval), name="queue:delayed"),
+            asyncio.create_task(
+                self._periodic(self.move_due_delayed, self.delayed_poll_interval), name="queue:delayed"
+            ),
             asyncio.create_task(self._periodic(self.reclaim_idle, self.claim_interval), name="queue:reclaim"),
-            asyncio.create_task(self._periodic(self.reconcile, self.reconcile_interval), name="queue:reconcile"),
-            asyncio.create_task(self._periodic(self.refresh_queue_depths, self.depth_interval), name="queue:depth"),
+            asyncio.create_task(
+                self._periodic(self.reconcile, self.reconcile_interval), name="queue:reconcile"
+            ),
+            asyncio.create_task(
+                self._periodic(self.refresh_queue_depths, self.depth_interval), name="queue:depth"
+            ),
         ]
         log.info("worker.started", consumer=self.consumer, job_types=self.job_types)
         try:
@@ -582,7 +658,9 @@ class Worker:
                 raise
             except Exception as exc:
                 ERRORS.labels(component="worker").inc()
-                log.warning("worker.periodic_failed", task=getattr(fn, "__name__", "?"), error=_error_text(exc))
+                log.warning(
+                    "worker.periodic_failed", task=getattr(fn, "__name__", "?"), error=_error_text(exc)
+                )
             await asyncio.sleep(interval)
 
     async def _wait_any(self, stop: asyncio.Event, timeout: float) -> None:  # noqa: ASYNC109
@@ -608,7 +686,11 @@ class Worker:
                     if job_type not in self._groups_ready:
                         await self._ensure_group(job_type)
                 response: Any = await self.redis.xreadgroup(
-                    GROUP, self.consumer, {stream_key(t): ">" for t in types}, count=count, block=self.block_ms
+                    GROUP,
+                    self.consumer,
+                    {stream_key(t): ">" for t in types},
+                    count=count,
+                    block=self.block_ms,
                 )
                 backoff = 0.5
             except (RedisError, OSError) as exc:
@@ -621,7 +703,7 @@ class Worker:
                 backoff = min(backoff * 2, 10.0)
                 continue
             for stream, messages in response or []:
-                job_type = stream[len(STREAM_PREFIX):]
+                job_type = stream[len(STREAM_PREFIX) :]
                 for message_id, fields in messages:
                     self._start(job_type, message_id, fields)
 
@@ -665,7 +747,10 @@ class Worker:
                                 | (BackgroundJob.run_after <= func.now() + timedelta(seconds=1))
                             )
                         )
-                        | ((BackgroundJob.status == JobState.RUNNING.value) & (BackgroundJob.updated_at < stale_before)),
+                        | (
+                            (BackgroundJob.status == JobState.RUNNING.value)
+                            & (BackgroundJob.updated_at < stale_before)
+                        ),
                     )
                     .values(
                         status=JobState.RUNNING.value,
@@ -696,22 +781,30 @@ class Worker:
             created_at=row.created_at,
         )
 
-    async def _unclaimable(self, job_type: str, job_id: str, message_id: str, fields: Mapping[str, str]) -> None:
+    async def _unclaimable(
+        self, job_type: str, job_id: str, message_id: str, fields: Mapping[str, str]
+    ) -> None:
         async with session_scope() as session:
             row = (
                 await session.execute(
-                    select(BackgroundJob.status, BackgroundJob.run_after).where(BackgroundJob.id == uuid.UUID(job_id))
+                    select(BackgroundJob.status, BackgroundJob.run_after).where(
+                        BackgroundJob.id == uuid.UUID(job_id)
+                    )
                 )
             ).first()
         if row is None:
             missing = int(fields.get("missing", "0") or 0) + 1
             if missing <= self.missing_row_retries:
                 # Row not visible yet (enqueuing transaction still open) or deleted.
-                await self.redis.zadd(DELAYED_ZSET, {_delayed_member(job_type, job_id, missing): time.time() + missing})
+                await self.redis.zadd(
+                    DELAYED_ZSET, {_delayed_member(job_type, job_id, missing): time.time() + missing}
+                )
             else:
                 log.error("worker.job_row_missing", job_id=job_id, job_type=job_type)
         elif row.status == JobState.QUEUED.value and row.run_after is not None:
-            await self.redis.zadd(DELAYED_ZSET, {_delayed_member(job_type, job_id): row.run_after.timestamp()})
+            await self.redis.zadd(
+                DELAYED_ZSET, {_delayed_member(job_type, job_id): row.run_after.timestamp()}
+            )
         else:
             log.debug("worker.duplicate_message", job_id=job_id, status=row.status)
         await self._ack(job_type, message_id)
@@ -723,7 +816,13 @@ class Worker:
             raise
         except Exception as exc:  # bookkeeping failed (DB/Redis): the unacked message is reclaimed later
             ERRORS.labels(component="worker").inc()
-            log.error("worker.message_failed", job_type=job_type, message_id=message_id, error=_error_text(exc), exc_info=exc)
+            log.error(
+                "worker.message_failed",
+                job_type=job_type,
+                message_id=message_id,
+                error=_error_text(exc),
+                exc_info=exc,
+            )
 
     async def _process_message(self, job_type: str, message_id: str, fields: dict[str, str]) -> None:
         job_id = fields.get("job_id", "")
@@ -744,12 +843,17 @@ class Worker:
             await self._unclaimable(job_type, job_id, message_id, fields)
             return
         if spec is None:  # pragma: no cover - only registered streams are read
-            await self._finish_failed(claimed, message_id, RuntimeError("no handler registered"), permanent=True)
+            await self._finish_failed(
+                claimed, message_id, RuntimeError("no handler registered"), permanent=True
+            )
             return
         max_attempts = spec.max_attempts or claimed.max_attempts
         if claimed.attempt > max_attempts:
             await self._finish_failed(
-                claimed, message_id, RuntimeError("attempts exhausted (worker crashed or was killed)"), permanent=False,
+                claimed,
+                message_id,
+                RuntimeError("attempts exhausted (worker crashed or was killed)"),
+                permanent=False,
                 exhausted=True,
             )
             return
@@ -794,11 +898,16 @@ class Worker:
         while True:
             await asyncio.sleep(interval)
             try:
-                await self.redis.xclaim(stream_key(job_type), GROUP, self.consumer, 0, [message_id], justid=True)
+                await self.redis.xclaim(
+                    stream_key(job_type), GROUP, self.consumer, 0, [message_id], justid=True
+                )
                 async with session_scope() as session:
                     await session.execute(
                         update(BackgroundJob)
-                        .where(BackgroundJob.id == uuid.UUID(job_id), BackgroundJob.status == JobState.RUNNING.value)
+                        .where(
+                            BackgroundJob.id == uuid.UUID(job_id),
+                            BackgroundJob.status == JobState.RUNNING.value,
+                        )
                         .values(updated_at=func.now())
                         .execution_options(synchronize_session=False)
                     )
@@ -833,31 +942,70 @@ class Worker:
         await self._ack(claimed.job_type, message_id)
         self.processed += 1
         JOBS.labels(type=claimed.job_type, status=JobState.SUCCEEDED.value).inc()
-        log.info("job.succeeded", job_id=claimed.job_id, job_type=claimed.job_type, attempt=claimed.attempt,
-                 duration_ms=round(duration * 1000, 1))
+        log.info(
+            "job.succeeded",
+            job_id=claimed.job_id,
+            job_type=claimed.job_type,
+            attempt=claimed.attempt,
+            duration_ms=round(duration * 1000, 1),
+        )
 
     def _backoff(self, attempt: int) -> float:
         delay = min(self.backoff_cap, self.backoff_base * (2 ** max(0, attempt - 1)))
         return delay * random.uniform(0.8, 1.2)
 
+    def _retry_delay(self, job_type: str, attempt: int, exc: BaseException) -> float:
+        """The handler's retry schedule when it has one, else the exponential backoff; never shorter than a
+        retry-after hint carried by the failure (an open circuit says when it will let calls through)."""
+        spec = _HANDLERS.get(job_type)
+        schedule = spec.retry_schedule if spec is not None else None
+        if schedule:
+            delay = schedule[min(max(attempt, 1) - 1, len(schedule) - 1)] * self.retry_schedule_scale
+            delay *= random.uniform(0.8, 1.2)
+        else:
+            delay = self._backoff(attempt)
+        hint = retry_after_hint(exc)
+        if hint is not None:
+            delay = max(delay, min(hint, MAX_RETRY_AFTER_SECONDS) * self.retry_schedule_scale)
+        return delay
+
     async def _schedule_retry(self, claimed: _ClaimedJob, message_id: str, exc: BaseException) -> None:
-        delay = self._backoff(claimed.attempt)
+        delay = self._retry_delay(claimed.job_type, claimed.attempt, exc)
         run_after = _now() + timedelta(seconds=delay)
         async with session_scope() as session:
             await session.execute(
                 update(BackgroundJob)
                 .where(BackgroundJob.id == uuid.UUID(claimed.job_id))
-                .values(status=JobState.QUEUED.value, last_error=_error_text(exc), run_after=run_after, updated_at=func.now())
+                .values(
+                    status=JobState.QUEUED.value,
+                    last_error=_error_text(exc),
+                    run_after=run_after,
+                    updated_at=func.now(),
+                )
                 .execution_options(synchronize_session=False)
             )
-        await self.redis.zadd(DELAYED_ZSET, {_delayed_member(claimed.job_type, claimed.job_id): run_after.timestamp()})
+        await self.redis.zadd(
+            DELAYED_ZSET, {_delayed_member(claimed.job_type, claimed.job_id): run_after.timestamp()}
+        )
         await self._ack(claimed.job_type, message_id)
         JOBS.labels(type=claimed.job_type, status="retried").inc()
-        log.warning("job.retry_scheduled", job_id=claimed.job_id, job_type=claimed.job_type, attempt=claimed.attempt,
-                    retry_in_seconds=round(delay, 2), error=type(exc).__name__)
+        log.warning(
+            "job.retry_scheduled",
+            job_id=claimed.job_id,
+            job_type=claimed.job_type,
+            attempt=claimed.attempt,
+            retry_in_seconds=round(delay, 2),
+            error=type(exc).__name__,
+        )
 
     async def _finish_failed(
-        self, claimed: _ClaimedJob, message_id: str, exc: BaseException, *, permanent: bool, exhausted: bool = False
+        self,
+        claimed: _ClaimedJob,
+        message_id: str,
+        exc: BaseException,
+        *,
+        permanent: bool,
+        exhausted: bool = False,
     ) -> None:
         status = JobState.FAILED if permanent else JobState.DEAD
         error = _error_text(exc)
@@ -865,7 +1013,13 @@ class Worker:
             await session.execute(
                 update(BackgroundJob)
                 .where(BackgroundJob.id == uuid.UUID(claimed.job_id))
-                .values(status=status.value, last_error=error, finished_at=func.now(), updated_at=func.now(), dedupe_key=None)
+                .values(
+                    status=status.value,
+                    last_error=error,
+                    finished_at=func.now(),
+                    updated_at=func.now(),
+                    dedupe_key=None,
+                )
                 .execution_options(synchronize_session=False)
             )
         try:
@@ -887,8 +1041,40 @@ class Worker:
         await self._ack(claimed.job_type, message_id)
         JOBS.labels(type=claimed.job_type, status=status.value).inc()
         ERRORS.labels(component="worker").inc()
-        log.error("job.failed", job_id=claimed.job_id, job_type=claimed.job_type, attempt=claimed.attempt,
-                  status=status.value, exhausted=exhausted, error=error)
+        log.error(
+            "job.failed",
+            job_id=claimed.job_id,
+            job_type=claimed.job_type,
+            attempt=claimed.attempt,
+            status=status.value,
+            exhausted=exhausted,
+            error=error,
+        )
+        await self._run_exhausted_hook(claimed, exc)
+
+    async def _run_exhausted_hook(self, claimed: _ClaimedJob, exc: BaseException) -> None:
+        """The handler's ``on_exhausted`` runs after the row is dead/failed; its own failure is logged, never raised."""
+        spec = _HANDLERS.get(claimed.job_type)
+        hook = spec.on_exhausted if spec is not None else None
+        if hook is None:
+            return
+        ctx = JobContext(
+            job_id=claimed.job_id,
+            job_type=claimed.job_type,
+            attempt=claimed.attempt,
+            max_attempts=claimed.max_attempts,
+            payload=claimed.payload,
+            enqueued_at=claimed.created_at,
+        )
+        try:
+            async with asyncio.timeout(60):
+                await hook(ctx, exc)
+        except Exception as hook_exc:  # noqa: BLE001 - the job is already dead; keep the worker alive
+            ERRORS.labels(component="worker").inc()
+            log.error(
+                "job.exhausted_hook_failed", job_id=claimed.job_id, job_type=claimed.job_type,
+                error=_error_text(hook_exc),
+            )  # fmt: skip
 
     async def _requeue_cancelled(self, claimed: _ClaimedJob, job_type: str, message_id: str) -> None:
         """Shutdown interrupted the job: give the attempt back and dispatch it again."""
@@ -896,7 +1082,10 @@ class Worker:
             async with session_scope() as session:
                 await session.execute(
                     update(BackgroundJob)
-                    .where(BackgroundJob.id == uuid.UUID(claimed.job_id), BackgroundJob.status == JobState.RUNNING.value)
+                    .where(
+                        BackgroundJob.id == uuid.UUID(claimed.job_id),
+                        BackgroundJob.status == JobState.RUNNING.value,
+                    )
                     .values(
                         status=JobState.QUEUED.value,
                         attempts=func.greatest(BackgroundJob.attempts - 1, 0),
@@ -906,7 +1095,10 @@ class Worker:
                     )
                     .execution_options(synchronize_session=False)
                 )
-            await self.redis.xadd(stream_key(job_type), {"job_id": claimed.job_id, "type": job_type, "enqueued_at": _now().isoformat()})
+            await self.redis.xadd(
+                stream_key(job_type),
+                {"job_id": claimed.job_id, "type": job_type, "enqueued_at": _now().isoformat()},
+            )
             await self._ack(job_type, message_id)
             JOBS.labels(type=job_type, status="interrupted").inc()
             log.warning("job.requeued_on_shutdown", job_id=claimed.job_id, job_type=job_type)
@@ -947,7 +1139,12 @@ class Worker:
                 continue
             try:
                 result = await self.redis.xautoclaim(
-                    stream_key(job_type), GROUP, self.consumer, min_idle_time=idle_ms, start_id="0-0", count=free
+                    stream_key(job_type),
+                    GROUP,
+                    self.consumer,
+                    min_idle_time=idle_ms,
+                    start_id="0-0",
+                    count=free,
                 )
             except ResponseError as exc:
                 if "NOGROUP" in str(exc):
@@ -974,7 +1171,9 @@ class Worker:
 
     async def reconcile(self) -> int:
         """Periodic safety net for stream messages lost after the row was committed."""
-        if not await self.redis.set(RECONCILE_LOCK, self.consumer, nx=True, ex=max(1, int(self.reconcile_interval * 0.8))):
+        if not await self.redis.set(
+            RECONCILE_LOCK, self.consumer, nx=True, ex=max(1, int(self.reconcile_interval * 0.8))
+        ):
             return 0
         return await self._redispatch(startup=False)
 
@@ -1060,12 +1259,14 @@ class Worker:
             got = 0
             if types:
                 response: Any = await self.redis.xreadgroup(
-                    GROUP, self.consumer, {stream_key(t): ">" for t in types},
+                    GROUP,
+                    self.consumer,
+                    {stream_key(t): ">" for t in types},
                     count=max(1, min(self._free(t) for t in types)),
                 )
                 for stream, messages in response or []:
                     for message_id, fields in messages:
-                        self._start(stream[len(STREAM_PREFIX):], message_id, fields)
+                        self._start(stream[len(STREAM_PREFIX) :], message_id, fields)
                         got += 1
             if self._tasks:
                 await asyncio.wait(set(self._tasks), timeout=0.05)
@@ -1100,7 +1301,9 @@ def session_bus_channel(session_id: uuid.UUID | str) -> str:
     return f"session:{session_id}:bus"
 
 
-async def publish_session_event(session_id: uuid.UUID | str, event: Mapping[str, Any], *, redis: Redis | None = None) -> int:
+async def publish_session_event(
+    session_id: uuid.UUID | str, event: Mapping[str, Any], *, redis: Redis | None = None
+) -> int:
     """Publish a JSON event on ``session:{id}:bus``; returns the receiver count."""
     if "type" not in event:
         raise ValueError("Session events need a 'type'")

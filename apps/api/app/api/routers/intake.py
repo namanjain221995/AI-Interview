@@ -60,7 +60,12 @@ from app.schemas.intake import (
 )
 from app.services.data_deletion.intake import delete_intake
 from app.services.intake import invitations as service
-from app.services.intake.access import IntakeRoute, get_intake, require_intake_enabled
+from app.services.intake.access import (
+    IntakeRoute,
+    get_intake,
+    require_intake_enabled,
+    require_intake_entitled,
+)
 from app.services.intake.kit import IntakeKitError, load_intake_kit
 from app.services.intake.listing import IntakeFilters, get_summary, intake_stats, list_intakes
 from app.services.intake.org_settings import get_org_settings, save_org_settings, settings_out
@@ -71,7 +76,7 @@ router = APIRouter(
     tags=["intake"],
     responses=ERROR_RESPONSES,
     route_class=IntakeRoute,
-    dependencies=[Depends(require_intake_enabled)],
+    dependencies=[Depends(require_intake_enabled), Depends(require_intake_entitled)],
 )
 
 ConfigReader = Annotated[Principal, Depends(require_permission(Permission.JOBS_READ))]

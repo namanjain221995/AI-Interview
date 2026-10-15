@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from app.ai.base import AIUnavailable
 from app.db.models import CandidateProfile, CandidateResume, MediaAsset, ResumeChunk
 from app.domain.enums import ModelTask, Role
+from app.workers.resume import PROFILE_RETRY_SCHEDULE
 from tests.integration.resume.helpers import (
     API,
     create_candidate,
@@ -169,8 +170,8 @@ async def test_model_outage_degrades_to_partial_profile(auth_client, mock_ai, pi
     detail = (await client.get(f"{API}/resumes/{response.json()['id']}")).json()
     assert detail["status"] == "ready" and detail["status_detail"] == "analysis degraded"
     # every extraction part per attempt (identity, 3 role groups + the rest, projects,
-    # skills, background); retried twice, then the deterministic parse
-    assert len(mock_ai.llm.calls_for(ModelTask.RESUME_EXTRACTION)) == 3 * 8
+    # skills, background); retried on the outage schedule (S11), then the deterministic parse
+    assert len(mock_ai.llm.calls_for(ModelTask.RESUME_EXTRACTION)) == (len(PROFILE_RETRY_SCHEDULE) + 1) * 8
     profile = (await client.get(f"{API}/candidates/{candidate['id']}/profile")).json()
     assert profile["status"] == "partial"
     assert profile["experience_years"] == 5.8  # heuristic parser + deterministic dates

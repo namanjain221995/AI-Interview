@@ -91,6 +91,12 @@ describe("normalizeMe", () => {
     expect(result.organization).toEqual({ id: "o2", name: "Globex", slug: "" });
   });
 
+  it("reads the must-change-password flag from the server", () => {
+    const flat = { id: "u1", email: "a@b.test", role: "RECRUITER", display_name: "A", must_change_password: true, permissions: [] };
+    expect(normalizeMe(flat).mustChangePassword).toBe(true);
+    expect(normalizeMe({ ...flat, must_change_password: false }).mustChangePassword).toBe(false);
+  });
+
   it("rejects candidates and malformed payloads", () => {
     expect(() => normalizeMe({ id: "c1", email: "c@x.co", role: "CANDIDATE" })).toThrow();
     expect(() => normalizeMe(null)).toThrow();
@@ -163,6 +169,7 @@ describe("gates", () => {
           element: <RequireAuth loadingFallback={<p>checking session</p>} />,
           children: [
             { path: "jobs", element: <p>jobs page</p> },
+            { path: "account", element: <p>account page</p> },
             {
               path: "users",
               element: <RequirePermission permission="users:manage" fallback={<p>forbidden</p>} />,
@@ -205,6 +212,32 @@ describe("gates", () => {
     renderAt("/app/users");
     expect(await screen.findByText("forbidden")).toBeInTheDocument();
     expect(screen.queryByText("users page")).not.toBeInTheDocument();
+  });
+
+  it("keeps an account with an administrator-issued password on the account page (S13)", async () => {
+    act(() => useAuthStore.getState().setSession(me("RECRUITER", { mustChangePassword: true })));
+    const router = renderAt("/app/jobs");
+    expect(await screen.findByText("account page")).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/app/account");
+    act(() => useAuthStore.getState().setSession(me("RECRUITER")));
+    await act(() => router.navigate("/app/jobs"));
+    expect(await screen.findByText("jobs page")).toBeInTheDocument();
+  });
+
+  it("a refused API call (password_change_required) sends the user to the account page", async () => {
+    act(() => useAuthStore.getState().setSession(me("RECRUITER")));
+    const router = renderAt("/app/jobs");
+    expect(await screen.findByText("jobs page")).toBeInTheDocument();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { code: "password_change_required", message: "Choose a new password" } }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await expect(api.get("/jobs")).rejects.toMatchObject({ code: "password_change_required" });
+    fetchSpy.mockRestore();
+    expect(await screen.findByText("account page")).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/app/account");
   });
 
   it("lets admins through", async () => {

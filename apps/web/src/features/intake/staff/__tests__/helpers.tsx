@@ -29,7 +29,7 @@ export function signIn(role: StaffRole = "RECRUITER") {
   act(() =>
     useAuthStore.getState().setSession({
       user: { id: IDS.reviewer, organization_id: "o1", email: "dana@acme.test", full_name: "Dana Whitfield", role, is_active: true, last_login_at: null, created_at: "", updated_at: "" },
-      organization: { id: "o1", name: "Acme Robotics", slug: "acme" },
+      organization: { id: "o1", name: "Acme Robotics", slug: "acme", features: { intake: true } },
       permissions: permissionsForRole(role),
     }),
   );

@@ -454,6 +454,16 @@ class RegisterRequest(_Lenient):
     privacy_ack: bool = False
     access_code: str | None = Field(None, max_length=64)
     website: str | None = Field(None, max_length=2000)
+    # Proof-of-work solution for GET /link-access/{token}/challenge (S15; ALTCHA payload, base64 JSON).
+    pow: str | None = Field(None, max_length=2000)
+
+
+class PowChallengeOut(BaseModel):
+    algorithm: str
+    challenge: str
+    salt: str
+    signature: str
+    maxnumber: int
 
 
 class RegisterResponse(BaseModel):

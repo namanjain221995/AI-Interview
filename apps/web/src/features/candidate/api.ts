@@ -280,6 +280,8 @@ export interface DisclosureItemView {
   key: string;
   title: string;
   description: string;
+  /** One plain sentence shown by default (the description stays one click away); empty from older servers. */
+  summary: string;
   required: boolean;
   enabled: boolean;
 }
@@ -314,7 +316,7 @@ const ITEM_TITLES: Record<string, { title: string; description: string }> = {
   audio_recording: { title: "Audio recording", description: "Audio of your answers is kept for the hiring team to review." },
   video_recording: { title: "Video recording", description: "Video of the interview is kept for the hiring team to review." },
   ai_assessment: { title: "AI assessment", description: "An AI evaluates your answers; a person makes every hiring decision." },
-  retention: { title: "Data retention", description: "Your data is kept only for the periods stated." },
+  retention: { title: "Data retention", description: "Stored recordings are deleted on the schedule stated; your transcript stays with the hiring team until they delete it." },
 };
 
 export function normalizeDisclosure(raw: unknown): DisclosureView {
@@ -332,6 +334,7 @@ export function normalizeDisclosure(raw: unknown): DisclosureView {
           key,
           title: firstStr(i.title, i.label) ?? ITEM_TITLES[key]?.title ?? key.replace(/_/g, " "),
           description: firstStr(i.description, i.text) ?? ITEM_TITLES[key]?.description ?? "",
+          summary: firstStr(i.summary) ?? "",
           required: bool(i.required, true),
           enabled: bool(i.enabled, true),
         };
@@ -345,7 +348,7 @@ export function normalizeDisclosure(raw: unknown): DisclosureView {
         continue;
       }
       if (value !== true) continue;
-      items.push({ key, title: ITEM_TITLES[key]?.title ?? key, description: ITEM_TITLES[key]?.description ?? "", required: true, enabled: true });
+      items.push({ key, title: ITEM_TITLES[key]?.title ?? key, description: ITEM_TITLES[key]?.description ?? "", summary: "", required: true, enabled: true });
     }
   }
   // `required_items` (list of keys) is the authority on what must be acknowledged.
@@ -718,6 +721,16 @@ export function normalizeSession(raw: unknown, fallbackId = ""): PortalSessionVi
 
 export function getPortalSession(sessionId: string): Promise<PortalSessionView> {
   return api.get<unknown>(`/portal/sessions/${encodeURIComponent(sessionId)}`).then((raw) => normalizeSession(raw, sessionId));
+}
+
+/**
+ * Ends the interview over REST when the WebSocket is down (S6). The server finishes it on whichever
+ * instance holds the room, or offline a few seconds later when no room is attached anywhere.
+ */
+/** `ending` | `already_ended` | `not_started` (nothing to end yet: the candidate may come back to the link). */
+export async function endPortalSession(sessionId: string, reason = "candidate_ended"): Promise<{ status: string }> {
+  const raw = rec(await api.post<unknown>(`/portal/sessions/${encodeURIComponent(sessionId)}/end`, { reason }, { keepalive: true, timeoutMs: 8000 }));
+  return { status: str(raw.status) ?? "ending" };
 }
 
 export async function getWsTicket(sessionId: string): Promise<{ ticket: string; ws_url: string }> {

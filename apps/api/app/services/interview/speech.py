@@ -144,6 +144,121 @@ def is_evaluative_sentence(sentence: str) -> bool:
     return bool(PRAISE.search(s) or CRITIQUE.search(s))
 
 
+_ACK_WORDS = (
+    "okay", "ok", "alright", "all right", "right", "got it", "sure", "great", "thanks", "thank you", "understood",
+    "i see", "good", "perfect", "nice", "cool", "makes sense",
+)  # fmt: skip
+_ACK_ECHO = re.compile(
+    r"^\s*(?:" + "|".join(re.escape(w) for w in sorted(_ACK_WORDS, key=len, reverse=True)) + r")\s*[,.!;:\u2013\u2014-]+\s*",
+    re.IGNORECASE,
+)
+
+
+_CHALLENGE = re.compile(r"\b(actually)\b,?\s*", re.IGNORECASE)
+_TRAILING_WORD = re.compile(r"[A-Za-z]+$")
+
+
+class ToneFilter:
+    """Streaming filter that removes "actually" from interviewer speech.
+
+    "How did you actually handle ...?" / "Which role actually involved ...?" reads as doubting the candidate (owner
+    report); the speech rules forbid it but the model still used it. The word carries no content in a question, so
+    it is dropped deterministically ("Actually, how ..." -> "How ..."). Only a trailing partial word is held
+    between chunks (it may be the start of "actually")."""
+
+    def __init__(self) -> None:
+        self._held = ""
+        self._strip = False  # a word was just dropped: the next text starts without its leading space
+        self._capitalize = False  # ... and with a capital letter (the dropped word opened a sentence)
+        self.dropped = 0
+
+    def feed(self, text: str) -> str:
+        buffer = self._held + text
+        partial = _TRAILING_WORD.search(buffer)
+        cut = partial.start() if partial else len(buffer)
+        out, self._held = buffer[:cut], buffer[cut:]
+        return self._clean(out)
+
+    def flush(self) -> str:
+        out, self._held = self._held, ""
+        return self._clean(out)
+
+    def _clean(self, text: str) -> str:
+        out: list[str] = []
+        pos = 0
+        for match in _CHALLENGE.finditer(text):
+            out.append(self._carry(text[pos : match.start()]))
+            pos = match.end()
+            self.dropped += 1
+            self._strip = True
+            self._capitalize = match.group(1)[0] == "A"  # sentence-initial "Actually, how ..." -> "How ..."
+        out.append(self._carry(text[pos:]))
+        return "".join(out)
+
+    def _carry(self, text: str) -> str:
+        """Apply what a dropped word left pending to the text that follows it."""
+        if self._strip:
+            text = text.lstrip()
+            if not text:
+                return ""
+            self._strip = False
+        if self._capitalize and text:
+            text = text[0].upper() + text[1:]
+            self._capitalize = False
+        return text
+
+
+class AckEchoFilter:
+    """Streaming filter for a turn the runtime already acknowledged out loud ("Okay." right after the answer): a
+    bare acknowledgement the reply starts with ("Right, so ...", "Got it. What ...") is dropped, so the candidate
+    never hears two in a row. Anything else passes through unchanged."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._decided = False
+        self.dropped: str | None = None
+
+    def _may_still_be_ack(self, text: str) -> bool:
+        lowered = text.strip().lower()
+        if not lowered:
+            return True
+        for word in _ACK_WORDS:
+            if word.startswith(lowered):
+                return True  # the word is still streaming ("Rig" ...)
+            if lowered.startswith(word) and not lowered[len(word) :].strip():
+                return True  # the word is complete, its punctuation not yet
+        return False
+
+    def feed(self, text: str) -> str:
+        if self._decided:
+            return text
+        self._buffer += text
+        match = _ACK_ECHO.match(self._buffer)
+        if match:
+            rest = self._buffer[match.end() :]
+            if not rest.strip():
+                return ""  # wait for what follows the acknowledgement
+            self._decided = True
+            self.dropped = match.group(0).strip()
+            self._buffer = ""
+            rest = rest.lstrip()
+            return rest[:1].upper() + rest[1:]
+        if self._may_still_be_ack(self._buffer):
+            return ""
+        return self._release()
+
+    def _release(self) -> str:
+        self._decided = True
+        out, self._buffer = self._buffer, ""
+        return out
+
+    def flush(self) -> str:
+        """End of stream: an acknowledgement that is the whole utterance is kept (something must be said)."""
+        if self._decided:
+            return ""
+        return self._release()
+
+
 class QuestionLimiter:
     """Streaming guard: an asking turn ends at its first question. Text after the first
     question mark (a second question, an extra request) is not spoken."""
@@ -230,11 +345,13 @@ class OpenerFilter:
 
 __all__ = [
     "ASR_COMMENT",
+    "AckEchoFilter",
     "CRITIQUE",
     "NARRATION",
     "PRAISE",
     "OpenerFilter",
     "QuestionLimiter",
+    "ToneFilter",
     "is_evaluative_sentence",
     "style_issues",
 ]

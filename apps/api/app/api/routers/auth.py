@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 
 from app.core.audit import audit
 from app.core.deps import CurrentPrincipal, DbSession, OptionalPrincipal, StaffPrincipal, verify_csrf
@@ -27,7 +28,14 @@ from app.schemas.api.auth import (
     SessionResponse,
 )
 from app.schemas.api.common import ERROR_RESPONSES
-from app.services.identity.cookies import REFRESH_COOKIE, clear_auth_cookies, set_auth_cookies
+from app.services.identity.cookies import (
+    REFRESH_COOKIE,
+    STAFF_COOKIES,
+    clear_auth_cookies,
+    refresh_cookie,
+    request_audience,
+    set_auth_cookies,
+)
 from app.services.identity.sessions import (
     IssuedTokens,
     RefreshTokenReuse,
@@ -51,6 +59,11 @@ async def build_me(db: DbSession, principal: Principal) -> MeResponse:
     org = await db.get(Organization, principal.organization_id) if principal.organization_id else None
     subject_id = principal.id
     assert subject_id is not None
+    must_change = False
+    if principal.user_id is not None:
+        must_change = bool(
+            await db.scalar(select(User.must_change_password).where(User.id == principal.user_id))
+        )
     return MeResponse(
         subject_type=principal.subject_type,
         id=subject_id,
@@ -61,6 +74,7 @@ async def build_me(db: DbSession, principal: Principal) -> MeResponse:
         organization=OrganizationBrief.model_validate(org) if org is not None else None,
         interview_id=principal.interview_id,
         permissions=sorted(p.value for p in principal.permissions),
+        must_change_password=must_change,
     )
 
 
@@ -94,7 +108,7 @@ def _error_clearing_cookies(request: Request, exc: AppError) -> JSONResponse:
         status_code=exc.status_code,
         headers=exc.headers,
     )
-    clear_auth_cookies(response)
+    clear_auth_cookies(response, request_audience(request))
     return response
 
 
@@ -126,11 +140,15 @@ async def login(body: LoginRequest, request: Request, response: Response, db: Db
     summary="Rotate the refresh token and issue a new access token",
 )
 async def refresh(request: Request, response: Response, db: DbSession) -> SessionResponse | JSONResponse:
-    token = request.cookies.get(REFRESH_COOKIE)
+    audience = request_audience(request)
+    token, legacy = refresh_cookie(request)  # staff or candidate set, by audience (G2)
     row = await find_session_by_refresh_token(db, token)
+    if row is not None and audience == "candidate" and row.subject_type != SubjectType.CANDIDATE:
+        row = None  # the legacy fallback reached the staff session: a candidate page never rotates it
     if row is None:
         return _error_clearing_cookies(
-            request, Unauthorized("Your session has expired. Please sign in again.", code="invalid_refresh_token")
+            request,
+            Unauthorized("Your session has expired. Please sign in again.", code="invalid_refresh_token"),
         )
     verify_csrf(request, row.id)
     try:
@@ -138,8 +156,14 @@ async def refresh(request: Request, response: Response, db: DbSession) -> Sessio
     except RefreshTokenReuse as exc:
         AUTH_EVENTS.labels(event="refresh_reuse_detected").inc()
         await audit(
-            db, None, "auth.refresh_reuse_detected", resource_type="auth_session", resource_id=str(row.family_id),
-            organization_id=None, details={"subject_type": row.subject_type}, request=request,
+            db,
+            None,
+            "auth.refresh_reuse_detected",
+            resource_type="auth_session",
+            resource_id=str(row.family_id),
+            organization_id=None,
+            details={"subject_type": row.subject_type},
+            request=request,
         )
         await db.commit()
         return _error_clearing_cookies(request, exc)
@@ -152,7 +176,15 @@ async def refresh(request: Request, response: Response, db: DbSession) -> Sessio
         if user is not None:
             email, name = user.email, user.full_name
     principal = principal_from_tokens(tokens, email=email, display_name=name)
-    set_auth_cookies(response, tokens)
+    if legacy and tokens.subject_type is SubjectType.CANDIDATE:
+        clear_auth_cookies(response, "staff")  # a pre-G2 candidate session moves to the candidate names
+        set_auth_cookies(response, tokens)
+    elif audience == "staff" and tokens.subject_type is SubjectType.CANDIDATE:
+        # A tab still running the pre-G2 bundle (no audience header) holds its candidate session under the staff
+        # names and sends the CSRF token it reads there: keep them in place until that tab reloads.
+        set_auth_cookies(response, tokens, names=STAFF_COOKIES)
+    else:
+        set_auth_cookies(response, tokens)
     AUTH_EVENTS.labels(event="refresh").inc()
     return _session_response(await build_me(db, principal), tokens)
 
@@ -160,7 +192,11 @@ async def refresh(request: Request, response: Response, db: DbSession) -> Sessio
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, summary="End the current session")
 async def logout(request: Request, db: DbSession, principal: OptionalPrincipal) -> Response:
     revoked: list[object] = []
-    row = await find_session_by_refresh_token(db, request.cookies.get(REFRESH_COOKIE))
+    audience = request_audience(request)
+    token, legacy = refresh_cookie(request)
+    row = await find_session_by_refresh_token(db, token)
+    if row is not None and audience == "candidate" and row.subject_type != SubjectType.CANDIDATE:
+        row = None  # the legacy fallback reached the staff session: a candidate sign-out never ends it
     if principal is None and row is not None:
         verify_csrf(request, row.id)  # access token expired: bind CSRF to the refresh session
     if principal is not None and principal.auth_session_id is not None:
@@ -169,13 +205,21 @@ async def logout(request: Request, db: DbSession, principal: OptionalPrincipal) 
         revoked += await revoke_family(db, row.family_id, reason="logout")
     if principal is not None or row is not None:
         await audit(
-            db, principal, "auth.logout", resource_type="auth_session",
-            resource_id=str(principal.auth_session_id if principal else row.id if row else ""), request=request,
+            db,
+            principal,
+            "auth.logout",
+            resource_type="auth_session",
+            resource_id=str(principal.auth_session_id if principal else row.id if row else ""),
+            request=request,
             organization_id=principal.organization_id if principal else None,
         )
         AUTH_EVENTS.labels(event="logout").inc()
     result = Response(status_code=status.HTTP_204_NO_CONTENT)
-    clear_auth_cookies(result)
+    clear_auth_cookies(
+        result, audience
+    )  # only this audience: a candidate signing out keeps the staff session
+    if legacy and row is not None:
+        clear_auth_cookies(result, "staff")  # a pre-G2 candidate session lived under the staff names
     return result
 
 
@@ -196,7 +240,13 @@ async def change_password(
         current = await db.get(AuthSession, principal.auth_session_id)
         family_id = current.family_id if current is not None else None
     await change_own_password(
-        db, user, current_password=body.current_password, new_password=body.new_password, keep_family_id=family_id
+        db,
+        user,
+        current_password=body.current_password,
+        new_password=body.new_password,
+        keep_family_id=family_id,
     )
-    await audit(db, principal, "user.password_change", resource_type="user", resource_id=str(user.id), request=request)
+    await audit(
+        db, principal, "user.password_change", resource_type="user", resource_id=str(user.id), request=request
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

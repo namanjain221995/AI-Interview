@@ -159,16 +159,43 @@ def test_alerts_have_severity_and_annotations() -> None:
 
 def test_scrape_config_covers_the_platform_services() -> None:
     config = yaml.safe_load(PROMETHEUS_YML.read_text())
+    jobs = {job["job_name"]: job for job in config["scrape_configs"]}
     targets = {
-        job["job_name"]: [t for sc in job["static_configs"] for t in sc["targets"]]
-        for job in config["scrape_configs"]
+        name: [t for sc in job.get("static_configs", []) for t in sc["targets"]] for name, job in jobs.items()
     }
     assert targets["interview-api"] == ["127.0.0.1:8200"]
     assert targets["interview-worker"] == ["127.0.0.1:8201"]
     assert targets["interview-tts"] == ["127.0.0.1:8210"]
     assert targets["interview-sandbox"] == ["127.0.0.1:8220"]
-    assert sorted(targets["vllm"]) == ["127.0.0.1:8000", "127.0.0.1:8002", "127.0.0.1:8003", "127.0.0.1:8005"]
     assert targets["dgx-gpu"] == ["127.0.0.1:9835"]
+    # The AI endpoints live at different addresses per node: file discovery generated from .env.
+    assert jobs["vllm"]["file_sd_configs"][0]["files"] == ["/etc/prometheus/targets/ai-endpoints.json"]
+
+
+def _prom_targets_module() -> Any:
+    spec = importlib.util.spec_from_file_location("prom_targets", REPO / "scripts" / "prom_targets.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_ai_scrape_targets_follow_the_env() -> None:
+    module = _prom_targets_module()
+
+    def pairs(env: dict[str, str]) -> list[tuple[str, str]]:
+        return [(group["labels"]["endpoint"], group["targets"][0]) for group in module.build(env)]
+
+    # Head-node layout (.env.example defaults): everything on loopback.
+    assert pairs({}) == [
+        ("main", "127.0.0.1:8000"),
+        ("vision", "127.0.0.1:8002"),
+        ("embedding", "127.0.0.1:8003"),
+        ("reranker", "127.0.0.1:8005"),
+    ]
+    # Worker-node layout: the main LLM over the interconnect, a disabled endpoint is not scraped.
+    worker = pairs({"MAIN_LLM_BASE_URL": "http://10.100.184.1:8000/v1", "AI_DISABLED_ENDPOINTS": "reranker"})
+    assert worker == [("main", "10.100.184.1:8000"), ("vision", "127.0.0.1:8002"), ("embedding", "127.0.0.1:8003")]
 
 
 # ----------------------------------------------------------------------------- live PromQL
