@@ -251,6 +251,53 @@ def test_real_answers_are_never_flow_turns(text: str) -> None:
     assert result.consumes_item and result.ack is None
 
 
+# ================================================================== questions to the interviewer (owner, 2026-10-17)
+
+# "What's your name?" mid-interview was taken as the answer and the interview moved on; a human interviewer
+# answers it and asks the question again.
+TO_INTERVIEWER = [
+    "What is your name?",
+    "What's your name?",
+    "Your name?",
+    "Sorry, what should I call you?",
+    "Who are you?",
+    "Okay, before that, who am I talking to?",
+    "Who is this?",
+    "How are you?",
+    "Where are you calling from?",
+    "Is this interview being recorded?",
+    "What is this program about?",
+    "Which one do you prefer?",
+    "Do you work for this company?",
+]
+STAYS_ANSWER = [
+    "I used Python and pandas, you know?",
+    "We built a chatbot that answers what is your order status for customers.",
+    "How did I handle it? I talked to my manager and we fixed it.",
+    "Why did we pick Kafka? Because your team needed ordered events at high volume and replay after failures.",
+    "My manager asked whether you could join the call.",
+]
+
+
+@pytest.mark.parametrize("text", TO_INTERVIEWER)
+def test_questions_to_the_interviewer_are_answered_not_consumed(text: str) -> None:
+    result = heard(text)
+    assert result.intent is TurnIntent.CANDIDATE_QUESTION, (text, result)
+    assert result.special.kind is SpecialKind.CANDIDATE_QUESTION and result.topic == "interviewer"
+    assert not result.flow  # the turn model answers it
+
+
+@pytest.mark.parametrize("text", STAYS_ANSWER)
+def test_answers_that_contain_a_question_stay_answers(text: str) -> None:
+    result = heard(text)
+    assert result.intent in (TurnIntent.ANSWER, TurnIntent.PARTIAL_ANSWER), (text, result)
+
+
+def test_questions_after_the_invitation_keep_the_invited_classification() -> None:
+    result = heard("What is your name?", questions_invited=True)
+    assert result.special.kind is SpecialKind.CANDIDATE_QUESTION and result.topic != "interviewer"
+
+
 def test_language_answer_to_a_choice_question_is_not_readiness() -> None:
     assert heard("Python.", LANGUAGE_Q).intent is TurnIntent.PARTIAL_ANSWER
 

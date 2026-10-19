@@ -206,9 +206,12 @@ async def test_process_questions_readiness_and_job_questions_before_the_last_par
     assert meta.full_text == P.WAIT and meta.decision["flow"] == "thinking"
     meta = only_meta(await driver.say("What are the next steps?", seconds=2, typed=False))
     assert meta.full_text.startswith(U.PROCESS_REPLIES["next_steps"])  # approved wording, answered now
-    # A job / program question keeps the deferral to the last part.
+    # A job / program question is answered now, like a human interviewer would (approved information only), and the
+    # question is asked again; the item stays pending.
     meta = only_meta(await driver.say("What is the salary for this program?", seconds=2, typed=False))
-    assert meta.full_text.startswith(P.DEFER_LEAD)
+    assert meta.full_text == live_helpers.ASIDE_SPEECH
+    assert meta.decision["action"] == "answer_candidate_question" and meta.decision["intake"]["move"] == "answer_question"
+    assert await pending(env, sid) == ("greeting.intro", "asked")
     # "Okay" twice gets "go ahead"; the third time the question is rephrased (ordinary unclear path).
     first = only_meta(await driver.say("Okay.", seconds=2, typed=False))
     assert first.full_text in U.READY_REPLIES and first.decision["flow"] == "readiness"
@@ -222,6 +225,43 @@ async def test_process_questions_readiness_and_job_questions_before_the_last_par
         "What is the salary for this program?",
         "Okay.",
     ]
+
+
+async def test_a_question_to_the_interviewer_is_answered_and_the_question_asked_again(intake_env) -> None:
+    """Owner, 2026-10-17: "What's your name?" mid-interview was taken as the answer and the interview moved on."""
+    env = intake_env
+    _, sid, _ = await start(env)
+    driver = Driver(env, sid)
+    calls = model_calls(env)
+
+    meta = only_meta(await driver.say("Sorry, what's your name?", seconds=2, typed=False))
+    assert model_calls(env) == calls + 1  # the model answers, not a fixed line
+    assert meta.full_text == live_helpers.ASIDE_SPEECH
+    assert meta.decision["action"] == "answer_candidate_question"
+    assert meta.decision["intake"]["item_key"] == "greeting.intro"
+    prompt = env["model"].prompts[-1]
+    assert "answer_question (item_key greeting.intro)" in prompt and "friendly human interviewer" in prompt
+    assert "The waiting question" in prompt  # it asks the pending question again
+    assert "APPROVED PROGRAM INFORMATION" in prompt and "twelve weeks" in prompt
+    assert await pending(env, sid) == ("greeting.intro", "asked")
+
+    # The real answer afterwards is the self-introduction, as before.
+    events = await driver.say(
+        "I'm Priya, a data analyst at Infosys for two years, mostly SQL and Python dashboards for sales teams.",
+        seconds=20, typed=False,
+    )  # fmt: skip
+    assert metas(events)
+    assert (await pending(env, sid))[0] != "greeting.intro"
+    assert [r.transcript_text for r in await answer_rows(sid)][-1].startswith("I'm Priya")
+
+
+async def test_an_unapproved_number_in_a_mid_interview_answer_is_flagged(intake_env) -> None:
+    env = intake_env
+    env["model"].speech["aside"] = "The stipend is fifty thousand rupees a month. So, tell me about yourself?"
+    _, sid, _ = await start(env)
+    meta = only_meta(await Driver(env, sid).say("Is there a stipend for this program?", seconds=2, typed=False))
+    assert "intake:unapproved_money" in meta.decision["intake"]["deviations"]
+    assert (await env["engine"].load_state(sid)).intake.template_next  # the next model utterance uses its template
 
 
 async def test_an_audio_check_while_paused_is_not_kept_as_the_answer(intake_env) -> None:

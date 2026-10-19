@@ -275,6 +275,51 @@ _OPEN_REQUEST = re.compile(
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 
 
+# --------------------------------------------------------------------------- questions to the interviewer
+# A short question addressed to the interviewer that no fixed reply covers ("What's your name?", "Who am I talking
+# to?", "Is this being recorded?", "What is this program about?"). A human interviewer answers it and then asks the
+# question again, so it becomes a candidate question (topic "interviewer") that the turn model answers while the
+# pending item stays pending. The whole turn must be the question: substance before it, or a tag question closing
+# an answer ("..., you know?"), keeps the turn an answer.
+_ASK_LEAD = re.compile(
+    r"^(?:(?:okay|ok|so|and|but|also|sorry|hello|hi|hey|wait|um+|uh+|hmm+|actually|first|sir|ma'am|maam|madam|"
+    r"one\s+(?:thing|question|second)|quick\s+question|just\s+curious|by\s+the\s+way|"
+    r"before\s+(?:that|we\s+start|i\s+(?:start|answer)))\s+)+"
+)
+_ASK_START = re.compile(
+    r"^(?:what|what's|whats|who|who's|whos|whom|whose|where|where's|when|why|how|how's|which|is|are|am|do|does|"
+    r"did|can|could|would|will|should|may|shall|have|has|tell\s+me)\b"
+)
+_ASK_TARGET = _rx(
+    r"\b(?:you|u|ya|your|yours|yourself)\b",
+    r"\b(?:this|the)\s+(?:interview|call|session|meeting|program|programme|course|training|internship|company|"
+    r"organization|organisation|platform|process)\b",
+    r"\b(?:recorded|recording)\b",
+    r"\bwho\s+(?:am\s+i\s+(?:talking|speaking)|is\s+(?:this|speaking|there))\b",
+)
+_ASK_TAG = re.compile(r"\b(?:you\s+know|right|isn't\s+it|no|correct|yeah|okay|ok)$")
+# Reasoning or first-person reporting: an answer that happens to open with a (rhetorical) question.
+_ASK_ANSWERISH = re.compile(
+    r"\b(?:because|since|so\s+we|we\s+(?:used|built|had|did|were|picked|chose)|i\s+(?:used|built|did|was|had|"
+    r"worked|picked|chose))\b"
+)
+
+
+def _asks_interviewer(norm: str, clean: str, n: int, ends_question: bool) -> str | None:
+    """The question (lead fillers removed) when the whole turn is a short question to the interviewer, else None."""
+    if n > FLOW_MAX_WORDS or _ASK_ANSWERISH.search(clean):
+        return None
+    _, mark, tail = norm.partition("?")
+    if mark and tail.strip() and not tail.rstrip().endswith("?") and len(substance_words(tail)) > 1:
+        return None  # "How did I handle it? I talked to my manager ...": the question opens an answer
+    body = _ASK_LEAD.sub("", clean)
+    if not body or _ASK_TARGET.search(body) is None:
+        return None
+    if _ASK_START.match(body) or (ends_question and not _ASK_TAG.search(body)):
+        return body
+    return None
+
+
 def _clean(text: str) -> str:
     """Normalised text without punctuation (apostrophes kept), for full-turn patterns."""
     return " ".join(re.sub(r"[^a-z0-9' ]+", " ", normalize(text)).split())
@@ -460,6 +505,18 @@ def understand(
         next_steps = "next_steps" if _NEXT_STEPS.search(clean) else None
         return Understanding(
             TurnIntent.CANDIDATE_QUESTION, special, topic=next_steps, matched=special.matched
+        )
+    asked = (
+        _asks_interviewer(norm, clean, n, ends_question)
+        if special.kind is SpecialKind.NONE and not special.suspect and not questions_invited
+        else None
+    )
+    if asked is not None:
+        return Understanding(
+            TurnIntent.CANDIDATE_QUESTION,
+            SpecialResult(SpecialKind.CANDIDATE_QUESTION, 0.75, asked),
+            topic="interviewer",
+            matched=asked,
         )
 
     if n <= 20 and _AWAY.search(norm):
@@ -649,9 +706,9 @@ def flow_allowed(state: Any, heard: Understanding) -> bool:
 
 
 ANSWER_FIRST_RULE = (
-    "If the candidate's last words were a question to you about the interview itself (whether you can hear them, "
-    "whether to start, how long to speak), answer it in a few words first and then ask your question again; it is "
-    "not their answer. Never say they mentioned, meant or were about to say something they did not say."
+    "If the candidate's last words were a question to you (about you, the interview, the role or the program), answer "
+    "it like a friendly human interviewer in a few honest words first and then ask your question again; it is not "
+    "their answer. Never say they mentioned, meant or were about to say something they did not say."
 )
 
 

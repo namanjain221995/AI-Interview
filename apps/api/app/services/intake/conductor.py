@@ -591,6 +591,11 @@ class IntakeConductor:
             ):  # fmt: skip
                 yield event
             return
+        if action == "defer_question":
+            async with aclosing(self._answer_aside(state, move, last_answer=last_answer, core=core)) as relay:
+                async for event in relay:
+                    yield event
+            return
         if action in ("redirect", "defer_question", "encourage", "dont_know_probe"):
             item = ik.current()
             if action == "encourage" and item is not None:
@@ -874,6 +879,25 @@ class IntakeConductor:
             async for event in relay:
                 yield event
 
+    async def _answer_aside(
+        self, state: InterviewState, move: S.Move, *, last_answer: str | None, core: str
+    ) -> AsyncGenerator[TurnEvent, None]:
+        """A question the candidate asked mid-interview ("What's your name?", "What is this program about?"): the
+        model answers it in a sentence, as a human interviewer would, and asks the waiting question again; the item
+        stays pending. Template fallback: the deferral line and the question."""
+        notes = (
+            [f'The waiting question (ask it again after your answer, in a few words): "{core}"'] if core else []
+        )
+        async with aclosing(
+            self._model_utterance(
+                state, move, last_answer=last_answer,
+                offers=[("answer_question", move.item_key or "", P.ITEM_INTENTS["aside.answer"])], notes=notes,
+                fallback=P.join_speech(P.DEFER_LEAD, core), meta_key=move.item_key or "", item_kind="answer_question",
+            )
+        ) as relay:  # fmt: skip
+            async for event in relay:
+                yield event
+
     def _intent(self, ik: IntakeState, key: str) -> str:
         if S.is_ladder(key):
             spec = S.item_spec(key)
@@ -911,12 +935,13 @@ class IntakeConductor:
         ik = self._ik(state)
         engine = self.engine
         utterance_id = str(uuid.uuid4())
-        action = TurnAction.ANSWER_CANDIDATE_QUESTION if "answer_question" in move.offered else (
+        aside = move.action == "defer_question"
+        action = TurnAction.ANSWER_CANDIDATE_QUESTION if "answer_question" in move.offered or aside else (
             TurnAction.ASK_FOLLOWUP if item_kind in ("followup", "clarify") else TurnAction.ASK_QUESTION
         )  # fmt: skip
         behavior = beh.provisional(action)
         state.avatar_state = behavior.state
-        kind: UtteranceKind = "followup" if action == TurnAction.ASK_FOLLOWUP else (
+        kind: UtteranceKind = "followup" if action == TurnAction.ASK_FOLLOWUP or aside else (
             "acknowledgment" if action == TurnAction.ANSWER_CANDIDATE_QUESTION else "question"
         )  # fmt: skip
         yield UtteranceBegin(utterance_id=utterance_id, kind=kind, behavior=behavior)
@@ -1031,7 +1056,11 @@ class IntakeConductor:
         if stage_key == "topic" and ik.card:
             topic_card = kit.topic_card(ik.card)
             card = {"title": topic_card.title, "bullets": list(topic_card.bullets)}
-        approved = P.approved_info_text(ik.approved_info) if stage_key == "close" else None
+        approved = (
+            P.approved_info_text(ik.approved_info)
+            if stage_key == "close" or move.action == "defer_question"
+            else None
+        )
         elapsed = self._now(state)
         if state.ungrounded_reference:
             notes = [
@@ -1079,8 +1108,9 @@ class IntakeConductor:
         ik = self._ik(state)
         now = self._now(state)
         offered = move.offered
-        chosen: str = turn.move
-        if chosen not in offered:
+        aside = move.action == "defer_question"  # answered mid-interview: the item stays pending
+        chosen: str = "answer_question" if aside else turn.move
+        if chosen not in offered and not aside:
             deviations.append("move_not_offered")
             if chosen == "follow_up" and move.followup_item:
                 pass  # a follow-up the machine did not offer is still charged (6.4)
@@ -1109,7 +1139,9 @@ class IntakeConductor:
             ik.weakest_bullet = turn.target_bullet
         # State: which item this utterance asked.
         followup_index = 0
-        if item_kind == "clarify" or chosen == "clarify":
+        if aside:
+            meta_key = move.item_key or meta_key
+        elif item_kind == "clarify" or chosen == "clarify":
             meta_key = meta_key or (move.item_key or "")
         elif chosen == "follow_up" or "answer_question" in offered:
             S.apply_resolution(ik, move.resolve, now)
@@ -1131,11 +1163,17 @@ class IntakeConductor:
         issues = [f"speech:{i}" for i in speech_issues(checked, action)]
         stage_key = ik.stage.key if ik.stage else ""
         terms = P.material_terms(self.kit, passage_keys=ik.passages.values(), card=ik.card)
+        approved_info = P.approved_info_text(ik.approved_info)
+        if aside:
+            # The answer re-asks the waiting question: its own numbers are not invented facts.
+            current = state.current_question()
+            approved_info = f"{approved_info}\n{current.text if current is not None else ''}"
         intake_issues = P.intake_speech_issues(
             checked,
             stage_key=stage_key,
             material_terms=terms,
-            approved_info=P.approved_info_text(ik.approved_info),
+            approved_info=approved_info,
+            answers_question=aside,
         )
         grounding = self.engine._grounding_issue(state, checked)
         if grounding:

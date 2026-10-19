@@ -368,8 +368,8 @@ last part). Sound natural and warm; vary how you begin; use the first name at mo
 - Ask about THIS candidate: build on what they actually said or on the résumé claim you are given. Attribute to \
 the candidate only what they said; résumé content is "your résumé mentions ...". Never say they mentioned, meant \
 or were about to say something they did not say; topics from your own earlier questions are not theirs.
-- If their last words were a question to you about the interview itself (whether you can hear them, whether to \
-start, how long to speak), answer it in a few words first, then ask the item; it is not their answer.
+- If their last words were a question to you (about you, the interview or the program), answer it the way a \
+friendly human interviewer would, in a few honest words, then ask the item; it is not their answer.
 - Never praise, judge or correct the answer ("great", "good answer", "that's right", "you did well"); never \
 mention scores, ratings of answers, evaluation, passing, failing, decisions or outcomes; never promise feedback, \
 a report or results.
@@ -413,8 +413,8 @@ PART {{ stage_number }} OF 7: {{ stage_title }}. Elapsed {{ elapsed }} of about 
 Title: {{ card.title }}
 {% for bullet in card.bullets %}{{ loop.index }}. {{ bullet }}
 {% endfor %}{% endif %}
-{% if approved %}APPROVED PROGRAM INFORMATION (the ONLY facts you may state; anything else: "The hiring team is \
-best placed to answer that; they'll follow up with you on it."):
+{% if approved %}APPROVED PROGRAM INFORMATION (the ONLY program facts you may state; anything else about the \
+program: "The hiring team is best placed to answer that; they'll follow up with you on it."):
 {{ approved | untrusted("derived_approved_info") }}
 {% endif %}
 {% if conversation %}RECENT CONVERSATION:
@@ -501,6 +501,16 @@ ITEM_INTENTS: dict[str, str] = {
         "questions. No numbers, dates, money or promises that are not in the approved information."
     ),
     "clarify": "The candidate did not follow or did not answer clearly: ask the same item again in simpler words.",
+    "aside.answer": (
+        "The candidate asked you something instead of answering. Answer it like a friendly human interviewer in one "
+        "short, honest sentence, then ask the waiting question again in a few words (one question mark in total). "
+        "You may say: your name; that you are an AI interviewer and a person on the hiring team reviews every "
+        "interview; how this interview works (seven short parts in about the time shown above; they can ask you to "
+        "repeat a question; they answer in their own words); and the approved program information. Small talk such "
+        "as 'how are you?' gets a short, warm reply. For anything else about the program, the company, pay, dates, "
+        "the result or how they are doing, say the hiring team will follow up with them on it. Never answer the "
+        "waiting question for them and never give hints."
+    ),
 }
 
 
@@ -713,10 +723,12 @@ def intake_speech_issues(
     stage_key: str,
     material_terms: Iterable[str] = (),
     approved_info: str = "",
+    answers_question: bool = False,
 ) -> list[str]:
     """Intake-specific checks of a model utterance (logged as deviations; the next model utterance of the item
     then uses the template): decision/score words; in stages 4-5 three or more cue terms of the current
-    passage or card; in stage 7 numbers, money, dates or guarantees that the approved information lacks."""
+    passage or card; in stage 7, and in any answer to a candidate's question, numbers, money, dates or
+    guarantees that the approved information lacks."""
     issues: list[str] = []
     text = speech or ""
     if _DECISION_WORDS.search(text):
@@ -726,7 +738,7 @@ def intake_speech_issues(
         hits = {t for t in terms if t and re.search(rf"\b{re.escape(t)}\b", text.lower())}
         if len(hits) >= 3:
             issues.append("intake:restates_material")
-    if stage_key == "close":
+    if stage_key == "close" or answers_question:
         approved = approved_info.lower()
         for number in _NUMBER.findall(text):
             if number.lower() not in approved:

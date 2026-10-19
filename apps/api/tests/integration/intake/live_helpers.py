@@ -271,6 +271,9 @@ _OFFER = re.compile(
 )
 
 
+ASIDE_SPEECH = "I'm your interviewer for today, and the hiring team will follow up on that. So, tell me about yourself?"
+
+
 @dataclass
 class ScriptedIntakeModel:
     """TURN_DECISION responder for intake prompts (``prompt_version`` ``intake-turn@...``)."""
@@ -297,7 +300,9 @@ class ScriptedIntakeModel:
             move = offers[0][0]
         key = moves[move]
         speech = self.speech.get(key) or f"Model question about {key.replace('.', ' ')}?"
-        if move == "answer_question":
+        if move == "answer_question" and key != "close.answer":
+            speech = self.speech.get("aside") or ASIDE_SPEECH  # answered mid-interview, then the question again
+        elif move == "answer_question":
             speech = "The training program lasts twelve weeks. Is there anything else you'd like to ask?"
         return IntakeTurn(
             speech=speech,
