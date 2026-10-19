@@ -59,11 +59,16 @@ class Edge:
     container: str
     http_port: int
     https_port: int
+    tunnel_port: int
     upstream_port: int
 
     @property
     def http(self) -> str:
         return f"http://127.0.0.1:{self.http_port}"
+
+    @property
+    def tunnel(self) -> str:
+        return f"http://127.0.0.1:{self.tunnel_port}"
 
     @property
     def ws(self) -> str:
@@ -104,11 +109,12 @@ def _write_site(root: Path) -> None:
 
 
 def _start_edge(site_root: Path, upstream_port: int) -> Edge:
-    http_port, https_port = free_port(), free_port()
+    http_port, https_port, tunnel_port = free_port(), free_port(), free_port()
     name = f"interview-test-edge-{uuid.uuid4().hex[:8]}"
     cmd = [
         "docker", "run", "-d", "--name", name, "--label", "interview.test=edge", "--network", "host",
         "-e", f"EDGE_HTTP_PORT={http_port}", "-e", f"EDGE_HTTPS_PORT={https_port}",
+        "-e", f"EDGE_TUNNEL_PORT={tunnel_port}",
         "-e", f"API_UPSTREAM=127.0.0.1:{upstream_port}", "-e", "EDGE_SITE_ROOT=/srv/www",
         "-e", f"EDGE_TLS_HOSTNAMES={EXTRA_TLS_HOSTNAMES}", "-e", "EDGE_HSTS=max-age=31536000",
         "-v", f"{CADDYFILE}:/etc/caddy/Caddyfile:ro", "-v", f"{site_root}:/srv/www:ro",
@@ -117,7 +123,13 @@ def _start_edge(site_root: Path, upstream_port: int) -> Edge:
         cmd += ["--tmpfs", "/run/caddy"]  # the edge image creates this directory itself
     cmd.append(EDGE_IMAGE)
     container = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()  # noqa: S603
-    edge = Edge(container=container, http_port=http_port, https_port=https_port, upstream_port=upstream_port)
+    edge = Edge(
+        container=container,
+        http_port=http_port,
+        https_port=https_port,
+        tunnel_port=tunnel_port,
+        upstream_port=upstream_port,
+    )
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         try:

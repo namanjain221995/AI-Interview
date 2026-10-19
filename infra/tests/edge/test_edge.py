@@ -253,6 +253,67 @@ def test_lan_clients_reach_the_api_with_their_real_address(edge: Edge, lan_ip: s
     assert response.json()["headers"]["x-forwarded-for"] == lan_ip
 
 
+# ----------------------------------------------------------------------------- public tunnel
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/metrics",
+        "/api/v1/test/sessions/1/advance-clock",
+        "/__edge/metrics",
+        "/api/docs",
+        "/api/openapi.json",
+    ],
+)
+def test_internal_endpoints_are_blocked_on_the_tunnel_listener(edge: Edge, path: str) -> None:
+    # The connector dials from loopback, but its traffic comes from the internet.
+    response = httpx.get(f"{edge.tunnel}{path}", headers={"Cf-Connecting-IP": "203.0.113.7"})
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "forbidden"
+
+
+def test_tunnel_listener_is_loopback_only(edge: Edge, lan_ip: str) -> None:
+    with pytest.raises(httpx.ConnectError):
+        httpx.get(f"http://{lan_ip}:{edge.tunnel_port}/__edge/health", timeout=2)
+
+
+def test_tunnel_visitors_reach_the_api_with_their_real_address_over_https(edge: Edge) -> None:
+    response = httpx.get(
+        f"{edge.tunnel}/api/v1/echo",
+        headers={
+            "Host": "vaani.example.com",
+            "Cf-Connecting-IP": "203.0.113.7",
+            "X-Forwarded-For": "6.6.6.6, 203.0.113.7",
+        },
+    )
+    assert response.status_code == 200
+    upstream_headers = response.json()["headers"]
+    # The client-supplied X-Forwarded-For prefix is dropped; uvicorn trusts the loopback hop.
+    assert upstream_headers["x-forwarded-for"] == "203.0.113.7, 127.0.0.1"
+    assert upstream_headers["x-forwarded-proto"] == "https"
+    assert upstream_headers["host"] == "vaani.example.com"
+    assert response.headers["strict-transport-security"] == "max-age=31536000"
+    _assert_security_headers(response)
+
+
+def test_tunnel_serves_the_spa_and_websockets(edge: Edge) -> None:
+    response = httpx.get(f"{edge.tunnel}/i/some-invite-token")
+    assert response.status_code == 200
+    assert "<title>Interview Studio</title>" in response.text
+
+    async def scenario() -> None:
+        uri = f"{edge.tunnel.replace('http', 'ws', 1)}/ws/sessions/0b8f?ticket=T"
+        headers = {"Cf-Connecting-IP": "203.0.113.7"}
+        async with connect(uri, additional_headers=headers, ping_interval=None, open_timeout=5) as ws:
+            welcome = json.loads(await ws.recv())
+            assert welcome["forwarded_for"] == "203.0.113.7, 127.0.0.1"
+            await ws.send("over-tunnel")
+            assert await ws.recv() == "echo:over-tunnel"
+
+    asyncio.run(scenario())
+
+
 # ----------------------------------------------------------------------------- TLS (LAN testing)
 
 

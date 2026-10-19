@@ -10,6 +10,8 @@
 #          https://<host-ip-or-name>:3443. Certificates are issued on demand for
 #          loopback / private / CGNAT addresses, LAN-style host names and
 #          EDGE_TLS_HOSTNAMES. Export the root CA with `make edge-ca`.
+#   127.0.0.1:3280  HTTP for the public tunnel connector (cloudflared, compose
+#          profile "tunnel"): internet visitors, never host clients.
 #
 # Routing (both listeners):
 #   /api/*                      FastAPI app at {$API_UPSTREAM}; per-route body
@@ -22,7 +24,8 @@
 #                               fall back to /index.html
 #
 # Environment (docker-compose.yml sets these; defaults in braces):
-#   EDGE_HTTP_PORT {3200}  EDGE_HTTPS_PORT {3443}  API_UPSTREAM {127.0.0.1:8200}
+#   EDGE_HTTP_PORT {3200}  EDGE_HTTPS_PORT {3443}  EDGE_TUNNEL_PORT {3280}
+#   API_UPSTREAM {127.0.0.1:8200}
 #   EDGE_SITE_ROOT {/srv/www}
 #   EDGE_TLS_HOSTNAMES  space-separated extra DNS names that may receive
 #                       on-demand internal certificates (exact match)
@@ -70,6 +73,18 @@
 	# HTTP/1.1 upgrade or HTTP/2 extended CONNECT anyway.
 	servers :{$EDGE_HTTPS_PORT:3443} {
 		protocols h1 h2
+		timeouts {
+			read_header 15s
+			idle 2m
+		}
+	}
+	# Public tunnel listener: only the local tunnel connector can reach it,
+	# so the visitor address it forwards (Cloudflare's Cf-Connecting-IP) is
+	# trusted as the client IP.
+	servers 127.0.0.1:{$EDGE_TUNNEL_PORT:3280} {
+		protocols h1
+		trusted_proxies static 127.0.0.1/32
+		client_ip_headers Cf-Connecting-IP X-Forwarded-For
 		timeouts {
 			read_header 15s
 			idle 2m
@@ -143,9 +158,16 @@
 }
 
 # Internal endpoints: answer 403 to anything that is not a loopback client.
-# The edge is the first hop, so remote_ip is the real peer address.
+# The edge is the first hop, so remote_ip is the real peer address. Requests
+# on the public tunnel listener arrive from loopback (the connector) but come
+# from the internet, so they are never host clients.
 (loopback_only) {
-	@not_loopback not remote_ip 127.0.0.0/8 ::1
+	@not_loopback {
+		not {
+			remote_ip 127.0.0.0/8 ::1
+			not vars public_tunnel 1
+		}
+	}
 	header @not_loopback Content-Type "application/json"
 	respond @not_loopback `{"error":{"code":"forbidden","message":"This endpoint is only reachable from the host."}}` 403
 }
@@ -357,6 +379,20 @@ https://:{$EDGE_HTTPS_PORT:3443} {
 	tls internal {
 		on_demand
 	}
+	import hsts
+	import app
+}
+
+# Public tunnel (cloudflared, compose profile "tunnel"): the internet reaches
+# the platform at PUBLIC_BASE_URL through an outbound tunnel that terminates
+# TLS at Cloudflare and forwards here. Loopback-bound; visitors are treated as
+# remote clients (internal surfaces answer 403) and the API sees their real
+# address and https.
+http://:{$EDGE_TUNNEL_PORT:3280} {
+	bind 127.0.0.1
+	vars public_tunnel 1
+	request_header X-Forwarded-For {client_ip}
+	request_header X-Forwarded-Proto https
 	import hsts
 	import app
 }

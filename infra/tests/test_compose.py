@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-HOST_NETWORK = {"migrate", "api", "worker", "edge", "prometheus", "grafana"}
+HOST_NETWORK = {"migrate", "api", "worker", "edge", "tunnel", "prometheus", "grafana"}
 BACKEND_NETWORK = {"postgres", "redis", "tts", "sandbox", "postgres-exporter", "redis-exporter"}
 OTHER_SYSTEMS_PORTS = {3000, 4000, 5050, 5432, 8000, 8002, 8003, 8005, 8080, 9000, 9090, 3300, 9835, 9838}
 
@@ -29,7 +29,7 @@ def model() -> dict[str, Any]:
     if not (REPO / ".env").exists():
         pytest.skip(".env missing (make setup)")
     result = subprocess.run(  # noqa: S603
-        ["docker", "compose", "--project-directory", str(REPO), "--profile", "runtimes", "--profile", "security",  # noqa: S607
+        ["docker", "compose", "--project-directory", str(REPO), "--profile", "runtimes", "--profile", "security", "--profile", "tunnel",  # noqa: S607
          "config", "--format", "json"],
         capture_output=True, text=True, check=True,
     )  # fmt: skip
