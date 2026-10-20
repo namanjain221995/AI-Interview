@@ -15,7 +15,7 @@ import { formatDateTime, pluralize } from "@/lib/format";
 import { FieldShell, ListEditor } from "@/features/recruiter/admin/components/Field";
 
 import { useRecordIntakeDecision } from "../../api";
-import { BAND_LABELS, competencyLabel, DECISION_ADVISORY_NOTE, lookup, OUTCOME_DESCRIPTIONS, OUTCOME_LABELS, RESOLUTION_LABELS, REVIEW_ITEM_LABELS } from "../../labels";
+import { BAND_LABELS, competencyLabel, DECISION_ADVISORY_NOTE, OUTCOME_DESCRIPTIONS, OUTCOME_LABELS, RESOLUTION_LABELS } from "../../labels";
 import { formatTotal } from "../../lib/decimals";
 import {
   decisionPayload,
@@ -32,8 +32,8 @@ import {
   type DecisionErrors,
 } from "../../lib/decision";
 import { COMPETENCY_KEYS, DECISION_OUTCOMES, type DecisionOutcome, type IntakeDecision, type IntakeDetail, type IntakeEvaluation, type ReviewResolution } from "../../types";
-import { BandBadge, OutcomeBadge, SeverityBadge } from "../IntakeBadges";
-import { sortReviewItems } from "./ReviewItems";
+import { BandBadge, OutcomeBadge } from "../IntakeBadges";
+import { GroupDetails, GroupTitle, groupReviewItems, sortReviewItems } from "./ReviewItems";
 
 const FINISHED = new Set(["completing", "completed", "aborted", "failed"]);
 const STALE_MS = 15 * 60_000;
@@ -122,17 +122,21 @@ export function DecisionTab({ detail, evaluation }: { detail: IntakeDetail; eval
       (evaluation && (evaluation.status === "pending" || evaluation.status === "running") && Date.now() - Date.parse(evaluation.created_at || "") < STALE_MS),
   );
   const openItems = useMemo(() => sortReviewItems(detail.review_items.filter((i) => !i.resolution)), [detail.review_items]);
+  const openGroups = useMemo(() => groupReviewItems(openItems), [openItems]);
   const differs = differsFromBand(draft.outcome, band);
   const unresolved = unresolvedItems(draft, openItems);
+  const unresolvedGroups = openGroups.filter((g) => g.items.some((i) => !draft.resolutions[i.id]?.resolution)).length;
 
   const update = (patch: Partial<DecisionDraft>) => {
     const next = { ...draft, ...patch };
     setDraft(next);
     if (attempted) setErrors(validateDecision(next));
   };
-  const setResolution = (id: string, patch: Partial<{ resolution: ReviewResolution | null; note: string }>) => {
-    const current = draft.resolutions[id] ?? { resolution: null, note: "" };
-    update({ resolutions: { ...draft.resolutions, [id]: { ...current, ...patch } } });
+  // One choice (and note) resolves every item of a group.
+  const setResolution = (ids: readonly string[], patch: Partial<{ resolution: ReviewResolution | null; note: string }>) => {
+    const resolutions = { ...draft.resolutions };
+    for (const id of ids) resolutions[id] = { ...(resolutions[id] ?? { resolution: null, note: "" }), ...patch };
+    update({ resolutions });
   };
 
   const submit = async () => {
@@ -225,23 +229,22 @@ export function DecisionTab({ detail, evaluation }: { detail: IntakeDetail; eval
                     <div className="grid grid-cols-1 gap-0.5">
                       <span className="text-[13px] font-medium text-fg">Review items</span>
                       <span className="text-xs text-fg-muted">
-                        Resolve each one with this decision. {unresolved.length ? `${pluralize(unresolved.length, "item")} still open; you can decide anyway.` : "All resolved."}
+                        Resolve each one with this decision. {unresolved.length ? `${pluralize(unresolvedGroups, "item")} still open; you can decide anyway.` : "All resolved."}
                       </span>
                     </div>
                     <ul className="grid grid-cols-1 divide-y divide-line-subtle rounded-md border border-line">
-                      {openItems.map((item) => {
-                        const value = draft.resolutions[item.id] ?? { resolution: null, note: "" };
+                      {openGroups.map((group) => {
+                        const ids = group.items.map((i) => i.id);
+                        const value = draft.resolutions[ids[0]] ?? { resolution: null, note: "" };
                         return (
-                          <li key={item.id} className="grid grid-cols-1 gap-2.5 px-3.5 py-3">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <SeverityBadge severity={item.severity} />
-                              <span className="min-w-0 text-sm font-medium text-fg">{item.title || lookup(REVIEW_ITEM_LABELS, item.kind)}</span>
-                            </div>
+                          <li key={group.key} className="grid grid-cols-1 gap-2.5 px-3.5 py-3">
+                            <GroupTitle group={group} />
+                            {group.items.length > 1 ? <GroupDetails group={group} /> : null}
                             <RadioGroup
                               value={value.resolution ?? ""}
-                              onValueChange={(v) => setResolution(item.id, { resolution: v as ReviewResolution })}
-                              aria-label={`Resolution for ${item.title || item.kind}`}
-                              data-testid={`intake-review-item-resolution-${item.id}`}
+                              onValueChange={(v) => setResolution(ids, { resolution: v as ReviewResolution })}
+                              aria-label={`Resolution for ${group.title}`}
+                              data-testid={`intake-review-item-resolution-${group.key}`}
                               className="flex flex-wrap gap-x-5 gap-y-2"
                             >
                               {(["confirmed", "dismissed", "follow_up"] as const).map((r) => (
@@ -253,10 +256,10 @@ export function DecisionTab({ detail, evaluation }: { detail: IntakeDetail; eval
                                 size="sm"
                                 maxLength={NOTE_MAX}
                                 placeholder="Note (optional)"
-                                aria-label={`Note on ${item.title || item.kind}`}
-                                aria-invalid={errors.notes?.[`item:${item.id}`] ? true : undefined}
+                                aria-label={`Note on ${group.title}`}
+                                aria-invalid={errors.notes?.[`item:${ids[0]}`] ? true : undefined}
                                 value={value.note}
-                                onChange={(e) => setResolution(item.id, { note: e.target.value })}
+                                onChange={(e) => setResolution(ids, { note: e.target.value })}
                               />
                             ) : null}
                           </li>

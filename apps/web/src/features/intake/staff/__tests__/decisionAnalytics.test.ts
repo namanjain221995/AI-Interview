@@ -2,9 +2,22 @@ import { describe, expect, it } from "vitest";
 
 import { bandRows, competencyRows, decisionRows, funnelSteps, overrideText, stageRows, trainingRows, weaknessRows } from "../lib/analytics";
 import { decisionPayload, decisionServerError, differsFromBand, emptyDecisionDraft, hasDecisionErrors, unresolvedItems, validateDecision } from "../lib/decision";
+import { groupReviewItems } from "../components/review/ReviewItems";
 import { ANALYTICS, DETAIL } from "./fixtures";
 
 describe("decision rules", () => {
+  it("groups open review items of one kind and severity, keeping resolved items apart", () => {
+    const base = DETAIL.review_items[0];
+    const stage = (n: number) => ({ ...base, id: `ri_stage${n}`, kind: "stage_incomplete", severity: "attention" as const, title: "Stage not completed", detail: `Stage ${n} did not finish.`, resolution: null });
+    const resolved = { ...stage(9), resolution: { resolution: "dismissed" as const, note: "", reviewer: null, at: null } };
+    const groups = groupReviewItems([stage(1), base, stage(2), resolved, stage(3)]);
+    const stages = groups.find((g) => g.items[0].kind === "stage_incomplete" && !g.items[0].resolution);
+    expect(stages?.items.map((i) => i.id)).toEqual(["ri_stage1", "ri_stage2", "ri_stage3"]);
+    expect(groups.filter((g) => g.items.some((i) => i.id === "ri_stage9"))).toHaveLength(1);
+    expect(groups).toHaveLength(3);
+  });
+
+
   it("uses the server's aligned outcomes per AI band for the override hint", () => {
     expect(differsFromBand("accept", "strong_accept")).toBe(false);
     expect(differsFromBand("second_interview", "accept_with_notes")).toBe(true);
