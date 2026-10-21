@@ -67,6 +67,22 @@ describe("CSRF header", () => {
     expect(getCsrfToken()).toBe("abc=123");
   });
 
+  it("reads only the prefixed cookie when built with VITE_COOKIE_PREFIX (dev copy next to production)", async () => {
+    vi.stubEnv("VITE_COOKIE_PREFIX", "dev_");
+    vi.resetModules();
+    try {
+      const prefixed = await import("@/lib/api");
+      expect(prefixed.CSRF_COOKIE).toBe("dev_csrf_token");
+      setCookie("csrf_token=prod-token; path=/");
+      expect(prefixed.getCsrfToken()).toBeNull();
+      setCookie("dev_csrf_token=dev-token; path=/");
+      expect(prefixed.getCsrfToken()).toBe("dev-token");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
   it("is sent on unsafe methods and never on GET", async () => {
     setCookie("csrf_token=tok-1; path=/");
     fetchMock.mockImplementation(async () => json(200, { ok: true }));

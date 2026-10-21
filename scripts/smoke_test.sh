@@ -8,6 +8,7 @@
 #
 #   scripts/smoke_test.sh
 #   SMOKE_SKIP="tts sandbox" scripts/smoke_test.sh     # skip optional components
+#   SMOKE_SKIP=monitoring scripts/smoke_test.sh         # a copy without its own monitoring (the dev stack)
 #   EDGE_URL=http://127.0.0.1:3200 API_URL=http://127.0.0.1:8200 scripts/smoke_test.sh
 set -euo pipefail
 # shellcheck source=scripts/_common.sh
@@ -16,10 +17,13 @@ require curl python3
 
 api_port="$(env_get API_PORT)"
 worker_port="$(env_get WORKER_METRICS_PORT)"
+edge_port="$(env_get EDGE_HTTP_PORT)"
+edge_tls_port="$(env_get EDGE_HTTPS_PORT)"
+edge_port="${edge_port:-3200}"
 API_URL="${API_URL:-http://127.0.0.1:${api_port:-8200}}"
 WORKER_URL="${WORKER_URL:-http://127.0.0.1:${worker_port:-8201}}"
-EDGE_URL="${EDGE_URL:-http://127.0.0.1:3200}"
-EDGE_TLS_URL="${EDGE_TLS_URL:-https://127.0.0.1:3443}"
+EDGE_URL="${EDGE_URL:-http://127.0.0.1:${edge_port}}"
+EDGE_TLS_URL="${EDGE_TLS_URL:-https://127.0.0.1:${edge_tls_port:-3443}}"
 TTS_URL="${TTS_URL:-http://127.0.0.1:8210}"
 SANDBOX_URL="${SANDBOX_URL:-http://127.0.0.1:8220}"
 PROM_URL="${PROM_URL:-http://127.0.0.1:9191}"
@@ -103,8 +107,8 @@ http "edge -> API proxy (/api/v1/auth/me)" "$EDGE_URL/api/v1/auth/me" "401 403" 
 http "edge /metrics from loopback" "$EDGE_URL/metrics" 200 || true
 ip="$(lan_ip)"
 if [[ -n "$ip" ]]; then
-  http "edge blocks /metrics for LAN ($ip)" "http://$ip:3200/metrics" 403 || true
-  http "edge blocks /api/v1/test/* for LAN" "http://$ip:3200/api/v1/test/ping" 403 || true
+  http "edge blocks /metrics for LAN ($ip)" "http://$ip:$edge_port/metrics" 403 || true
+  http "edge blocks /api/v1/test/* for LAN" "http://$ip:$edge_port/api/v1/test/ping" 403 || true
 else
   warn "no LAN address found; skipped the non-loopback block checks"
 fi
@@ -119,6 +123,7 @@ if skipped sandbox; then warn "sandbox skipped (SMOKE_SKIP)"; else
 fi
 
 info "== Monitoring"
+if skipped monitoring; then warn "monitoring skipped (SMOKE_SKIP)"; else
 http "prometheus /-/ready" "$PROM_URL/-/ready" 200 || true
 if curl -sS --max-time 10 "$PROM_URL/api/v1/targets?state=active" -o "$tmp/targets" 2>/dev/null; then
   while IFS=$'\t' read -r status job instance health err; do
@@ -142,6 +147,7 @@ else
   record FAIL "prometheus targets API" "unreachable"
 fi
 http "grafana /api/health" "$GRAFANA_URL/api/health" 200 || true
+fi
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 [[ $failed -eq 0 ]]

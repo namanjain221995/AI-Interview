@@ -104,6 +104,33 @@ Edge settings (in `.env`, read by docker compose):
 
 ## 3. Build and deploy
 
+### Production and dev on one node (`make deploy-prod`, `make deploy-dev`)
+
+Two copies run side by side, each built from a clean, detached git worktree of its branch under
+`~/deploy/ai-interview/` (`DEPLOY_ROOT`); the working repository itself is never deployed.
+
+| Copy | Branch | Compose project | Edge | API / worker | Postgres / Redis | Cookies |
+|---|---|---|---|---|---|---|
+| prod | `origin/main` | `interview` | :3200, :3443, tunnel :3280 | 8200 / 8201 | 5442 / 6390 | no prefix |
+| dev | `origin/hd-dev` | `interview-dev` | :3201, :3444 (local only) | 8300 / 8301 | 5443 / 6391 | `dev_` |
+
+```bash
+make deploy-status            # what each copy runs, whether its branch moved on, health
+make deploy-dev               # fetch origin/hd-dev, build api + edge, migrate, restart, smoke (first run seeds demo data)
+make deploy-prod              # fetch origin/main; refuses while an interview is live (ARGS=--force), backs up first
+make deploy-rollback ENV=prod # previous :prod-previous images + checkout (the database keeps newer migrations)
+```
+
+Each copy's settings are its own `.env` in its worktree (production's started as a copy of the repository's
+`.env`; dev's was derived from it with its own ports, database, Redis, secrets and `COOKIE_NAME_PREFIX=dev_`).
+Change production settings in `~/deploy/ai-interview/prod/.env`, then `make deploy-prod`. dev shares production's
+tts, sandbox, stt (Whisper turbo) and monitoring and has no public hostname. Images are tagged `:prod` and `:dev`;
+backups go to `~/deploy/ai-interview/backups/<copy>/`, a log of every deploy to `~/deploy/ai-interview/deploy.log`.
+Deploys take a lock, so builds never run in parallel (memory is shared with vLLM). A commit reaches a copy only
+when it is pushed and that copy is deployed: nothing deploys automatically.
+
+### Single copy
+
 ```bash
 make env download-assets      # first time only
 make build                    # api/worker, tts, sandbox, edge images (native arm64)

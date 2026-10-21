@@ -10,6 +10,11 @@
 #     services run on an isolated bridge network and publish only on 127.0.0.1.
 #   * Only the edge proxy listens on a non-loopback interface (:3200 / :3443).
 #   * File storage is the local `appdata` volume (no S3/MinIO).
+#   * Two copies run on one node (scripts/deploy.sh): production (project
+#     "interview", branch main, :3200/:3443) and development (project
+#     "interview-dev", branch hd-dev, :3201/:3444). Each one's .env sets the
+#     project name, IMAGE_TAG, ports and BACKEND_NETWORK; development shares
+#     production's tts, sandbox, stt and monitoring. Defaults = production.
 #
 # Validate: docker compose config -q   (make compose-check)
 
@@ -83,7 +88,7 @@ services:
     volumes:
       - redisdata:/data
     ports:
-      - "127.0.0.1:6390:6379"
+      - "127.0.0.1:${REDIS_PORT:-6390}:6379"
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping | grep -q PONG"]
       interval: 5s
@@ -99,7 +104,7 @@ services:
   # --------------------------------------------------------------------------
   migrate:
     <<: *app-env
-    image: interview-api:local
+    image: interview-api:${IMAGE_TAG:-local}
     build:
       context: ./apps/api
     command: ["alembic", "upgrade", "head"]
@@ -112,7 +117,7 @@ services:
 
   api:
     <<: *app-env
-    image: interview-api:local
+    image: interview-api:${IMAGE_TAG:-local}
     build:
       context: ./apps/api
     command:
@@ -149,7 +154,7 @@ services:
 
   worker:
     <<: *app-env
-    image: interview-api:local
+    image: interview-api:${IMAGE_TAG:-local}
     build:
       context: ./apps/api
     command: ["python", "-m", "app.worker"]
@@ -171,7 +176,7 @@ services:
     logging: *default-logging
 
   tts:
-    image: interview-tts:local
+    image: interview-tts:${IMAGE_TAG:-local}
     build:
       context: ./services/tts
     restart: unless-stopped
@@ -203,7 +208,7 @@ services:
     networks: [backend]
 
   sandbox:
-    image: interview-sandbox:local
+    image: interview-sandbox:${IMAGE_TAG:-local}
     build:
       context: ./services/sandbox
     restart: unless-stopped
@@ -249,18 +254,22 @@ services:
 
   edge:
     <<: *hardened
-    image: interview-edge:local
+    image: interview-edge:${IMAGE_TAG:-local}
     build:
       context: ./apps/web
       # The image bakes in infra/caddy/Caddyfile (the bind mount below
       # overrides it at runtime so `make edge-reload` needs no rebuild).
       additional_contexts:
         edgeconf: ./infra/caddy
+      args:
+        # Prefix for the auth cookie names the SPA reads (must match the API's COOKIE_NAME_PREFIX).
+        COOKIE_PREFIX: ${COOKIE_NAME_PREFIX:-}
     network_mode: host
     restart: unless-stopped
     environment:
-      EDGE_HTTP_PORT: "3200"
-      EDGE_HTTPS_PORT: "3443"
+      EDGE_HTTP_PORT: "${EDGE_HTTP_PORT:-3200}"
+      EDGE_HTTPS_PORT: "${EDGE_HTTPS_PORT:-3443}"
+      EDGE_TUNNEL_PORT: "${EDGE_TUNNEL_PORT:-3280}"
       API_UPSTREAM: 127.0.0.1:${API_PORT:-8200}
       # Extra DNS names (space separated) allowed to get on-demand internal
       # TLS certificates on :3443, on top of loopback/private IPs and
@@ -276,7 +285,7 @@ services:
       - /run/caddy:mode=0700,uid=10001,gid=10001
       - /tmp
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3200/__edge/health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:${EDGE_HTTP_PORT:-3200}/__edge/health"]
       interval: 15s
       timeout: 3s
       retries: 3
@@ -496,7 +505,7 @@ services:
   # Point WHISPER_BASE_URL at it (WHISPER_BASE_URL_PARALLELISM=4) and keep the shared server in
   # WHISPER_EXTRA_BASE_URLS as the fallback. Loopback only; ~3 GB of GPU memory.
   stt:
-    image: interview-stt:local
+    image: interview-stt:${IMAGE_TAG:-local}
     build:
       context: ./services/stt
     profiles: ["stt"]
@@ -531,7 +540,7 @@ services:
 
 networks:
   backend:
-    name: interview-backend
+    name: ${BACKEND_NETWORK:-interview-backend}
 
 volumes:
   pgdata:

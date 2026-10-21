@@ -6,7 +6,8 @@ export interface StaffSession {
 }
 
 function csrfFrom(cookies: Array<{ name: string; value: string }>): string {
-  return cookies.find((c) => c.name === "csrf_token")?.value ?? "";
+  // E2E_COOKIE_PREFIX = the target stack's COOKIE_NAME_PREFIX (dev_ for the dev copy on :3201).
+  return cookies.find((c) => c.name === `${process.env.E2E_COOKIE_PREFIX ?? ""}csrf_token`)?.value ?? "";
 }
 
 /** Log a staff user in through the real API and return a request context carrying the cookies + CSRF token. */

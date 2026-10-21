@@ -13,9 +13,11 @@
  */
 
 export const API_BASE = "/api/v1";
-export const CSRF_COOKIE = "csrf_token";
+/** The API's COOKIE_NAME_PREFIX (build arg): a second copy on the same host (dev on :3201) keeps its own cookies. */
+export const COOKIE_PREFIX: string = import.meta.env.VITE_COOKIE_PREFIX ?? "";
+export const CSRF_COOKIE = `${COOKIE_PREFIX}csrf_token`;
 /** Candidate sessions use their own cookie set (G2), so a recruiter who opens a candidate link stays signed in. */
-export const CANDIDATE_CSRF_COOKIE = "cand_csrf_token";
+export const CANDIDATE_CSRF_COOKIE = `${COOKIE_PREFIX}cand_csrf_token`;
 export const CSRF_HEADER = "X-CSRF-Token";
 export const AUDIENCE_HEADER = "X-Session-Audience";
 /** SPA areas whose requests act as the candidate (invite, open link, personal link, the candidate journey). */

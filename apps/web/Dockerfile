@@ -8,6 +8,7 @@
 #
 # Build args:
 #   SOURCEMAPS=strip|keep   ship Vite source maps publicly (default: strip)
+#   COOKIE_PREFIX=<prefix>  auth cookie name prefix (a second copy on the same host, e.g. dev_)
 # =============================================================================
 
 ARG NODE_IMAGE=node:22-bookworm-slim
@@ -28,7 +29,9 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci
 
 COPY . .
 ARG SOURCEMAPS=strip
-RUN npm run build \
+# Prefix of the auth cookie names (the API's COOKIE_NAME_PREFIX); empty in production.
+ARG COOKIE_PREFIX=
+RUN VITE_COOKIE_PREFIX="$COOKIE_PREFIX" npm run build \
     && if [ "$SOURCEMAPS" = "strip" ]; then find dist -type f -name '*.map' -delete; fi \
     && node docker/precompress.mjs dist
 

@@ -9,6 +9,7 @@ the local `appdata` volume (no S3/MinIO).
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -36,8 +37,10 @@ def model() -> dict[str, Any]:
     return json.loads(result.stdout)
 
 
-def test_project_name(model: dict[str, Any]) -> None:
-    assert model["name"] == "interview"
+def test_project_name() -> None:
+    # The file's own name (production). A .env may override it (COMPOSE_PROJECT_NAME: the dev copy, the
+    # working repository), so the resolved model is not checked.
+    assert re.search(r"(?m)^name: interview$", (REPO / "docker-compose.yml").read_text())
 
 
 def test_no_object_storage_anywhere(model: dict[str, Any]) -> None:

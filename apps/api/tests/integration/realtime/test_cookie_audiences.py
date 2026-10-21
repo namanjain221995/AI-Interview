@@ -176,3 +176,35 @@ async def test_a_candidate_page_never_refreshes_or_ends_the_staff_session(
     staff_refresh = await browser.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": csrf})
     assert staff_refresh.status_code == 200, staff_refresh.text  # the family was never revoked
     await browser.aclose()
+
+
+async def test_cookie_name_prefix_keeps_two_copies_on_one_host_apart(
+    app, settings, org_factory, user_factory
+) -> None:
+    """COOKIE_NAME_PREFIX (dev on :3201 next to production on :3200): every cookie carries the prefix, and the
+    unprefixed cookies of the other copy are never read."""
+    settings.cookie_name_prefix = "dev_"
+    org = await org_factory()
+    staff = await user_factory(Role.RECRUITER, organization_id=org)
+    browser = _browser(app)
+    login = await browser.post("/api/v1/auth/login", json={"email": staff.email, "password": staff.password})
+    assert login.status_code == 200, login.text
+    names = set(_set_cookie_names(login))
+    assert {"dev_access_token", "dev_refresh_token", "dev_csrf_token"} <= names
+    assert not {"access_token", "refresh_token", "csrf_token"} & names
+    csrf = login.json()["csrf_token"]
+    assert (await browser.get("/api/v1/jobs")).status_code == 200
+
+    # The other copy's session cookie (no prefix) is not a session here.
+    other = _browser(app)
+    other.cookies.set("access_token", browser.cookies.get("dev_access_token") or "")
+    assert (await other.get("/api/v1/jobs")).status_code == 401
+    await other.aclose()
+
+    refreshed = await browser.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": csrf})
+    assert refreshed.status_code == 200, refreshed.text
+    assert {"dev_access_token", "dev_csrf_token"} <= set(_set_cookie_names(refreshed))
+    out = await browser.post("/api/v1/auth/logout", headers={"X-CSRF-Token": refreshed.json()["csrf_token"]})
+    assert out.status_code == 204
+    assert {"dev_access_token", "dev_refresh_token", "dev_csrf_token"} <= set(_set_cookie_names(out))
+    await browser.aclose()

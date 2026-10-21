@@ -29,9 +29,8 @@ from app.schemas.api.auth import (
 )
 from app.schemas.api.common import ERROR_RESPONSES
 from app.services.identity.cookies import (
-    REFRESH_COOKIE,
-    STAFF_COOKIES,
     clear_auth_cookies,
+    cookie_names,
     refresh_cookie,
     request_audience,
     set_auth_cookies,
@@ -121,7 +120,7 @@ def _error_clearing_cookies(request: Request, exc: AppError) -> JSONResponse:
 async def login(body: LoginRequest, request: Request, response: Response, db: DbSession) -> SessionResponse:
     user = await authenticate(db, email=body.email, password=body.password, request=request)
     # A browser that signs in again supersedes its previous session family.
-    previous = await find_session_by_refresh_token(db, request.cookies.get(REFRESH_COOKIE))
+    previous = await find_session_by_refresh_token(db, request.cookies.get(cookie_names("staff").refresh))
     if previous is not None and previous.user_id == user.id and previous.revoked_at is None:
         await revoke_family(db, previous.family_id, reason="superseded")
     tokens = await start_user_session(db, user, request=request)
@@ -182,7 +181,7 @@ async def refresh(request: Request, response: Response, db: DbSession) -> Sessio
     elif audience == "staff" and tokens.subject_type is SubjectType.CANDIDATE:
         # A tab still running the pre-G2 bundle (no audience header) holds its candidate session under the staff
         # names and sends the CSRF token it reads there: keep them in place until that tab reloads.
-        set_auth_cookies(response, tokens, names=STAFF_COOKIES)
+        set_auth_cookies(response, tokens, names=cookie_names("staff"))
     else:
         set_auth_cookies(response, tokens)
     AUTH_EVENTS.labels(event="refresh").inc()

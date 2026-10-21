@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     cookie_secure: bool = True
     cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     cookie_domain: str | None = None
+    # Prepended to every cookie name. Browsers share cookies across ports, so a second copy on the same host (the
+    # dev stack on :3201 next to production on :3200) needs its own names; the edge image gets the same value.
+    cookie_name_prefix: str = Field(default="", pattern=r"^[A-Za-z0-9_]{0,16}$")
     csrf_enabled: bool = True
     password_min_length: int = 12
     login_max_attempts: int = 5

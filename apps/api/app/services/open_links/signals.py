@@ -68,7 +68,7 @@ def device_hash(value: str) -> str:
 
 
 def read_device_cookie(request: Request) -> str | None:
-    value = request.cookies.get(DEVICE_COOKIE)
+    value = request.cookies.get(get_settings().cookie_name_prefix + DEVICE_COOKIE)
     return value if value and _DEVICE_VALUE.match(value) else None
 
 
@@ -79,7 +79,7 @@ def new_device_value() -> str:
 def set_device_cookie(response: Response, value: str) -> None:
     settings = get_settings()
     response.set_cookie(
-        DEVICE_COOKIE,
+        settings.cookie_name_prefix + DEVICE_COOKIE,
         value,
         max_age=DEVICE_COOKIE_MAX_AGE,
         path=DEVICE_COOKIE_PATH,

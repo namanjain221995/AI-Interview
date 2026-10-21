@@ -7,6 +7,9 @@ same browser stays signed in:
   ``csrf_token`` (readable, path ``/``).
 * candidate: ``cand_access_token``, ``cand_refresh_token``, ``cand_csrf_token`` (same paths and flags).
 
+``COOKIE_NAME_PREFIX`` is prepended to every name (``cookie_names``): browsers share cookies across ports, so the
+dev copy on :3201 (``dev_``) never reads or overwrites production's cookies on :3200.
+
 Which set a request uses (``request_audience``): the candidate-only API areas (portal, candidate-access,
 link-access, link-return) always mean the candidate; the shared endpoints (``/auth/refresh``, ``/auth/logout``,
 ``/media``) mean the candidate when the SPA sends ``X-Session-Audience: candidate`` from a candidate page;
@@ -60,7 +63,12 @@ CANDIDATE_COOKIES = CookieNames(CANDIDATE_ACCESS_COOKIE, CANDIDATE_REFRESH_COOKI
 
 
 def cookie_names(audience: Audience) -> CookieNames:
-    return CANDIDATE_COOKIES if audience == "candidate" else STAFF_COOKIES
+    """The audience's cookie names with ``COOKIE_NAME_PREFIX`` applied."""
+    names = CANDIDATE_COOKIES if audience == "candidate" else STAFF_COOKIES
+    prefix = get_settings().cookie_name_prefix
+    if not prefix:
+        return names
+    return CookieNames(prefix + names.access, prefix + names.refresh, prefix + names.csrf)
 
 
 def request_audience(request: Request) -> Audience:
@@ -80,7 +88,7 @@ def _cookie(request: Request, kind: Literal["access", "refresh", "csrf"]) -> tup
     value = request.cookies.get(getattr(cookie_names(audience), kind))
     if value or audience == "staff":
         return value or None, False
-    legacy = request.cookies.get(getattr(STAFF_COOKIES, kind))
+    legacy = request.cookies.get(getattr(cookie_names("staff"), kind))
     return (legacy, True) if legacy else (None, False)
 
 

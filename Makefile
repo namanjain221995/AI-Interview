@@ -86,6 +86,21 @@ restart: ## Restart services (SERVICE=api) or the application tier
 monitoring-up: ## Start only Prometheus, Grafana and the exporters
 	$(COMPOSE) up -d --no-deps $(MONITORING)
 
+##@ Deploy (two copies on this node: prod = main on :3200/:3443 + tunnel, dev = hd-dev on :3201/:3444)
+.PHONY: deploy-prod deploy-dev deploy-status deploy-rollback
+deploy-prod: ## Deploy origin/main to production (refuses while an interview is live; ARGS="--force" / "--ref <ref>")
+	@$(ROOT)/scripts/deploy.sh prod $(ARGS)
+
+deploy-dev: ## Deploy origin/hd-dev to the dev copy (first run creates and seeds it; ARGS="--ref <ref>")
+	@$(ROOT)/scripts/deploy.sh dev $(ARGS)
+
+deploy-status: ## Which commit each copy runs, whether its branch moved on, health, URLs
+	@$(ROOT)/scripts/deploy.sh status
+
+deploy-rollback: ## Previous images + checkout of one copy: make deploy-rollback ENV=prod|dev (database not rolled back)
+	@test -n "$(ENV)" || { echo "usage: make deploy-rollback ENV=prod|dev"; exit 2; }
+	@$(ROOT)/scripts/deploy.sh rollback $(ENV)
+
 ##@ Database
 .PHONY: migrate migrate-docker seed demo seed-docker demo-docker backup-db restore-db backup-storage restore-storage
 migrate: ## Apply Alembic migrations from the host (postgres must be up)
