@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------ app
-    app_name: str = "AI Interview Platform"
+    app_name: str = "Swayam by TechSara"
     app_env: AppEnv = "development"
     log_level: str = "INFO"
     log_json: bool = True

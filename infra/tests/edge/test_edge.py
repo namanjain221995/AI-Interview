@@ -282,7 +282,7 @@ def test_tunnel_visitors_reach_the_api_with_their_real_address_over_https(edge: 
     response = httpx.get(
         f"{edge.tunnel}/api/v1/echo",
         headers={
-            "Host": "vaani.example.com",
+            "Host": "swayam.example.com",
             "Cf-Connecting-IP": "203.0.113.7",
             "X-Forwarded-For": "6.6.6.6, 203.0.113.7",
         },
@@ -292,7 +292,7 @@ def test_tunnel_visitors_reach_the_api_with_their_real_address_over_https(edge: 
     # The client-supplied X-Forwarded-For prefix is dropped; uvicorn trusts the loopback hop.
     assert upstream_headers["x-forwarded-for"] == "203.0.113.7, 127.0.0.1"
     assert upstream_headers["x-forwarded-proto"] == "https"
-    assert upstream_headers["host"] == "vaani.example.com"
+    assert upstream_headers["host"] == "swayam.example.com"
     assert response.headers["strict-transport-security"] == "max-age=31536000"
     _assert_security_headers(response)
 
@@ -300,7 +300,7 @@ def test_tunnel_visitors_reach_the_api_with_their_real_address_over_https(edge: 
 def test_tunnel_serves_the_spa_and_websockets(edge: Edge) -> None:
     response = httpx.get(f"{edge.tunnel}/i/some-invite-token")
     assert response.status_code == 200
-    assert "<title>Interview Studio</title>" in response.text
+    assert "<title>Swayam by TechSara</title>" in response.text
 
     async def scenario() -> None:
         uri = f"{edge.tunnel.replace('http', 'ws', 1)}/ws/sessions/0b8f?ticket=T"

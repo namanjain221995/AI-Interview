@@ -70,7 +70,7 @@ export default function DesignSystemPage() {
           <div className="max-w-2xl">
             <h1 className="text-display text-fg">Calm precision</h1>
             <p className="mt-3 text-[15px] leading-6 text-fg-muted">
-              The components behind Interview Studio. Quiet chrome so the evidence stays loud: hairlines over heavy boxes, ink for the one primary action,
+              The components behind Swayam. Quiet chrome so the evidence stays loud: hairlines over heavy boxes, ink for the one primary action,
               and colour only where it carries meaning.
             </p>
           </div>

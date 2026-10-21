@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Preflight for a node that runs the AI Interview stack (plan package S16): tooling, .env,
+# Preflight for a node that runs the Swayam stack (plan package S16): tooling, .env,
 # the AI endpoints the .env points at, model assets, sandbox runtime images and, when the
 # stack is up, the API's deep readiness. Required checks exit 1; optional ones only WARN.
 #   scripts/doctor.sh            # everything

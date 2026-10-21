@@ -1,8 +1,10 @@
 import { useEffect } from "react";
 
-export const APP_NAME = "Interview Studio";
+import { PRODUCT_NAME } from "@/lib/brand";
 
-/** Sets `document.title` to "<title> | Interview Studio" while mounted. */
+export const APP_NAME = PRODUCT_NAME;
+
+/** Sets `document.title` to "<title> | Swayam" while mounted. */
 export function useDocumentTitle(title: string | null | undefined): void {
   useEffect(() => {
     if (typeof document === "undefined") return;

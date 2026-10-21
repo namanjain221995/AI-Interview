@@ -147,7 +147,7 @@ describe("describeLoginError", () => {
 
   it("covers deactivated accounts, network and server failures", () => {
     expect(describeLoginError(new ApiError({ status: 403, code: "account_disabled", message: "x" })).title).toBe("Account deactivated");
-    expect(describeLoginError(new ApiError({ status: 0, code: "network_error", message: "x" })).title).toBe("Can't reach Interview Studio");
+    expect(describeLoginError(new ApiError({ status: 0, code: "network_error", message: "x" })).title).toBe("Can't reach Swayam");
     const server = describeLoginError(new ApiError({ status: 500, code: "internal_error", message: "x", requestId: "r-1" }));
     expect(server.title).toBe("Sign-in is unavailable right now");
     expect(server.requestId).toBe("r-1");

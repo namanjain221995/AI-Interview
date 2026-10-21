@@ -190,7 +190,7 @@ export default function UsersPage() {
     <PageContainer>
       <PageHeader
         title="Users"
-        description="People on your team who can sign in to Interview Studio, and what they can do."
+        description="People on your team who can sign in to Swayam, and what they can do."
         actions={
           roles.length ? (
             <Button leftIcon={<UserPlus />} onClick={() => setCreateOpen(true)}>

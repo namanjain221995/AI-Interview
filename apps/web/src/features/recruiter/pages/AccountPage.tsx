@@ -94,7 +94,7 @@ export default function AccountPage() {
 
   return (
     <PageContainer width="narrow">
-      <PageHeader title="Your account" description="How you sign in to Interview Studio." />
+      <PageHeader title="Your account" description="How you sign in to Swayam." />
       <div className="grid gap-6">
         {mustChange ? (
           <Callout tone="warning" title="Choose your own password to continue" data-testid="password-change-required">

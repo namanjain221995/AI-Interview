@@ -1,6 +1,6 @@
 # Deployment and operations
 
-Written for: engineers who deploy, operate and harden the AI Interview Platform. Day-to-day development setup
+Written for: engineers who deploy, operate and harden Swayam. Day-to-day development setup
 is in [LOCAL_SETUP.md](LOCAL_SETUP.md); component design in [ARCHITECTURE.md](ARCHITECTURE.md); the threat
 model and controls in [SECURITY.md](SECURITY.md).
 
@@ -127,7 +127,23 @@ Change production settings in `~/deploy/ai-interview/prod/.env`, then `make depl
 tts, sandbox, stt (Whisper turbo) and monitoring and has no public hostname. Images are tagged `:prod` and `:dev`;
 backups go to `~/deploy/ai-interview/backups/<copy>/`, a log of every deploy to `~/deploy/ai-interview/deploy.log`.
 Deploys take a lock, so builds never run in parallel (memory is shared with vLLM). A commit reaches a copy only
-when it is pushed and that copy is deployed: nothing deploys automatically.
+when it is pushed and that copy is deployed.
+
+**Auto-deploy.** `make autodeploy-install` adds a systemd user timer (`infra/systemd/swayam-autodeploy.*`) that
+runs `scripts/autodeploy.sh` every two minutes. It deploys dev when `origin/hd-dev` moves and prod when `origin/main`
+moves (for example, when a pull request is merged). The rules:
+
+- Only copies deployed once by hand are followed. The first `make deploy-<copy>` is always deliberate.
+- Prod never deploys over a live or paused interview. `deploy.sh` exits 75 ("not now") and the timer tries again
+  on its next run.
+- A failed deploy is not retried for the same commit. The next push retries it, or `make deploy-<copy>` retries it now.
+- A manual `ARGS="--ref <ref>"` deploy of commits that are ahead of the remote is kept, not rolled back to the
+  remote's older commit.
+- `make autodeploy-status` shows the next check and the log (`~/deploy/ai-interview/autodeploy.log`).
+- `make autodeploy-uninstall` makes deploys manual again.
+
+The timer runs the scripts from this working repository, and needs linger (`loginctl enable-linger`) to keep running
+after logout.
 
 ### Single copy
 
@@ -263,8 +279,8 @@ Platform metrics are defined once in `apps/api/app/core/metrics.py`: sessions an
 embedding/rerank/OCR latency, coding executions, jobs, queue depth, HTTP requests, auth events, rate-limit
 rejections, circuit-breaker state and integrity events.
 
-Grafana provisions the datasource (uid `prometheus`) and three dashboards in the "Interview Platform" folder:
-**Interview Platform — Overview** (service health, live sessions, turn latency and time-to-first-audio p50/p95
+Grafana provisions the datasource (uid `prometheus`) and three dashboards in the "Swayam" folder:
+**Swayam — Overview** (service health, live sessions, turn latency and time-to-first-audio p50/p95
 against the SLOs, barge-ins, integrity signals, HTTP status classes, errors, edge, sign-ins, rate limits),
 **AI Models** (LLM latency and TTFT by endpoint and task, tokens, failures, STT/TTS/embedding/rerank/OCR
 latency, vLLM running/waiting/KV cache, GPU) and **Workers & Infrastructure** (queues, job outcomes and

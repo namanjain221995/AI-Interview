@@ -34,7 +34,7 @@ export function describeLoginError(error: unknown): LoginErrorView {
   const details = error.details;
 
   if (error.isNetworkError || code === "timeout") {
-    return { tone: "danger", title: "Can't reach Interview Studio", message: "Check your connection and try again." };
+    return { tone: "danger", title: "Can't reach Swayam", message: "Check your connection and try again." };
   }
 
   if (error.status === 423 || code === "account_locked" || code === "locked") {

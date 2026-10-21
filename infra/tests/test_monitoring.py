@@ -84,7 +84,7 @@ def test_dashboard_json_is_generated_from_the_generator() -> None:
 def test_expected_dashboards_exist_with_unique_uids() -> None:
     dashboards = _dashboards()
     titles = {d["title"] for d in dashboards.values()}
-    assert {"Interview Platform — Overview", "AI Models", "Workers & Infrastructure"} <= titles
+    assert {"Swayam — Overview", "AI Models", "Workers & Infrastructure"} <= titles
     uids = [d["uid"] for d in dashboards.values()]
     assert len(uids) == len(set(uids))
 

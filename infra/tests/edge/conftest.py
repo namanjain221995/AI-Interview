@@ -31,7 +31,7 @@ EDGE_IMAGE = os.environ.get("EDGE_TEST_IMAGE", STOCK_IMAGE)
 EXTRA_TLS_HOSTNAMES = "interview.test edge.example"
 
 INDEX_HTML = """<!doctype html>
-<html lang="en"><head><meta charset="UTF-8"><title>Interview Studio</title>
+<html lang="en"><head><meta charset="UTF-8"><title>Swayam by TechSara</title>
 <script type="module" src="/assets/app-3f9a1c7e.js"></script></head>
 <body><div id="root"></div></body></html>
 """

@@ -1,6 +1,6 @@
 # Implementation report
 
-Written for: the product owner and the engineers who take over the AI Interview Platform.
+Written for: the product owner and the engineers who take over Swayam.
 State as of 2026-10-08 (deployed on the DGX Spark, compose project `interview`, Alembic head `0004`).
 
 ## 1. What was found

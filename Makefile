@@ -1,5 +1,5 @@
 # =============================================================================
-# AI Interview Platform — developer and operator entry points.
+# Swayam — developer and operator entry points.
 # `make` (or `make help`) lists every target. See LOCAL_SETUP.md / DEPLOYMENT.md.
 #
 # Safety: `make down` never removes volumes (no `-v`): database, Redis, uploaded
@@ -100,6 +100,25 @@ deploy-status: ## Which commit each copy runs, whether its branch moved on, heal
 deploy-rollback: ## Previous images + checkout of one copy: make deploy-rollback ENV=prod|dev (database not rolled back)
 	@test -n "$(ENV)" || { echo "usage: make deploy-rollback ENV=prod|dev"; exit 2; }
 	@$(ROOT)/scripts/deploy.sh rollback $(ENV)
+
+.PHONY: autodeploy-install autodeploy-uninstall autodeploy-status
+SYSTEMD_USER_DIR := $(HOME)/.config/systemd/user
+autodeploy-install: ## Deploy dev/prod by themselves when hd-dev/main move on origin (systemd user timer, every 2 min)
+	@mkdir -p $(SYSTEMD_USER_DIR)
+	@sed 's|@REPO@|$(ROOT)|g' $(ROOT)/infra/systemd/swayam-autodeploy.service >$(SYSTEMD_USER_DIR)/swayam-autodeploy.service
+	@cp $(ROOT)/infra/systemd/swayam-autodeploy.timer $(SYSTEMD_USER_DIR)/
+	@systemctl --user daemon-reload
+	@systemctl --user enable --now swayam-autodeploy.timer
+	@loginctl show-user "$$USER" -p Linger | grep -q '=yes' || echo "WARN  linger is off: the timer stops at logout (sudo loginctl enable-linger $$USER)"
+
+autodeploy-uninstall: ## Stop the auto-deploy timer (deploys are then manual again)
+	@systemctl --user disable --now swayam-autodeploy.timer || true
+	@rm -f $(SYSTEMD_USER_DIR)/swayam-autodeploy.service $(SYSTEMD_USER_DIR)/swayam-autodeploy.timer
+	@systemctl --user daemon-reload
+
+autodeploy-status: ## Next auto-deploy check and the latest auto-deploy log lines
+	@systemctl --user list-timers swayam-autodeploy.timer --all --no-pager || true
+	@tail -n 15 $(HOME)/deploy/ai-interview/autodeploy.log 2>/dev/null || echo "no auto-deploys yet"
 
 ##@ Database
 .PHONY: migrate migrate-docker seed demo seed-docker demo-docker backup-db restore-db backup-storage restore-storage

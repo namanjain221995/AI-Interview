@@ -1,6 +1,6 @@
 # Local setup
 
-Written for: engineers who run the AI Interview Platform on a workstation or on the DGX Spark host, for
+Written for: engineers who run Swayam on a workstation or on the DGX Spark host, for
 development or demos. Production operation (TLS, backups, scaling, hardening) is in
 [DEPLOYMENT.md](DEPLOYMENT.md); the system design is in [ARCHITECTURE.md](ARCHITECTURE.md).
 

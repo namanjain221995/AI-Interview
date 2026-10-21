@@ -1,6 +1,7 @@
+import { PRODUCT_NAME } from "@/lib/brand";
 import { cn } from "@/lib/utils";
 
-export const PRODUCT_NAME = "Interview Studio";
+export { PRODUCT_FULL_NAME, PRODUCT_NAME } from "@/lib/brand";
 /** Company behind the product; the mark is its logo. */
 export const COMPANY_NAME = "TechSara";
 

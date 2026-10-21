@@ -187,7 +187,7 @@ export default function LoginPage() {
         <footer className="px-6 pb-6 text-xs text-fg-subtle sm:px-10 sm:pb-8">Need access? Ask a workspace admin to invite you.</footer>
       </div>
 
-      <aside className="theme-stage relative m-3 hidden flex-1 overflow-hidden rounded-[20px] bg-surface-sunken ring-1 ring-line ring-inset lg:flex" aria-label="About Interview Studio">
+      <aside className="theme-stage relative m-3 hidden flex-1 overflow-hidden rounded-[20px] bg-surface-sunken ring-1 ring-line ring-inset lg:flex" aria-label="About Swayam by TechSara">
         <div className="login-stage-glow pointer-events-none absolute inset-0" aria-hidden="true" />
         <div className="relative flex w-full flex-col items-center justify-center gap-10 px-10 py-12">
           <EvidenceTrace />

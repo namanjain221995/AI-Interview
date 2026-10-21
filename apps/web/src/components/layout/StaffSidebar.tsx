@@ -1,7 +1,7 @@
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Link, useMatch, useResolvedPath } from "react-router";
 
-import { Logo } from "@/components/brand/Logo";
+import { Logo, PRODUCT_NAME } from "@/components/brand/Logo";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { hasFeature, useAuthStore, usePermissions } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -65,7 +65,7 @@ export function StaffSidebar({ collapsed, onToggleCollapsed, onNavigate, classNa
   return (
     <div className={cn("flex h-full flex-col", className)}>
       <div className={cn("flex h-14 shrink-0 items-center", collapsed ? "justify-center px-2" : "px-4")}>
-        <Link to="/app/dashboard" onClick={onNavigate} className="rounded-sm" aria-label="Interview Studio home">
+        <Link to="/app/dashboard" onClick={onNavigate} className="rounded-sm" aria-label={`${PRODUCT_NAME} home`}>
           <Logo collapsed={collapsed} />
         </Link>
       </div>

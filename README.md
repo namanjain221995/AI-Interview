@@ -2,14 +2,14 @@
   <img src="apps/web/public/brand/techsara-mark-128.png" width="72" alt="TechSara logo">
 </p>
 
-<h1 align="center">AI Interview Studio</h1>
+<h1 align="center">Swayam</h1>
 
 <p align="center">
   Self-hosted, voice-first AI interviews with evidence-based reports and a human decision at the end.<br>
   Built by TechSara Solutions. Every model runs on local inference endpoints.
 </p>
 
-AI Interview Studio runs adaptive job interviews by voice. An AI interviewer, shown to the candidate as an animated
+Swayam by TechSara runs adaptive job interviews by voice. An AI interviewer, shown to the candidate as an animated
 voice orb, asks one question at a time, listens, follows up on the candidate's résumé and answers, and can open a
 coding exercise. Recruiters get a transcript, a recording, evidence-referenced competency scores, integrity
 observations and a printable report, and a person on the hiring team makes every decision. A separate intake

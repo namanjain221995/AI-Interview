@@ -1,6 +1,6 @@
 # Architecture
 
-Written for: engineers who build, operate or extend the AI Interview Platform.
+Written for: engineers who build, operate or extend Swayam.
 
 The platform runs an adaptive, voice-first interview with an animated interviewer presence rendered in the candidate's
 browser. All AI runs on local inference endpoints shared with another production stack on the same host. The

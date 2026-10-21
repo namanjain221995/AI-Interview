@@ -68,4 +68,4 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
 
 LABEL org.opencontainers.image.title="interview-edge" \
-      org.opencontainers.image.description="AI Interview Platform edge: SPA + reverse proxy (Caddy)"
+      org.opencontainers.image.description="Swayam edge: SPA + reverse proxy (Caddy)"

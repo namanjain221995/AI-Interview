@@ -46,7 +46,7 @@ export function StaffPagePlaceholder({ title, description, icon: Icon, planned, 
           <Icon className="size-5" />
         </span>
         <h2 className="text-[15px] font-semibold text-fg">This view is being built</h2>
-        <p className="mt-1 max-w-md text-sm text-fg-muted">It ships with the next release of Interview Studio. It will let you:</p>
+        <p className="mt-1 max-w-md text-sm text-fg-muted">It ships with the next release of Swayam. It will let you:</p>
         <PlannedList items={planned} />
       </section>
     </PageContainer>

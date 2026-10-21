@@ -1,6 +1,6 @@
 # Platform contracts
 
-Written for: engineers (and build agents) implementing modules of the AI Interview Platform in parallel.
+Written for: engineers (and build agents) implementing modules of Swayam in parallel.
 Every module must honour these contracts so the pieces integrate without rework. Code-level contracts
 are authoritative where they exist:
 

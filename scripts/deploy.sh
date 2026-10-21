@@ -16,14 +16,15 @@
 # secrets, its own ports, database and Redis). The working repository is never deployed. Images are tagged
 # :prod / :dev (the previous ones :prod-previous / :dev-previous). dev shares prod's tts, sandbox, stt and
 # monitoring, so it builds and runs only postgres, redis, migrate, api, worker and edge.
-# Deploys are serialised (one image build at a time: memory is shared with vLLM).
+# Deploys are serialised (one image build at a time: memory is shared with vLLM). Exit status 75 means "not now"
+# (another deploy holds the lock, or prod has a live interview): scripts/autodeploy.sh retries those later.
 set -euo pipefail
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 require docker git python3 flock
 
 usage() {
-  sed -n '2,20p' "$0"
+  sed -n '2,21p' "$0"
   exit "${1:-0}"
 }
 
@@ -31,6 +32,12 @@ DEPLOY_ROOT="${DEPLOY_ROOT:-$HOME/deploy/ai-interview}"
 # The main working tree (holds .git and the operator's .env), also when this runs from a deploy worktree.
 REPO="$(cd "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)"
 REMOTE="${DEPLOY_REMOTE:-origin}"
+
+# busy MESSAGE: a refusal worth retrying later (EX_TEMPFAIL).
+busy() {
+  fail "$*"
+  exit 75
+}
 
 cmd="${1:-}"
 [[ -n "$cmd" ]] || usage 2
@@ -226,7 +233,7 @@ deploy() {
   configure "$env_name"
   mkdir -p "$DEPLOY_ROOT/state" "$DEPLOY_ROOT/backups/$env_name"
   exec 9>"$DEPLOY_ROOT/.deploy.lock"
-  flock -n 9 || die "another deploy is running (lock $DEPLOY_ROOT/.deploy.lock)"
+  flock -n 9 || busy "another deploy is running (lock $DEPLOY_ROOT/.deploy.lock)"
 
   info "== $env_name: resolving the target commit"
   git -C "$REPO" fetch --quiet --prune "$REMOTE"
@@ -254,7 +261,7 @@ deploy() {
     local live
     live="$(live_sessions)"
     if [[ "${live:-0}" != 0 ]]; then
-      $force || die "$live interview(s) live or paused right now; deploy later or pass --force (they pause and resume)"
+      $force || busy "$live interview(s) live or paused right now; deploy later or pass --force (they pause and resume)"
       warn "$live interview(s) live: deploying anyway (--force)"
     fi
   fi

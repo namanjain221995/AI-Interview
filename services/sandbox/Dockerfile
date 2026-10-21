@@ -9,7 +9,7 @@
 FROM python:3.12-slim-trixie
 
 LABEL org.opencontainers.image.title="interview-sandbox" \
-      org.opencontainers.image.description="Secure code execution service for the AI Interview Platform"
+      org.opencontainers.image.description="Secure code execution service for Swayam"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

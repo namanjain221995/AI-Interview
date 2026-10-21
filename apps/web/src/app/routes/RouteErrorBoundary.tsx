@@ -27,7 +27,7 @@ export function describeRouteError(error: unknown): Described {
     return {
       kind: "new_version",
       title: "A newer version is available",
-      description: "Interview Studio was updated while this tab was open. Reload to continue.",
+      description: "Swayam was updated while this tab was open. Reload to continue.",
     };
   }
   if (isApiError(error)) {

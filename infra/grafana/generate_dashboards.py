@@ -611,7 +611,7 @@ def voice_to_voice(d: Dashboard) -> None:
 def overview() -> Dashboard:
     d = Dashboard(
         "interview-overview",
-        "Interview Platform — Overview",
+        "Swayam — Overview",
         "Live interviews, voice-loop latency SLOs, API and edge health.",
         time_from="now-1h",
     )

@@ -34,7 +34,7 @@ _CONVENTIONAL = (("catalog", "seed_catalog", False, 20), ("demo", "seed_demo", T
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="python -m app.seed", description="Seed the interview platform database."
+        prog="python -m app.seed", description="Seed the Swayam database."
     )
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--core-only", action="store_true", help="only the organization and staff accounts")

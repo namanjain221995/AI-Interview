@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
 
-import { BrandMark, Logo } from "@/components/brand/Logo";
+import { BrandMark, Logo, PRODUCT_NAME } from "@/components/brand/Logo";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 
 /** Neutral splash while the app resolves the session or the first route chunk. */
-export function AppSplash({ label = "Loading Interview Studio" }: { label?: string }) {
+export function AppSplash({ label = `Loading ${PRODUCT_NAME}` }: { label?: string }) {
   return (
     <div className="flex h-dvh w-full flex-col items-center justify-center gap-5 bg-surface-muted" role="status" aria-label={label}>
       <BrandMark size={40} />
@@ -30,7 +30,7 @@ export function FullPageMessage({ eyebrow, title, description, actions, icon, ch
   return (
     <div className={cn("flex min-h-dvh flex-col bg-surface-muted", className)}>
       <header className="px-6 py-5">
-        <a href="/" className="inline-flex rounded-sm" aria-label="Interview Studio home">
+        <a href="/" className="inline-flex rounded-sm" aria-label={`${PRODUCT_NAME} home`}>
           <Logo />
         </a>
       </header>

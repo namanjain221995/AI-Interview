@@ -17,7 +17,7 @@ export function StaffArea() {
       errorFallback={(error, retry) => (
         <FullPageMessage
           icon={<CloudOff />}
-          title="Can't reach Interview Studio"
+          title="Can't reach Swayam"
           description={error.message}
           actions={<Button onClick={retry}>Try again</Button>}
         >
